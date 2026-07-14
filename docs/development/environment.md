@@ -37,6 +37,11 @@ Sin exponer valores secretos:
 - `CORS_ALLOWED_ORIGINS`
 - `DATABASE_URL`
 - `MASTER_DATABASE_URL`
+- `JOB_POLL_INTERVAL_SECONDS`
+- `JOB_MAX_ATTEMPTS`
+- `JOB_RETRY_BASE_SECONDS`
+- `JOB_RETRY_MAX_SECONDS`
+- `JOB_STALE_AFTER_SECONDS`
 - `DEFAULT_COMPANY_NAME`
 - `DEFAULT_ADMIN_EMAIL`
 - `DEFAULT_ADMIN_PASSWORD`
@@ -75,7 +80,13 @@ Trabajadores identificados:
 - `backend/app/workers/email_worker.py`
 - `backend/app/workers/jobs_worker.py`
 
-No se ha verificado un comando CLI separado y estable para lanzarlos fuera del proceso web.
+Comando estable documentado para jobs:
+
+```bash
+APP_ENV=development ./.venv/bin/python -m app.workers.jobs_worker
+```
+
+El worker usa la misma resolucion de tenant que el proceso web y recupera jobs bloqueados al arrancar.
 
 ## Problemas conocidos del entorno
 

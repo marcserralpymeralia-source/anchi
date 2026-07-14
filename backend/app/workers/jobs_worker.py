@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import logging
+import os
 import threading
 import time
 from datetime import datetime, timezone
 from urllib.error import URLError
 
 import json
+from socket import gethostname
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -14,7 +17,7 @@ from sqlalchemy.orm import selectinload
 from app.agent.platform import LearningService
 from app.agent.services import AgentProcessingService, ScoringService
 from app.core.config import get_settings
-from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, FTPSettings, Order, ScoringSettings
+from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, FTPSettings, ImportJob, Order, ScoringSettings
 from app.exports.service import ExportService, FTPService
 from app.logs.service import log_action
 from app.master.database import MasterSessionLocal
@@ -23,15 +26,38 @@ from app.imports.service import confirm_import, guess_mapping, read_preview
 from app.orders.routes import _customer_label, _sync_customer_product_knowledge, validate_confirmation
 from app.settings.integrations import backfill_imap_emails, read_latest_imap_emails
 from app.settings.service import get_or_create_settings
-from app.jobs.service import claim_next_job, fail_job, finish_job, job_payload, update_job_progress
+from app.jobs.service import claim_next_job, fail_job, finish_job, job_payload, recover_stale_jobs, update_job_progress
 from app.tenancy.database import tenant_db_session
 
 logger = logging.getLogger(__name__)
 _worker_started = False
+_worker_identity: str | None = None
+
+JOB_TYPES = {
+    "email_sync",
+    "process_recent_emails",
+    "backfill_imap",
+    "process_pending_emails",
+    "process_email",
+    "process_order",
+    "import_confirm",
+    "import_file",
+    "export_order",
+    "export_order_ftp",
+    "bulk_order_action",
+}
 
 
 def _now():
     return datetime.now(timezone.utc)
+
+
+def _identity() -> str:
+    global _worker_identity
+    if _worker_identity:
+        return _worker_identity
+    _worker_identity = f"{gethostname()}:{os.getpid()}:{uuid4().hex[:8]}"
+    return _worker_identity
 
 
 def _is_retryable_exception(exc: Exception) -> bool:
@@ -130,6 +156,26 @@ def _process_import_job(db, job: BackgroundJob, payload: dict) -> dict:
     mode = str(payload.get("mode") or "create_update")
     save_template = bool(payload.get("save_template"))
     template_name = str(payload.get("template_name") or "")
+    existing_import = db.scalar(
+        select(ImportJob)
+        .where(
+            ImportJob.company_id == job.company_id,
+            ImportJob.entity_type == entity_type,
+            ImportJob.filename == filename,
+            ImportJob.status == "completed",
+        )
+        .order_by(ImportJob.created_at.desc())
+    )
+    if existing_import:
+        return {
+            "ok": True,
+            "message": f"Importacion {entity_type} ya procesada",
+            "import_job_id": existing_import.id,
+            "rows_total": existing_import.rows_total,
+            "rows_created": existing_import.rows_created,
+            "rows_updated": existing_import.rows_updated,
+            "rows_ignored": existing_import.rows_ignored,
+        }
     df = read_preview(token, filename, encoding=encoding)
     if not mapping:
         mapping = guess_mapping(entity_type, [str(column) for column in df.columns])
@@ -357,29 +403,21 @@ def _process_bulk_action(db, job: BackgroundJob, payload: dict) -> dict:
     return {"ok": True, "message": f"Accion masiva {action}: {processed} aplicadas, {skipped} omitidas.", "processed": processed, "skipped": skipped}
 
 
-def _handle_tenant_jobs(master_db, tenant: MasterTenantDatabase, owner: str) -> None:
+def _handle_tenant_jobs(tenant: MasterTenantDatabase, owner: str) -> dict[str, int]:
     if not tenant.database_url:
-        return
+        return {"recovered": 0, "processed": 0}
     session_factory = tenant_db_session(tenant.database_url)
     db = session_factory()
+    recovered_jobs = 0
+    processed_jobs = 0
     try:
+        recovered = recover_stale_jobs(db, owner=owner, job_types=JOB_TYPES)
+        recovered_jobs += len(recovered)
         while True:
             job = claim_next_job(
                 db,
                 owner=owner,
-                job_types={
-                    "email_sync",
-                    "process_recent_emails",
-                    "backfill_imap",
-                    "process_pending_emails",
-                    "process_email",
-                    "process_order",
-                    "import_confirm",
-                    "import_file",
-                    "export_order",
-                    "export_order_ftp",
-                    "bulk_order_action",
-                },
+                job_types=JOB_TYPES,
             )
             if not job:
                 break
@@ -389,34 +427,53 @@ def _handle_tenant_jobs(master_db, tenant: MasterTenantDatabase, owner: str) -> 
                     raise RuntimeError(str(result.get("message") or "El job devolvio ok=false."))
                 finish_job(db, job, result)
                 log_action(db, company_id=job.company_id, user=None, action=f"job.{job.job_type}.success", entity_type="job", entity_id=job.id, message=result.get("message") or "Trabajo completado")
+                processed_jobs += 1
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Job fallido company=%s job=%s", job.company_id, job.job_type)
-                should_retry = job.retry_count < max(1, job.max_retries) and _is_retryable_exception(exc)
+                should_retry = job.attempt_count < (max(0, job.max_retries or 0) + 1) and _is_retryable_exception(exc)
                 failed_job = fail_job(db, job, str(exc), retry=should_retry, error_type=exc.__class__.__name__)
                 action_suffix = "retrying" if failed_job.status == "retrying" else "failed"
                 log_action(db, company_id=job.company_id, user=None, action=f"job.{job.job_type}.{action_suffix}", entity_type="job", entity_id=job.id, message=str(exc))
     finally:
         db.close()
+    return {"recovered": recovered_jobs, "processed": processed_jobs}
+
+
+def run_worker_cycle() -> dict[str, int]:
+    summary = {"tenants": 0, "recovered": 0, "processed": 0}
+    master_db = MasterSessionLocal()
+    try:
+        tenants = master_db.scalars(
+            select(MasterTenantDatabase).where(
+                MasterTenantDatabase.is_active.is_(True),
+                MasterTenantDatabase.database_url.is_not(None),
+            )
+        ).all()
+        summary["tenants"] = len(tenants)
+        for tenant in tenants:
+            tenant_summary = _handle_tenant_jobs(tenant, owner=_identity())
+            summary["recovered"] += tenant_summary["recovered"]
+            summary["processed"] += tenant_summary["processed"]
+    finally:
+        master_db.close()
+    logger.info(
+        "Job worker cycle completed tenants=%s recovered=%s processed=%s owner=%s",
+        summary["tenants"],
+        summary["recovered"],
+        summary["processed"],
+        _identity(),
+    )
+    return summary
 
 
 def _worker_loop() -> None:
     settings = get_settings()
     poll_seconds = max(int(getattr(settings, "job_worker_poll_seconds", 10)), 5)
     while True:
-        master_db = MasterSessionLocal()
         try:
-            tenants = master_db.scalars(
-                select(MasterTenantDatabase).where(
-                    MasterTenantDatabase.is_active.is_(True),
-                    MasterTenantDatabase.database_url.is_not(None),
-                )
-            ).all()
-            for tenant in tenants:
-                _handle_tenant_jobs(master_db, tenant, owner="job-worker")
+            run_worker_cycle()
         except Exception as exc:  # noqa: BLE001
             logger.exception("Job worker error: %s", exc)
-        finally:
-            master_db.close()
         time.sleep(poll_seconds)
 
 
@@ -426,3 +483,11 @@ def start_job_worker() -> None:
         return
     _worker_started = True
     threading.Thread(target=_worker_loop, name="anchi-job-worker", daemon=True).start()
+
+
+def main() -> None:
+    _worker_loop()
+
+
+if __name__ == "__main__":
+    main()

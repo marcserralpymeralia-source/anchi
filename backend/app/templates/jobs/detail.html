@@ -17,7 +17,7 @@
     <article class="compact-card compact-card-muted"><span>Estado</span><strong>{{ job.status.replace('_', ' ') | title }}</strong><small>Job operativo</small></article>
     <article class="compact-card compact-card-reviewable"><span>Progreso</span><strong>{{ job.progress or 0 }}%</strong><small>Avance actual</small></article>
     <article class="compact-card compact-card-safe"><span>Intentos</span><strong>{{ job.attempt_count }}</strong><small>Ejecuciones totales</small></article>
-    <article class="compact-card compact-card-safe"><span>Reintentos</span><strong>{{ job.retry_count }}</strong><small>Veces reintentado</small></article>
+    <article class="compact-card compact-card-safe"><span>Máx. intentos</span><strong>{{ job.max_attempts }}</strong><small>Límite total</small></article>
     <article class="compact-card compact-card-error"><span>Bloqueo</span><strong>{{ "Sí" if job.lock_owner else "No" }}</strong><small>{{ job.lock_owner or "Sin lock" }}</small></article>
   </section>
 
@@ -37,6 +37,7 @@
         <div><dt>Progreso</dt><dd>{{ job.progress or 0 }}%</dd></div>
         <div><dt>Intentos</dt><dd>{{ job.attempt_count }}</dd></div>
         <div><dt>Máx. reintentos</dt><dd>{{ job.max_retries }}</dd></div>
+        <div><dt>Máx. intentos</dt><dd>{{ job.max_attempts }}</dd></div>
         <div><dt>Encolado</dt><dd>{{ job.queued_at.strftime("%d/%m/%Y %H:%M:%S") if job.queued_at else "Sin dato" }}</dd></div>
         <div><dt>Inicio</dt><dd>{{ job.started_at.strftime("%d/%m/%Y %H:%M:%S") if job.started_at else "Pendiente" }}</dd></div>
         <div><dt>Fin</dt><dd>{{ job.finished_at.strftime("%d/%m/%Y %H:%M:%S") if job.finished_at else "Pendiente" }}</dd></div>
@@ -106,6 +107,34 @@
           </article>
         {% else %}
           <p class="muted">Todavía no hay eventos registrados para este job.</p>
+        {% endfor %}
+      </div>
+    </article>
+
+    <article class="panel stack jobs-detail-card">
+      <div class="section-title-row">
+        <div>
+          <h3>Intentos</h3>
+          <p class="muted">Cada adquisición y su resultado final o intermedio.</p>
+        </div>
+      </div>
+      <div class="job-log-list">
+        {% for attempt in attempts %}
+          <article class="job-log-row">
+            <strong>Intento {{ attempt.attempt_number }}</strong>
+            <span>{{ attempt.status.replace('_', ' ') | title }}</span>
+            <p>
+              Worker {{ attempt.worker_id or "sin worker" }}
+              · Inicio {{ attempt.started_at.strftime("%d/%m %H:%M:%S") if attempt.started_at else "Sin dato" }}
+              · Fin {{ attempt.finished_at.strftime("%d/%m %H:%M:%S") if attempt.finished_at else "Sin dato" }}
+              · {{ attempt.duration_seconds }}s
+            </p>
+            {% if attempt.error_message %}
+              <small class="muted">{{ attempt.error_type or "error" }} · {{ attempt.error_message }}</small>
+            {% endif %}
+          </article>
+        {% else %}
+          <p class="muted">Todavía no hay intentos registrados para este job.</p>
         {% endfor %}
       </div>
     </article>

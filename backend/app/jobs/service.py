@@ -4,12 +4,15 @@ import hashlib
 import json
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import or_, select, update
+from sqlalchemy import and_, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.db.models import BackgroundJob
+from app.core.config import get_settings
+from app.db.models import BackgroundJob, JobAttempt
 
 ACTIVE_JOB_STATUSES = {"queued", "running", "retrying"}
+TERMINAL_JOB_STATUSES = {"success", "failed", "cancelled"}
 DEFAULT_MAX_RETRIES = {
     "email_sync": 5,
     "process_recent_emails": 5,
@@ -23,10 +26,28 @@ DEFAULT_MAX_RETRIES = {
     "import_confirm": 1,
     "import_file": 1,
 }
+FORBIDDEN_PAYLOAD_KEYS = {
+    "password",
+    "api_key",
+    "client_secret",
+    "refresh_token",
+    "access_token",
+    "smtp_password",
+    "imap_password",
+    "private_key",
+    "database_url",
+    "dsn",
+}
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    if not value:
+        return None
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 def _dumps(payload: dict | None) -> str | None:
@@ -45,6 +66,78 @@ def _loads(payload_json: str | None) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _safe_payload(payload: dict | None) -> dict:
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise ValueError("Job payload must be a dictionary.")
+    try:
+        json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    except TypeError as exc:  # pragma: no cover - validated by tests
+        raise ValueError("Job payload must be JSON serializable.") from exc
+    stack = [payload]
+    while stack:
+        current = stack.pop()
+        for key, value in current.items():
+            if str(key).lower() in FORBIDDEN_PAYLOAD_KEYS:
+                raise ValueError("Job payload contains forbidden secret data.")
+            if isinstance(value, dict):
+                stack.append(value)
+            elif isinstance(value, list):
+                stack.extend(item for item in value if isinstance(item, dict))
+    return payload
+
+
+def _settings():
+    return get_settings()
+
+
+def _retry_budget(job: BackgroundJob) -> int:
+    return max(0, int(job.max_retries or 0))
+
+
+def _max_attempts(job: BackgroundJob) -> int:
+    return _retry_budget(job) + 1
+
+
+def _retry_delay_seconds(job: BackgroundJob) -> int:
+    settings = _settings()
+    attempt_index = max(job.retry_count, 0)
+    return min(settings.job_retry_max_seconds, settings.job_retry_base_seconds * (2**attempt_index))
+
+
+def _latest_attempt(db: Session, job_id: int) -> JobAttempt | None:
+    return db.scalar(
+        select(JobAttempt)
+        .where(JobAttempt.job_id == job_id)
+        .order_by(JobAttempt.attempt_number.desc(), JobAttempt.created_at.desc())
+    )
+
+
+def _finalize_attempt(
+    db: Session,
+    job: BackgroundJob,
+    *,
+    status: str,
+    error_type: str | None = None,
+    error_message: str | None = None,
+    next_retry_at: datetime | None = None,
+) -> None:
+    attempt = _latest_attempt(db, job.id)
+    if not attempt:
+        return
+    now = _now()
+    started_at = _aware(attempt.started_at) or _aware(job.started_at) or now
+    attempt.status = status
+    attempt.finished_at = now
+    attempt.duration_seconds = max(int((now - started_at).total_seconds()), 0)
+    attempt.error_type = error_type
+    attempt.error_message = error_message[:2000] if error_message else None
+    attempt.next_retry_at = next_retry_at
+    attempt.worker_id = job.lock_owner or attempt.worker_id
+    db.flush()
+
+
 def build_dedupe_key(job_type: str, payload: dict | None = None) -> str:
     raw_payload = _dumps(payload or {})
     digest = hashlib.sha1(f"{job_type}:{raw_payload or '{}'}".encode("utf-8")).hexdigest()
@@ -61,18 +154,20 @@ def enqueue_job(
     dedupe_key: str | None = None,
     max_retries: int | None = None,
 ) -> BackgroundJob:
-    normalized_payload = payload or {}
+    normalized_payload = _safe_payload(payload)
     key = dedupe_key or build_dedupe_key(job_type, normalized_payload)
     existing = db.scalars(
         select(BackgroundJob).where(
             BackgroundJob.company_id == company_id,
             BackgroundJob.job_type == job_type,
             BackgroundJob.dedupe_key == key,
-            BackgroundJob.status.in_(tuple(ACTIVE_JOB_STATUSES)),
         )
     ).first()
     if existing:
         return existing
+    settings = _settings()
+    configured_max_retries = max(0, int((max_retries if max_retries is not None else DEFAULT_MAX_RETRIES.get(job_type, 3))))
+    max_retries_final = min(configured_max_retries, max(0, settings.job_max_attempts - 1))
     job = BackgroundJob(
         company_id=company_id,
         job_type=job_type,
@@ -80,13 +175,26 @@ def enqueue_job(
         status="queued",
         payload_json=_dumps(normalized_payload),
         created_by_user_id=created_by_user_id,
-        max_retries=max(1, int(max_retries or DEFAULT_MAX_RETRIES.get(job_type, 3))),
+        max_retries=max_retries_final,
         queued_at=_now(),
         attempt_count=0,
         updated_at=_now(),
     )
     db.add(job)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = db.scalars(
+            select(BackgroundJob).where(
+                BackgroundJob.company_id == company_id,
+                BackgroundJob.job_type == job_type,
+                BackgroundJob.dedupe_key == key,
+            )
+        ).first()
+        if existing:
+            return existing
+        raise
     db.refresh(job)
     return job
 
@@ -131,7 +239,9 @@ def cancel_job(db: Session, company_id: int, job_id: int) -> BackgroundJob | Non
     job = get_job(db, company_id, job_id)
     if not job:
         return None
-    if job.status in {"success", "failed", "cancelled"}:
+    if job.status == "running":
+        return None
+    if job.status in TERMINAL_JOB_STATUSES:
         return job
     job.status = "cancelled"
     job.finished_at = _now()
@@ -146,6 +256,7 @@ def cancel_job(db: Session, company_id: int, job_id: int) -> BackgroundJob | Non
 
 def claim_next_job(db: Session, *, owner: str, job_types: set[str] | None = None) -> BackgroundJob | None:
     now = _now()
+    settings = _settings()
     conditions = [
         BackgroundJob.status.in_(("queued", "retrying")),
         or_(BackgroundJob.lock_until.is_(None), BackgroundJob.lock_until <= now),
@@ -173,17 +284,85 @@ def claim_next_job(db: Session, *, owner: str, job_types: set[str] | None = None
             status="running",
             started_at=now,
             lock_owner=owner,
-            lock_until=now + timedelta(minutes=5),
+            lock_until=now + timedelta(seconds=settings.job_stale_after_seconds),
             attempt_count=BackgroundJob.attempt_count + 1,
             last_heartbeat_at=now,
             updated_at=now,
         )
+        .returning(BackgroundJob.id)
     )
-    if result.rowcount != 1:
+    row = result.first()
+    if not row:
         db.rollback()
         return None
+    job = db.get(BackgroundJob, row[0])
+    if not job:
+        db.rollback()
+        return None
+    db.add(
+        JobAttempt(
+            company_id=job.company_id,
+            job_id=job.id,
+            attempt_number=job.attempt_count,
+            worker_id=owner,
+            status="running",
+            started_at=now,
+        )
+    )
     db.commit()
-    return db.get(BackgroundJob, candidate_id)
+    db.refresh(job)
+    return job
+
+
+def recover_stale_jobs(db: Session, *, owner: str | None = None, job_types: set[str] | None = None) -> list[BackgroundJob]:
+    now = _now()
+    settings = _settings()
+    stale_before = now - timedelta(seconds=settings.job_stale_after_seconds)
+    conditions = [
+        BackgroundJob.status == "running",
+        or_(
+            BackgroundJob.lock_until <= now,
+            and_(BackgroundJob.lock_until.is_(None), BackgroundJob.started_at.is_not(None), BackgroundJob.started_at <= stale_before),
+            and_(BackgroundJob.last_heartbeat_at.is_not(None), BackgroundJob.last_heartbeat_at <= stale_before),
+        ),
+    ]
+    if job_types:
+        conditions.append(BackgroundJob.job_type.in_(sorted(job_types)))
+    jobs = db.scalars(select(BackgroundJob).where(*conditions)).all()
+    recovered: list[BackgroundJob] = []
+    for job in jobs:
+        lock_owner = owner or job.lock_owner
+        next_retry_at = now + timedelta(seconds=_retry_delay_seconds(job))
+        attempt = _latest_attempt(db, job.id)
+        if attempt:
+            attempt.status = "abandoned"
+            attempt.finished_at = now
+            attempt.duration_seconds = max(int((now - (_aware(attempt.started_at) or _aware(job.started_at) or now)).total_seconds()), 0)
+            attempt.error_type = "stale_worker"
+            attempt.error_message = "El worker anterior supero el tiempo maximo y el job fue recuperado."
+            attempt.next_retry_at = next_retry_at
+            attempt.worker_id = lock_owner
+        job.lock_owner = None
+        job.lock_until = None
+        job.last_heartbeat_at = now
+        job.last_error_at = now
+        job.last_error_type = "stale_worker"
+        job.error_message = "El worker anterior supero el tiempo maximo y el job fue recuperado."
+        job.next_retry_at = None
+        job.updated_at = now
+        if job.attempt_count < _max_attempts(job):
+            job.status = "retrying"
+            job.retry_count += 1
+            job.next_retry_at = next_retry_at
+        else:
+            job.status = "failed"
+            job.finished_at = now
+        recovered.append(job)
+    if recovered:
+        db.commit()
+        for job in recovered:
+            db.refresh(job)
+    return recovered
 
 
 def finish_job(db: Session, job: BackgroundJob, result: dict | None = None) -> BackgroundJob:
@@ -200,6 +379,7 @@ def finish_job(db: Session, job: BackgroundJob, result: dict | None = None) -> B
     job.lock_owner = None
     job.lock_until = None
     job.last_heartbeat_at = now
+    _finalize_attempt(db, job, status="succeeded")
     db.commit()
     db.refresh(job)
     return job
@@ -207,13 +387,15 @@ def finish_job(db: Session, job: BackgroundJob, result: dict | None = None) -> B
 
 def fail_job(db: Session, job: BackgroundJob, error_message: str, *, retry: bool = False, error_type: str | None = None) -> BackgroundJob:
     now = _now()
-    backoff_seconds = min(300, 15 * (2 ** max(job.retry_count, 0)))
-    if retry and job.retry_count < max(1, job.max_retries):
+    settings = _settings()
+    backoff_seconds = min(settings.job_retry_max_seconds, settings.job_retry_base_seconds * (2 ** max(job.retry_count, 0)))
+    next_retry_at = now + timedelta(seconds=backoff_seconds)
+    if retry and job.attempt_count < _max_attempts(job):
         job.status = "retrying"
         job.retry_count += 1
         job.lock_owner = None
         job.lock_until = None
-        job.next_retry_at = now + timedelta(seconds=backoff_seconds)
+        job.next_retry_at = next_retry_at
     else:
         job.status = "failed"
         job.finished_at = now
@@ -225,6 +407,14 @@ def fail_job(db: Session, job: BackgroundJob, error_message: str, *, retry: bool
     job.last_error_type = error_type or ("retryable" if retry else "fatal")
     job.last_heartbeat_at = now
     job.updated_at = now
+    _finalize_attempt(
+        db,
+        job,
+        status="retry_scheduled" if job.status == "retrying" else "failed_permanent",
+        error_type=job.last_error_type,
+        error_message=error_message,
+        next_retry_at=job.next_retry_at,
+    )
     db.commit()
     db.refresh(job)
     return job
@@ -232,11 +422,12 @@ def fail_job(db: Session, job: BackgroundJob, error_message: str, *, retry: bool
 
 def retry_job(db: Session, company_id: int, job_id: int) -> BackgroundJob | None:
     job = get_job(db, company_id, job_id)
-    if not job or job.status == "running":
+    if not job or job.status in {"running", "success"}:
         return None
     now = _now()
     job.status = "queued"
     job.error_message = None
+    job.result_json = None
     job.progress = 0
     job.started_at = None
     job.finished_at = None

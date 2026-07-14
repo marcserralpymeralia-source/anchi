@@ -88,6 +88,7 @@
             <span class="job-pill">Fin {{ job.finished_at.strftime("%d/%m %H:%M") if job.finished_at else "Pendiente" }}</span>
             <span class="job-pill">Intentos {{ job.attempt_count }}</span>
             <span class="job-pill">Reintentos {{ job.retry_count }}</span>
+            <span class="job-pill">Máx. {{ job.max_attempts }}</span>
             <span class="job-pill">Edad {{ (job.age_seconds // 60) if job.age_seconds else 0 }}m</span>
             <span class="job-pill">Duración {{ (job.runtime_seconds // 60) if job.runtime_seconds else 0 }}m</span>
             <span class="job-pill">Pulso {{ (job.heartbeat_age_seconds // 60) if job.heartbeat_age_seconds else 0 }}m</span>

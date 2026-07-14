@@ -24,3 +24,9 @@
 | 2026-07-14 | Fase 2 | `backend/app/auth/dependencies.py` | Se separo el acceso master reservandolo a `Superadmin` | `unittest` |
 | 2026-07-14 | Fase 2 | `backend/tests/test_tenant_isolation.py` | Se añadieron pruebas de aislamiento multi-compania e IDs coincidentes | `unittest` |
 | 2026-07-14 | Fase 2 | `docs/development/*` | Se documentaron las reglas de aislamiento y el cierre de fase | Revision manual |
+| 2026-07-14 | Fase 3 | `backend/app/jobs/service.py` | Se consolidaron claves de idempotencia, limite de intentos, backoff y recovery de jobs bloqueados | `tests.test_jobs_reliability`, `unittest discover` |
+| 2026-07-14 | Fase 3 | `backend/app/db/models.py` | Se añadió historial de intentos y restriccion unica para jobs equivalentes | `tests.test_jobs_reliability` |
+| 2026-07-14 | Fase 3 | `backend/app/workers/jobs_worker.py` | Se añadió entrada CLI estable, identidad de worker y recovery al arrancar | `tests.test_jobs_reliability` |
+| 2026-07-14 | Fase 3 | `backend/app/agent/services.py` | Se bloqueo la reentrada del procesamiento de correo para evitar pedidos duplicados | `tests.test_jobs_reliability` |
+| 2026-07-14 | Fase 3 | `backend/tests/test_jobs_reliability.py` | Se añadieron pruebas de idempotencia, intentos, recovery y worker real | `APP_ENV=test ./.venv/bin/python -m unittest tests.test_jobs_reliability` |
+| 2026-07-14 | Fase 3 | `backend/.env.example` y `docs/development/*` | Se documentaron variables, comandos y criterios de jobs fiables | Revision manual |

@@ -227,6 +227,21 @@ class AgentProcessingService:
             )
             db.add(inbound_message)
             db.flush()
+        if not force_order:
+            if inbound_message.order_id:
+                order = db.get(Order, inbound_message.order_id)
+                if order:
+                    return {
+                        "ok": True,
+                        "status": "order_detected",
+                        "message": f"Pedido {order.id} ya habia sido creado.",
+                        "order_id": order.id,
+                        "score": order.score,
+                    }
+            if inbound_message.status == "no_order":
+                return {"ok": True, "message": "Entrada ya clasificada como no pedido.", "status": "no_order"}
+            if inbound_message.status == "doubtful":
+                return {"ok": False, "message": inbound_message.processing_error or "Entrada dudosa.", "status": "doubtful"}
         result = self.pipeline.process_inbound_message(db, inbound_message, user=user, force_order=force_order, email=email)
         if result.get("order_id") or result.get("status") == "order_detected":
             email.agent_status = "processed_order_detected"

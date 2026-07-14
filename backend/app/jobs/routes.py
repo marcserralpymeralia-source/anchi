@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import current_user
 from app.core.pagination import normalize_page
 from app.core.templating import templates
-from app.db.models import AuditLog, BackgroundJob
+from app.db.models import AuditLog, BackgroundJob, JobAttempt
 from app.jobs.service import cancel_job, get_job, list_jobs, retry_job
 from app.master.service import TenantUser
 from app.tenancy.database import get_tenant_db
@@ -67,6 +67,7 @@ def _serialize_job(job) -> dict:
         "attempt_count": job.attempt_count,
         "retry_count": job.retry_count,
         "max_retries": job.max_retries,
+        "max_attempts": (job.max_retries or 0) + 1,
         "lock_owner": job.lock_owner,
         "lock_until": job.lock_until,
         "next_retry_at": job.next_retry_at,
@@ -200,6 +201,28 @@ def jobs_detail_page(job_id: int, request: Request, db: Session = Depends(get_te
         }
         for log in logs
     ]
+    attempts = db.scalars(
+        select(JobAttempt)
+        .where(
+            JobAttempt.company_id == user.company_id,
+            JobAttempt.job_id == job.id,
+        )
+        .order_by(JobAttempt.attempt_number.asc(), JobAttempt.created_at.asc())
+    ).all()
+    attempt_items = [
+        {
+            "attempt_number": attempt.attempt_number,
+            "status": attempt.status,
+            "worker_id": attempt.worker_id,
+            "started_at": attempt.started_at,
+            "finished_at": attempt.finished_at,
+            "duration_seconds": attempt.duration_seconds,
+            "error_type": attempt.error_type,
+            "error_message": attempt.error_message,
+            "next_retry_at": attempt.next_retry_at,
+        }
+        for attempt in attempts
+    ]
     return templates.TemplateResponse(
         "jobs/detail.html",
         {
@@ -208,6 +231,7 @@ def jobs_detail_page(job_id: int, request: Request, db: Session = Depends(get_te
             "job": serialized,
             "raw_job": job,
             "logs": log_items,
+            "attempts": attempt_items,
             "request_id": getattr(request.state, "request_id", None),
         },
     )

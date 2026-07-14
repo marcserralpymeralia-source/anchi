@@ -10,3 +10,6 @@
 | 2026-07-14 | Fase 2 | Exigir `membership_id`, `user_id` y `company_id` sincronizados para resolver tenant | Evitar que slug, host o company_id por si solos abran una base incorrecta | `backend/app/master/service.py`, `backend/app/tenancy/database.py` |
 | 2026-07-14 | Fase 2 | Reservar `Superadmin` para rutas master | Separar administracion de plataforma de la administracion de compania | `backend/app/auth/dependencies.py`, `backend/app/admin/routes.py`, `backend/app/health/routes.py` |
 | 2026-07-14 | Fase 2 | Introducir tests de aislamiento entre dos companias | Demostrar que IDs coincidentes no producen acceso cruzado | `backend/tests/test_tenant_isolation.py` |
+| 2026-07-14 | Fase 3 | Consolidar idempotencia de jobs por clave estable y restriccion unica | Evitar duplicados activos y repetidos para la misma operacion | `backend/app/jobs/service.py`, `backend/app/db/models.py` |
+| 2026-07-14 | Fase 3 | Registrar intentos de job y recovery de abandonados | Hacer trazable cada adquisicion y cada reintento | `backend/app/db/models.py`, `backend/app/jobs/service.py`, `backend/app/workers/jobs_worker.py` |
+| 2026-07-14 | Fase 3 | Añadir entrada CLI estable para el worker de jobs | Poder ejecutar y probar la cola sin depender del arranque web | `backend/app/workers/jobs_worker.py`, `docs/development/environment.md` |

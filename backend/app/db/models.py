@@ -775,6 +775,30 @@ class BackgroundJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+    attempts: Mapped[list["JobAttempt"]] = relationship(cascade="all, delete-orphan", order_by="JobAttempt.attempt_number")
+
+    __table_args__ = (UniqueConstraint("company_id", "job_type", "dedupe_key"),)
+
+
+class JobAttempt(Base):
+    __tablename__ = "job_attempts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    job_id: Mapped[int] = mapped_column(ForeignKey("background_jobs.id"), index=True)
+    attempt_number: Mapped[int] = mapped_column(Integer)
+    worker_id: Mapped[str | None] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(40), default="running")
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    duration_seconds: Mapped[int] = mapped_column(Integer, default=0)
+    error_type: Mapped[str | None] = mapped_column(String(120))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    next_retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (UniqueConstraint("job_id", "attempt_number"),)
+
 
 class Alert(Base):
     __tablename__ = "alerts"

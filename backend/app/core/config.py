@@ -112,6 +112,11 @@ class Settings(BaseSettings):
     branding_cache_ttl_seconds: int = 30
     email_worker_poll_seconds: int = 15
     job_worker_poll_seconds: int = 10
+    job_poll_interval_seconds: int | None = Field(default=None, validation_alias="JOB_POLL_INTERVAL_SECONDS")
+    job_max_attempts: int = Field(default=3, validation_alias="JOB_MAX_ATTEMPTS")
+    job_retry_base_seconds: int = Field(default=15, validation_alias="JOB_RETRY_BASE_SECONDS")
+    job_retry_max_seconds: int = Field(default=300, validation_alias="JOB_RETRY_MAX_SECONDS")
+    job_stale_after_seconds: int = Field(default=900, validation_alias="JOB_STALE_AFTER_SECONDS")
     app_url: str = "http://127.0.0.1:8000"
     session_cookie: str = "anchi_session"
     session_cookie_secure: bool | None = Field(default=None, validation_alias="SESSION_COOKIE_SECURE")
@@ -157,6 +162,19 @@ class Settings(BaseSettings):
             self.session_max_age = 60 * 60 * 24 * 7
         if self.session_max_age <= 0:
             raise ValueError("SESSION_MAX_AGE must be greater than zero")
+
+        if self.job_poll_interval_seconds is not None:
+            self.job_worker_poll_seconds = int(self.job_poll_interval_seconds)
+        if self.job_worker_poll_seconds <= 0:
+            raise ValueError("JOB_POLL_INTERVAL_SECONDS must be greater than zero")
+        if self.job_max_attempts <= 0:
+            raise ValueError("JOB_MAX_ATTEMPTS must be greater than zero")
+        if self.job_retry_base_seconds <= 0:
+            raise ValueError("JOB_RETRY_BASE_SECONDS must be greater than zero")
+        if self.job_retry_max_seconds < self.job_retry_base_seconds:
+            raise ValueError("JOB_RETRY_MAX_SECONDS must be greater than or equal to JOB_RETRY_BASE_SECONDS")
+        if self.job_stale_after_seconds <= 0:
+            raise ValueError("JOB_STALE_AFTER_SECONDS must be greater than zero")
 
         if self.tenant_db_encryption_key and not _is_valid_fernet_key(self.tenant_db_encryption_key):
             raise ValueError("ENCRYPTION_KEY must be a valid Fernet key")

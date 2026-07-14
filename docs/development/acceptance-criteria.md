@@ -35,6 +35,8 @@
 - No cambiar rutas ni endpoints salvo que el objetivo lo requiera.
 - No alterar el modelo de datos salvo instruccion explicita.
 - No permitir acceso cruzado entre dos companias con IDs coincidentes en bases distintas.
+- Mantener jobs idempotentes, con reintentos limitados, historial de intentos y recovery de jobs bloqueados.
+- Garantizar que el worker tenga una entrada CLI estable y que no procese un job antes de su fecha de reintento.
 
 ## Documentacion
 
