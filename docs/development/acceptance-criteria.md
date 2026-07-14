@@ -17,6 +17,10 @@
 - Mantener cookies seguras y hosts/origenes explicitos.
 - No usar datos de produccion.
 - No ejecutar acciones destructivas.
+- Mantener aislamiento estricto entre master y tenant.
+- No resolver tenant por `company_id`, slug o host sin membresia valida.
+- No permitir acceso master con rol tenant.
+- Rechazar sesiones incompletas o inconsistentes.
 
 ## Tests
 
@@ -30,6 +34,7 @@
 - No romper el arranque local.
 - No cambiar rutas ni endpoints salvo que el objetivo lo requiera.
 - No alterar el modelo de datos salvo instruccion explicita.
+- No permitir acceso cruzado entre dos companias con IDs coincidentes en bases distintas.
 
 ## Documentacion
 

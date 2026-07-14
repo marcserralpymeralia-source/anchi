@@ -105,46 +105,27 @@ def load_tenant_context(request, master_db: Session) -> TenantContext | None:
     company_slug = session.get("company_slug")
     host = (request.headers.get("host") or "").split(":")[0].lower()
 
-    membership = None
-    if membership_id:
-        membership = master_db.get(CompanyMembership, membership_id)
-        if membership and company_id and membership.company_id != company_id:
-            return None
-    if not membership and user_id and company_id:
-        membership = master_db.scalar(
-            select(CompanyMembership)
-            .options(selectinload(CompanyMembership.user), selectinload(CompanyMembership.company))
-            .where(
-                CompanyMembership.user_id == user_id,
-                CompanyMembership.company_id == company_id,
-                CompanyMembership.is_active.is_(True),
-            )
-        )
-    if not membership and user_id and not company_id and not company_slug:
-        membership = master_db.scalar(
-            select(CompanyMembership)
-            .options(selectinload(CompanyMembership.user), selectinload(CompanyMembership.company))
-            .where(CompanyMembership.user_id == user_id, CompanyMembership.is_active.is_(True))
-        )
-    if membership and company_id and membership.company_id != company_id:
+    if not membership_id or not user_id or not company_id:
         return None
-    if not membership and company_slug:
-        membership = master_db.scalar(
-            select(CompanyMembership)
-            .join(CompanyMembership.company)
-            .options(selectinload(CompanyMembership.user), selectinload(CompanyMembership.company))
-            .where(MasterCompany.slug == company_slug, CompanyMembership.is_active.is_(True))
+
+    membership = master_db.scalar(
+        select(CompanyMembership)
+        .options(selectinload(CompanyMembership.user), selectinload(CompanyMembership.company))
+        .where(
+            CompanyMembership.id == membership_id,
+            CompanyMembership.user_id == user_id,
+            CompanyMembership.company_id == company_id,
+            CompanyMembership.is_active.is_(True),
         )
-    if not membership and host and host not in {"localhost", "127.0.0.1"} and "." in host:
+    )
+    if not membership or not membership.user.is_active or not membership.company.active:
+        return None
+    if company_slug and membership.company.slug != company_slug:
+        return None
+    if host and host not in {"localhost", "127.0.0.1"} and "." in host:
         subdomain = host.split(".", 1)[0]
-        membership = master_db.scalar(
-            select(CompanyMembership)
-            .join(CompanyMembership.company)
-            .options(selectinload(CompanyMembership.user), selectinload(CompanyMembership.company))
-            .where(MasterCompany.slug == subdomain, CompanyMembership.is_active.is_(True))
-        )
-    if not membership:
-        return None
+        if subdomain != membership.company.slug:
+            return None
 
     tenant_db = master_db.scalar(
         select(MasterTenantDatabase).where(

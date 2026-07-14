@@ -19,3 +19,8 @@
 | 2026-07-14 | Fase 1 | `backend/app/health/routes.py` | Se retiro la clave de la base tenant de la respuesta de salud | Revision manual |
 | 2026-07-14 | Fase 1 | `backend/.env.example` | Se documentaron las variables de seguridad y despliegue seguras | Revision manual |
 | 2026-07-14 | Fase 1 | `docs/development/*` | Se actualizo la guia de entorno, validaciones y criterios de aceptacion | Revision manual |
+| 2026-07-14 | Fase 2 | `backend/app/master/service.py` | Se endurecio la resolucion del tenant para exigir sesion y membresia coherentes | `unittest`, acceso cruzado bloqueado |
+| 2026-07-14 | Fase 2 | `backend/app/tenancy/database.py` | Se elimino la resolucion de base por `company_id` no validado | `unittest`, rechazo de sesiones invalidas |
+| 2026-07-14 | Fase 2 | `backend/app/auth/dependencies.py` | Se separo el acceso master reservandolo a `Superadmin` | `unittest` |
+| 2026-07-14 | Fase 2 | `backend/tests/test_tenant_isolation.py` | Se añadieron pruebas de aislamiento multi-compania e IDs coincidentes | `unittest` |
+| 2026-07-14 | Fase 2 | `docs/development/*` | Se documentaron las reglas de aislamiento y el cierre de fase | Revision manual |

@@ -4,12 +4,11 @@ from collections.abc import Generator
 from functools import lru_cache
 
 from fastapi import Depends, HTTPException, Request, status
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.database import Base, ensure_schema_for_engine
 from app.master.database import get_master_db
-from app.master.models import MasterTenantDatabase
 from app.master.service import load_tenant_context
 
 
@@ -33,31 +32,14 @@ def ensure_tenant_schema(database_url: str) -> None:
     ensure_schema_for_engine(engine)
 
 
-def _tenant_database_url(request: Request, master_db: Session) -> str | None:
-    tenant = getattr(request.state, "tenant", None)
-    if tenant and getattr(tenant.company, "database_url", None):
-        return tenant.company.database_url
-
-    session = request.scope.get("session") or {}
-    company_id = session.get("company_id")
-    if company_id:
-        tenant_db = master_db.scalar(
-            select(MasterTenantDatabase).where(
-                MasterTenantDatabase.company_id == company_id,
-                MasterTenantDatabase.is_active.is_(True),
-            )
-        )
-        if tenant_db and tenant_db.database_url:
-            return tenant_db.database_url
-    tenant_context = load_tenant_context(request, master_db)
-    if tenant_context and tenant_context.company.database_url:
-        request.state.tenant = tenant_context
-        return tenant_context.company.database_url
-    return None
-
-
 def get_tenant_db(request: Request, master_db: Session = Depends(get_master_db)) -> Generator[Session, None, None]:
-    database_url = _tenant_database_url(request, master_db)
+    tenant = getattr(request.state, "tenant", None)
+    if tenant is None:
+        tenant = load_tenant_context(request, master_db)
+        if tenant:
+            request.state.tenant = tenant
+
+    database_url = tenant.company.database_url if tenant else None
     if not database_url:
         session = request.scope.get("session") or {}
         if not any(session.get(key) for key in ("membership_id", "user_id", "company_id", "company_slug")):

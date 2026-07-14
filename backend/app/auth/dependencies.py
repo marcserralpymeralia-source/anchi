@@ -59,7 +59,7 @@ def require_master_role(*roles: str):
 
 
 def require_master_admin(user: TenantUser = Depends(current_master_user)) -> TenantUser:
-    if user.role.name not in {"Administrador", "Superadmin"}:
+    if user.role.name != "Superadmin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No autorizado")
     return user
 
