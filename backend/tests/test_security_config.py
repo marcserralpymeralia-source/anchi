@@ -1,0 +1,389 @@
+from __future__ import annotations
+
+import os
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+os.environ.setdefault("APP_ENV", "development")
+
+from app.core.app_factory import create_app
+from app.core.config import DEV_SECRET_KEY, get_settings
+from app.core.encryption import encrypt_secret, mask_secret
+from app.settings.service import update_with_form
+from app.db.models import EmailSettings
+from cryptography.fernet import Fernet
+
+
+VALID_FERNET_KEY = Fernet.generate_key().decode()
+
+
+def _load_settings(env: dict[str, str]) -> object:
+    baseline = {
+        "APP_ENV": "development",
+        "ENVIRONMENT": "development",
+        "SECRET_KEY": "a-very-strong-secret-key-for-development-123456",
+        "ENCRYPTION_KEY": VALID_FERNET_KEY,
+        "DEBUG": "false",
+        "SESSION_COOKIE_SECURE": "false",
+        "SESSION_COOKIE_SAMESITE": "lax",
+        "SESSION_MAX_AGE": "604800",
+        "ALLOWED_HOSTS": "localhost,127.0.0.1,testserver",
+        "CORS_ALLOWED_ORIGINS": "http://localhost:8000,http://127.0.0.1:8000",
+        "DATABASE_URL": "sqlite:///./anchi_demo.db",
+        "MASTER_DATABASE_URL": "sqlite:///./master.db",
+        "DEFAULT_ADMIN_EMAIL": "ops@example.com",
+        "DEFAULT_ADMIN_PASSWORD": "StrongPassw0rd!2026",
+    }
+    baseline.update(env)
+    if "ENVIRONMENT" not in env and "APP_ENV" in env:
+        baseline["ENVIRONMENT"] = env["APP_ENV"]
+    runtime_env = baseline.get("APP_ENV", "development")
+    if "ENABLE_DEMO_BOOTSTRAP" not in env and "SEED_DEMO_DATA" not in env:
+        baseline["ENABLE_DEMO_BOOTSTRAP"] = "true" if runtime_env == "development" else "false"
+    if runtime_env == "production":
+        if "SESSION_COOKIE_SECURE" not in env:
+            baseline["SESSION_COOKIE_SECURE"] = "true"
+        if "ALLOWED_HOSTS" not in env:
+            baseline["ALLOWED_HOSTS"] = "app.example.com"
+        if "CORS_ALLOWED_ORIGINS" not in env:
+            baseline["CORS_ALLOWED_ORIGINS"] = "https://app.example.com"
+        if "DATABASE_URL" not in env:
+            baseline["DATABASE_URL"] = "postgresql+psycopg://user:password@db.example.com:5432/anchi"
+        if "MASTER_DATABASE_URL" not in env:
+            baseline["MASTER_DATABASE_URL"] = "postgresql+psycopg://user:password@db.example.com:5432/anchi_master"
+        if "DEFAULT_ADMIN_EMAIL" not in env:
+            baseline["DEFAULT_ADMIN_EMAIL"] = "ops@example.com"
+        if "DEFAULT_ADMIN_PASSWORD" not in env:
+            baseline["DEFAULT_ADMIN_PASSWORD"] = "StrongPassw0rd!2026"
+    with patch.dict(os.environ, baseline, clear=True):
+        get_settings.cache_clear()
+        return get_settings()
+
+
+class SecurityConfigurationTests(unittest.TestCase):
+    def tearDown(self):
+        get_settings.cache_clear()
+
+    def test_environment_accepts_allowed_values(self):
+        for value in ["development", "test", "production"]:
+            settings = _load_settings({"APP_ENV": value})
+            self.assertEqual(settings.environment, value)
+
+    def test_environment_rejects_unknown_value(self):
+        with patch.dict(os.environ, {"APP_ENV": "staging"}, clear=True):
+            get_settings.cache_clear()
+            with self.assertRaisesRegex(ValueError, "APP_ENV must be development, test or production"):
+                get_settings()
+
+    def test_development_keeps_local_defaults(self):
+        settings = _load_settings({"APP_ENV": "development"})
+        self.assertFalse(settings.session_cookie_secure)
+        self.assertEqual(settings.session_cookie_samesite, "lax")
+        self.assertGreater(settings.session_max_age, 0)
+        self.assertIn("localhost", settings.allowed_hosts)
+        self.assertTrue(settings.cors_allowed_origins)
+        self.assertTrue(settings.seed_demo_data)
+
+    def test_test_environment_uses_isolated_defaults(self):
+        settings = _load_settings({"APP_ENV": "test"})
+        self.assertEqual(settings.environment, "test")
+        self.assertFalse(settings.debug)
+        self.assertFalse(settings.session_cookie_secure)
+        self.assertFalse(settings.seed_demo_data)
+
+    def test_production_accepts_safe_configuration(self):
+        settings = _load_settings(
+            {
+                "APP_ENV": "production",
+                "ENVIRONMENT": "production",
+                "SECRET_KEY": "a-very-strong-secret-key-for-production-123456",
+                "ENCRYPTION_KEY": VALID_FERNET_KEY,
+                "ENABLE_DEMO_BOOTSTRAP": "false",
+                "DEBUG": "false",
+                "SESSION_COOKIE_SECURE": "true",
+                "SESSION_COOKIE_SAMESITE": "lax",
+                "SESSION_MAX_AGE": "604800",
+                "ALLOWED_HOSTS": "app.example.com",
+                "CORS_ALLOWED_ORIGINS": "https://app.example.com",
+                "DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi",
+                "MASTER_DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi_master",
+                "DEFAULT_ADMIN_EMAIL": "ops@example.com",
+                "DEFAULT_ADMIN_PASSWORD": "StrongPassw0rd!2026",
+            }
+        )
+        self.assertEqual(settings.environment, "production")
+        self.assertTrue(settings.session_cookie_secure)
+        self.assertEqual(settings.allowed_hosts, ["app.example.com"])
+
+    def test_production_rejects_insecure_secret_key(self):
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "production",
+                "ENVIRONMENT": "production",
+                "SECRET_KEY": DEV_SECRET_KEY,
+                "ENCRYPTION_KEY": VALID_FERNET_KEY,
+                "ENABLE_DEMO_BOOTSTRAP": "false",
+                "DEBUG": "false",
+                "SESSION_COOKIE_SECURE": "true",
+                "ALLOWED_HOSTS": "app.example.com",
+                "DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi",
+                "MASTER_DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi_master",
+                "DEFAULT_ADMIN_EMAIL": "ops@example.com",
+                "DEFAULT_ADMIN_PASSWORD": "StrongPassw0rd!2026",
+            },
+            clear=True,
+        ):
+            get_settings.cache_clear()
+            with self.assertRaisesRegex(ValueError, "Unsafe SECRET_KEY for production"):
+                get_settings()
+
+    def test_production_rejects_short_secret_key(self):
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "production",
+                "ENVIRONMENT": "production",
+                "SECRET_KEY": "short-key",
+                "ENCRYPTION_KEY": VALID_FERNET_KEY,
+                "ENABLE_DEMO_BOOTSTRAP": "false",
+                "DEBUG": "false",
+                "SESSION_COOKIE_SECURE": "true",
+                "ALLOWED_HOSTS": "app.example.com",
+                "DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi",
+                "MASTER_DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi_master",
+                "DEFAULT_ADMIN_EMAIL": "ops@example.com",
+                "DEFAULT_ADMIN_PASSWORD": "StrongPassw0rd!2026",
+            },
+            clear=True,
+        ):
+            get_settings.cache_clear()
+            with self.assertRaisesRegex(ValueError, "Unsafe SECRET_KEY for production"):
+                get_settings()
+
+    def test_production_rejects_invalid_encryption_key(self):
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "production",
+                "ENVIRONMENT": "production",
+                "SECRET_KEY": "a-very-strong-secret-key-for-production-123456",
+                "ENCRYPTION_KEY": "invalid-key",
+                "ENABLE_DEMO_BOOTSTRAP": "false",
+                "DEBUG": "false",
+                "SESSION_COOKIE_SECURE": "true",
+                "ALLOWED_HOSTS": "app.example.com",
+                "DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi",
+                "MASTER_DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi_master",
+                "DEFAULT_ADMIN_EMAIL": "ops@example.com",
+                "DEFAULT_ADMIN_PASSWORD": "StrongPassw0rd!2026",
+            },
+            clear=True,
+        ):
+            get_settings.cache_clear()
+            with self.assertRaisesRegex(ValueError, "ENCRYPTION_KEY must be a valid Fernet key"):
+                get_settings()
+
+    def test_production_rejects_demo_bootstrap(self):
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "production",
+                "ENVIRONMENT": "production",
+                "SECRET_KEY": "a-very-strong-secret-key-for-production-123456",
+                "ENCRYPTION_KEY": VALID_FERNET_KEY,
+                "ENABLE_DEMO_BOOTSTRAP": "true",
+                "DEBUG": "false",
+                "SESSION_COOKIE_SECURE": "true",
+                "ALLOWED_HOSTS": "app.example.com",
+                "DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi",
+                "MASTER_DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi_master",
+                "DEFAULT_ADMIN_EMAIL": "ops@example.com",
+                "DEFAULT_ADMIN_PASSWORD": "StrongPassw0rd!2026",
+            },
+            clear=True,
+        ):
+            get_settings.cache_clear()
+            with self.assertRaisesRegex(ValueError, "ENABLE_DEMO_BOOTSTRAP cannot be enabled in production"):
+                get_settings()
+
+    def test_production_rejects_debug(self):
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "production",
+                "ENVIRONMENT": "production",
+                "SECRET_KEY": "a-very-strong-secret-key-for-production-123456",
+                "ENCRYPTION_KEY": VALID_FERNET_KEY,
+                "ENABLE_DEMO_BOOTSTRAP": "false",
+                "DEBUG": "true",
+                "SESSION_COOKIE_SECURE": "true",
+                "ALLOWED_HOSTS": "app.example.com",
+                "DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi",
+                "MASTER_DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi_master",
+                "DEFAULT_ADMIN_EMAIL": "ops@example.com",
+                "DEFAULT_ADMIN_PASSWORD": "StrongPassw0rd!2026",
+            },
+            clear=True,
+        ):
+            get_settings.cache_clear()
+            with self.assertRaisesRegex(ValueError, "DEBUG cannot be enabled in production"):
+                get_settings()
+
+    def test_production_rejects_hosts_wildcard(self):
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "production",
+                "ENVIRONMENT": "production",
+                "SECRET_KEY": "a-very-strong-secret-key-for-production-123456",
+                "ENCRYPTION_KEY": VALID_FERNET_KEY,
+                "ENABLE_DEMO_BOOTSTRAP": "false",
+                "DEBUG": "false",
+                "SESSION_COOKIE_SECURE": "true",
+                "ALLOWED_HOSTS": "*",
+                "CORS_ALLOWED_ORIGINS": "https://app.example.com",
+                "DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi",
+                "MASTER_DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi_master",
+                "DEFAULT_ADMIN_EMAIL": "ops@example.com",
+                "DEFAULT_ADMIN_PASSWORD": "StrongPassw0rd!2026",
+            },
+            clear=True,
+        ):
+            get_settings.cache_clear()
+            with self.assertRaisesRegex(ValueError, "ALLOWED_HOSTS cannot contain \\* in production"):
+                get_settings()
+
+    def test_production_rejects_cors_wildcard(self):
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "production",
+                "ENVIRONMENT": "production",
+                "SECRET_KEY": "a-very-strong-secret-key-for-production-123456",
+                "ENCRYPTION_KEY": VALID_FERNET_KEY,
+                "ENABLE_DEMO_BOOTSTRAP": "false",
+                "DEBUG": "false",
+                "SESSION_COOKIE_SECURE": "true",
+                "ALLOWED_HOSTS": "app.example.com",
+                "CORS_ALLOWED_ORIGINS": "*",
+                "DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi",
+                "MASTER_DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi_master",
+                "DEFAULT_ADMIN_EMAIL": "ops@example.com",
+                "DEFAULT_ADMIN_PASSWORD": "StrongPassw0rd!2026",
+            },
+            clear=True,
+        ):
+            get_settings.cache_clear()
+            with self.assertRaisesRegex(ValueError, "CORS wildcard is not allowed with credentials"):
+                get_settings()
+
+    def test_production_rejects_empty_hosts(self):
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "production",
+                "ENVIRONMENT": "production",
+                "SECRET_KEY": "a-very-strong-secret-key-for-production-123456",
+                "ENCRYPTION_KEY": VALID_FERNET_KEY,
+                "ENABLE_DEMO_BOOTSTRAP": "false",
+                "DEBUG": "false",
+                "SESSION_COOKIE_SECURE": "true",
+                "DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi",
+                "MASTER_DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi_master",
+                "DEFAULT_ADMIN_EMAIL": "ops@example.com",
+                "DEFAULT_ADMIN_PASSWORD": "StrongPassw0rd!2026",
+            },
+            clear=True,
+        ):
+            get_settings.cache_clear()
+            with self.assertRaisesRegex(ValueError, "ALLOWED_HOSTS must be explicit in production"):
+                get_settings()
+
+    def test_secret_repr_and_masking_do_not_expose_values(self):
+        settings = _load_settings({"APP_ENV": "development", "SECRET_KEY": "x" * 48, "ENCRYPTION_KEY": VALID_FERNET_KEY})
+        repr_value = repr(settings)
+        self.assertNotIn("x" * 48, repr_value)
+        self.assertNotIn("admin123", repr_value)
+        secret = encrypt_secret("super-secret-value")
+        self.assertEqual(mask_secret(secret), "••••••••")
+
+    def test_secret_update_flow_preserves_blank_value(self):
+        settings = EmailSettings(company_id=1, imap_password_encrypted=encrypt_secret("old-value"))
+        original = settings.imap_password_encrypted
+        update_with_form(settings, {"imap_password_encrypted": ""}, {"imap_password_encrypted"})
+        self.assertEqual(settings.imap_password_encrypted, original)
+
+    def test_login_template_no_longer_prefills_demo_credentials(self):
+        login_template = Path(__file__).resolve().parents[1] / "app" / "templates" / "login.html"
+        source = login_template.read_text(encoding="utf-8")
+        self.assertNotIn("default_admin_password", source)
+        self.assertNotIn("default_admin_email", source)
+
+    def test_create_app_uses_security_middlewares(self):
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "development",
+                "ENVIRONMENT": "development",
+                "SECRET_KEY": "a-very-strong-secret-key-for-development-123456",
+                "ENABLE_DEMO_BOOTSTRAP": "true",
+                "SESSION_COOKIE_SECURE": "false",
+                "ALLOWED_HOSTS": "localhost,127.0.0.1,testserver",
+                "CORS_ALLOWED_ORIGINS": "http://localhost:8000,http://127.0.0.1:8000",
+                "DATABASE_URL": "sqlite:///./anchi_demo.db",
+                "MASTER_DATABASE_URL": "sqlite:///./master.db",
+                "DEFAULT_ADMIN_EMAIL": "ops@example.com",
+                "DEFAULT_ADMIN_PASSWORD": "StrongPassw0rd!2026",
+            },
+            clear=True,
+        ):
+            get_settings.cache_clear()
+            app = create_app()
+            middleware_names = {middleware.cls.__name__ for middleware in app.user_middleware}
+            self.assertIn("SessionMiddleware", middleware_names)
+            self.assertIn("TrustedHostMiddleware", middleware_names)
+            self.assertIn("CORSMiddleware", middleware_names)
+            self.assertFalse(app.debug)
+
+            session_middleware = next(middleware for middleware in app.user_middleware if middleware.cls.__name__ == "SessionMiddleware")
+            self.assertFalse(session_middleware.kwargs["https_only"])
+            self.assertEqual(session_middleware.kwargs["same_site"], "lax")
+
+    def test_create_app_in_production_uses_secure_session_cookie(self):
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "production",
+                "ENVIRONMENT": "production",
+                "SECRET_KEY": "a-very-strong-secret-key-for-production-123456",
+                "ENCRYPTION_KEY": VALID_FERNET_KEY,
+                "ENABLE_DEMO_BOOTSTRAP": "false",
+                "DEBUG": "false",
+                "SESSION_COOKIE_SECURE": "true",
+                "SESSION_COOKIE_SAMESITE": "lax",
+                "ALLOWED_HOSTS": "app.example.com",
+                "CORS_ALLOWED_ORIGINS": "https://app.example.com",
+                "DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi",
+                "MASTER_DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi_master",
+                "DEFAULT_ADMIN_EMAIL": "ops@example.com",
+                "DEFAULT_ADMIN_PASSWORD": "StrongPassw0rd!2026",
+            },
+            clear=True,
+        ):
+            get_settings.cache_clear()
+            app = create_app()
+            middleware_names = {middleware.cls.__name__ for middleware in app.user_middleware}
+            self.assertIn("SessionMiddleware", middleware_names)
+            self.assertIn("TrustedHostMiddleware", middleware_names)
+            self.assertIn("CORSMiddleware", middleware_names)
+
+            session_middleware = next(middleware for middleware in app.user_middleware if middleware.cls.__name__ == "SessionMiddleware")
+            self.assertTrue(session_middleware.kwargs["https_only"])
+            self.assertEqual(session_middleware.kwargs["same_site"], "lax")
+            self.assertFalse(app.debug)
+
+
+if __name__ == "__main__":
+    unittest.main()

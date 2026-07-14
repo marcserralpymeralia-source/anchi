@@ -13,13 +13,16 @@ Edita `.env`:
 
 - `APP_NAME`: nombre tecnico visible en titulo/base.
 - `APP_SLUG`: identificador unico del cliente, sin espacios.
+- `APP_ENV`: `development` para local, `production` para entrega real.
 - `DATABASE_URL`: base de datos propia del cliente.
+- `MASTER_DATABASE_URL`: base master compartida o dedicada.
 - `DEFAULT_COMPANY_NAME`: razon social o nombre comercial inicial.
 - `DEFAULT_ADMIN_EMAIL` y `DEFAULT_ADMIN_PASSWORD`: credenciales iniciales.
-- `APP_SECRET_KEY`: clave Fernet unica por instalacion.
+- `SECRET_KEY`: clave de sesion unica por instalacion.
+- `ENCRYPTION_KEY`: clave Fernet unica por instalacion.
 - `BRANDING_*`: identidad inicial.
 
-Mantener `SEED_DEMO_DATA=false` para entregas reales.
+Mantener `ENABLE_DEMO_BOOTSTRAP=false` para entregas reales.
 
 ## 2. Arrancar instalacion limpia
 
@@ -38,7 +41,7 @@ Al primer arranque se crean:
 - Prompts base del agente.
 - Configuracion editable.
 
-No se crean clientes, productos ni pedidos demo salvo que `SEED_DEMO_DATA=true`.
+No se crean clientes, productos ni pedidos demo salvo que `ENABLE_DEMO_BOOTSTRAP=true`.
 
 ## 3. Personalizar desde la app
 

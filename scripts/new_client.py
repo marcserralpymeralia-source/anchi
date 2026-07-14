@@ -34,22 +34,33 @@ def build_env(args: argparse.Namespace) -> str:
     admin_password = args.admin_password or secrets.token_urlsafe(18)
     app_name = args.app_name or "Anchi"
     db_name = args.database_name or f"{slug}.db"
+    is_production = args.environment == "production"
+    allowed_hosts = "localhost,127.0.0.1,testserver" if not is_production else ""
+    cors_origins = "http://localhost:8000,http://127.0.0.1:8000,http://localhost:8001,http://127.0.0.1:8001" if not is_production else ""
     return "\n".join(
         [
             "# Generado por scripts/new_client.py",
             "# No subir este archivo al repositorio.",
             "",
+            f"APP_ENV={quote(args.environment)}",
             f"APP_NAME={quote(app_name)}",
             f"APP_SLUG={quote(slug)}",
-            f"ENVIRONMENT={quote(args.environment)}",
-            f"APP_SECRET_KEY={quote(fernet_key())}",
+            f"SECRET_KEY={quote(secrets.token_urlsafe(48))}",
+            f"ENCRYPTION_KEY={quote(fernet_key())}",
             f"SESSION_COOKIE={quote(slug + '_session')}",
+            f"SESSION_COOKIE_SECURE={quote('true' if is_production else 'false')}",
+            f"SESSION_COOKIE_SAMESITE={quote('lax')}",
+            "SESSION_MAX_AGE=604800",
+            f"ALLOWED_HOSTS={quote(allowed_hosts)}",
+            f"CORS_ALLOWED_ORIGINS={quote(cors_origins if not is_production else '')}",
             f"DATABASE_URL={quote('sqlite:///./' + db_name)}",
+            "MASTER_DATABASE_URL=\"sqlite:///./master.db\"",
             "",
             f"DEFAULT_COMPANY_NAME={quote(args.name)}",
             f"DEFAULT_ADMIN_EMAIL={quote(args.admin_email)}",
             f"DEFAULT_ADMIN_PASSWORD={quote(admin_password)}",
-            "SEED_DEMO_DATA=false",
+            f"ENABLE_DEMO_BOOTSTRAP={quote('false' if is_production else 'true')}",
+            f"DEBUG={quote('false' if is_production else 'true')}",
             "",
             f"BRANDING_APP_NAME={quote(app_name)}",
             f"BRANDING_PRIMARY_CLAIM={quote(args.primary_claim)}",

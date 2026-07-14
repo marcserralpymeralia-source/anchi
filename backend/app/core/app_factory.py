@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.core.config import get_settings
@@ -31,15 +32,27 @@ def internal_server_error_response(request) -> JSONResponse:  # noqa: ANN001
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title=settings.app_name, lifespan=app_lifespan)
-    app.add_middleware(SessionMiddleware, secret_key=settings.app_secret_key, session_cookie=settings.session_cookie)
+    app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=app_lifespan)
     app.add_middleware(
-        CORSMiddleware,
-        allow_origins=[settings.app_url, "http://localhost:8000", "http://127.0.0.1:8000", "http://localhost:8001", "http://127.0.0.1:8001"],
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        SessionMiddleware,
+        secret_key=settings.app_secret_key,
+        session_cookie=settings.session_cookie,
+        https_only=bool(settings.session_cookie_secure),
+        same_site=settings.session_cookie_samesite or "lax",
+        max_age=settings.session_max_age,
+        domain=settings.session_cookie_domain or None,
     )
+    if settings.allowed_hosts:
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
+    cors_origins = settings.cors_allowed_origins
+    if cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
     app.middleware("http")(branding_middleware)
     static_dir = Path(__file__).resolve().parents[1] / "static"
     app.mount("/static", StaticFiles(directory=static_dir.as_posix()), name="static")

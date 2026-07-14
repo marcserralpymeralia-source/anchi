@@ -3,3 +3,7 @@
 | 2026-07-14 | Fase 0 | Crear base documental de entorno, validacion y entregas | Dejar una referencia repetible para las siguientes fases | `AGENTS.md`, `docs/development/*` |
 | 2026-07-14 | Fase 0 | Crear rama `chore/technical-improvement-plan` | Identificar la secuencia de mejoras sin tocar funcionalidad | Ninguno |
 | 2026-07-14 | Fase 0.5 | Crear la linea base Git inicial con exclusiones locales estrictas | Obtener un punto de comparacion limpio sin secretos, bases ni entorno virtual | `.gitignore`, codigo fuente, documentacion de desarrollo |
+| 2026-07-14 | Fase 1 | Centralizar la seguridad de configuracion en `app.core.config` | Impedir que produccion arranque con secretos, demo bootstrap o cookies inseguras | `backend/app/core/config.py`, `backend/app/core/app_factory.py`, `backend/app/core/encryption.py` |
+| 2026-07-14 | Fase 1 | Exigir configuracion explicita de hosts, CORS y cookies por entorno | Evitar defaults abiertos y hacer el despliegue mas predecible | `backend/app/core/config.py`, `backend/app/core/app_factory.py`, `backend/.env.example` |
+| 2026-07-14 | Fase 1 | Retirar credenciales demo del login | Evitar que la pantalla de acceso exponga valores iniciales reutilizables | `backend/app/templates/login.html` |
+| 2026-07-14 | Fase 1 | Redactar secretos en salida textual | Evitar fugas en placeholders, repr y diagnosticos | `backend/app/core/encryption.py`, `backend/app/admin/diagnostics.py`, `backend/app/health/routes.py` |

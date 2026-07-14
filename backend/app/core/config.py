@@ -1,11 +1,99 @@
+from __future__ import annotations
+
 import base64
 import hashlib
+import logging
+import os
 from functools import lru_cache
 
+from cryptography.fernet import Fernet
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+logger = logging.getLogger(__name__)
+
 DEV_SECRET_KEY = base64.urlsafe_b64encode(hashlib.sha256(b"order-agent-dev-secret-key").digest()).decode()
+ALLOWED_ENVIRONMENTS = {"development", "test", "production"}
+LOCAL_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "testserver"]
+LOCAL_CORS_ORIGINS = [
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://localhost:8001",
+    "http://127.0.0.1:8001",
+]
+PROHIBITED_SECRET_KEY_VALUES = {
+    "secret",
+    "changeme",
+    "dev",
+    "development",
+    "demo",
+    "test",
+    "password",
+    "your-secret-key",
+}
+PROHIBITED_ADMIN_PASSWORDS = {
+    "",
+    "admin",
+    "admin123",
+    "changeme",
+    "demo",
+    "password",
+    "test",
+}
+
+
+def _split_csv(raw_value: str | None) -> list[str]:
+    if not raw_value:
+        return []
+    return [item.strip() for item in raw_value.split(",") if item.strip()]
+
+
+def _derive_fernet_key(source: str) -> str:
+    digest = hashlib.sha256(source.encode()).digest()
+    return base64.urlsafe_b64encode(digest).decode()
+
+
+def _is_valid_fernet_key(value: str | None) -> bool:
+    if not value:
+        return False
+    try:
+        Fernet(value.encode())
+    except (ValueError, TypeError):
+        return False
+    return True
+
+
+def _looks_safe_secret_key(value: str | None) -> bool:
+    if not value:
+        return False
+    normalized = value.strip()
+    lowered = normalized.lower()
+    if len(normalized) < 32:
+        return False
+    if normalized == DEV_SECRET_KEY:
+        return False
+    if any(lowered == token or lowered.startswith(f"{token}-") or lowered.startswith(f"{token}_") for token in PROHIBITED_SECRET_KEY_VALUES):
+        return False
+    if normalized in {"secret", "changeme", "demo", "test", "password", "your-secret-key"}:
+        return False
+    return True
+
+
+def _sanitize_database_url(url: str | None) -> str:
+    if not url:
+        return ""
+    if "@" not in url:
+        return url
+    prefix, suffix = url.split("://", 1) if "://" in url else ("", url)
+    if ":" not in suffix or "@" not in suffix:
+        return url
+    credentials, rest = suffix.split("@", 1)
+    if ":" not in credentials:
+        return url
+    username, _password = credentials.split(":", 1)
+    scheme = f"{prefix}://" if prefix else ""
+    return f"{scheme}{username}:***@{rest}"
 
 
 class Settings(BaseSettings):
@@ -13,8 +101,11 @@ class Settings(BaseSettings):
     app_slug: str = "anchi"
     database_url: str = "sqlite:///./anchi_demo.db"
     master_database_url: str = "sqlite:///./master.db"
-    app_secret_key: str = DEV_SECRET_KEY
-    tenant_db_encryption_key: str = ""
+    app_secret_key: str = Field(default=DEV_SECRET_KEY, validation_alias=AliasChoices("SECRET_KEY", "APP_SECRET_KEY"))
+    tenant_db_encryption_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("ENCRYPTION_KEY", "APP_ENCRYPTION_KEY", "TENANT_DB_ENCRYPTION_KEY"),
+    )
     auth_secret: str = DEV_SECRET_KEY
     cron_secret: str = ""
     enable_legacy_sync: bool = False
@@ -23,11 +114,18 @@ class Settings(BaseSettings):
     job_worker_poll_seconds: int = 10
     app_url: str = "http://127.0.0.1:8000"
     session_cookie: str = "anchi_session"
-    environment: str = "development"
+    session_cookie_secure: bool | None = Field(default=None, validation_alias="SESSION_COOKIE_SECURE")
+    session_cookie_samesite: str | None = Field(default=None, validation_alias="SESSION_COOKIE_SAMESITE")
+    session_max_age: int | None = Field(default=None, validation_alias="SESSION_MAX_AGE")
+    session_cookie_domain: str | None = Field(default=None, validation_alias="SESSION_COOKIE_DOMAIN")
+    cors_allowed_origins_raw: str | None = Field(default=None, validation_alias="CORS_ALLOWED_ORIGINS")
+    allowed_hosts_raw: str | None = Field(default=None, validation_alias="ALLOWED_HOSTS")
+    environment: str = Field(default="development", validation_alias=AliasChoices("APP_ENV", "ENVIRONMENT"))
+    debug: bool | None = Field(default=None, validation_alias="DEBUG")
     default_company_name: str = "Anchi Demo"
     default_admin_email: str = "admin@anchi.local"
     default_admin_password: str = "admin123"
-    seed_demo_data: bool = True
+    seed_demo_data: bool | None = Field(default=None, validation_alias=AliasChoices("ENABLE_DEMO_BOOTSTRAP", "SEED_DEMO_DATA"))
     branding_app_name: str = "Anchi"
     branding_primary_claim: str = "Gestion inteligente de pedidos"
     branding_secondary_claim: str = ""
@@ -36,9 +134,115 @@ class Settings(BaseSettings):
     branding_favicon_url: str = ""
     email_signature_text: str = "Equipo de pedidos"
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @model_validator(mode="after")
+    def validate_runtime_configuration(self):
+        self.environment = (self.environment or "development").strip().lower()
+        if self.environment not in ALLOWED_ENVIRONMENTS:
+            raise ValueError("APP_ENV must be development, test or production")
+
+        if self.debug is None:
+            self.debug = False
+        if self.seed_demo_data is None:
+            self.seed_demo_data = self.environment == "development"
+        if self.session_cookie_secure is None:
+            self.session_cookie_secure = self.environment == "production"
+        if self.session_cookie_samesite is None:
+            self.session_cookie_samesite = "lax"
+        self.session_cookie_samesite = self.session_cookie_samesite.strip().lower()
+        if self.session_cookie_samesite not in {"lax", "strict", "none"}:
+            raise ValueError("SESSION_COOKIE_SAMESITE must be lax, strict or none")
+        if self.session_max_age is None:
+            self.session_max_age = 60 * 60 * 24 * 7
+        if self.session_max_age <= 0:
+            raise ValueError("SESSION_MAX_AGE must be greater than zero")
+
+        if self.tenant_db_encryption_key and not _is_valid_fernet_key(self.tenant_db_encryption_key):
+            raise ValueError("ENCRYPTION_KEY must be a valid Fernet key")
+        if not self.tenant_db_encryption_key and self.environment == "production":
+            raise ValueError("ENCRYPTION_KEY is required in production")
+
+        if self.environment == "production":
+            if not _looks_safe_secret_key(self.app_secret_key):
+                raise ValueError("Unsafe SECRET_KEY for production")
+            if self.debug:
+                raise ValueError("DEBUG cannot be enabled in production")
+            if self.seed_demo_data:
+                raise ValueError("ENABLE_DEMO_BOOTSTRAP cannot be enabled in production")
+            if not self.session_cookie_secure:
+                raise ValueError("SESSION_COOKIE_SECURE must be enabled in production")
+            if not self.allowed_hosts:
+                raise ValueError("ALLOWED_HOSTS must be explicit in production")
+            if "*" in self.allowed_hosts:
+                raise ValueError("ALLOWED_HOSTS cannot contain * in production")
+            if "*" in self.cors_allowed_origins:
+                raise ValueError("CORS wildcard is not allowed with credentials")
+            if self.database_url.startswith("sqlite"):
+                raise ValueError("DATABASE_URL cannot use sqlite in production")
+            if self.master_database_url.startswith("sqlite"):
+                raise ValueError("MASTER_DATABASE_URL cannot use sqlite in production")
+            if self.default_admin_email.strip().lower() == "admin@anchi.local":
+                raise ValueError("DEFAULT_ADMIN_EMAIL must be customized in production")
+            if self.default_admin_password.strip().lower() in PROHIBITED_ADMIN_PASSWORDS or len(self.default_admin_password.strip()) < 12:
+                raise ValueError("DEFAULT_ADMIN_PASSWORD must be stronger than the demo value in production")
+
+        return self
+
+    @property
+    def cors_allowed_origins(self) -> list[str]:
+        origins = _split_csv(self.cors_allowed_origins_raw)
+        if origins:
+            return origins
+        if self.environment in {"development", "test"}:
+            return LOCAL_CORS_ORIGINS.copy()
+        return []
+
+    @property
+    def allowed_hosts(self) -> list[str]:
+        hosts = _split_csv(self.allowed_hosts_raw)
+        if hosts:
+            return hosts
+        if self.environment in {"development", "test"}:
+            return LOCAL_ALLOWED_HOSTS.copy()
+        return []
+
+    @property
+    def encryption_key(self) -> str:
+        if self.tenant_db_encryption_key:
+            return self.tenant_db_encryption_key
+        return _derive_fernet_key(self.app_secret_key)
+
+    def __repr__(self) -> str:
+        parts = {
+            "app_name": self.app_name,
+            "app_slug": self.app_slug,
+            "environment": self.environment,
+            "database_url": _sanitize_database_url(self.database_url),
+            "master_database_url": _sanitize_database_url(self.master_database_url),
+            "session_cookie": self.session_cookie,
+            "session_cookie_secure": self.session_cookie_secure,
+            "session_cookie_samesite": self.session_cookie_samesite,
+            "session_max_age": self.session_max_age,
+            "debug": self.debug,
+            "seed_demo_data": self.seed_demo_data,
+            "allowed_hosts": self.allowed_hosts,
+            "cors_allowed_origins": self.cors_allowed_origins,
+            "app_secret_key": "[redacted]",
+            "tenant_db_encryption_key": "[redacted]" if self.tenant_db_encryption_key else "",
+            "auth_secret": "[redacted]" if self.auth_secret else "",
+            "cron_secret": "[redacted]" if self.cron_secret else "",
+            "default_company_name": self.default_company_name,
+            "default_admin_email": self.default_admin_email,
+            "default_admin_password": "[redacted]" if self.default_admin_password else "",
+        }
+        return f"Settings({parts!r})"
+
+    __str__ = __repr__
 
 
 @lru_cache
 def get_settings() -> Settings:
+    if "APP_ENV" not in os.environ and "ENVIRONMENT" not in os.environ:
+        logger.warning("APP_ENV no definido; usando development por compatibilidad local.")
     return Settings()

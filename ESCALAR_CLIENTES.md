@@ -44,6 +44,20 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 3. Entrar con el admin inicial del `.env`.
 
+La configuracion de entorno debe incluir, como minimo:
+
+- `APP_ENV`
+- `SECRET_KEY`
+- `ENCRYPTION_KEY`
+- `DATABASE_URL`
+- `MASTER_DATABASE_URL`
+- `ENABLE_DEMO_BOOTSTRAP`
+- `ALLOWED_HOSTS`
+- `CORS_ALLOWED_ORIGINS`
+- `SESSION_COOKIE_SECURE`
+- `SESSION_COOKIE_SAMESITE`
+- `SESSION_MAX_AGE`
+
 4. Configurar en la app:
 
 - Identidad corporativa.

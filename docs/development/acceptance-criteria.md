@@ -12,6 +12,9 @@
 ## Seguridad
 
 - No exponer credenciales ni tokens.
+- Rechazar configuracion insegura en produccion.
+- No permitir secretos demo ni claves debiles en produccion.
+- Mantener cookies seguras y hosts/origenes explicitos.
 - No usar datos de produccion.
 - No ejecutar acciones destructivas.
 
@@ -19,6 +22,7 @@
 
 - Ejecutar los tests relacionados antes de cerrar una fase.
 - Ejecutar validacion sintactica.
+- Ejecutar tests especificos de configuracion segura.
 - Documentar cualquier fallo que no se corrija en ese momento.
 
 ## Compatibilidad
@@ -42,4 +46,3 @@
 ## Condicion de detencion
 
 - Detenerse al terminar el alcance solicitado, sin empezar la fase siguiente.
-

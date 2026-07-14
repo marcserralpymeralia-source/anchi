@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 import asyncio
+import os
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -13,6 +14,8 @@ from sqlalchemy.orm import sessionmaker
 from fastapi.responses import JSONResponse
 
 import sys
+
+os.environ.setdefault("APP_ENV", "development")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 

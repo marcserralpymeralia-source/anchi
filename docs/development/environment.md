@@ -24,17 +24,36 @@ Desde `backend/`:
 
 Sin exponer valores secretos:
 
+- `APP_ENV`
 - `APP_NAME`
 - `APP_SLUG`
-- `ENVIRONMENT`
-- `APP_SECRET_KEY`
+- `SECRET_KEY`
+- `ENCRYPTION_KEY`
 - `SESSION_COOKIE`
+- `SESSION_COOKIE_SECURE`
+- `SESSION_COOKIE_SAMESITE`
+- `SESSION_MAX_AGE`
+- `ALLOWED_HOSTS`
+- `CORS_ALLOWED_ORIGINS`
 - `DATABASE_URL`
 - `MASTER_DATABASE_URL`
 - `DEFAULT_COMPANY_NAME`
 - `DEFAULT_ADMIN_EMAIL`
 - `DEFAULT_ADMIN_PASSWORD`
-- `SEED_DEMO_DATA`
+- `ENABLE_DEMO_BOOTSTRAP`
+- `DEBUG`
+
+Comportamiento por defecto:
+
+- si `APP_ENV` no existe, la aplicacion usa `development` y avisa una vez en logs;
+- `development` y `test` permiten valores locales seguros por defecto;
+- `production` exige configuracion explicita y rechaza valores demo.
+
+Alias historicas compatibles:
+
+- `ENVIRONMENT` sigue siendo aceptado como alias de `APP_ENV`.
+- `APP_SECRET_KEY` sigue siendo aceptado como alias de `SECRET_KEY`.
+- `SEED_DEMO_DATA` sigue siendo aceptado como alias de `ENABLE_DEMO_BOOTSTRAP`.
 
 ## Base de datos de desarrollo
 

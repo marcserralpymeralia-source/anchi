@@ -4,7 +4,7 @@ from app.core.config import get_settings
 
 
 def _fernet() -> Fernet:
-    key = get_settings().app_secret_key.encode()
+    key = get_settings().encryption_key.encode()
     return Fernet(key)
 
 
@@ -27,5 +27,4 @@ def mask_secret(value: str | None) -> str:
     plain = decrypt_secret(value) if value else None
     if not plain:
         return ""
-    suffix = plain[-4:] if len(plain) >= 4 else plain
-    return f"••••••••{suffix}"
+    return "••••••••"

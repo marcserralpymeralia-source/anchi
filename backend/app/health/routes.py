@@ -31,7 +31,6 @@ def health(request: Request, master_db: Session = Depends(get_master_db)):
         "tenant": bool(tenant),
         "tenant_company_id": tenant.company.id if tenant else None,
         "tenant_slug": tenant.company.slug if tenant else None,
-        "tenant_database_key": tenant.company.database_key if tenant and getattr(tenant.company, "database_key", None) else None,
         "tenant_database_configured": bool(tenant and getattr(tenant.company, "database_url", None)),
     }
 
