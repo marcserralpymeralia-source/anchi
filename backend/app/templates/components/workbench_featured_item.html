@@ -1,0 +1,24 @@
+<section class="featured-process-section">
+  <div class="section-title-row">
+    <h4>Pedido de ejemplo</h4>
+    <span class="badge">Proceso real</span>
+  </div>
+  <article class="featured-process-card queue-item queue-item-confidence-amber">
+    <div class="queue-item-main">
+      <strong class="queue-item-name">{{ featured_process_item.date.strftime("%Y-%m-%d %H:%M") if featured_process_item.date else "Sin fecha" }} · {{ featured_process_item.customer_name }}</strong>
+      <div class="queue-item-tags">
+        <span class="queue-item-tag queue-item-tag-channel">{{ featured_process_item.origin or "PDF" }}</span>
+        <span class="queue-item-tag queue-item-tag-confidence queue-item-confidence-amber">{{ "%.0f"|format(featured_process_item.score or 0) }}%</span>
+        <span class="queue-item-tag queue-item-tag-status">{{ featured_process_item.category_label }}</span>
+      </div>
+      <small>{{ featured_process_item.subject or "Pedido compra" }}</small>
+    </div>
+    <div class="queue-item-actions">
+      <button class="button secondary compact-button" type="button" onclick="openWorkbenchItemDetail('{{ featured_process_item.detail_url }}')">Abrir</button>
+      <a class="button secondary compact-button" href="/pedidos?kind=orders&date_range=30d&search=PEdido+compra">Histórico</a>
+    </div>
+    <div class="queue-item-confidence-col queue-item-confidence-amber">
+      <span class="queue-item-score queue-item-confidence-amber">{{ "%.0f"|format(featured_process_item.score or 0) }}%</span>
+    </div>
+  </article>
+</section>

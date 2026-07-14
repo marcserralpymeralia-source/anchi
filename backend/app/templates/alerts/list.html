@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% set title = "Alertas" %}
+{% block content %}
+<section class="panel stack alerts-page-shell">
+  <div class="section-title-row">
+    <div>
+      <h2>Alertas</h2>
+      <p class="muted">Centro de revisión y trazabilidad de incidencias, bloqueos y avisos del sistema.</p>
+    </div>
+    <div class="actions">
+      <a class="button secondary" href="/">Bandeja</a>
+      <a class="button secondary" href="/pedidos">Pedidos</a>
+    </div>
+  </div>
+
+  <section class="history-summary">
+    <article class="compact-card compact-card-error"><span>Pendientes</span><strong>{{ summary.total }}</strong><small>Activas</small></article>
+    <article class="compact-card compact-card-error"><span>Críticas</span><strong>{{ summary.critical }}</strong><small>Requieren atención</small></article>
+    <article class="compact-card compact-card-reviewable"><span>Alta</span><strong>{{ summary.high }}</strong><small>Revisión</small></article>
+    <article class="compact-card compact-card-safe"><span>Media/Baja</span><strong>{{ summary.medium + summary.low + summary.info }}</strong><small>Seguimiento</small></article>
+  </section>
+
+  <form class="filter-grid" method="get" action="/alerts">
+    <input type="hidden" name="page" value="1">
+    <label>Estado
+      <select name="status">
+        {% for value, label in [("all","Todas"),("open","Nuevas"),("seen","Vistas"),("processing","En proceso"),("resolved","Resueltas"),("ignored","Ignoradas")] %}
+          <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Severidad
+      <select name="severity">
+        {% for value, label in [("all","Todas"),("critical","Críticas"),("high","Alta"),("medium","Media"),("low","Baja"),("info","Informativas")] %}
+          <option value="{{ value }}" {% if filters.severity == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Buscar<input name="search" value="{{ filters.search }}" placeholder="Título, mensaje o tipo"></label>
+    <label>Tamaño página
+      <select name="page_size">
+        {% for size in pagination.allowed_page_sizes %}
+          <option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>&nbsp;<button class="secondary" data-loading-text="Filtrando...">Filtrar</button></label>
+  </form>
+</section>
+
+<section class="panel stack history-table-panel">
+  <div class="section-title-row">
+    <div>
+      <h3>Alertas activas e históricas</h3>
+      <span class="badge">{{ pagination.start_item }}-{{ pagination.end_item }} de {{ pagination.total_items }}</span>
+    </div>
+  </div>
+
+  <div class="alerts-list page-alerts-list">
+    {% for alert in alerts %}
+      <article class="alert-card alert-{{ alert.severity }} alert-status-{{ alert.status }}">
+        <div class="alert-card-main">
+          <div class="alert-card-meta">
+            <span class="badge">{{ alert.severity_label }}</span>
+            <span class="badge">{{ alert.status_label }}</span>
+            <span class="badge">{{ alert.entity_type }}</span>
+            <span class="badge">{{ alert.type }}</span>
+          </div>
+          <strong>{{ alert.title }}</strong>
+          <p>{{ alert.message }}</p>
+          <small>{{ alert.created_label }} · {{ alert.entity_type }} {{ alert.entity_id }}</small>
+        </div>
+        <div class="alert-card-actions">
+          <a class="button secondary compact-button" href="{{ alert.action_href }}">{{ alert.action_label }}</a>
+          <form class="js-loading-form" method="post" action="/alerts/{{ alert.id }}/mark-read"><button class="secondary compact-button" data-loading-text="Marcando...">Vista</button></form>
+          <form class="js-loading-form" method="post" action="/alerts/{{ alert.id }}/resolve"><button class="secondary compact-button" data-loading-text="Resolviendo...">Resolver</button></form>
+          <form class="js-loading-form" method="post" action="/alerts/{{ alert.id }}/ignore"><button class="secondary compact-button" data-loading-text="Ignorando...">Ignorar</button></form>
+          <form class="js-loading-form" method="post" action="/alerts/{{ alert.id }}/reopen"><button class="secondary compact-button" data-loading-text="Reabriendo...">Reabrir</button></form>
+        </div>
+      </article>
+    {% else %}
+      <p class="muted">No hay alertas para los filtros seleccionados.</p>
+    {% endfor %}
+  </div>
+
+  {% include "components/pagination.html" %}
+</section>
+{% endblock %}

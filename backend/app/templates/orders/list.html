@@ -1,0 +1,338 @@
+{% extends "base.html" %}
+{% set title = "Pedidos" %}
+{% block content %}
+<div class="actions" style="margin-bottom:14px">
+  <form method="post" action="/orders/mock"><button>{{ request.state.branding.microcopy.create_test_order }}</button></form>
+</div>
+
+<section class="panel" style="margin-bottom:16px">
+  <details open>
+    <summary>Filtros</summary>
+    <form class="filter-grid" method="get" action="/orders">
+      <input type="hidden" name="page" value="1">
+      <label>Desde<input type="date" name="date_from" value="{{ filters.date_from }}"></label>
+      <label>Hasta<input type="date" name="date_to" value="{{ filters.date_to }}"></label>
+      <label>Cliente
+      <select name="customer_id">
+        <option value="0">Todos</option>
+        {% for customer in customers %}
+          <option value="{{ customer.id }}" {% if filters.customer_id == customer.id %}selected{% endif %}>{{ customer.code }} - {{ customer.fiscal_name }}</option>
+        {% endfor %}
+      </select>
+      </label>
+      <label>Score min.<input type="number" name="score_min" min="0" max="100" step="0.01" value="{{ filters.score_min or '' }}"></label>
+      <label>Score max.<input type="number" name="score_max" min="0" max="100" step="0.01" value="{{ filters.score_max or '' }}"></label>
+      <label>Categoria
+      <select name="scoring_category">
+        <option value="">Todas</option>
+        <option value="safe" {% if filters.scoring_category == "safe" %}selected{% endif %}>Alta</option>
+        <option value="reviewable" {% if filters.scoring_category == "reviewable" %}selected{% endif %}>Revisable</option>
+        <option value="doubtful" {% if filters.scoring_category == "doubtful" %}selected{% endif %}>Dudosa</option>
+        <option value="not_importable" {% if filters.scoring_category == "not_importable" %}selected{% endif %}>Bloqueada</option>
+        <option value="without_score" {% if filters.scoring_category == "without_score" %}selected{% endif %}>Pendiente de analizar</option>
+      </select>
+      </label>
+      <label>PDF
+      <select name="has_pdf">
+        <option value="">Todos</option>
+        <option value="yes" {% if filters.has_pdf == "yes" %}selected{% endif %}>Si</option>
+        <option value="no" {% if filters.has_pdf == "no" %}selected{% endif %}>No</option>
+      </select>
+      </label>
+      <label>Revisión
+      <select name="requires_review">
+        <option value="">Todos</option>
+        <option value="yes" {% if filters.requires_review == "yes" %}selected{% endif %}>Si</option>
+        <option value="no" {% if filters.requires_review == "no" %}selected{% endif %}>No</option>
+      </select>
+      </label>
+      <label>Tipo
+      <select name="email_type">
+        <option value="">Todos</option>
+        {% for item in ["pedido", "no_pedido", "consulta", "incidencia", "dudoso"] %}
+          <option value="{{ item }}" {% if filters.email_type == item %}selected{% endif %}>{{ item|status_label }}</option>
+        {% endfor %}
+      </select>
+      </label>
+      <label>Remitente<input name="sender" value="{{ filters.sender }}" placeholder="cliente.com"></label>
+      <label>Buscar<input name="search" value="{{ filters.search }}" placeholder="Asunto o cliente"></label>
+      <label>Estado
+      <select name="status">
+        <option value="">Todos</option>
+        {% for item in statuses %}
+          <option value="{{ item }}" {% if filters.status == item %}selected{% endif %}>{{ item|status_label }}</option>
+        {% endfor %}
+      </select>
+      </label>
+      <label>Orden
+      <select name="sort">
+        <option value="date_desc" {% if filters.sort == "date_desc" %}selected{% endif %}>Fecha desc.</option>
+        <option value="date_asc" {% if filters.sort == "date_asc" %}selected{% endif %}>Fecha asc.</option>
+        <option value="score_desc" {% if filters.sort == "score_desc" %}selected{% endif %}>Confianza desc.</option>
+        <option value="score_asc" {% if filters.sort == "score_asc" %}selected{% endif %}>Confianza asc.</option>
+        <option value="customer_asc" {% if filters.sort == "customer_asc" %}selected{% endif %}>Cliente</option>
+        <option value="status_asc" {% if filters.sort == "status_asc" %}selected{% endif %}>Estado</option>
+      </select>
+      </label>
+      <label>Tamaño
+      <select name="page_size">
+        {% for size in pagination.allowed_page_sizes %}<option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>{% endfor %}
+      </select>
+      </label>
+      <label>&nbsp;<button class="secondary" data-loading-text="Filtrando...">Filtrar</button></label>
+    </form>
+  </details>
+</section>
+
+<table class="data-table review-table">
+  <thead><tr><th>Fecha</th><th>Remitente</th><th>Asunto</th><th>Cliente</th><th>Tipo</th><th>Confianza</th><th>Alertas</th><th>Estado</th><th>Accion</th></tr></thead>
+  <tbody>
+  {% for order in orders %}
+    {% set category = categories[order.id][0] %}
+    {% set category_label = categories[order.id][1] %}
+    {% set order_alerts = alerts[order.id] %}
+    <tr class="clickable-row row-{{ category }}" onclick="openOrderModal('order-modal-{{ order.id }}')">
+      <td>{{ order.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+      <td>{{ order.email.sender if order.email else "" }}</td>
+      <td class="wide-cell" title="{{ order.email.subject if order.email else '' }}">{{ order.email.subject if order.email else "" }}</td>
+      <td>{{ order.validated_customer.fiscal_name if order.validated_customer else order.customer.fiscal_name if order.customer else order.customer_detected_name or "Sin identificar" }}</td>
+      <td>{{ order.email.detected_type|status_label if order.email else "Pedido" }}</td>
+      <td>
+        <div class="score-widget score-{{ category|replace('_', '-') }}">
+          <div><strong>{{ "%.2f"|format(order.score or 0) }}%</strong> <span>{{ category_label }}</span></div>
+          <div class="score-meter"><span style="width: {{ order.score or 0 }}%"></span></div>
+        </div>
+      </td>
+      <td>
+        <div class="alert-badges">
+          <span class="badge">{{ order_alerts.line_count }} lineas</span>
+          <span class="badge {% if order_alerts.doubtful_count %}warn{% endif %}">{{ order_alerts.doubtful_count }} dudas</span>
+          {% if order_alerts.has_pdf %}<span class="badge">PDF</span>{% endif %}
+          {% if order_alerts.has_notes %}<span class="badge">Obs.</span>{% endif %}
+        </div>
+      </td>
+      <td><span class="badge {{ order.status|status_class }}">{{ order.status|status_label }}</span></td>
+      <td class="actions">
+        <button class="secondary compact-button" onclick="event.stopPropagation(); openOrderModal('order-modal-{{ order.id }}')">{{ request.state.branding.microcopy.review_order }}</button>
+        {% if order.email_id %}<a class="button secondary compact-button" href="/channels?focus=email-{{ order.email_id }}" onclick="event.stopPropagation();">Ver origen</a>{% endif %}
+        <details class="row-more-actions" onclick="event.stopPropagation()">
+          <summary class="button secondary compact-button">...</summary>
+          <div class="row-more-actions-panel">
+            <a href="/orders/{{ order.id }}/export-preview" onclick="event.stopPropagation();">Ver exportación</a>
+            <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/delete" data-confirm="¿Seguro que quieres eliminar este pedido? Se quitará de la gestión activa.">
+              <button type="submit" class="secondary compact-button danger" data-loading-text="Eliminando...">Eliminar</button>
+            </form>
+          </div>
+        </details>
+      </td>
+    </tr>
+  {% else %}
+    <tr><td colspan="9" class="muted">{{ request.state.branding.microcopy.empty_orders }}</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% include "components/pagination.html" %}
+
+{% macro scoring_block(order, category, category_label) %}
+<div class="review-score-card score-{{ category|replace('_', '-') }}">
+  <div class="score-main">{{ "%.2f"|format(order.score or 0) }}%</div>
+  <div>{{ category_label }}</div>
+  <div class="score-meter"><span style="width: {{ order.score or 0 }}%"></span></div>
+  <p class="muted">{{ order.review_reasons or "Sin motivos adicionales registrados." }}</p>
+</div>
+{% endmacro %}
+
+{% for order in orders %}
+  {% set category = categories[order.id][0] %}
+  {% set category_label = categories[order.id][1] %}
+  {% set order_alerts = alerts[order.id] %}
+  {% set pdfs = order.email.attachments|selectattr("content_type", "equalto", "application/pdf")|list if order.email else [] %}
+  {% set exports = exports_by_order[order.id] %}
+  <dialog id="order-modal-{{ order.id }}" class="order-review-modal" data-dirty="false">
+    <div class="review-modal-header">
+      <div>
+        <h2>Revisión</h2>
+        <p class="muted">{{ order.customer_detected_name or "Cliente sin detectar" }} · {{ "%.2f"|format(order.score or 0) }}% {{ category_label }} · {{ order.status|status_label }}</p>
+      </div>
+      <div class="actions">
+        {% if order.email_id %}<a class="button secondary compact-button" href="/channels?focus=email-{{ order.email_id }}">Ver origen</a>{% endif %}
+        <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/delete" data-confirm="¿Seguro que quieres eliminar este pedido? Se quitará de la gestión activa.">
+          <button type="submit" class="secondary compact-button danger" data-loading-text="Eliminando...">Eliminar pedido</button>
+        </form>
+        <button type="button" class="secondary" onclick="closeOrderModal('order-modal-{{ order.id }}')">Cerrar</button>
+      </div>
+    </div>
+
+    <div class="review-grid">
+      <section class="review-pane">
+        <h3>Entrada</h3>
+        <article class="subpanel">
+          <h4>Datos</h4>
+          <p><strong>Remitente:</strong> {{ order.email.sender if order.email else "" }}</p>
+          <p><strong>Dominio:</strong> {{ order.email.sender.split('@')[-1] if order.email and '@' in order.email.sender else "" }}</p>
+          <p><strong>Asunto:</strong> {{ order.email.subject if order.email else "" }}</p>
+          <p><strong>Fecha:</strong> {{ order.email.received_at.strftime("%Y-%m-%d %H:%M") if order.email else "" }}</p>
+          <p><strong>Tipo:</strong> {{ order.email.detected_type|status_label if order.email else "" }}</p>
+          <details><summary>Técnico</summary><p>{{ order.email.external_id if order.email else "" }}</p></details>
+        </article>
+        <article class="subpanel">
+          <div class="section-title-row"><h4>Correo</h4><button type="button" class="secondary" onclick="copyText('email-body-{{ order.id }}')">Copiar</button></div>
+          <pre id="email-body-{{ order.id }}" class="doc-text">{{ order.email.body if order.email else "" }}</pre>
+        </article>
+        <article class="subpanel">
+          <h4>PDF / adjuntos</h4>
+          {% if pdfs %}
+            <div class="actions">
+              {% for attachment in pdfs %}
+                <a class="button secondary" target="_blank" href="/orders/{{ order.id }}/attachments/{{ attachment.id }}">{{ attachment.filename }}</a>
+              {% endfor %}
+            </div>
+            <iframe class="review-pdf-frame" src="/orders/{{ order.id }}/attachments/{{ pdfs[0].id }}"></iframe>
+            <div class="section-title-row"><h4>Texto PDF</h4><button type="button" class="secondary" onclick="copyText('pdf-text-{{ order.id }}')">Copiar</button></div>
+            <pre id="pdf-text-{{ order.id }}" class="doc-text">{{ pdfs[0].extracted_text or "No se ha podido extraer texto del PDF. Requiere OCR o revision manual." }}</pre>
+          {% else %}
+            <p class="muted">Pedido recibido en el cuerpo del email.</p>
+          {% endif %}
+        </article>
+        <article class="subpanel">
+          <div class="section-title-row"><h4>Texto agente</h4><button type="button" class="secondary" onclick="copyText('agent-text-{{ order.id }}')">Copiar</button></div>
+          <pre id="agent-text-{{ order.id }}" class="doc-text">{{ order.email.extracted_text if order.email else "" }}</pre>
+        </article>
+      </section>
+
+      <section class="review-pane">
+        <h3>Pedido</h3>
+        {{ scoring_block(order, category, category_label) }}
+        <form class="stack js-loading-form dirty-form" method="post" action="/orders/{{ order.id }}/update">
+          <article class="subpanel">
+            <h4>Cliente</h4>
+            <div class="form-grid">
+              <label>Cliente detectado<input value="{{ order.customer_detected_name or '' }}" readonly></label>
+              <label>Metodo identificacion<input value="{{ order.customer_identification_method or '' }}" readonly></label>
+              <label>Confianza cliente<input value="{{ order.customer_score }}" readonly></label>
+              <label>Cliente validado
+                <select name="validated_customer_id">
+                  <option value="0">Sin cliente</option>
+                  {% for customer in customers %}
+                    <option value="{{ customer.id }}" {% if order.validated_customer_id == customer.id %}selected{% endif %}>{{ customer.code }} - {{ customer.fiscal_name }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label>Fecha pedido<input name="order_date" value="{{ order.order_date or '' }}"></label>
+              <label>Fecha entrega<input name="requested_delivery_date" value="{{ order.requested_delivery_date or '' }}"></label>
+              <label>Estado<select name="status"><option value="{{ order.status }}">{{ order.status|status_label }}</option><option value="pedido_pendiente_revision">Pendiente revision</option><option value="pedido_confirmado">Confirmado</option><option value="pedido_exportado">Exportado</option><option value="dudoso">Dudoso</option><option value="no_importable">No importable</option></select></label>
+              <label class="span-2">Observaciones<textarea name="notes">{{ order.notes or "" }}</textarea></label>
+            </div>
+            <button data-loading-text="Guardando...">{{ request.state.branding.microcopy.save_changes }}</button>
+          </article>
+        </form>
+
+        <article class="subpanel">
+          <details>
+            <summary>Aprender cliente</summary>
+          <form class="form-grid js-loading-form" method="post" action="/orders/{{ order.id }}/save-customer-alias">
+            <label>Cliente<select name="customer_id">{% for customer in customers %}<option value="{{ customer.id }}" {% if order.validated_customer_id == customer.id %}selected{% endif %}>{{ customer.code }} - {{ customer.fiscal_name }}</option>{% endfor %}</select></label>
+            <label>Alias<input name="alias" value="{{ order.customer_detected_name or '' }}"></label>
+            <label>Dominio<input name="domain" value="{{ order.email.sender.split('@')[-1] if order.email and '@' in order.email.sender else '' }}"></label>
+            <label>&nbsp;<button class="secondary" data-loading-text="Guardando alias...">Guardar</button></label>
+          </form>
+          </details>
+        </article>
+
+        <article class="subpanel">
+          <h4>Productos interpretados</h4>
+          <table class="line-table">
+            <thead><tr><th>Nº</th><th>Texto original</th><th>Producto interpretado</th><th>Referencia validada</th><th>Cantidad</th><th>Confianza</th><th>Estado</th><th>Acciones</th></tr></thead>
+            <tbody>
+            {% for line in order.lines %}
+              <tr class="line-{{ 'validated' if line.validation_status == 'validated' and line.validated_product_id else 'pending' }}">
+                <td>{{ loop.index }}</td>
+                <td>{{ line.original_text or "" }}</td>
+                <td>{{ line.detected_product or "" }}<br><span class="muted">Ref detectada: {{ line.detected_reference or "n/a" }}</span></td>
+                <td colspan="5">
+                  <form class="line-edit-form js-loading-form" method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}">
+                    <select name="validated_product_id">
+                      <option value="0">Sin referencia</option>
+                      {% for product in products %}
+                        <option value="{{ product.id }}" {% if line.validated_product_id == product.id %}selected{% endif %}>{{ product.reference }} - {{ product.name }}</option>
+                      {% endfor %}
+                    </select>
+                    <input name="quantity" type="number" step="0.01" value="{{ line.quantity or 0 }}">
+                    <input name="unit" value="{{ line.unit or '' }}" placeholder="Unidad">
+                    <span class="score-badge {% if line.line_score >= 80 %}score-safe{% elif line.line_score >= 60 %}score-reviewable{% elif line.line_score >= 40 %}score-doubtful{% else %}score-not-importable{% endif %}">{{ "%.0f"|format(line.line_score or 0) }}%</span>
+                    <span class="badge">{{ line.validation_status }}</span>
+                    <button class="secondary" data-loading-text="Guardando...">Guardar</button>
+                  </form>
+                  <div class="line-actions">
+                    <span class="muted">{{ line.doubt_reason or "Matching: validado/manual" }}</span>
+                    <form method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}/duplicate"><button class="secondary">Duplicar</button></form>
+                    <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}/delete" data-confirm="Eliminar linea de pedido?"><button class="secondary" data-loading-text="Eliminando...">Eliminar</button></form>
+                  </div>
+                </td>
+              </tr>
+            {% endfor %}
+            </tbody>
+          </table>
+          <form class="form-grid js-loading-form" method="post" action="/orders/{{ order.id }}/lines">
+            <label>Texto original<input name="original_text" value="Linea manual"></label>
+            <label>Producto<select name="validated_product_id"><option value="0">Sin referencia</option>{% for product in products %}<option value="{{ product.id }}">{{ product.reference }} - {{ product.name }}</option>{% endfor %}</select></label>
+            <label>Cantidad<input name="quantity" type="number" step="0.01" value="1"></label>
+            <label>Unidad<input name="unit"></label>
+            <label>&nbsp;<button data-loading-text="Anadiendo...">Anadir linea</button></label>
+          </form>
+          <form class="form-grid js-loading-form" method="post" action="/orders/{{ order.id }}/save-product-alias">
+            <label>Producto<select name="product_id">{% for product in products %}<option value="{{ product.id }}">{{ product.reference }} - {{ product.name }}</option>{% endfor %}</select></label>
+            <label>Alias detectado<input name="alias" placeholder="Texto corregido por el usuario"></label>
+            <label>&nbsp;<button class="secondary" data-loading-text="Guardando alias...">Aprender equivalencia</button></label>
+          </form>
+        </article>
+
+        <details class="subpanel" open>
+          <summary>Vista previa del archivo de exportacion</summary>
+          {% if exports %}
+            <p><strong>Archivo:</strong> {{ exports[0].filename }} · <strong>Formato:</strong> CSV</p>
+            <pre class="doc-text">{{ exports[0].content }}</pre>
+            <a class="button secondary" href="/orders/{{ order.id }}/exports/{{ exports[0].id }}/download">Descargar archivo</a>
+          {% else %}
+            <p class="muted">Todavia no hay archivo generado.</p>
+          {% endif %}
+        </details>
+      </section>
+    </div>
+
+    <div class="review-action-bar">
+      <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/recalculate-score"><button class="secondary" data-loading-text="Recalculando...">{{ request.state.branding.microcopy.recalculate_score }}</button></form>
+      <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/confirm" data-confirm="Confirmar pedido?"><button data-loading-text="Confirmando...">{{ request.state.branding.microcopy.confirm_order }}</button></form>
+      <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/force-confirm" data-confirm="Forzar confirmacion?"><input name="force_reason" required placeholder="Motivo obligatorio"><button class="secondary" data-loading-text="Confirmando...">Forzar</button></form>
+      <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/generate-export"><button class="secondary" data-loading-text="Generando archivo...">{{ request.state.branding.microcopy.generate_file }}</button></form>
+      <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/export-ftp"><button class="secondary" data-loading-text="Exportando...">{{ request.state.branding.microcopy.send_to_management }}</button></form>
+      <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/mark-not-order" data-confirm="Marcar como no pedido?"><button class="secondary">Marcar no pedido</button></form>
+      <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/discard" data-confirm="Descartar pedido?"><button class="secondary">Descartar</button></form>
+      <button type="button" class="secondary" onclick="closeOrderModal('order-modal-{{ order.id }}')">Cerrar</button>
+    </div>
+  </dialog>
+{% endfor %}
+
+<script>
+  function openOrderModal(id) {
+    const dialog = document.getElementById(id);
+    if (dialog) dialog.showModal();
+  }
+  function closeOrderModal(id) {
+    const dialog = document.getElementById(id);
+    if (!dialog) return;
+    if (dialog.dataset.dirty === "true" && !confirm("Hay cambios sin guardar. ¿Cerrar igualmente?")) return;
+    dialog.close();
+  }
+  function copyText(id) {
+    const node = document.getElementById(id);
+    if (node) navigator.clipboard.writeText(node.textContent || "");
+  }
+  document.querySelectorAll(".order-review-modal input, .order-review-modal textarea, .order-review-modal select").forEach((field) => {
+    field.addEventListener("change", () => {
+      const dialog = field.closest("dialog");
+      if (dialog) dialog.dataset.dirty = "true";
+    });
+  });
+</script>
+{% endblock %}

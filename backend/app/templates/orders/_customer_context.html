@@ -1,0 +1,150 @@
+<section class="review-pane context-pane">
+  <div class="pane-title-row">
+    <h3>Contexto cliente</h3>
+    <span class="badge {% if customer_context.identified %}status-confirmed{% else %}status-doubtful{% endif %}">
+      {% if customer_context.identified %}Cargado{% else %}Sin cliente{% endif %}
+    </span>
+  </div>
+
+  {% if not customer_context.identified %}
+    <article class="subpanel">
+      <p class="muted">Cliente no identificado. Selecciona un cliente para cargar su contexto.</p>
+    </article>
+  {% else %}
+    {% set customer = customer_context.customer %}
+    <article class="subpanel">
+      <div class="section-title-row">
+        <div>
+          <h4>{{ customer.name }}</h4>
+          <p class="muted">{{ customer.code }} · {{ customer.commercial_name or "Sin nombre comercial" }}</p>
+        </div>
+        <span class="badge">Conf. {{ "%.0f"|format(customer.confidence or 0) }}%</span>
+      </div>
+      <div class="info-list">
+        <div><dt>Canal habitual</dt><dd>{{ customer.email or customer.phone or "Sin dato" }}</dd></div>
+        <div><dt>Último pedido</dt><dd>{{ customer.last_order_at or "Sin registro" }}</dd></div>
+        <div><dt>Estado</dt><dd>{{ customer.status }}</dd></div>
+        <div><dt>Alias</dt><dd>{{ customer.aliases|length }}</dd></div>
+      </div>
+      <div class="actions">
+        <a class="button secondary compact-button" href="/customers/{{ customer.id }}/knowledge">Carpeta</a>
+        <a class="button secondary compact-button" href="/settings#knowledge">Ajustes</a>
+      </div>
+      <details class="compact-details">
+        <summary>Alias / dominio</summary>
+        <form class="stack js-loading-form" method="post" action="/orders/{{ order.id }}/save-customer-alias">
+          <input type="hidden" name="customer_id" value="{{ customer.id }}">
+          <div class="form-grid">
+            <label class="span-2">Alias<input name="alias" placeholder="Alias corto"></label>
+            <label>Dominio<input name="domain" placeholder="cliente.com"></label>
+          </div>
+          <button class="secondary compact-button" data-loading-text="Guardando...">Guardar</button>
+        </form>
+      </details>
+    </article>
+
+    <article class="subpanel">
+      <div class="section-title-row">
+        <h4>Artículos</h4>
+        <span class="badge">{{ customer_context.summary.knowledge_rows }}</span>
+      </div>
+      <div class="learning-doc-list">
+        {% for row in customer_context.knowledge_rows %}
+          <article class="learning-doc-row">
+            <div class="learning-doc-main">
+              <div class="learning-doc-head">
+                <strong>{{ row.reference }} · {{ row.product_name }}</strong>
+                <span class="badge {{ 'status-confirmed' if row.habitual else 'status-doubtful' }}">{{ row.status }}</span>
+              </div>
+              <p class="muted">Pedido {{ row.times_ordered }} veces · U. habitual {{ row.usual_unit or "sin unidad" }}</p>
+              <p>Media {{ "%.2f"|format(row.average_quantity or 0) }} · Última {{ row.last_quantity if row.last_quantity is not none else "—" }} · Confianza {{ "%.0f"|format((row.confidence or 0) * 100) }}%</p>
+              {% if row.comments %}<p class="muted">{{ row.comments }}</p>{% endif %}
+            </div>
+          </article>
+        {% else %}
+          <p class="muted">No hay artículos consolidados para este cliente.</p>
+        {% endfor %}
+      </div>
+    </article>
+
+    <article class="subpanel">
+      <div class="section-title-row">
+        <h4>Líneas</h4>
+        <span class="badge">{{ customer_context.line_contexts|length }}</span>
+      </div>
+      <div class="learning-case-list">
+        {% for line in customer_context.line_contexts %}
+          <article class="learning-case-row">
+            <div class="learning-case-main">
+              <strong>{{ line.product_label }}</strong>
+              <p>{{ line.source_text or "Sin texto fuente" }}</p>
+              {% if line.matched %}
+                <p class="muted">Habitual: {{ line.times_ordered }} · Cantidad media: {{ "%.2f"|format(line.average_quantity or 0) }} · Unidad: {{ line.usual_unit or "—" }}</p>
+              {% else %}
+                <p class="muted">Producto nuevo para este cliente. Revisión recomendada.</p>
+              {% endif %}
+              {% if line.anomaly %}
+                <p class="review-reasons">Cantidad anómala respecto al histórico.</p>
+              {% endif %}
+            </div>
+            <div class="learning-case-side">
+              <span class="badge {% if line.habitual %}status-confirmed{% else %}status-doubtful{% endif %}">{% if line.habitual %}Habitual{% else %}Nuevo{% endif %}</span>
+              <small>{{ "%.0f"|format((line.confidence or 0) * 100) }}%</small>
+            </div>
+          </article>
+        {% else %}
+          <p class="muted">Todavía no hay líneas para comparar.</p>
+        {% endfor %}
+      </div>
+    </article>
+
+    <article class="subpanel">
+      <div class="section-title-row">
+        <h4>Reciente</h4>
+        <span class="badge">{{ customer_context.summary.documents }} docs · {{ customer_context.summary.cases }} casos</span>
+      </div>
+      <div class="learning-doc-list">
+        {% for doc in customer_context.documents %}
+          <article class="learning-doc-row">
+            <div class="learning-doc-main">
+              <div class="learning-doc-head">
+                <strong>{{ doc.title }}</strong>
+                <span class="badge">{{ doc.status }}</span>
+              </div>
+              <p>{{ doc.excerpt or "Sin contenido" }}</p>
+            </div>
+          </article>
+        {% else %}
+          <p class="muted">Sin documentos de cliente todavía.</p>
+        {% endfor %}
+      </div>
+      <div class="learning-case-list" style="margin-top: 10px;">
+        {% for case in customer_context.cases %}
+          <article class="learning-case-row">
+            <div class="learning-case-main">
+              <strong>{{ case.action }}</strong>
+              <p>{{ case.summary }}</p>
+            </div>
+            <div class="learning-case-side"><span class="badge">Caso</span><small>{{ case.created_at }}</small></div>
+          </article>
+        {% else %}
+          <p class="muted">No hay casos recientes asociados.</p>
+        {% endfor %}
+      </div>
+      <div class="learning-case-list" style="margin-top: 10px;">
+        {% for correction in customer_context.corrections %}
+          <article class="learning-case-row">
+            <div class="learning-case-main">
+              <strong>{{ correction.field }}</strong>
+              <p>{{ correction.before }} → {{ correction.after }}</p>
+              <p class="muted">{{ correction.reason }}</p>
+            </div>
+            <div class="learning-case-side"><span class="badge">Cambio</span></div>
+          </article>
+        {% else %}
+          <p class="muted">No hay correcciones recientes para mostrar.</p>
+        {% endfor %}
+      </div>
+    </article>
+  {% endif %}
+</section>

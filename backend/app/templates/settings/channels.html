@@ -1,0 +1,245 @@
+{% extends "base.html" %}
+{% set title = "Canales de entrada" %}
+{% block content %}
+<section class="channels-shell">
+  <header class="channels-header panel">
+    <div>
+      <h2>Canales de entrada</h2>
+      <p class="muted">Activa los canales por los que el agente recibirá pedidos.</p>
+    </div>
+    <div class="actions">
+      <a class="button secondary compact-button" href="/settings">Volver a configuración</a>
+    </div>
+  </header>
+
+  <section class="channels-grid">
+    {% for item in channels %}
+      {% set channel = item.channel %}
+      <article class="channel-card panel">
+        <div class="channel-card-head">
+          <div class="channel-card-title">
+            <h3>{{ channel.name }}</h3>
+            <div class="channel-badges">
+              <span class="badge channel-state {{ item.state }}">{{ item.status_label }}</span>
+              {% if channel.is_default %}<span class="badge">Base</span>{% endif %}
+            </div>
+          </div>
+          <button type="button" class="secondary compact-button" data-open-channel="{{ channel.key }}">Configurar</button>
+        </div>
+
+        <p class="channel-summary">{{ item.details }}</p>
+
+        <div class="channel-capabilities">
+          <span class="muted">Soporta:</span>
+          {% for capability in item.capabilities %}
+            <span class="badge">{{ capability }}</span>
+          {% endfor %}
+        </div>
+
+        <div class="channel-meta">
+          <div>
+            <span>{{ item.activity_label }}</span>
+            <strong>{{ item.activity_value }}</strong>
+          </div>
+          <div>
+            <span>Parámetros</span>
+            <strong>{{ item.settings_count }}</strong>
+          </div>
+        </div>
+
+        <div class="channel-actions">
+          {% if channel.key == "email" %}
+            <a class="button secondary compact-button" href="/settings#email">Abrir correo</a>
+            {% if item.state == "ready" %}
+              <form class="js-loading-form" method="post" action="/settings/email/imap/test">
+                <button class="secondary compact-button" data-loading-text="Probando...">Probar canal</button>
+              </form>
+            {% endif %}
+          {% endif %}
+
+          {% if channel.is_active %}
+            <form class="js-loading-form" method="post" action="/settings/channels/{{ channel.key }}/deactivate" data-confirm="Este canal dejará de recibir nuevas entradas. No se eliminarán mensajes, pedidos ni configuración histórica. ¿Desactivar?">
+              <button class="secondary compact-button" data-loading-text="Desactivando...">Desactivar</button>
+            </form>
+          {% else %}
+            <form class="js-loading-form" method="post" action="/settings/channels/{{ channel.key }}/activate">
+              <button data-loading-text="Activando...">Activar</button>
+            </form>
+          {% endif %}
+        </div>
+      </article>
+    {% endfor %}
+  </section>
+</section>
+
+{% for item in channels %}
+  {% set channel = item.channel %}
+  <dialog id="channel-{{ channel.key }}" class="settings-drawer channel-drawer">
+    <div class="drawer-head">
+      <div>
+        <h3>{{ channel.name }}</h3>
+        <p class="muted">{{ item.details }}</p>
+      </div>
+      <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+    </div>
+
+    <div class="drawer-body stack">
+      <section class="drawer-card">
+        <div class="section-title-row">
+          <div>
+            <h4>Estado</h4>
+            <p class="muted">{{ item.status_label }}</p>
+          </div>
+          <span class="badge channel-state {{ item.state }}">{{ item.status_label }}</span>
+        </div>
+        <div class="settings-kpis">
+          <div>
+            <span>Actividad</span>
+            <strong>{{ item.activity_value }}</strong>
+          </div>
+          <div>
+            <span>Capacidades</span>
+            <strong>{{ item.capabilities|join(" · ") }}</strong>
+          </div>
+          <div>
+            <span>Estado</span>
+            <strong>{{ item.state|capitalize }}</strong>
+          </div>
+        </div>
+      </section>
+
+      {% if channel.key == "email" %}
+        <section class="drawer-card">
+          <div class="section-title-row">
+            <div>
+              <h4>Correo</h4>
+              <p class="muted">La configuración completa vive en el apartado de Correo.</p>
+            </div>
+            <span class="badge {% if item.email_status.imap_ready and item.email_status.smtp_ready %}status-confirmed{% else %}status-doubtful{% endif %}">
+              {% if item.email_status.imap_ready and item.email_status.smtp_ready %}Configurado{% else %}Pendiente{% endif %}
+            </span>
+          </div>
+          <div class="settings-kpis">
+            <div>
+              <span>IMAP</span>
+              <strong>{{ item.email_status.provider_status.imap }}</strong>
+            </div>
+            <div>
+              <span>SMTP</span>
+              <strong>{{ item.email_status.provider_status.smtp }}</strong>
+            </div>
+            <div>
+              <span>Última lectura</span>
+              <strong>{{ item.email_status.last_sync.at.strftime("%d/%m %H:%M") if item.email_status.last_sync.at else "Sin registro" }}</strong>
+            </div>
+          </div>
+          <div class="drawer-actions">
+            <a class="button secondary compact-button" href="/settings#email">Abrir configuración de correo</a>
+            <a class="button secondary compact-button" href="/channels?tab=processed&date_range=30d&sort=date_desc">Ver procesados</a>
+            <a class="button secondary compact-button" href="/pedidos">Ver pedidos</a>
+            <form class="js-loading-form compact-backfill-form" method="post" action="/settings/email/backfill">
+              <label>Desde<input type="date" name="from_date" value="{{ email.read_from_date or '' }}"></label>
+              <label>Hasta<input type="date" name="to_date" value=""></label>
+              <label>Límite<input type="number" name="limit" min="1" max="250" value="100"></label>
+              <button class="secondary compact-button" data-loading-text="Recuperando..." data-confirm="Recuperar histórico IMAP con el rango configurado?">Traer rango</button>
+            </form>
+          </div>
+          <p class="muted">El rango se procesa por fecha y puedes limitar cuántos correos se traen en una sola pasada.</p>
+        </section>
+        {% if recent_processed_emails %}
+          <section class="drawer-card">
+            <div class="section-title-row">
+              <div>
+                <h4>Procesados recientes</h4>
+                <p class="muted">Últimos correos que ya pasaron por el agente en los últimos 30 días.</p>
+              </div>
+            </div>
+            <div class="recent-email-list">
+              {% for email in recent_processed_emails %}
+                <article class="recent-email-row">
+                  <div>
+                    <strong>{{ email.subject }}</strong>
+                    <p class="muted">{{ email.sender }}</p>
+                  </div>
+                  <div class="recent-email-meta">
+                    <span>{{ email.received_label }}</span>
+                    <span class="badge">{{ email.status_label }}</span>
+                  </div>
+                </article>
+              {% endfor %}
+            </div>
+          </section>
+        {% endif %}
+      {% else %}
+        <form class="drawer-card stack js-loading-form" method="post" action="/settings/channels/{{ channel.key }}/settings">
+          <div class="section-title-row">
+            <div>
+              <h4>Configuración mínima</h4>
+              <p class="muted">Completa solo lo necesario para empezar.</p>
+            </div>
+          </div>
+          <div class="form-grid">
+            {% for field in item.spec.fields %}
+              <label class="{% if field.key in ['access_token', 'webhook_secret'] %}span-2{% endif %}">
+                {{ field.label }}
+                <input
+                  name="{{ field.key }}"
+                  type="{% if field.secret %}password{% else %}text{% endif %}"
+                  placeholder="{% if field.secret and item.settings.get(field.key) %}Mantener valor actual{% elif field.get('placeholder') %}{{ field.get('placeholder') }}{% else %}{{ field.label }}{% endif %}"
+                  value="{% if not field.secret %}{{ item.settings.get(field.key) or '' }}{% endif %}">
+              </label>
+            {% endfor %}
+          </div>
+          <div class="drawer-actions">
+            <button data-loading-text="Guardando...">Guardar canal</button>
+            {% if channel.is_active %}
+              <button class="secondary js-loading-form" formaction="/settings/channels/{{ channel.key }}/deactivate" formmethod="post" data-loading-text="Desactivando..." data-confirm="Este canal dejará de recibir nuevas entradas. No se eliminarán mensajes, pedidos ni configuración histórica. ¿Desactivar?">Desactivar</button>
+            {% endif %}
+          </div>
+        </form>
+      {% endif %}
+
+      {% if technical_access %}
+        <details class="drawer-subsection">
+          <summary>Configuración técnica</summary>
+          {% if item.raw_settings %}
+            <div class="channel-tech-list">
+              {% for setting in item.raw_settings %}
+                <div class="channel-tech-row">
+                  <div>
+                    <strong>{{ setting.key }}</strong>
+                    <span>{{ setting.value or "Sin valor" }}</span>
+                  </div>
+                  <span class="badge">{{ setting.value_type }}</span>
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p class="muted">No hay parámetros configurados para este canal.</p>
+          {% endif %}
+        </details>
+      {% endif %}
+    </div>
+  </dialog>
+{% endfor %}
+
+<script>
+  document.querySelectorAll("[data-open-channel]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const dialog = document.getElementById(`channel-${button.dataset.openChannel}`);
+      if (dialog) dialog.showModal();
+    });
+  });
+  document.querySelectorAll("[data-close-settings]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const dialog = button.closest("dialog");
+      if (dialog) dialog.close();
+    });
+  });
+  const focusKey = new URLSearchParams(window.location.search).get("focus");
+  if (focusKey) {
+    const dialog = document.getElementById(`channel-${focusKey}`);
+    if (dialog) dialog.showModal();
+  }
+</script>
+{% endblock %}

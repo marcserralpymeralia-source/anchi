@@ -1,0 +1,56 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
+
+from app.core.config import get_settings
+from app.core.lifespan import app_lifespan
+from app.core.middleware import branding_middleware
+from app.core.router_registry import get_registered_routers
+from app.core.templating import templates
+from app.settings.branding import branding_css_vars
+
+
+def internal_server_error_response(request) -> JSONResponse:  # noqa: ANN001
+    request_id = getattr(request.state, "request_id", None)
+    payload = {
+        "error": "internal_error",
+        "message": "Ha ocurrido un error interno.",
+        "request_id": request_id,
+    }
+    response = JSONResponse(status_code=500, content=payload)
+    if request_id:
+        response.headers["X-Request-ID"] = request_id
+    return response
+
+
+def create_app() -> FastAPI:
+    settings = get_settings()
+    app = FastAPI(title=settings.app_name, lifespan=app_lifespan)
+    app.add_middleware(SessionMiddleware, secret_key=settings.app_secret_key, session_cookie=settings.session_cookie)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[settings.app_url, "http://localhost:8000", "http://127.0.0.1:8000", "http://localhost:8001", "http://127.0.0.1:8001"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    app.middleware("http")(branding_middleware)
+    static_dir = Path(__file__).resolve().parents[1] / "static"
+    app.mount("/static", StaticFiles(directory=static_dir.as_posix()), name="static")
+    templates.env.globals["branding_css_vars"] = branding_css_vars
+    templates.env.globals["app_settings"] = settings
+
+    for router in get_registered_routers():
+        app.include_router(router)
+
+    @app.exception_handler(Exception)
+    async def _fallback_exception_handler(request, exc):  # noqa: ANN001
+        return internal_server_error_response(request)
+
+    return app

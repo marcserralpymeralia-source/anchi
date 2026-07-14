@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% set title = "Detalle de job" %}
+{% block content %}
+<section class="panel stack jobs-detail-shell">
+  <div class="section-title-row">
+    <div>
+      <h2>{{ job.job_type.replace('_', ' ') | title }}</h2>
+      <p class="muted">Job #{{ job.id }} · {{ job.created_at.strftime("%d/%m/%Y %H:%M") if job.created_at else "Sin fecha" }}</p>
+    </div>
+    <div class="actions">
+      <a class="button secondary" href="/jobs/monitor">Volver</a>
+      <a class="button secondary" href="/jobs/{{ job.id }}">JSON</a>
+    </div>
+  </div>
+
+  <section class="history-summary jobs-summary jobs-detail-summary">
+    <article class="compact-card compact-card-muted"><span>Estado</span><strong>{{ job.status.replace('_', ' ') | title }}</strong><small>Job operativo</small></article>
+    <article class="compact-card compact-card-reviewable"><span>Progreso</span><strong>{{ job.progress or 0 }}%</strong><small>Avance actual</small></article>
+    <article class="compact-card compact-card-safe"><span>Intentos</span><strong>{{ job.attempt_count }}</strong><small>Ejecuciones totales</small></article>
+    <article class="compact-card compact-card-safe"><span>Reintentos</span><strong>{{ job.retry_count }}</strong><small>Veces reintentado</small></article>
+    <article class="compact-card compact-card-error"><span>Bloqueo</span><strong>{{ "Sí" if job.lock_owner else "No" }}</strong><small>{{ job.lock_owner or "Sin lock" }}</small></article>
+  </section>
+
+  <section class="jobs-detail-grid">
+    <article class="panel stack jobs-detail-card">
+      <div class="section-title-row">
+        <div>
+          <h3>Información</h3>
+          <p class="muted">Estado, bloqueo y marcas de tiempo del worker.</p>
+        </div>
+      </div>
+      <div class="info-list">
+        <div><dt>Tipo</dt><dd>{{ job.job_type.replace('_', ' ') | title }}</dd></div>
+        <div><dt>Estado</dt><dd>{{ job.status.replace('_', ' ') | title }}</dd></div>
+        <div><dt>Empresa</dt><dd>{{ job.company_id }}</dd></div>
+        <div><dt>Clave</dt><dd>{{ job.dedupe_key or "Sin clave" }}</dd></div>
+        <div><dt>Progreso</dt><dd>{{ job.progress or 0 }}%</dd></div>
+        <div><dt>Intentos</dt><dd>{{ job.attempt_count }}</dd></div>
+        <div><dt>Máx. reintentos</dt><dd>{{ job.max_retries }}</dd></div>
+        <div><dt>Encolado</dt><dd>{{ job.queued_at.strftime("%d/%m/%Y %H:%M:%S") if job.queued_at else "Sin dato" }}</dd></div>
+        <div><dt>Inicio</dt><dd>{{ job.started_at.strftime("%d/%m/%Y %H:%M:%S") if job.started_at else "Pendiente" }}</dd></div>
+        <div><dt>Fin</dt><dd>{{ job.finished_at.strftime("%d/%m/%Y %H:%M:%S") if job.finished_at else "Pendiente" }}</dd></div>
+        <div><dt>Siguiente reintento</dt><dd>{{ job.next_retry_at.strftime("%d/%m/%Y %H:%M:%S") if job.next_retry_at else "Sin programar" }}</dd></div>
+        <div><dt>Último error</dt><dd>{{ job.last_error_at.strftime("%d/%m/%Y %H:%M:%S") if job.last_error_at else "Sin error" }}</dd></div>
+        <div><dt>Tipo error</dt><dd>{{ job.last_error_type or "Sin dato" }}</dd></div>
+        <div><dt>Último pulso</dt><dd>{{ job.last_heartbeat_at.strftime("%d/%m/%Y %H:%M:%S") if job.last_heartbeat_at else "Sin pulso" }}</dd></div>
+        <div><dt>Edad del pulso</dt><dd>{{ job.heartbeat_age_seconds if job.heartbeat_age_seconds is not none else "Sin dato" }} s</dd></div>
+        <div><dt>Lock owner</dt><dd>{{ job.lock_owner or "Sin lock" }}</dd></div>
+        <div><dt>Lock until</dt><dd>{{ job.lock_until.strftime("%d/%m/%Y %H:%M:%S") if job.lock_until else "Sin lock" }}</dd></div>
+        <div><dt>Lock restante</dt><dd>{{ job.lock_remaining_seconds }} s</dd></div>
+        <div><dt>Edad</dt><dd>{{ (job.age_seconds // 60) if job.age_seconds else 0 }} min</dd></div>
+        <div><dt>Duración</dt><dd>{{ (job.runtime_seconds // 60) if job.runtime_seconds else 0 }} min</dd></div>
+        <div><dt>Request ID</dt><dd>{{ request_id or "Sin request_id" }}</dd></div>
+      </div>
+      <div class="drawer-actions">
+        <form class="js-loading-form" method="post" action="/jobs/{{ job.id }}/retry">
+          <button class="secondary compact-button" data-loading-text="Reintentando..." {% if job.status not in ["failed", "cancelled", "retrying"] %}disabled{% endif %}>Reintentar</button>
+        </form>
+        <form class="js-loading-form" method="post" action="/jobs/{{ job.id }}/cancel">
+          <button class="secondary compact-button" data-loading-text="Cancelando..." {% if job.status in ["success", "failed", "cancelled"] %}disabled{% endif %}>Cancelar</button>
+        </form>
+      </div>
+    </article>
+
+    <article class="panel stack jobs-detail-card">
+      <div class="section-title-row">
+        <div>
+          <h3>Payload</h3>
+          <p class="muted">Datos que recibió el worker.</p>
+        </div>
+      </div>
+      <pre class="jobs-json">{{ job.payload_json or "{}" }}</pre>
+      {% if job.result_json %}
+        <div class="section-title-row">
+          <div>
+            <h3>Resultado</h3>
+            <p class="muted">Última salida del job.</p>
+          </div>
+        </div>
+        <pre class="jobs-json">{{ job.result_json }}</pre>
+      {% endif %}
+      {% if job.error_message %}
+        <div class="section-title-row">
+          <div>
+            <h3>Error actual</h3>
+            <p class="muted">Último fallo registrado.</p>
+          </div>
+        </div>
+        <pre class="jobs-json jobs-json-error">{{ job.error_message }}</pre>
+      {% endif %}
+    </article>
+
+    <article class="panel stack jobs-detail-card">
+      <div class="section-title-row">
+        <div>
+          <h3>Historial</h3>
+          <p class="muted">Eventos del job y mensajes de operación.</p>
+        </div>
+      </div>
+      <div class="job-log-list">
+        {% for log in logs %}
+          <article class="job-log-row">
+            <strong>{{ log.created_label }}</strong>
+            <span>{{ log.action }}</span>
+            <p>{{ log.message }}</p>
+          </article>
+        {% else %}
+          <p class="muted">Todavía no hay eventos registrados para este job.</p>
+        {% endfor %}
+      </div>
+    </article>
+  </section>
+</section>
+{% endblock %}

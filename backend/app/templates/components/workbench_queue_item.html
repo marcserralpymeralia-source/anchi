@@ -1,0 +1,62 @@
+<article
+  class="queue-item queue-item-{{ item.scoring_category }} queue-item-{{ item.agent_status }} queue-item-confidence-{{ confidence_key }}"
+  data-modal-id="{{ item.modal_id }}"
+  data-kind="{{ item.kind }}"
+  data-detail-url="{{ item.detail_url }}"
+  data-selection-kind="{{ item.kind }}"
+  data-selection-id="{{ selection_id }}"
+  onclick="selectWorkbenchItem(this)"
+  tabindex="0"
+>
+  <div class="queue-item-main">
+    <div class="queue-item-main-head">
+      <label class="queue-item-select-wrap" onclick="event.stopPropagation();">
+        <input class="queue-item-select" type="checkbox" aria-label="Seleccionar tarjeta" onchange="toggleWorkbenchSelection(this)">
+      </label>
+      <span class="badge queue-item-priority">{{ item.priority or item.priority_label or "Media" }}</span>
+    </div>
+    <strong class="queue-item-name">{{ item.customer_name or item.from_email or "Sin cliente" }}</strong>
+    <div class="queue-item-tags">
+      <a class="queue-item-tag queue-item-tag-channel" href="/?origin={{ channel_label|urlencode }}" onclick="event.stopPropagation();">{{ channel_label }}</a>
+      <a class="queue-item-tag queue-item-tag-confidence queue-item-confidence-{{ confidence_key }}" href="/?mode={% if confidence_key == 'without' %}not_processed{% else %}attention{% endif %}" onclick="event.stopPropagation();">{{ confidence_label }}</a>
+      {% if status_chip %}
+        <a class="queue-item-tag queue-item-tag-status" href="/?mode={% if status_chip == 'Pendiente' %}not_processed{% elif status_chip == 'Revisión' %}attention{% elif status_chip == 'Sin pedido' %}no_order{% else %}processed{% endif %}" onclick="event.stopPropagation();">{{ status_chip }}</a>
+      {% endif %}
+    </div>
+  </div>
+  <div class="queue-item-actions">
+    {% if item.kind == "email" and item.agent_status == "not_processed" %}
+      <form class="js-loading-form" method="post" action="/workbench/email/{{ item.email_id }}/process"><button class="primary compact-button" data-loading-text="Procesando..." onclick="event.stopPropagation();">Procesar</button></form>
+      <button class="secondary compact-button" type="button" onclick="event.stopPropagation(); openWorkbenchItemDetail('{{ item.detail_url }}')">Resolver</button>
+    {% elif item.kind == "order" and item.order_status_label == "Listo para confirmar" %}
+      <form class="js-loading-form" method="post" action="/orders/{{ item.order_id }}/confirm" data-confirm="Confirmar pedido?"><button class="primary compact-button" data-loading-text="Confirmando..." onclick="event.stopPropagation();">Procesar</button></form>
+      <button class="secondary compact-button" type="button" onclick="event.stopPropagation(); openWorkbenchItemDetail('{{ item.detail_url }}')">Resolver</button>
+    {% else %}
+      <button class="primary compact-button" type="button" onclick="event.stopPropagation(); openWorkbenchItemDetail('{{ item.detail_url }}')">{{ quick_process_label }}</button>
+      <button class="secondary compact-button" type="button" onclick="event.stopPropagation(); openWorkbenchItemDetail('{{ item.detail_url }}')">Resolver</button>
+    {% endif %}
+    <details class="workbench-more-menu" onclick="event.stopPropagation();">
+      <summary class="secondary compact-button" onclick="event.stopPropagation();">...</summary>
+      <div class="workbench-more-menu-panel">
+        {% if item.kind == "order" %}
+          <a href="/orders/{{ item.order_id }}" onclick="event.stopPropagation();">Editar pedido</a>
+          {% if item.email_id %}<a href="/channels?focus=email-{{ item.email_id }}" onclick="event.stopPropagation();">Ver origen</a>{% endif %}
+          {% if item.email_id %}<a href="/orders/{{ item.order_id }}#attachments" onclick="event.stopPropagation();">Ver adjuntos</a>{% endif %}
+          <form class="js-loading-form" method="post" action="/orders/{{ item.order_id }}/recalculate-score"><button class="secondary compact-button" data-loading-text="Recalculando..." onclick="event.stopPropagation();">Recalcular confianza</button></form>
+          <form class="js-loading-form" method="post" action="/orders/{{ item.order_id }}/export-ftp"><button class="secondary compact-button" data-loading-text="Exportando..." onclick="event.stopPropagation();">Enviar a gestión</button></form>
+          <form class="js-loading-form" method="post" action="/orders/{{ item.order_id }}/mark-not-order" data-confirm="Marcar como sin pedido?"><button class="secondary compact-button" data-loading-text="Marcando..." onclick="event.stopPropagation();">Marcar como sin pedido</button></form>
+          <form class="js-loading-form" method="post" action="/orders/{{ item.order_id }}/discard" data-confirm="¿Seguro que quieres eliminar este pedido? Esta acción lo moverá a eliminados y no aparecerá en la gestión activa."><button class="secondary compact-button danger-soft" data-loading-text="Eliminando..." onclick="event.stopPropagation();">Eliminar pedido</button></form>
+          <button type="button" class="secondary compact-button" onclick="event.stopPropagation(); openWorkbenchItemDetail('{{ item.detail_url }}')">Cambiar cliente</button>
+        {% else %}
+          <form class="js-loading-form" method="post" action="/workbench/email/{{ item.email_id }}/process"><button class="secondary compact-button" data-loading-text="Procesando..." onclick="event.stopPropagation();">Reprocesar</button></form>
+          <form class="js-loading-form" method="post" action="/workbench/email/{{ item.email_id }}/mark-no-order" data-confirm="Marcar como sin pedido?"><button class="secondary compact-button" data-loading-text="Marcando..." onclick="event.stopPropagation();">Marcar como sin pedido</button></form>
+          <form class="js-loading-form" method="post" action="/workbench/email/{{ item.email_id }}/discard" data-confirm="Descartar este correo?"><button class="secondary compact-button danger-soft" data-loading-text="Descartando..." onclick="event.stopPropagation();">Eliminar pedido</button></form>
+          <button class="secondary compact-button" type="button" onclick="event.stopPropagation(); openWorkbenchItemDetail('{{ item.detail_url }}')">Ver origen</button>
+        {% endif %}
+      </div>
+    </details>
+  </div>
+  <div class="queue-item-confidence-col queue-item-confidence-{{ confidence_key }}">
+    <span class="queue-item-score queue-item-confidence-{{ confidence_key }}">{% if item.score is not none %}{{ "%.0f"|format(item.score) }}%{% else %}--{% endif %}</span>
+  </div>
+</article>

@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% set title = "Gestión de pedidos" %}
+{% block content %}
+
+{% set tabs = workbench["tab_counts"] %}
+<section class="workbench-shell">
+  <section class="panel workbench-queue-panel">
+    <form id="workbench-bulk-form" class="workbench-bulk-bar" method="post" action="/workbench/bulk-action" hidden>
+      <input type="hidden" name="selected_items" id="workbench-selected-items" value="[]">
+      <input type="hidden" name="target_state" id="workbench-target-state" value="">
+      <span class="workbench-bulk-count"><strong id="workbench-selected-count">0</strong> pedidos seleccionados</span>
+      <label class="workbench-bulk-state">
+        <span>Estado</span>
+        <select id="workbench-state-select">
+          <option value="">Cambiar estado</option>
+          <option value="pedido_pendiente_revision">Revisión</option>
+          <option value="pedido_confirmado">Confirmado</option>
+          <option value="pedido_exportado">Exportado</option>
+          <option value="no_pedido">Sin pedido</option>
+          <option value="dudoso">Dudoso</option>
+          <option value="descartado">Eliminado</option>
+        </select>
+      </label>
+      <div class="actions workbench-bulk-actions">
+        <button type="button" class="secondary compact-button" onclick="submitWorkbenchBulkAction('process')">Procesar</button>
+        <button type="button" class="secondary compact-button" onclick="submitWorkbenchBulkAction('reprocess')">Reprocesar</button>
+        <button type="button" class="secondary compact-button" onclick="submitWorkbenchBulkAction('confirm')">Confirmar</button>
+        <button type="button" class="secondary compact-button" onclick="submitWorkbenchBulkAction('mark_no_order')">Sin pedido</button>
+        <button type="button" class="secondary compact-button" onclick="submitWorkbenchBulkAction('export')">Exportar</button>
+        <button type="button" class="secondary compact-button" onclick="submitWorkbenchBulkAction('change_state')">Cambiar estado</button>
+        <button type="button" class="secondary compact-button" onclick="submitWorkbenchBulkAction('delete', true)">Eliminar</button>
+      </div>
+    </form>
+    <details class="workbench-filters-panel" open>
+      <summary>Filtros rápidos</summary>
+      <div class="workbench-tabs">
+        {% for key, label, count in [
+          ("all","Todos", tabs.all),
+          ("not_processed","Pendientes", tabs.not_processed),
+          ("attention","Revisión", tabs.attention),
+          ("processed","Listos", tabs.processed),
+          ("errors","Errores", tabs.errors),
+          ("no_order","Sin pedido", tabs.no_order)
+        ] %}
+          <a class="workbench-tab {% if filters.mode == key %}active{% endif %}" href="/?mode={{ key }}">
+            <span>{{ label }}</span><strong>{{ count }}</strong>
+          </a>
+        {% endfor %}
+      </div>
+      <details class="workbench-advanced-filters">
+        <summary>Más filtros</summary>
+        <form method="get" action="/" class="workbench-filters-form">
+          <input type="hidden" name="page" value="1">
+          <div class="filter-grid workbench-quick-filters">
+            <label>Buscar<input name="customer_or_sender" value="{{ filters.customer_or_sender or filters.search }}" placeholder="Cliente / asunto"></label>
+            <label>Fecha
+              <select name="date_range">
+                <option value="today" {% if filters.date_range == "today" %}selected{% endif %}>Hoy</option>
+                <option value="yesterday" {% if filters.date_range == "yesterday" %}selected{% endif %}>Ayer</option>
+                <option value="7d" {% if filters.date_range == "7d" %}selected{% endif %}>7 días</option>
+                <option value="custom" {% if filters.date_range == "custom" %}selected{% endif %}>Personalizado</option>
+              </select>
+            </label>
+            <label>Estado<input name="agent_status" value="{{ filters.agent_status }}" placeholder="pendiente / error"></label>
+            <label>Cliente<input name="customer_id" value="{{ filters.customer_id }}" placeholder="ID"></label>
+            <label>Confianza min.<input type="number" name="score_min" min="0" max="100" step="0.01" value="{{ filters.score_min }}"></label>
+            <label>Confianza max.<input type="number" name="score_max" min="0" max="100" step="0.01" value="{{ filters.score_max }}"></label>
+            <label>Canal<input name="origin" value="{{ filters.origin }}" placeholder="Email / WhatsApp"></label>
+            <label>Tipo<input name="email_type" value="{{ filters.email_type }}" placeholder="pedido / duda"></label>
+            <label>Tamaño<select name="page_size">{% for size in pagination.allowed_page_sizes %}<option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>{% endfor %}</select></label>
+            <button class="secondary compact-button" data-loading-text="Filtrando...">Filtrar</button>
+            <a class="button secondary compact-button" href="/">Limpiar</a>
+          </div>
+          <input type="hidden" name="mode" value="{{ filters.mode }}">
+        </form>
+      </details>
+    </details>
+
+    <div class="workbench-tools-row">
+      <div class="workbench-tools-note">
+        <strong>Trabajo activo</strong>
+        <span id="workbench-last-refresh">Ultima actualizacion: --:--</span>
+      </div>
+      <div class="actions">
+        <form class="js-loading-form" method="post" action="/workbench/process-recent" data-confirm="Procesar los 3 correos recientes?">
+          <input type="hidden" name="limit" value="3">
+          <button class="secondary compact-button" data-loading-text="Procesando...">Procesar 3 mails</button>
+        </form>
+      </div>
+    </div>
+
+    {% if featured_process_item %}
+      {% include "components/workbench_featured_item.html" %}
+    {% endif %}
+
+    <div class="work-queue">
+      {% for item in workbench["items"] %}
+        {% set score_value = item.score if item.score is not none else none %}
+        {% set confidence_key = "without" %}
+        {% set confidence_label = "Sin analizar" %}
+        {% if score_value is not none %}
+          {% if score_value >= 80 %}
+            {% set confidence_key = "strong" %}
+            {% set confidence_label = "Alta" %}
+          {% elif score_value >= 60 %}
+            {% set confidence_key = "amber" %}
+            {% set confidence_label = "Revisable" %}
+          {% elif score_value >= 40 %}
+            {% set confidence_key = "low" %}
+            {% set confidence_label = "Baja" %}
+          {% else %}
+            {% set confidence_key = "critical" %}
+            {% set confidence_label = "Crítica" %}
+          {% endif %}
+        {% endif %}
+        {% set channel_label = item.channel or item.origin or "Canal" %}
+        {% set status_chip = none %}
+        {% if item.order_status_label == "Listo para confirmar" %}
+          {% set status_chip = "Listo" %}
+        {% elif item.agent_status == "not_processed" %}
+          {% set status_chip = "Pendiente" %}
+        {% elif item.agent_status in ["doubtful", "error"] or item.scoring_category in ["doubtful", "blocked"] or (item.order_status or "").startswith("error") %}
+          {% set status_chip = "Revisión" %}
+        {% elif item.agent_status in ["no_order", "discarded"] %}
+          {% set status_chip = "Sin pedido" %}
+        {% elif item.agent_status in ["processed", "order_detected"] %}
+          {% set status_chip = "Listo" %}
+        {% endif %}
+        {% set selection_id = item.order_id if item.order_id else item.email_id %}
+        {% set quick_process_label = "Confirmar" if item.kind == "order" and item.order_status_label == "Listo para confirmar" else "Procesar" %}
+        {% include "components/workbench_queue_item.html" %}
+      {% else %}
+        <article class="task-empty">
+          <strong>Todo resuelto</strong>
+          <span>El agente no necesita intervención ahora.</span>
+        </article>
+      {% endfor %}
+    </div>
+    {% include "components/pagination.html" %}
+  </section>
+</section>
+
+  {% include "components/workbench_detail_modal.html" %}
+  <script src="/static/js/workbench-dashboard.js"></script>
+{% endblock %}

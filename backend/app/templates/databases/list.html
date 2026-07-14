@@ -1,0 +1,474 @@
+{% extends "base.html" %}
+{% set title = "Bases de datos" %}
+{% block content %}
+<section class="panel stack database-shell">
+  <div class="section-title-row">
+    <div>
+      <h2>Bases de datos</h2>
+      <p class="muted">Clientes, productos, alias e importaciones en un mismo bloque de datos maestros.</p>
+    </div>
+    <div class="actions">
+      <a class="button secondary" href="/imports/history">Importaciones</a>
+      <a class="button secondary" href="/learning">Conocimiento</a>
+    </div>
+  </div>
+
+  <section class="history-summary database-summary">
+    <article class="compact-card compact-card-muted"><span>Clientes</span><strong>{{ stats.customers_total }}</strong><small>{{ stats.active_customers }} activos</small></article>
+    <article class="compact-card compact-card-safe"><span>Productos</span><strong>{{ stats.products_total }}</strong><small>{{ stats.active_products }} activos</small></article>
+    <article class="compact-card compact-card-reviewable"><span>Alias</span><strong>{{ stats.customer_alias_total + stats.product_alias_total }}</strong><small>Clientes + productos</small></article>
+    <article class="compact-card compact-card-error"><span>Aprendizaje</span><strong>{{ stats.learned_aliases + stats.manual_corrections }}</strong><small>Correcciones y RAG</small></article>
+  </section>
+
+  <div class="workbench-tabs database-tabs">
+    {% for key, label in [
+      ("customers", "Clientes"),
+      ("products", "Productos"),
+      ("aliases", "Alias y equivalencias"),
+      ("imports", "Importaciones"),
+      ("knowledge", "Conocimiento del agente")
+    ] %}
+      <a class="workbench-tab {% if tab == key %}active{% endif %}" href="/databases?tab={{ key }}">
+        <span>{{ label }}</span><strong>{% if key == 'customers' %}{{ stats.customers_total }}{% elif key == 'products' %}{{ stats.products_total }}{% elif key == 'aliases' %}{{ stats.customer_alias_total + stats.product_alias_total }}{% elif key == 'imports' %}{{ stats.manual_corrections }}{% else %}{{ stats.learned_aliases }}{% endif %}</strong>
+      </a>
+    {% endfor %}
+  </div>
+
+  {% if tab == "customers" %}
+    <form class="filter-grid database-filters" method="get" action="/databases">
+      <input type="hidden" name="tab" value="customers">
+      <label>Buscar<input name="q" value="{{ filters.q }}" placeholder="Código, nombre, CIF, email, alias o contacto"></label>
+      <label>Estado
+        <select name="status">
+          {% for value, label in [("all","Todos"),("active","Activos"),("inactive","Inactivos"),("with_alias","Con alias"),("without_alias","Sin alias"),("recent","Recientes")] %}
+            <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Tamaño página
+        <select name="page_size">
+          {% for size in pagination.allowed_page_sizes %}<option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>&nbsp;<button class="secondary" data-loading-text="Filtrando...">Filtrar</button></label>
+      <div class="actions database-actions">
+        <button type="button" class="secondary" onclick="document.getElementById('create-customer-panel').showModal()">Nuevo cliente</button>
+        <a class="button secondary" href="/imports/history">Importar clientes</a>
+      </div>
+    </form>
+
+    <div class="database-layout">
+      <section class="panel stack database-list-panel">
+        <div class="section-title-row">
+          <div><h3>Clientes</h3><span class="badge">{{ pagination.start_item }}-{{ pagination.end_item }} de {{ pagination.total_items }}</span></div>
+        </div>
+        <table class="data-table database-table">
+          <thead><tr><th>Estado</th><th>Código</th><th>Nombre</th><th>CIF/NIF</th><th>Email</th><th>Teléfono</th><th>Alias</th><th>Último pedido</th><th>Acción</th></tr></thead>
+          <tbody>
+            {% for row in customers %}
+              <tr class="database-row" onclick="selectDatabaseRecord(this)" data-kind="customer" data-record='{{ row|tojson }}'>
+                <td><span class="badge {{ "status-confirmed" if row.status == "active" and not row.company_inactive else "status-discarded" }}">{{ row.status_label }}</span></td>
+                <td>{{ row.code }}</td>
+                <td class="wide-cell" title="{{ row.fiscal_name }}">{{ row.fiscal_name }}</td>
+                <td>{{ row.tax_id }}</td>
+                <td>{{ row.primary_email }}</td>
+                <td>{{ row.phone }}</td>
+                <td>{{ row.alias_count }}</td>
+                <td>{{ row.last_order_at }}</td>
+                <td><button type="button" class="secondary compact-button" onclick="event.stopPropagation(); selectDatabaseRecord(this.closest('tr'))">Ver</button></td>
+              </tr>
+            {% else %}
+              <tr><td colspan="9" class="muted">No hay clientes para los filtros seleccionados.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% include "components/pagination.html" %}
+      </section>
+
+      <aside class="panel stack database-detail-panel" id="database-detail-panel">
+        {% set record = detail %}
+        <div class="section-title-row">
+          <div>
+            <h3>Detalle</h3>
+            <span class="badge" id="database-detail-kind">{{ "Cliente" if record else "Sin selección" }}</span>
+          </div>
+          <button type="button" class="secondary compact-button" onclick="saveDatabaseDetail()">Guardar cambios</button>
+        </div>
+        {% if record %}
+          <form id="customer-detail-form" class="stack js-loading-form database-detail-form" method="post" action="/customers">
+            <input type="hidden" name="id" value="{{ record.id }}">
+            <div class="form-grid">
+              <label>Código cliente<input name="code" value="{{ record.code }}"></label>
+              <label>Nombre comercial<input name="commercial_name" value="{{ record.commercial_name }}"></label>
+              <label>Razón social<input name="fiscal_name" value="{{ record.fiscal_name }}"></label>
+              <label>CIF/NIF<input name="tax_id" value="{{ record.tax_id }}"></label>
+              <label>Email principal<input name="primary_email" value="{{ record.primary_email }}"></label>
+              <label>Emails asociados<input name="associated_emails" value="{{ record.associated_emails }}" placeholder="compras@cliente.com, admin@cliente.com"></label>
+              <label>Teléfono<input name="phone" value="{{ record.phone }}"></label>
+              <label>Teléfonos asociados<input name="associated_phones" value="{{ record.associated_phones }}" placeholder="600 111 222, 900 333 444"></label>
+              <label>Dirección<input name="address" value="{{ record.address }}"></label>
+              <label>País<input name="country" value="{{ record.country }}"></label>
+              <label>Delegación<input name="delegation" value="{{ record.delegation }}"></label>
+              <label>Ciudad<input name="city" value="{{ record.city }}"></label>
+              <label>Provincia<input name="province" value="{{ record.province }}"></label>
+              <label>Comercial asignado<input name="assigned_salesperson" value="{{ record.assigned_salesperson }}"></label>
+              <label>Código contable<input name="accounting_code" value="{{ record.accounting_code }}"></label>
+              <label>Categoría<input name="category" value="{{ record.category }}"></label>
+              <label>Estado<select name="status"><option value="active" {% if record.status == "active" %}selected{% endif %}>Activo</option><option value="inactive" {% if record.status != "active" %}selected{% endif %}>Inactivo</option></select></label>
+              <label>Baja empresa<input name="company_inactive" type="checkbox" {% if record.company_inactive %}checked{% endif %}></label>
+              <label class="span-2">Observaciones<textarea name="notes" rows="3">{{ record.notes }}</textarea></label>
+              <label class="span-2">Dominios<input name="domains" value="{{ record.detail_domains }}"></label>
+              <label class="span-2">Alias<input name="aliases" value="{{ record.detail_aliases }}"></label>
+            </div>
+          </form>
+          <section class="subpanel">
+            <h4>Relaciones</h4>
+            <p><strong>Pedidos:</strong> {{ record.orders_count }}</p>
+            <p><strong>Contactos:</strong> {{ record.contact_count }}</p>
+            <p><strong>Último pedido:</strong> {{ record.last_order_at }}</p>
+            <p><strong>Alias:</strong> {{ record.detail_aliases or "Sin alias" }}</p>
+            <p><strong>Dominios:</strong> {{ record.detail_domains or "Sin dominios" }}</p>
+            <p><strong>Contactos:</strong> {{ record.detail_contacts or "Sin contactos" }}</p>
+          </section>
+          <section class="subpanel">
+            <h4>Ficha cliente</h4>
+            <div class="history-summary">
+              <article class="compact-card compact-card-muted"><span>Documentos</span><strong>{{ customer_knowledge.summary.documents }}</strong><small>Notas y conocimientos</small></article>
+              <article class="compact-card compact-card-safe"><span>Casos</span><strong>{{ customer_knowledge.summary.cases }}</strong><small>Resueltos con este cliente</small></article>
+              <article class="compact-card compact-card-reviewable"><span>Alias</span><strong>{{ customer_knowledge.summary.aliases }}</strong><small>Equivalencias</small></article>
+              <article class="compact-card compact-card-error"><span>Dominios</span><strong>{{ customer_knowledge.summary.domains }}</strong><small>Señales de correo</small></article>
+              <article class="compact-card compact-card-muted"><span>Artículos habituales</span><strong>{{ customer_knowledge.summary.habitual_products }}</strong><small>{{ customer_knowledge.summary.products }} relaciones</small></article>
+            </div>
+            {% if user.role.name in ["Administrador", "Superadmin"] %}
+              <form class="stack js-loading-form" method="post" action="/learning/documents?tab=documents">
+                <input type="hidden" name="source_type" value="customer_knowledge">
+                <input type="hidden" name="source_entity" value="customer">
+                <input type="hidden" name="source_entity_id" value="{{ record.id }}">
+                <label>Título<input name="title" value="Ficha cliente · {{ record.fiscal_name }}" required></label>
+                <label>Contenido<textarea name="content_text" rows="4" placeholder="Preferencias, condiciones especiales, productos habituales, comentarios operativos..."></textarea></label>
+                <button class="secondary" data-loading-text="Guardando...">Añadir a la ficha</button>
+              </form>
+            {% endif %}
+            <div class="learning-doc-list">
+              {% for doc in customer_knowledge.documents %}
+                <article class="learning-doc-row">
+                  <div class="learning-doc-main">
+                    <div class="learning-doc-head">
+                      <strong>{{ doc.title }}</strong>
+                      <span class="badge {{ 'status-confirmed' if doc.status in ['indexed', 'ready', 'completed'] else 'status-doubtful' if doc.status in ['pending', 'processing'] else 'status-discarded' }}">{{ doc.status }}</span>
+                    </div>
+                    <p class="muted">{{ doc.source_type.replace('_', ' ').title() }} · {{ doc.created_at }}</p>
+                    <p>{{ doc.content_excerpt or "Sin contenido" }}</p>
+                  </div>
+                </article>
+              {% else %}
+                <p class="muted">Todavía no hay documentos específicos para esta ficha cliente.</p>
+              {% endfor %}
+            </div>
+            <div class="learning-case-list" style="margin-top: 12px;">
+              {% for case in customer_knowledge.cases %}
+                <article class="learning-case-row">
+                  <div class="learning-case-main">
+                    <strong>{{ case.action }}</strong>
+                    <p>{{ case.summary }}</p>
+                  </div>
+                  <div class="learning-case-side">
+                    <span class="badge">Caso</span>
+                    <small>{{ case.created_at }}</small>
+                  </div>
+                </article>
+              {% else %}
+                <p class="muted">No hay casos resueltos vinculados a este cliente.</p>
+              {% endfor %}
+            </div>
+            <div class="learning-doc-list" style="margin-top: 12px;">
+              {% for row in customer_knowledge.products %}
+                <article class="learning-doc-row">
+                  <div class="learning-doc-main">
+                    <div class="learning-doc-head">
+                      <strong>{{ row.reference }} · {{ row.name }}</strong>
+                      <span class="badge {{ 'status-confirmed' if row.status == 'habitual' else 'status-doubtful' }}">{{ row.status }}</span>
+                    </div>
+                    <p class="muted">Veces pedido: {{ row.times_ordered }} · U. habitual: {{ row.usual_unit or 'sin unidad' }}</p>
+                    <p>Media {{ "%.2f"|format(row.average_quantity or 0) }} · Última cantidad {{ row.last_quantity if row.last_quantity is not none else '—' }} · Confianza {{ "%.0f"|format((row.confidence or 0) * 100) }}%</p>
+                  </div>
+                </article>
+              {% else %}
+                <p class="muted">Todavía no hay artículos consolidados para este cliente.</p>
+              {% endfor %}
+            </div>
+          </section>
+        {% else %}
+          <p class="muted">Selecciona una fila para ver el detalle y editar sin salir de la tabla.</p>
+        {% endif %}
+      </aside>
+    </div>
+  {% elif tab == "products" %}
+    <form class="filter-grid database-filters" method="get" action="/databases">
+      <input type="hidden" name="tab" value="products">
+      <label>Buscar<input name="q" value="{{ filters.q }}" placeholder="Referencia, nombre, alias, familia o EAN"></label>
+      <label>Estado
+        <select name="status">
+          {% for value, label in [("all","Todos"),("active","Activos"),("inactive","Inactivos"),("with_alias","Con alias"),("without_alias","Sin alias"),("recent","Recientes")] %}
+            <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>Familia
+        <select name="family">
+          <option value="">Todas</option>
+          {% for item in families %}<option value="{{ item }}" {% if filters.family == item %}selected{% endif %}>{{ item }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>Tamaño página
+        <select name="page_size">
+          {% for size in pagination.allowed_page_sizes %}<option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>&nbsp;<button class="secondary" data-loading-text="Filtrando...">Filtrar</button></label>
+      <div class="actions database-actions">
+        <button type="button" class="secondary" onclick="document.getElementById('create-product-panel').showModal()">Nuevo producto</button>
+        <a class="button secondary" href="/imports/history">Importar productos</a>
+      </div>
+    </form>
+
+    <div class="database-layout">
+      <section class="panel stack database-list-panel">
+        <div class="section-title-row">
+          <div><h3>Productos</h3><span class="badge">{{ pagination.start_item }}-{{ pagination.end_item }} de {{ pagination.total_items }}</span></div>
+        </div>
+        <table class="data-table database-table">
+          <thead><tr><th>Estado</th><th>Referencia</th><th>Producto</th><th>Familia</th><th>Unidad</th><th>Alias</th><th>Último uso</th><th>Acción</th></tr></thead>
+          <tbody>
+            {% for row in products %}
+              <tr class="database-row" onclick="selectDatabaseRecord(this)" data-kind="product" data-record='{{ row|tojson }}'>
+                <td><span class="badge {{ "status-confirmed" if row.status == "active" and not row.obsolete else "status-discarded" }}">{{ row.status_label }}</span></td>
+                <td>{{ row.reference }}</td>
+                <td class="wide-cell" title="{{ row.name }}">{{ row.name }}</td>
+                <td>{{ row.family }}</td>
+                <td>{{ row.sale_unit }}</td>
+                <td>{{ row.alias_count }}</td>
+                <td>{{ row.last_used_at }}</td>
+                <td><button type="button" class="secondary compact-button" onclick="event.stopPropagation(); selectDatabaseRecord(this.closest('tr'))">Ver</button></td>
+              </tr>
+            {% else %}
+              <tr><td colspan="8" class="muted">No hay productos para los filtros seleccionados.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% include "components/pagination.html" %}
+      </section>
+
+      <aside class="panel stack database-detail-panel">
+        {% set record = detail %}
+        <div class="section-title-row">
+          <div>
+            <h3>Detalle</h3>
+            <span class="badge" id="database-detail-kind">{{ "Producto" if record else "Sin selección" }}</span>
+          </div>
+          <button type="button" class="secondary compact-button" onclick="saveDatabaseDetail()">Guardar cambios</button>
+        </div>
+        {% if record %}
+          <form id="product-detail-form" class="stack js-loading-form database-detail-form" method="post" action="/products">
+            <input type="hidden" name="id" value="{{ record.id }}">
+            <div class="form-grid">
+              <label>Referencia<input name="reference" value="{{ record.reference }}"></label>
+              <label>Nombre producto<input name="name" value="{{ record.name }}"></label>
+              <label>Marca<input name="brand" value=""></label>
+              <label>Proveedor habitual<input name="usual_supplier" value=""></label>
+              <label>Código alternativo<input name="alternative_code" value="{{ record.alternative_code }}"></label>
+              <label>Familia<input name="family" value="{{ record.family }}"></label>
+              <label>Subfamilia<input name="subfamily" value="{{ record.subfamily }}"></label>
+              <label>Unidad base<input name="sale_unit" value="{{ record.sale_unit }}"></label>
+              <label>Formato<input name="size_group" value="{{ record.size_group }}"></label>
+              <label>EAN/SKU<input name="ean" value="{{ record.ean }}"></label>
+              <label>Precio<input name="sale_price" type="number" step="0.01" value="{{ record.sale_price if record.sale_price is not none else '' }}"></label>
+              <label>Descuento<input name="discount_percent" type="number" step="0.01" value="{{ record.discount_percent if record.discount_percent is not none else '' }}"></label>
+              <label>Fecha alta<input name="entry_date" type="date" value="{{ record.entry_date }}"></label>
+              <label>Tipo artículo<input name="article_type" value="{{ record.article_type }}"></label>
+              <label>Almacén reposición<input name="replenishment_warehouse" value="{{ record.replenishment_warehouse }}"></label>
+              <label>Ubicación almacén<input name="warehouse_location_code" value="{{ record.warehouse_location_code }}"></label>
+              <label>Estado<select name="status"><option value="active" {% if record.status == "active" %}selected{% endif %}>Activo</option><option value="inactive" {% if record.status != "active" %}selected{% endif %}>Inactivo</option></select></label>
+              <label>Obsoleto<input name="obsolete" type="checkbox" {% if record.obsolete %}checked{% endif %}></label>
+              <label class="span-2">Colores<input name="colors" value="{{ record.colors }}"></label>
+              <label class="span-2">Descripción completa<textarea name="description_cont" rows="3">{{ record.description_cont }}</textarea></label>
+              <label class="span-2">Observaciones<textarea name="notes" rows="3">{{ record.notes }}</textarea></label>
+              <label class="span-2">Alias<input name="aliases" value="{{ record.detail_aliases }}"></label>
+            </div>
+          </form>
+          <section class="subpanel">
+            <h4>Relaciones</h4>
+            <p><strong>Usos en pedidos:</strong> {{ record.usage_count }}</p>
+            <p><strong>Último uso:</strong> {{ record.last_used_at }}</p>
+            <p><strong>Alias:</strong> {{ record.detail_aliases or "Sin alias" }}</p>
+          </section>
+        {% else %}
+          <p class="muted">Selecciona una fila para ver el detalle y editar sin salir de la tabla.</p>
+        {% endif %}
+      </aside>
+    </div>
+  {% elif tab == "aliases" %}
+    <form class="filter-grid database-filters" method="get" action="/databases">
+      <input type="hidden" name="tab" value="aliases">
+      <label>Buscar<input name="q" value="{{ filters.q }}" placeholder="Alias o valor canónico"></label>
+      <label>Tamaño página
+        <select name="page_size">
+          {% for size in pagination.allowed_page_sizes %}<option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>{% endfor %}
+        </select>
+      </label>
+      <label>&nbsp;<button class="secondary" data-loading-text="Filtrando...">Filtrar</button></label>
+    </form>
+    <section class="panel stack">
+      <div class="section-title-row"><div><h3>Alias y equivalencias</h3><span class="badge">{{ pagination.start_item }}-{{ pagination.end_item }} de {{ pagination.total_items }}</span></div></div>
+      <table class="data-table database-table">
+        <thead><tr><th>Tipo</th><th>Alias</th><th>Canónico</th><th>Referencia</th></tr></thead>
+        <tbody>
+          {% for item in aliases %}
+            <tr>
+              <td><span class="badge">{{ "Cliente" if item.kind == "customer" else "Producto" }}</span></td>
+              <td>{{ item.alias }}</td>
+              <td>{{ item.canonical }}</td>
+              <td>{{ item.reference }}</td>
+            </tr>
+          {% else %}
+            <tr><td colspan="4" class="muted">No hay alias para mostrar.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% include "components/pagination.html" %}
+    </section>
+  {% elif tab == "imports" %}
+    <section class="database-import-grid">
+      <article class="panel stack">
+        <h3>Importaciones</h3>
+        <p class="muted">Usa importación guiada para subir bases completas o revisa el histórico de cargas.</p>
+        <div class="actions">
+          <a class="button secondary" href="/imports/history">Ver histórico de importaciones</a>
+        </div>
+        <form class="stack js-loading-form" method="post" action="/customers/import" enctype="multipart/form-data">
+          <input type="hidden" name="entity_type" value="customers">
+          <label>Importar clientes<input type="file" name="file" accept=".csv,.xlsx,.xls" required></label>
+          <select name="encoding"><option value="utf-8">UTF-8</option><option value="latin-1">ISO-8859-1</option><option value="cp1252">Windows-1252</option></select>
+          <button data-loading-text="Leyendo...">Cargar clientes</button>
+        </form>
+        <form class="stack js-loading-form" method="post" action="/products/import" enctype="multipart/form-data">
+          <input type="hidden" name="entity_type" value="products">
+          <label>Importar productos<input type="file" name="file" accept=".csv,.xlsx,.xls" required></label>
+          <select name="encoding"><option value="utf-8">UTF-8</option><option value="latin-1">ISO-8859-1</option><option value="cp1252">Windows-1252</option></select>
+          <button data-loading-text="Leyendo...">Cargar productos</button>
+        </form>
+      </article>
+      <article class="panel stack">
+        <h3>Conocimiento del agente</h3>
+        <p><strong>Alias aprendidos:</strong> {{ stats.learned_aliases }}</p>
+        <p><strong>Correcciones manuales:</strong> {{ stats.manual_corrections }}</p>
+        <p class="muted">Estas señales alimentan el matching y la recuperación de casos similares.</p>
+        <a class="button secondary" href="/learning">Abrir aprendizaje</a>
+      </article>
+    </section>
+  {% else %}
+    <section class="panel stack">
+      <h3>Conocimiento del agente</h3>
+      <p class="muted">Los datos maestros y las correcciones alimentan el RAG controlado y el aprendizaje operativo.</p>
+      <div class="history-summary">
+        <article class="compact-card compact-card-safe"><span>Correcciones</span><strong>{{ stats.manual_corrections }}</strong><small>Manuales</small></article>
+        <article class="compact-card compact-card-reviewable"><span>Alias aprendidos</span><strong>{{ stats.learned_aliases }}</strong><small>Pendientes o aprobados</small></article>
+        <article class="compact-card compact-card-muted"><span>Clientes</span><strong>{{ stats.customers_total }}</strong><small>Base activa</small></article>
+        <article class="compact-card compact-card-muted"><span>Productos</span><strong>{{ stats.products_total }}</strong><small>Base activa</small></article>
+      </div>
+      <a class="button secondary" href="/learning">Abrir aprendizaje</a>
+    </section>
+  {% endif %}
+</section>
+
+<dialog id="create-customer-panel" class="edit-dialog">
+  <form class="stack js-loading-form" method="post" action="/customers">
+    <div class="dialog-header"><h2>Nuevo cliente</h2><button type="button" class="secondary" onclick="this.closest('dialog').close()">Cerrar</button></div>
+    <input type="hidden" name="id" value="0">
+    <div class="form-grid">
+      <label>Código cliente<input name="code" required></label>
+      <label>Razón social<input name="fiscal_name" required></label>
+      <label>Nombre comercial<input name="commercial_name"></label>
+      <label>CIF/NIF<input name="tax_id"></label>
+      <label>Email principal<input name="primary_email"></label>
+      <label>Emails asociados<input name="associated_emails" placeholder="compras@cliente.com, admin@cliente.com"></label>
+      <label>Teléfono<input name="phone"></label>
+      <label>Teléfonos asociados<input name="associated_phones" placeholder="600 111 222, 900 333 444"></label>
+      <label>Dirección<input name="address"></label>
+      <label>País<input name="country"></label>
+      <label>Delegación<input name="delegation"></label>
+      <label>Ciudad<input name="city"></label>
+      <label>Provincia<input name="province"></label>
+      <label>Comercial asignado<input name="assigned_salesperson"></label>
+      <label>Código contable<input name="accounting_code"></label>
+      <label>Categoría<input name="category"></label>
+      <label>Dominios<input name="domains"></label>
+      <label>Alias<input name="aliases"></label>
+      <label>Estado<select name="status"><option value="active">Activo</option><option value="inactive">Inactivo</option></select></label>
+      <label>Baja empresa<input name="company_inactive" type="checkbox"></label>
+      <label class="span-2">Observaciones<textarea name="notes" rows="3"></textarea></label>
+    </div>
+    <button data-loading-text="Guardando...">Guardar cliente</button>
+  </form>
+</dialog>
+
+<dialog id="create-product-panel" class="edit-dialog">
+  <form class="stack js-loading-form" method="post" action="/products">
+    <div class="dialog-header"><h2>Nuevo producto</h2><button type="button" class="secondary" onclick="this.closest('dialog').close()">Cerrar</button></div>
+    <input type="hidden" name="id" value="0">
+    <div class="form-grid">
+      <label>Referencia<input name="reference" required></label>
+      <label>Nombre producto<input name="name" required></label>
+      <label>Marca<input name="brand"></label>
+      <label>Proveedor habitual<input name="usual_supplier"></label>
+      <label>Código alternativo<input name="alternative_code"></label>
+      <label>Familia<input name="family"></label>
+      <label>Subfamilia<input name="subfamily"></label>
+      <label>Unidad base<input name="sale_unit"></label>
+      <label>Formato<input name="size_group"></label>
+      <label>EAN/SKU<input name="ean"></label>
+      <label>Precio<input name="sale_price" type="number" step="0.01"></label>
+      <label>Descuento<input name="discount_percent" type="number" step="0.01"></label>
+      <label>Fecha alta<input name="entry_date" type="date"></label>
+      <label>Tipo artículo<input name="article_type"></label>
+      <label>Almacén reposición<input name="replenishment_warehouse"></label>
+      <label>Ubicación almacén<input name="warehouse_location_code"></label>
+      <label>Alias<input name="aliases"></label>
+      <label>Estado<select name="status"><option value="active">Activo</option><option value="inactive">Inactivo</option></select></label>
+      <label>Obsoleto<input name="obsolete" type="checkbox"></label>
+      <label class="span-2">Descripción completa<textarea name="description_cont" rows="3"></textarea></label>
+      <label class="span-2">Observaciones<textarea name="notes" rows="3"></textarea></label>
+    </div>
+    <button data-loading-text="Guardando...">Guardar producto</button>
+  </form>
+</dialog>
+
+<script>
+  function saveDatabaseDetail() {
+    const form = document.getElementById("customer-detail-form") || document.getElementById("product-detail-form");
+    if (form) form.requestSubmit();
+  }
+  function selectDatabaseRecord(row) {
+    const record = row?.dataset?.record ? JSON.parse(row.dataset.record) : null;
+    if (!record) return;
+    document.querySelectorAll(".database-row.is-selected").forEach((node) => node.classList.remove("is-selected"));
+    row.classList.add("is-selected");
+    const isCustomer = row.dataset.kind === "customer";
+    const detailKind = document.getElementById("database-detail-kind");
+    if (detailKind) detailKind.textContent = isCustomer ? "Cliente" : "Producto";
+    const form = isCustomer ? document.getElementById("customer-detail-form") : document.getElementById("product-detail-form");
+    if (!form) return;
+    Object.entries(record).forEach(([key, value]) => {
+      const field = form.querySelector(`[name="${key}"]`);
+      if (!field) return;
+      if (field.type === "checkbox") {
+        field.checked = !!value && value !== "false";
+      } else {
+        field.value = value ?? "";
+      }
+    });
+  }
+  const firstRow = document.querySelector(".database-row");
+  if (firstRow) selectDatabaseRecord(firstRow);
+</script>
+{% endblock %}

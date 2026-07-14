@@ -1,0 +1,476 @@
+{% set customer = customer_context.customer %}
+{% set quality = customer_context.summary.quality_percent or 0 %}
+{% set current_section = section if section in ["summary", "articles", "conditions", "import"] else "summary" %}
+{% set top_articles = customer_context.knowledge_rows[:5] %}
+{% set recent_docs = customer_context.documents[:3] %}
+{% set recent_cases = customer_context.cases[:4] %}
+{% set recent_corrections = customer_context.corrections[:4] %}
+{% set quality_label = "Alta" if quality >= 71 else "Media" if quality >= 31 else "Baja" %}
+{% set status_label = "Activo" if customer.status == "active" else "Inactivo" %}
+
+<section class="knowledge-folder stack">
+  <div class="knowledge-folder-head knowledge-folder-head-compact">
+    <div class="knowledge-folder-lead">
+      <h3>{{ customer.name }}</h3>
+    </div>
+    <div class="knowledge-folder-status">
+      <span class="badge {% if quality >= 71 %}status-confirmed{% elif quality >= 31 %}status-doubtful{% else %}status-discarded{% endif %}">Calidad {{ quality }}%</span>
+      <span class="badge {% if customer.status == 'active' %}status-confirmed{% else %}status-discarded{% endif %}">{{ status_label }}</span>
+      <div class="knowledge-folder-actions knowledge-folder-actions-head">
+        <a class="button secondary compact-button" href="{{ customer.import_url }}">Importar conocimiento</a>
+        <details class="knowledge-more-menu">
+          <summary class="button secondary compact-button" aria-label="Más acciones">...</summary>
+          <div class="knowledge-more-menu-panel">
+            <a href="{{ customer.orders_url }}">Ver pedidos</a>
+            <a href="{{ customer.edit_url }}">Editar ficha</a>
+            <a href="{{ customer.reindex_url }}">Reindexar conocimiento</a>
+            <a href="{{ customer.transform_url }}">Ejecutar transformador</a>
+            <a href="#history">Ver histórico</a>
+            <a href="/settings#knowledge">Configuración cliente</a>
+          </div>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <div class="knowledge-metric-line">
+    <div><strong>{{ customer_context.summary.documents }}</strong><span>documentos</span></div>
+    <div><strong>{{ customer_context.summary.knowledge_rows }}</strong><span>artículos</span></div>
+    <div><strong>{{ customer_context.summary.conditions }}</strong><span>condiciones</span></div>
+    <div><strong>{{ customer_context.summary.aliases }}</strong><span>alias</span></div>
+    <div><strong>{{ customer_context.summary.conflicts_pending }}</strong><span>conflictos</span></div>
+  </div>
+
+  <div class="knowledge-folder-tabs">
+    {% for key, label in [("summary", "Resumen"), ("articles", "Artículos"), ("conditions", "Condiciones"), ("import", "Importación")] %}
+      <a class="knowledge-folder-tab {% if current_section == key %}active{% endif %}" href="{{ customer.knowledge_url }}?section={{ key }}&q={{ q|urlencode }}&status={{ status|urlencode }}">{{ label }}</a>
+    {% endfor %}
+  </div>
+
+  {% if current_section == "summary" %}
+    <div class="knowledge-summary-grid">
+      <div class="knowledge-summary-column">
+        <article class="subpanel knowledge-panel-tight">
+          <div class="section-title-row">
+            <h4>Ficha técnica</h4>
+            <details class="knowledge-inline-editor">
+              <summary class="button secondary compact-button">Editar ficha</summary>
+              <form class="knowledge-inline-form stack js-loading-form" method="post" action="/customers">
+                <input type="hidden" name="id" value="{{ customer.id }}">
+                <div class="form-grid">
+                  <label>Código<input name="code" value="{{ customer.code }}"></label>
+                  <label>Razón social<input name="fiscal_name" value="{{ customer.name }}"></label>
+                  <label>Nombre comercial<input name="commercial_name" value="{{ customer.commercial_name }}"></label>
+                  <label>CIF/NIF<input name="tax_id" value="{{ customer.tax_id or '' }}"></label>
+                  <label>Email principal<input name="primary_email" value="{{ customer.email or '' }}"></label>
+                  <label>Canal habitual<input value="{{ customer.habitual_channel }}" disabled></label>
+                  <label class="span-2">Emails asociados<input name="associated_emails" value="{{ customer.associated_emails }}" placeholder="compras@cliente.com, admin@cliente.com"></label>
+                  <label class="span-2">Dominios<input name="domains" value="{{ customer.associated_domains or customer.domains | join(', ') }}"></label>
+                  <label class="span-2">Teléfonos<input name="associated_phones" value="{{ customer.associated_phones }}" placeholder="600 111 222, 900 333 444"></label>
+                  <label class="span-2">Alias<input name="aliases" value="{{ customer.associated_aliases or customer.aliases | join(', ') }}"></label>
+                </div>
+                <button data-loading-text="Guardando...">Guardar cambios</button>
+              </form>
+            </details>
+          </div>
+          <dl class="knowledge-mini-spec">
+            <div><dt>Código</dt><dd>{{ customer.code }}</dd></div>
+            <div><dt>Razón social</dt><dd>{{ customer.name }}</dd></div>
+            <div><dt>Email principal</dt><dd>{{ customer.email or "Sin dato" }}</dd></div>
+            <div><dt>Canal habitual</dt><dd>{{ customer.habitual_channel }}</dd></div>
+            <div><dt>Emails asociados</dt><dd>{{ customer.associated_emails or "Sin dato" }}</dd></div>
+            <div><dt>Dominios</dt><dd>{{ customer.associated_domains or "Sin dato" }}</dd></div>
+            <div><dt>Teléfonos</dt><dd>{{ customer.associated_phones or "Sin dato" }}</dd></div>
+            <div><dt>Alias</dt><dd>{{ customer.associated_aliases or customer.aliases | join(', ') or "Sin dato" }}</dd></div>
+            <div><dt>Estado</dt><dd>{{ status_label }}</dd></div>
+          </dl>
+        </article>
+
+        <article class="subpanel knowledge-panel-tight">
+          <div class="section-title-row">
+            <h4>Estado del conocimiento</h4>
+          </div>
+          <div class="knowledge-diagnosis">
+            <div class="knowledge-diagnosis-row">
+              <span>Calidad</span><strong>{{ quality }}%</strong><small>{{ quality_label }}</small>
+            </div>
+            <div class="knowledge-diagnosis-line">
+              <span>Documentos</span><strong>{{ customer_context.summary.documents }}</strong>
+              <span>Artículos</span><strong>{{ customer_context.summary.knowledge_rows }}</strong>
+              <span>Condiciones</span><strong>{{ customer_context.summary.conditions }}</strong>
+              <span>Conflictos</span><strong>{{ customer_context.summary.conflicts_pending }}</strong>
+            </div>
+            <p class="knowledge-next-action">
+              {% if customer_context.summary.knowledge_rows == 0 %}
+                Importa o consolida artículos para mejorar el matching.
+              {% elif customer_context.summary.conditions == 0 %}
+                Añade condiciones para completar el contexto del agente.
+              {% else %}
+                El conocimiento ya está utilizable. Revisa conflictos y mantén el histórico al día.
+              {% endif %}
+            </p>
+            <div class="actions">
+              <a class="button secondary compact-button" href="{{ customer.import_url }}">Importar conocimiento</a>
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <div class="knowledge-summary-column">
+        <article class="subpanel knowledge-panel-tight" id="articles">
+          <div class="section-title-row">
+            <h4>Principales artículos</h4>
+            <a class="button secondary compact-button" href="{{ customer.knowledge_url }}?section=articles">Ver todos</a>
+          </div>
+          {% if top_articles %}
+            <div class="knowledge-table-wrap">
+              <table class="data-table knowledge-table knowledge-table-compact">
+                <thead>
+                  <tr>
+                    <th>Artículo</th>
+                    <th>Ref.</th>
+                    <th>Veces</th>
+                    <th>Último pedido</th>
+                    <th>Cantidad habitual</th>
+                    <th>Comentarios</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for row in top_articles %}
+                    <tr>
+                      <td class="wide-cell">{{ row.product_name }}</td>
+                      <td>{{ row.reference }}</td>
+                      <td>{{ row.times_ordered }}</td>
+                      <td>{{ row.last_order_at.strftime("%d/%m/%Y") if row.last_order_at else "—" }}</td>
+                      <td>{{ "%.2f"|format(row.average_quantity or 0) }} {{ row.usual_unit or "" }}</td>
+                      <td class="wide-cell">{{ row.comments or "—" }}</td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <div class="empty-action-card empty-action-card-compact">
+              <strong>No hay artículos consolidados.</strong>
+              <p>Importa un histórico o añade un artículo manualmente.</p>
+              <div class="actions">
+                <a class="button secondary compact-button" href="{{ customer.import_url }}">Importar</a>
+                <a class="button secondary compact-button" href="{{ customer.edit_url }}">Añadir artículo</a>
+              </div>
+            </div>
+          {% endif %}
+        </article>
+
+        <article class="subpanel knowledge-panel-tight" id="conditions">
+          <div class="section-title-row">
+            <h4>Principales condiciones</h4>
+            <a class="button secondary compact-button" href="{{ customer.knowledge_url }}?section=conditions">Ver condiciones</a>
+          </div>
+          {% if customer.notes or recent_cases or recent_corrections %}
+            <div class="knowledge-list knowledge-list-tight">
+              {% if customer.notes %}
+                <div class="knowledge-row knowledge-row-compact">
+                  <div>
+                    <strong>Condición general</strong>
+                    <p>{{ customer.notes }}</p>
+                  </div>
+                  <span class="badge status-confirmed">Activa</span>
+                </div>
+              {% endif %}
+              {% for case in recent_cases[:2] %}
+                <div class="knowledge-row knowledge-row-compact">
+                  <div>
+                    <strong>{{ case.action }}</strong>
+                    <p>{{ case.summary }}</p>
+                  </div>
+                  <span class="badge">Histórico</span>
+                </div>
+              {% endfor %}
+              {% for correction in recent_corrections[:1] %}
+                <div class="knowledge-row knowledge-row-compact">
+                  <div>
+                    <strong>{{ correction.field }}</strong>
+                    <p>{{ correction.before }} → {{ correction.after }}</p>
+                  </div>
+                  <span class="badge status-doubtful">Ajuste</span>
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <div class="empty-action-card empty-action-card-compact">
+              <strong>No hay condiciones activas.</strong>
+              <p>Añade una condición o aplica una plantilla general.</p>
+              <div class="actions">
+                <a class="button secondary compact-button" href="{{ customer.edit_url }}">Añadir condición</a>
+              </div>
+            </div>
+          {% endif %}
+        </article>
+      </div>
+    </div>
+  {% elif current_section == "articles" %}
+    <article class="subpanel knowledge-panel-tight" id="articles">
+      <div class="section-title-row">
+        <h4>Artículos</h4>
+        <div class="actions">
+          <a class="button secondary compact-button" href="{{ customer.import_url }}">Importar histórico</a>
+          <a class="button secondary compact-button" href="{{ customer.edit_url }}">Añadir artículo</a>
+        </div>
+      </div>
+      <form class="filter-grid knowledge-filters knowledge-filters-inline" method="get" action="{{ customer.knowledge_url }}">
+        <input type="hidden" name="section" value="articles">
+        <label>Buscar<input name="q" value="{{ q }}" placeholder="Referencia, artículo o comentario"></label>
+        <label>Orden
+          <select name="status">
+            {% for value, label in [("all","Todos"),("recent","Recientes"),("habitual","Habituales")] %}
+              <option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>&nbsp;<button class="secondary compact-button" data-loading-text="Filtrando...">Aplicar</button></label>
+      </form>
+      {% if customer_context.knowledge_rows %}
+        <div class="knowledge-table-wrap">
+          <table class="data-table knowledge-table knowledge-table-compact">
+            <thead>
+              <tr>
+                <th>Estado</th>
+                <th>Artículo</th>
+                <th>Ref.</th>
+                <th>Veces</th>
+                <th>Último pedido</th>
+                <th>Cantidad habitual</th>
+                <th>Comentarios</th>
+                <th>Acción</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in customer_context.knowledge_rows %}
+                {% set row_text = (row.reference ~ ' ' ~ row.product_name ~ ' ' ~ row.comments)|lower %}
+                {% if not q or q|lower in row_text %}
+                  <tr>
+                    <td><span class="badge {% if row.habitual %}status-confirmed{% else %}status-doubtful{% endif %}">{{ row.status }}</span></td>
+                    <td class="wide-cell">{{ row.product_name }}</td>
+                    <td>{{ row.reference }}</td>
+                    <td>{{ row.times_ordered }}</td>
+                    <td>{{ row.last_order_at.strftime("%d/%m/%Y") if row.last_order_at else "—" }}</td>
+                    <td>{{ "%.2f"|format(row.average_quantity or 0) }} {{ row.usual_unit or "" }}</td>
+                    <td class="wide-cell">{{ row.comments or "—" }}</td>
+                    <td class="actions">
+                      <a class="button secondary compact-button" href="{{ customer.orders_url }}">Histórico</a>
+                    </td>
+                  </tr>
+                {% endif %}
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty-action-card empty-action-card-compact">
+          <strong>No hay artículos consolidados.</strong>
+          <p>Importa un histórico o añade un artículo manualmente.</p>
+        </div>
+      {% endif %}
+    </article>
+  {% elif current_section == "conditions" %}
+    <article class="subpanel knowledge-panel-tight" id="conditions">
+      <div class="section-title-row">
+        <h4>Condiciones e instrucciones</h4>
+        <div class="actions">
+          <a class="button secondary compact-button" href="{{ customer.import_url }}">Importar conocimiento</a>
+          <a class="button secondary compact-button" href="{{ customer.edit_url }}">Añadir condición</a>
+        </div>
+      </div>
+      <div class="knowledge-conditions-grid">
+        <article class="subpanel knowledge-subpanel-tight">
+          <div class="section-title-row">
+            <h4>Condiciones aplicadas</h4>
+          </div>
+          {% if customer.notes %}
+            <p class="knowledge-inline-text">{{ customer.notes }}</p>
+          {% else %}
+            <div class="empty-action-card empty-action-card-compact">
+              <strong>No hay condiciones activas.</strong>
+              <p>Añade una condición o aplica una plantilla general.</p>
+            </div>
+          {% endif %}
+        </article>
+        <article class="subpanel knowledge-subpanel-tight">
+          <div class="section-title-row">
+            <h4>Instrucciones activas</h4>
+          </div>
+          <div class="knowledge-list knowledge-list-tight">
+            {% for case in recent_cases[:3] %}
+              <div class="knowledge-row knowledge-row-compact">
+                <div>
+                  <strong>{{ case.action }}</strong>
+                  <p>{{ case.summary }}</p>
+                </div>
+                <span class="badge">Histórico</span>
+              </div>
+            {% endfor %}
+            {% for correction in recent_corrections[:2] %}
+              <div class="knowledge-row knowledge-row-compact">
+                <div>
+                  <strong>{{ correction.field }}</strong>
+                  <p>{{ correction.reason or "Corrección manual aplicada" }}</p>
+                </div>
+                <span class="badge status-doubtful">Ajuste</span>
+              </div>
+            {% endfor %}
+            {% if not recent_cases and not recent_corrections %}
+              <div class="empty-action-card empty-action-card-compact">
+                <strong>Sin instrucciones todavía.</strong>
+                <p>Las correcciones y el histórico se verán aquí cuando empiecen a llegar.</p>
+              </div>
+            {% endif %}
+          </div>
+        </article>
+        <article class="subpanel knowledge-subpanel-tight">
+          <div class="section-title-row">
+            <h4>Vista del agente</h4>
+          </div>
+          <div class="knowledge-agent-view">
+            <div><span>Cliente</span><strong>{{ customer.name }} · {{ customer.code }}</strong></div>
+            <div><span>Señales</span><strong>{{ customer_context.summary.emails }} emails · {{ customer_context.summary.phones }} teléfonos · {{ customer_context.summary.aliases }} alias</strong></div>
+            <div><span>Prioridad</span><strong>Artículos habituales → condiciones → validación manual</strong></div>
+            <div><span>Contexto adicional</span><strong>{% if customer.notes %}{{ customer.notes }}{% else %}Sin contexto adicional.{% endif %}</strong></div>
+          </div>
+        </article>
+      </div>
+    </article>
+  {% elif current_section == "import" %}
+    <article class="knowledge-import-shell" id="history">
+      <div class="section-title-row knowledge-import-head">
+        <div class="knowledge-import-head-main">
+          <h4>Importación</h4>
+          <div class="knowledge-stepper">
+            <span class="badge status-confirmed">1 Archivo</span>
+            <span class="badge status-doubtful">2 Limpieza IA</span>
+            <span class="badge">3 Revisión</span>
+            <span class="badge">4 Guardar</span>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="button secondary compact-button disabled" type="button" disabled>Guardar en conocimiento</button>
+        </div>
+      </div>
+
+      <div class="knowledge-import-layout">
+        <section class="knowledge-import-panel">
+          <div class="section-title-row">
+            <h4>Importar archivo</h4>
+            <span class="badge">XLSX · CSV · PDF · DOCX · TXT</span>
+          </div>
+          <form id="knowledge-upload-form" class="knowledge-import-upload stack js-loading-form" method="post" action="/imports/preview" enctype="multipart/form-data" target="import-review-frame">
+            <input type="hidden" name="entity_type" value="customers">
+            <label>Archivo
+              <input type="file" name="file" accept=".xlsx,.xls,.csv,.pdf,.docx,.txt" required>
+            </label>
+            <label>Tipo de importación
+              <select name="import_kind">
+                <option value="historico_pedidos">Histórico de pedidos</option>
+                <option value="historico_albaranes">Histórico de albaranes</option>
+                <option value="articulos_habituales">Artículos habituales</option>
+                <option value="tarifas_precios">Tarifas / precios</option>
+                <option value="condiciones_especiales">Condiciones especiales</option>
+                <option value="comentarios_comerciales">Comentarios comerciales</option>
+                <option value="equivalencias">Equivalencias cliente-producto</option>
+                <option value="instrucciones">Instrucciones para el agente</option>
+                <option value="documento_libre">Documento libre</option>
+              </select>
+            </label>
+            <button data-loading-text="Analizando...">Analizar archivo</button>
+          </form>
+          <details class="knowledge-import-text-toggle">
+            <summary>Pegar texto manual</summary>
+            <form class="knowledge-import-form stack js-loading-form" method="post" action="/learning/documents">
+              <input type="hidden" name="source_type" value="customer_knowledge">
+              <input type="hidden" name="source_entity" value="customer">
+              <input type="hidden" name="source_entity_id" value="{{ customer.id }}">
+              <input type="hidden" name="source_mode" value="text">
+              <label>Título<input name="title" value="Ficha cliente · {{ customer.name }}" required></label>
+              <label>Texto<textarea name="content_text" rows="6" placeholder="Pega aquí notas, condiciones, alias o instrucciones para el agente."></textarea></label>
+              <button data-loading-text="Guardando...">Guardar en conocimiento</button>
+            </form>
+          </details>
+        </section>
+
+        <aside class="knowledge-import-review">
+          <div class="section-title-row">
+            <h4>Depurar conocimiento importado</h4>
+            <span class="badge">Pendiente</span>
+          </div>
+          <div class="knowledge-import-status">
+            <div><span>Archivo</span><strong>Sin analizar</strong></div>
+            <div><span>Propuesta</span><strong>0 elementos</strong></div>
+            <div><span>Conflictos</span><strong>0</strong></div>
+            <div><span>Guardar</span><strong>Bloqueado</strong></div>
+          </div>
+          <div class="knowledge-import-action">
+            <button class="button secondary disabled" type="button" disabled>Guardar en conocimiento</button>
+          </div>
+        </aside>
+      </div>
+
+      <section class="knowledge-import-preview">
+        <div class="section-title-row">
+          <h4>Vista previa y depuración</h4>
+          <span class="badge">Original · Limpieza IA · Revisión · Resultado</span>
+        </div>
+        <iframe id="import-review-frame" name="import-review-frame" class="knowledge-import-frame" src="about:blank" title="Depurar conocimiento importado"></iframe>
+      </section>
+
+      {% if recent_docs %}
+        <details class="knowledge-accordion knowledge-import-accordion" open>
+          <summary>Documentos recientes <span class="badge">{{ customer_context.summary.documents }}</span></summary>
+          <div class="knowledge-list knowledge-list-tight">
+            {% for doc in recent_docs %}
+              <div class="knowledge-row knowledge-row-compact">
+                <div>
+                  <strong>{{ doc.title }}</strong>
+                  <p>{{ doc.content_excerpt or "Sin contenido" }}</p>
+                </div>
+                <span class="badge">{{ doc.status }}</span>
+              </div>
+            {% endfor %}
+          </div>
+        </details>
+      {% endif %}
+
+      {% if recent_cases %}
+        <details class="knowledge-accordion knowledge-import-accordion">
+          <summary>Histórico y trazabilidad <span class="badge">{{ recent_cases|length }}</span></summary>
+          <div class="knowledge-list knowledge-list-tight">
+            {% for case in recent_cases %}
+              <div class="knowledge-row knowledge-row-compact">
+                <div>
+                  <strong>{{ case.action }}</strong>
+                  <p>{{ case.summary }}</p>
+                </div>
+                <span class="badge">{{ case.created_at }}</span>
+              </div>
+            {% endfor %}
+          </div>
+        </details>
+      {% endif %}
+
+      {% if recent_corrections %}
+        <details class="knowledge-accordion knowledge-import-accordion">
+          <summary>Conflictos recientes <span class="badge">{{ recent_corrections|length }}</span></summary>
+          <div class="knowledge-list knowledge-list-tight">
+            {% for correction in recent_corrections %}
+              <div class="knowledge-row knowledge-row-compact">
+                <div>
+                  <strong>{{ correction.field }}</strong>
+                  <p>{{ correction.before }} → {{ correction.after }}</p>
+                </div>
+                <span class="badge status-doubtful">Corrección</span>
+              </div>
+            {% endfor %}
+          </div>
+        </details>
+      {% endif %}
+    </article>
+  {% endif %}
+</section>

@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% set title = "Importacion: validacion previa" %}
+{% block content %}
+<section class="grid">
+  <article class="card"><div class="muted">Filas</div><div class="metric">{{ validation.rows_total }}</div></article>
+  <article class="card"><div class="muted">Nuevos</div><div class="metric">{{ validation.rows_new }}</div></article>
+  <article class="card"><div class="muted">Actualizables</div><div class="metric">{{ validation.rows_update }}</div></article>
+  <article class="card"><div class="muted">Duplicados</div><div class="metric">{{ validation.duplicates }}</div></article>
+  <article class="card"><div class="muted">Errores</div><div class="metric">{{ validation.rows_error }}</div></article>
+  <article class="card"><div class="muted">Emails dudosos</div><div class="metric">{{ validation.invalid_emails }}</div></article>
+  <article class="card"><div class="muted">Telefonos dudosos</div><div class="metric">{{ validation.invalid_phones }}</div></article>
+</section>
+<section class="panel stack" style="margin-top:16px">
+  {% if validation.errors %}
+    <h2>Errores</h2>
+    <ul>{% for error in validation.errors %}<li>{{ error }}</li>{% endfor %}</ul>
+  {% endif %}
+  {% if validation.warnings %}
+    <h2>Advertencias</h2>
+    <ul>{% for warning in validation.warnings %}<li>{{ warning }}</li>{% endfor %}</ul>
+  {% endif %}
+  <form class="stack js-loading-form" method="post" action="/imports/confirm" data-confirm="Vas a importar registros masivamente. ¿Continuar?">
+    <input type="hidden" name="token" value="{{ token }}">
+    <input type="hidden" name="filename" value="{{ filename }}">
+    <input type="hidden" name="entity_type" value="{{ entity_type }}">
+    <input type="hidden" name="encoding" value="{{ encoding }}">
+    <input type="hidden" name="mapping_json" value='{{ mapping_json }}'>
+    <label>Modo
+      <select name="mode">
+        <option value="create_update">Crear y actualizar</option>
+        <option value="create">Crear nuevos solamente</option>
+        <option value="update">Actualizar existentes solamente</option>
+      </select>
+    </label>
+    <label><input type="checkbox" name="save_template"> Guardar plantilla de mapeo</label>
+    <label>Nombre plantilla<input name="template_name" placeholder="Plantilla habitual"></label>
+    <div class="actions">
+      <button data-loading-text="Importando...">Confirmar importacion</button>
+      <a class="button secondary" href="{{ '/customers' if entity_type == 'customers' else '/products' }}">Cancelar</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% set title = "Diagnóstico admin" %}
+{% block content %}
+<section class="panel stack">
+  <div class="section-title-row">
+    <div>
+      <h2>Diagnóstico de tenants</h2>
+      <p class="muted">Estado de cada compañía, su base operativa, IMAP, IA y migraciones.</p>
+    </div>
+    <div class="actions">
+      <a class="button secondary" href="/admin/tenants">JSON</a>
+      <a class="button secondary" href="/health">Health general</a>
+    </div>
+  </div>
+
+  <section class="history-summary">
+    <article class="compact-card compact-card-muted"><span>Tenants</span><strong>{{ totals.companies }}</strong><small>Registrados</small></article>
+    <article class="compact-card compact-card-safe"><span>Activos</span><strong>{{ totals.active }}</strong><small>Compañías activas</small></article>
+    <article class="compact-card compact-card-reviewable"><span>IMAP listo</span><strong>{{ totals.imap_ready }}</strong><small>Conexión email</small></article>
+    <article class="compact-card compact-card-safe"><span>IA lista</span><strong>{{ totals.llm_ready }}</strong><small>OpenAI / LLM</small></article>
+    <article class="compact-card compact-card-error"><span>Tenant OK</span><strong>{{ totals.tenant_ok }}</strong><small>DB y esquema</small></article>
+  </section>
+</section>
+
+<section class="panel stack">
+  <div class="section-title-row">
+    <div>
+      <h3>Companías</h3>
+      <p class="muted">Cada fila resume si la compañía está lista para operar sin salir del panel.</p>
+    </div>
+  </div>
+
+  <div class="jobs-list">
+    {% for company in companies %}
+      <article class="job-card job-status-{{ 'success' if company.tenant_database_status == 'ok' else 'failed' if company.tenant_database_status in ['missing', 'error'] else 'retrying' }}">
+        <div class="job-card-main">
+          <div class="job-card-title-row">
+            <div class="job-card-title-wrap">
+              <strong class="job-card-title">{{ company.company_name }}</strong>
+              <small class="muted">{{ company.company_slug }} · ID {{ company.company_id }}</small>
+            </div>
+            <span class="job-status-pill job-status-{{ 'success' if company.company_active else 'failed' }}">{{ 'Activa' if company.company_active else 'Inactiva' }}</span>
+          </div>
+
+          <div class="job-card-meta">
+            <span class="job-pill">DB {{ company.tenant_database_status }}</span>
+            <span class="job-pill">Esquema {{ company.schema_report.status }}</span>
+            <span class="job-pill">IMAP {{ 'OK' if company.imap_ready else 'KO' }}</span>
+            <span class="job-pill">SMTP {{ 'OK' if company.smtp_ready else 'KO' }}</span>
+            <span class="job-pill">IA {{ 'OK' if company.llm_ready else 'KO' }}</span>
+            <span class="job-pill">Pedidos {{ company.orders_total }}</span>
+            <span class="job-pill">Clientes {{ company.customers_total }}</span>
+            <span class="job-pill">Productos {{ company.products_total }}</span>
+            <span class="job-pill">Jobs {{ company.jobs_total }}</span>
+          </div>
+
+          <div class="job-card-preview">
+            <div>
+              <span class="job-preview-label">Última sincronización</span>
+              <p>{% if company.last_sync_at %}{{ company.last_sync_at.strftime("%d/%m/%Y %H:%M") }}{% else %}Sin sincronización{% endif %}</p>
+            </div>
+            <div>
+              <span class="job-preview-label">Mensajes</span>
+              <p>{% if company.last_sync_message %}{{ company.last_sync_message }}{% else %}Sin mensaje{% endif %}</p>
+            </div>
+            {% if company.schema_report.last_error %}
+              <div class="job-error-block">
+                <span class="job-preview-label">Esquema</span>
+                <p>{{ company.schema_report.last_error }}</p>
+              </div>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="job-card-side">
+          <div class="job-progress">
+            <strong>{{ company.jobs_success }}</strong>
+            <span>Jobs OK</span>
+            <div class="job-progress-bar"><span style="width: {% if company.jobs_total %}{{ (company.jobs_success * 100 / company.jobs_total)|round(0) }}{% else %}0{% endif %}%"></span></div>
+          </div>
+          <div class="job-side-links">
+            <a class="button secondary compact-button" href="/admin/tenants/{{ company.company_id }}/diagnostics">JSON</a>
+            <a class="button secondary compact-button" href="/admin/tenants/{{ company.company_id }}/health">Health</a>
+          </div>
+        </div>
+      </article>
+    {% else %}
+      <p class="muted">No hay compañías registradas.</p>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

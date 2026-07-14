@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ app_settings.app_name }}</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <style>{{ branding_css_vars(login_branding)|safe }}</style>
+</head>
+<body>
+  <main class="login">
+    <section class="panel">
+      {% if login_branding.logo_url %}
+        <img class="login-logo" src="{{ login_branding.logo_url }}" alt="{{ login_branding.app_name }}" onerror="this.style.display='none'">
+      {% endif %}
+      <h1>{{ login_branding.app_name }}</h1>
+      {% if login_branding.show_claim_login %}<p class="muted">{{ login_branding.primary_claim }}</p>{% endif %}
+      {% if error %}<p class="error">{{ error }}</p>{% endif %}
+      <form class="stack" method="post" action="/login">
+        <label>Email<input name="email" type="email" value="{{ app_settings.default_admin_email if app_settings.environment == 'development' else '' }}" required></label>
+        <label>Password<input name="password" type="password" value="{{ app_settings.default_admin_password if app_settings.environment == 'development' else '' }}" required></label>
+        <button>Entrar</button>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% set title = "Usuarios" %}
+{% block content %}
+<section class="panel stack" style="margin-bottom:16px">
+  <h2>Crear usuario</h2>
+  <form class="form-grid" method="post" action="/users">
+    <label>Nombre<input name="name" required></label>
+    <label>Email<input name="email" type="email" required></label>
+    <label>Rol<select name="role_id">{% for role in roles %}<option value="{{ role.id }}">{{ role.name }}</option>{% endfor %}</select></label>
+    <label>Password<input name="password" type="password" required></label>
+    <label>&nbsp;<button>Crear</button></label>
+  </form>
+</section>
+<table>
+  <thead><tr><th>Nombre</th><th>Email</th><th>Rol</th><th>Activo</th><th>Password</th><th>Accion</th></tr></thead>
+  <tbody>
+  {% for item in users %}
+    <tr>
+      <form method="post" action="/users/{{ item.id }}">
+        <td><input name="name" value="{{ item.name }}"></td>
+        <td>{{ item.email }}</td>
+        <td><select name="role_id">{% for role in roles %}<option value="{{ role.id }}" {% if item.role_id == role.id %}selected{% endif %}>{{ role.name }}</option>{% endfor %}</select></td>
+        <td><input name="is_active" type="checkbox" {% if item.is_active %}checked{% endif %}></td>
+        <td><input name="password" type="password" placeholder="Mantener"></td>
+        <td><button class="secondary">Guardar</button></td>
+      </form>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

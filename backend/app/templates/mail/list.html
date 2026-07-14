@@ -1,0 +1,139 @@
+{% extends "base.html" %}
+{% set title = "Correo" %}
+{% block content %}
+<section class="panel stack">
+  <div class="section-title-row">
+    <div>
+      <h2>Bandeja de correo</h2>
+      <p class="muted">Vista orientada a pedidos. Filtros, columnas y acciones salen de Configuracion > Correo.</p>
+    </div>
+    <a class="button secondary" href="/settings#email">Configurar correo</a>
+  </div>
+  <form class="filter-grid" method="get" action="/mail">
+    <input type="hidden" name="page" value="1">
+    <label>Estado
+      <select name="status">
+        {% for value, label in [("all","Todos"),("pending","No procesados"),("processed","Procesados"),("pedido","Pedidos detectados"),("dudoso","Dudosos"),("error","Errores")] %}
+          <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Rango
+      <select name="date_range">
+        {% for value, label in [("today","Hoy"),("7d","Ultimos 7 dias"),("30d","Ultimos 30 dias"),("all","Todos")] %}
+          <option value="{{ value }}" {% if filters.date_range == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Orden
+      <select name="sort">
+        {% for value, label in [("date_desc","Fecha desc."),("date_asc","Fecha asc."),("score_desc","Scoring desc."),("status_asc","Estado agente")] %}
+          <option value="{{ value }}" {% if filters.sort == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Buscar<input name="search" value="{{ filters.search }}" placeholder="Asunto o remitente"></label>
+    <label>Tamano pagina<select name="page_size">{% for size in pagination.allowed_page_sizes %}<option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>{% endfor %}</select></label>
+    <label>&nbsp;<button class="secondary">Filtrar</button></label>
+  </form>
+</section>
+
+{% if mail_settings.show_summary_cards %}
+<section class="op-metrics">
+  <article class="op-card"><span>Correos visibles</span><strong>{{ pagination.total_items }}</strong></article>
+  <article class="op-card op-card-safe"><span>Plantillas activas</span><strong>{{ reply_templates|length }}</strong></article>
+  <article class="op-card {% if mail_settings.auto_process_on_fetch %}op-card-safe{% else %}op-card-muted{% endif %}"><span>Auto procesamiento</span><strong>{{ "Si" if mail_settings.auto_process_on_fetch else "No" }}</strong></article>
+</section>
+{% endif %}
+
+<section class="panel stack">
+  <table class="data-table work-table">
+    <thead>
+      <tr>
+        <th>Fecha</th>
+        <th>Remitente</th>
+        <th>Asunto</th>
+        {% if mail_settings.show_customer_column %}<th>Cliente detectado</th>{% endif %}
+        <th>Tipo/estado</th>
+        {% if mail_settings.show_score_column %}<th>Scoring</th>{% endif %}
+        {% if mail_settings.show_attachments_column %}<th>Adjuntos</th>{% endif %}
+        {% if mail_settings.show_order_column %}<th>Pedido asociado</th>{% endif %}
+        <th>Acciones</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for email in emails %}
+        {% set order = orders_by_email.get(email.id) %}
+        <tr>
+          <td>{{ email.received_at.strftime("%Y-%m-%d %H:%M") }}</td>
+          <td>{{ email.sender }}</td>
+          <td class="wide-cell" title="{{ email.subject }}">{{ email.subject }}</td>
+          {% if mail_settings.show_customer_column %}<td>{{ order.customer_detected_name if order else "" }}</td>{% endif %}
+          <td><span class="badge {{ email.status|status_class }}">{{ (email.detected_type or email.status)|status_label }}</span></td>
+          {% if mail_settings.show_score_column %}
+            <td>{% if order %}<span class="score">{{ "%.2f"|format(order.score or 0) }}%</span>{% else %}<span class="muted">Sin pedido</span>{% endif %}</td>
+          {% endif %}
+          {% if mail_settings.show_attachments_column %}<td>{{ email.attachments|length }}</td>{% endif %}
+          {% if mail_settings.show_order_column %}<td>{% if order %}<a class="button secondary" href="/orders?search={{ email.subject }}">Abrir pedido</a>{% else %}<span class="muted">No asociado</span>{% endif %}</td>{% endif %}
+          <td>
+            <div class="actions">
+              {% if mail_settings.show_reply_button %}<button class="secondary" type="button" onclick="openReplyDialog('reply-{{ email.id }}')">Responder</button>{% endif %}
+              {% if mail_settings.show_process_button %}<a class="button secondary" href="/orders?search={{ email.subject }}">Procesar</a>{% endif %}
+            </div>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="9" class="muted">No hay correos para los filtros seleccionados.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% include "components/pagination.html" %}
+</section>
+
+{% for email in emails %}
+<dialog id="reply-{{ email.id }}" class="edit-dialog">
+  <div class="dialog-header">
+    <h3>Responder correo</h3>
+    <button class="secondary" type="button" onclick="this.closest('dialog').close()">Cerrar</button>
+  </div>
+  <form class="stack">
+    <label>Plantilla
+      <select onchange="applyReplyTemplate(this, 'reply-subject-{{ email.id }}', 'reply-body-{{ email.id }}')">
+        <option value="">Seleccionar plantilla</option>
+        {% for template in reply_templates %}
+          <option value="{{ template.subject_template|e }}|||{{ template.body_template|e }}">{{ template.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Para<input value="{{ email.sender }}"></label>
+    <label>Asunto<input id="reply-subject-{{ email.id }}" value="Re: {{ email.subject }}"></label>
+    <label>Mensaje<textarea id="reply-body-{{ email.id }}" rows="10">{{ "\n\n" ~ mail_settings.signature_text if mail_settings.use_signature else "" }}</textarea></label>
+    <p class="muted">El envio usa la configuracion SMTP y firma de Configuracion > Correo. En esta vista se prepara la respuesta orientada al pedido.</p>
+  </form>
+</dialog>
+{% endfor %}
+
+<script>
+  const replyContext = {
+    firma: {{ (mail_settings.signature_text or "")|tojson }},
+    empresa_nombre: {{ request.state.branding.company_name|tojson }},
+    usuario_nombre: {{ user.name|tojson }}
+  };
+  function openReplyDialog(id) {
+    const dialog = document.getElementById(id);
+    if (dialog) dialog.showModal();
+  }
+  function applyReplyTemplate(select, subjectId, bodyId) {
+    if (!select.value) return;
+    const [subject, body] = select.value.split("|||");
+    const subjectNode = document.getElementById(subjectId);
+    const bodyNode = document.getElementById(bodyId);
+    const fill = (text) => text
+      .replaceAll("{firma}", replyContext.firma)
+      .replaceAll("{empresa_nombre}", replyContext.empresa_nombre)
+      .replaceAll("{usuario_nombre}", replyContext.usuario_nombre);
+    if (subjectNode) subjectNode.value = fill(subject);
+    if (bodyNode) bodyNode.value = fill(body);
+  }
+</script>
+{% endblock %}

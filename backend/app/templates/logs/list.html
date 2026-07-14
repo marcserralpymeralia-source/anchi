@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% set title = "Logs" %}
+{% block content %}
+<table>
+  <thead><tr><th>Fecha</th><th>Accion</th><th>Entidad</th><th>Mensaje</th></tr></thead>
+  <tbody>
+  {% for log in logs %}
+    <tr>
+      <td>{{ log.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+      <td>{{ log.action }}</td>
+      <td>{{ log.entity_type or "" }} {{ log.entity_id or "" }}</td>
+      <td>{{ log.message }}</td>
+    </tr>
+  {% else %}
+    <tr><td colspan="4" class="muted">Sin logs todavia.</td></tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

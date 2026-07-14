@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% set title = "Jobs operativos" %}
+{% macro status_class(status) -%}
+  {%- if status == "queued" -%}queued
+  {%- elif status == "running" -%}running
+  {%- elif status == "retrying" -%}retrying
+  {%- elif status == "failed" -%}failed
+  {%- elif status == "cancelled" -%}cancelled
+  {%- elif status == "success" -%}success
+  {%- else -%}neutral
+  {%- endif -%}
+{%- endmacro %}
+{% block content %}
+<section class="panel stack jobs-shell">
+  <div class="section-title-row">
+    <div>
+      <h2>Jobs operativos</h2>
+      <p class="muted">Seguimiento de colas, reintentos, fallos y trabajos en curso sin salir de la app.</p>
+    </div>
+    <div class="actions">
+      <a class="button secondary" href="/settings">Configuración</a>
+      <a class="button secondary" href="/admin/diagnostics">Diagnóstico</a>
+    </div>
+  </div>
+
+  <section class="history-summary jobs-summary">
+    <article class="compact-card compact-card-muted"><span>Total</span><strong>{{ counts.total }}</strong><small>Registrados</small></article>
+    <article class="compact-card compact-card-reviewable"><span>En cola</span><strong>{{ counts.queued }}</strong><small>Pendientes</small></article>
+    <article class="compact-card compact-card-safe"><span>En marcha</span><strong>{{ counts.running }}</strong><small>Ejecutando</small></article>
+    <article class="compact-card compact-card-reviewable"><span>Reintentando</span><strong>{{ counts.retrying }}</strong><small>Recuperables</small></article>
+    <article class="compact-card compact-card-error"><span>Fallidos</span><strong>{{ counts.failed }}</strong><small>Necesitan revisión</small></article>
+    <article class="compact-card compact-card-muted"><span>Cancelados</span><strong>{{ counts.cancelled }}</strong><small>Interrumpidos</small></article>
+    <article class="compact-card compact-card-safe"><span>Exitosos</span><strong>{{ counts.success }}</strong><small>Completados</small></article>
+  </section>
+
+  <form class="filter-grid" method="get" action="/jobs/monitor">
+    <input type="hidden" name="page" value="1">
+    <label>Estado
+      <select name="status">
+        {% for value, label in [("all","Todos"),("queued","En cola"),("running","En marcha"),("retrying","Reintentando"),("success","Exitosos"),("failed","Fallidos"),("cancelled","Cancelados")] %}
+          <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Tipo
+      <select name="job_type">
+        <option value="all" {% if filters.job_type == "all" %}selected{% endif %}>Todos</option>
+        {% for value in job_types %}
+          <option value="{{ value }}" {% if filters.job_type == value %}selected{% endif %}>{{ value.replace('_', ' ') | title }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Buscar<input name="search" value="{{ filters.search }}" placeholder="Tipo, payload o error"></label>
+    <label>Tamaño página
+      <select name="page_size">
+        {% for size in pagination.allowed_page_sizes %}
+          <option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>&nbsp;<button class="secondary" data-loading-text="Filtrando...">Filtrar</button></label>
+  </form>
+</section>
+
+<section class="panel stack jobs-list-panel">
+  <div class="section-title-row">
+    <div>
+      <h3>Cola y ejecución</h3>
+      <span class="badge">{{ pagination.start_item }}-{{ pagination.end_item }} de {{ pagination.total_items }}</span>
+    </div>
+    <a class="button secondary compact-button" href="/jobs/monitor">Refrescar</a>
+  </div>
+
+  <div class="jobs-list">
+    {% for job in jobs %}
+      <article class="job-card job-status-{{ status_class(job.status) }}">
+        <div class="job-card-main">
+          <div class="job-card-title-row">
+            <div class="job-card-title-wrap">
+              <strong class="job-card-title">{{ job.job_type.replace('_', ' ') | title }}</strong>
+              <small class="muted">Job #{{ job.id }} · {{ job.created_at.strftime("%d/%m %H:%M") if job.created_at else "Sin fecha" }}</small>
+            </div>
+            <span class="job-status-pill job-status-{{ status_class(job.status) }}">{{ job.status.replace('_', ' ') | title }}</span>
+          </div>
+          <div class="job-card-meta">
+            <span class="job-pill">Encolado {{ job.queued_at.strftime("%d/%m %H:%M") if job.queued_at else "Sin fecha" }}</span>
+            <span class="job-pill">Inicio {{ job.started_at.strftime("%d/%m %H:%M") if job.started_at else "Pendiente" }}</span>
+            <span class="job-pill">Fin {{ job.finished_at.strftime("%d/%m %H:%M") if job.finished_at else "Pendiente" }}</span>
+            <span class="job-pill">Intentos {{ job.attempt_count }}</span>
+            <span class="job-pill">Reintentos {{ job.retry_count }}</span>
+            <span class="job-pill">Edad {{ (job.age_seconds // 60) if job.age_seconds else 0 }}m</span>
+            <span class="job-pill">Duración {{ (job.runtime_seconds // 60) if job.runtime_seconds else 0 }}m</span>
+            <span class="job-pill">Pulso {{ (job.heartbeat_age_seconds // 60) if job.heartbeat_age_seconds else 0 }}m</span>
+            <span class="job-pill">Lock {{ job.lock_remaining_seconds }}s</span>
+            {% if job.next_retry_at %}
+              <span class="job-pill">Siguiente {{ job.next_retry_at.strftime("%d/%m %H:%M") }}</span>
+            {% endif %}
+            {% if job.dedupe_key %}
+              <span class="job-pill">Clave {{ job.dedupe_key[:10] }}</span>
+            {% endif %}
+          </div>
+          <div class="job-card-preview">
+            <div>
+              <span class="job-preview-label">Payload</span>
+              <p>{{ job.payload_preview or "Sin payload relevante" }}</p>
+            </div>
+            {% if job.result_preview %}
+              <div>
+                <span class="job-preview-label">Resultado</span>
+                <p>{{ job.result_preview }}</p>
+              </div>
+            {% endif %}
+            {% if job.error_message %}
+              <div class="job-error-block">
+                <span class="job-preview-label">Error</span>
+                <p>{{ job.error_message }}</p>
+              </div>
+            {% endif %}
+          </div>
+        </div>
+
+        <div class="job-card-side">
+          <div class="job-progress">
+            <strong>{{ job.progress or 0 }}%</strong>
+            <span>Progreso</span>
+            <div class="job-progress-bar"><span style="width: {{ job.progress or 0 }}%"></span></div>
+          </div>
+          <div class="job-side-links">
+            <a class="button secondary compact-button" href="/jobs/{{ job.id }}/detail">Detalle</a>
+            <a class="button secondary compact-button" href="/jobs/{{ job.id }}">JSON</a>
+          </div>
+        </div>
+
+        <div class="job-card-actions">
+          <form class="js-loading-form" method="post" action="/jobs/{{ job.id }}/retry">
+            <button class="secondary compact-button" data-loading-text="Reintentando..." {% if job.status not in ["failed", "cancelled", "retrying"] %}disabled{% endif %}>Reintentar</button>
+          </form>
+          <form class="js-loading-form" method="post" action="/jobs/{{ job.id }}/cancel">
+            <button class="secondary compact-button" data-loading-text="Cancelando..." {% if job.status in ["success", "failed", "cancelled"] %}disabled{% endif %}>Cancelar</button>
+          </form>
+        </div>
+      </article>
+    {% else %}
+      <p class="muted">No hay jobs para los filtros seleccionados.</p>
+    {% endfor %}
+  </div>
+
+  {% include "components/pagination.html" %}
+</section>
+{% endblock %}

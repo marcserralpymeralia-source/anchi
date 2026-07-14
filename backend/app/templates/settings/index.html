@@ -1,0 +1,938 @@
+{% extends "base.html" %}
+{% set title = "Configuracion" %}
+{% macro state_label(state) -%}
+  {%- if state == "ready" -%}Configurado
+  {%- elif state == "warning" -%}Con avisos
+  {%- elif state == "pending" -%}Pendiente
+  {%- elif state == "locked" -%}Solo Superadmin
+  {%- else -%}Opcional
+  {%- endif -%}
+{%- endmacro %}
+{% block content %}
+<section class="settings-shell">
+  <header class="settings-header panel">
+    <div class="settings-title">
+      <h2>Configuración</h2>
+      <span class="settings-status-pill {{ 'status-confirmed' if dashboard.errors == 0 else 'status-doubtful' if dashboard.pending else 'status-error' }}">
+        {{ dashboard.progress }}% completa · {{ dashboard.configured }} módulos configurados · {{ dashboard.pending }} pendientes{% if dashboard.errors %} · {{ dashboard.errors }} bloqueados{% endif %}
+      </span>
+    </div>
+    <div class="settings-header-actions">
+      <label class="settings-search">
+        <span class="muted">Buscar ajuste</span>
+        <input id="settings-search" type="search" placeholder="Buscar ajuste...">
+      </label>
+      <span class="badge">{{ user.name }} · {{ user.role.name }}</span>
+      <form method="post" action="/logout"><button class="secondary compact-button">Salir</button></form>
+    </div>
+  </header>
+
+  <section class="settings-checklist panel">
+    {% for step in dashboard.checklist %}
+      <article class="check-step {{ step.state }}">
+        <span class="check-dot"></span>
+        <strong>{{ step.label }}</strong>
+        <span>{{ "Hecho" if step.state == "done" else "Pendiente" }}</span>
+      </article>
+    {% endfor %}
+  </section>
+
+  <section class="settings-modules">
+    {% for module in dashboard.modules %}
+      <article id="{{ module.key }}" class="module-card panel" data-search="{{ module.label }} {{ module.summary }} {{ module.state }}">
+        <div class="module-card-head">
+          <div>
+            <h3>{{ module.label }}</h3>
+            <span class="module-state {{ module.state }}">{{ state_label(module.state) }}</span>
+          </div>
+          {% if module.key in ["general", "identity", "email", "ai", "scoring", "decision", "export", "ftp"] or (module.key == "advanced" and user.role.name == "Superadmin") %}
+            <button type="button" class="secondary compact-button" data-open-settings="{{ module.key }}">{{ module.action }}</button>
+          {% elif module.key == "advanced" %}
+            <span class="muted">Solo Superadmin</span>
+          {% endif %}
+        </div>
+        <p>{{ module.summary }}</p>
+        <div class="module-card-footer">
+          {% if module.key == "channels" %}
+            <a class="button secondary compact-button" href="/settings/channels">Abrir</a>
+          {% elif module.key == "customers-products" %}
+            <a class="button secondary compact-button" href="/customers">Clientes</a>
+            <a class="button secondary compact-button" href="/products">Productos</a>
+          {% elif module.key == "users" %}
+            <a class="button secondary compact-button" href="/users">Abrir</a>
+          {% elif module.key == "alerts" %}
+            <a class="button secondary compact-button" href="/alerts">Ver</a>
+          {% elif module.key == "decision" %}
+            <a class="button secondary compact-button" href="/settings#decision">Abrir</a>
+          {% elif module.key == "advanced" and user.role.name != "Superadmin" %}
+            <span class="muted">Disponible para Superadmin</span>
+          {% endif %}
+        </div>
+      </article>
+    {% endfor %}
+  </section>
+
+  <section id="knowledge" class="panel stack" style="margin-top: 16px;">
+    <div class="section-title-row">
+      <div>
+        <h3>Conocimiento y aprendizaje</h3>
+        <p class="muted">Ajusta aquí la configuración que antes vivía en una ventana operativa separada.</p>
+      </div>
+      <span class="badge">Configuración centralizada</span>
+    </div>
+    <div class="history-summary">
+      <article class="compact-card compact-card-muted"><span>Clientes</span><strong>{{ dashboard.customer_count }}</strong><small>Conocimiento por carpeta</small></article>
+      <article class="compact-card compact-card-safe"><span>Productos</span><strong>{{ dashboard.product_count }}</strong><small>Base del tenant</small></article>
+      <article class="compact-card compact-card-reviewable"><span>Prompts</span><strong>{{ dashboard.prompt_templates|length }}</strong><small>Versiones activas</small></article>
+      <article class="compact-card compact-card-error"><span>Canales</span><strong>{{ dashboard.active_channels_count }}</strong><small>Entrada activa</small></article>
+    </div>
+    <div class="actions">
+      <a class="button secondary compact-button" href="/customers">Abrir clientes</a>
+      <a class="button secondary compact-button" href="/products">Abrir productos</a>
+      <a class="button secondary compact-button" href="/settings/channels">Canales</a>
+      <a class="button secondary compact-button" href="#decision">Motor de decisión</a>
+    </div>
+  </section>
+</section>
+
+<dialog id="settings-general" class="settings-drawer">
+  <div class="drawer-head">
+    <div>
+      <h3>General</h3>
+      <p class="muted">Datos base de la empresa, logo principal y preferencias regionales.</p>
+    </div>
+    <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+  </div>
+  <form class="drawer-body stack js-loading-form" method="post" action="/settings/company" enctype="multipart/form-data">
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Datos de empresa</h4>
+          <p class="muted">Lo que el equipo necesita ver y validar de forma rápida.</p>
+        </div>
+        <span class="badge {% if company.active %}status-confirmed{% else %}status-doubtful{% endif %}">{{ "Activa" if company.active else "Inactiva" }}</span>
+      </div>
+      <div class="form-grid">
+        <label>Nombre comercial<input name="name" value="{{ company.name }}"></label>
+        <label>Razón social<input name="legal_name" value="{{ company.legal_name or '' }}"></label>
+        <label>CIF/NIF<input name="tax_id" value="{{ company.tax_id or '' }}"></label>
+        <label>Email principal<input name="email" type="email" value="{{ company.email or '' }}"></label>
+        <label>Teléfono principal<input name="phone" value="{{ company.phone or '' }}"></label>
+        <label>Web<input name="web" value="{{ company.web or '' }}"></label>
+        <label class="span-2">Dirección fiscal<textarea name="address" rows="2">{{ company.address or '' }}</textarea></label>
+        <label>País<input name="country" value="{{ company.country or '' }}"></label>
+      </div>
+    </section>
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Configuración regional</h4>
+          <p class="muted">Valores que afectan a fechas, importes y exportaciones.</p>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label>Idioma<select name="language"><option value="es" {% if company.language == "es" %}selected{% endif %}>Español</option><option value="en" {% if company.language == "en" %}selected{% endif %}>English</option><option value="fr" {% if company.language == "fr" %}selected{% endif %}>Français</option></select></label>
+        <label>Zona horaria<input name="timezone" value="{{ company.timezone }}"></label>
+        <label>Formato fecha<select name="date_format"><option value="%d/%m/%Y" {% if company.date_format == "%d/%m/%Y" %}selected{% endif %}>dd/mm/aaaa</option><option value="%Y-%m-%d" {% if company.date_format == "%Y-%m-%d" %}selected{% endif %}>aaaa-mm-dd</option><option value="%d-%m-%Y" {% if company.date_format == "%d-%m-%Y" %}selected{% endif %}>dd-mm-aaaa</option></select></label>
+        <label>Separador decimal<select name="decimal_separator"><option value="," {% if company.decimal_separator == "," %}selected{% endif %}>,</option><option value="." {% if company.decimal_separator == "." %}selected{% endif %}>.</option></select></label>
+        <label>Moneda<select name="currency"><option value="EUR" {% if (company.currency or 'EUR') == "EUR" %}selected{% endif %}>EUR</option><option value="USD" {% if company.currency == "USD" %}selected{% endif %}>USD</option><option value="GBP" {% if company.currency == "GBP" %}selected{% endif %}>GBP</option><option value="MXN" {% if company.currency == "MXN" %}selected{% endif %}>MXN</option></select></label>
+      </div>
+    </section>
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Logo básico</h4>
+          <p class="muted">Subida local recomendada. La URL externa queda como opción secundaria.</p>
+        </div>
+        {% if company.logo_url %}
+          <span class="badge">Logo actual</span>
+        {% else %}
+          <span class="badge">Sin logo</span>
+        {% endif %}
+      </div>
+      <div class="logo-basic-grid">
+        <div class="logo-preview-card">
+          {% if company.logo_url %}
+            <img src="{{ company.logo_url }}" alt="Logo de empresa">
+            {% if not company.logo_url.startswith('/static/uploads/branding/') %}
+              <small class="muted">Logo actual: URL externa</small>
+            {% endif %}
+          {% else %}
+            <div class="logo-preview-empty">Sin previsualización</div>
+          {% endif %}
+        </div>
+        <div class="form-grid">
+          <label class="span-2">Subir logo<input name="logo_file" type="file" accept=".png,.jpg,.jpeg,.svg,.webp"></label>
+          <label class="span-2">Eliminar logo actual<input name="remove_logo" type="checkbox"></label>
+        </div>
+      </div>
+      <details class="drawer-subsection">
+        <summary>URL externa y compatibilidad</summary>
+        <div class="form-grid">
+          <label class="span-2">Logo externo<input name="logo_url" value="{{ company.logo_url if company.logo_url and not company.logo_url.startswith('/static/uploads/branding/') else '' }}" placeholder="https://..."></label>
+          <p class="muted span-2">Si ya había una ruta antigua guardada, se mantiene hasta que subas un archivo nuevo o la elimines.</p>
+        </div>
+      </details>
+    </section>
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Notificaciones y estado</h4>
+          <p class="muted">Alertas internas y situación del tenant.</p>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label>Email interno de avisos<input name="notification_email" type="email" value="{{ company.notification_email or '' }}"></label>
+        <label>Contacto responsable<input name="responsible_contact" value="{{ company.responsible_contact or '' }}"></label>
+        <label>Empresa activa<input name="active" type="checkbox" {% if company.active %}checked{% endif %}></label>
+      </div>
+    </section>
+    <div class="drawer-actions">
+      <button data-loading-text="Guardando...">Guardar</button>
+      <button class="secondary js-loading-form" formaction="/settings/company/reset-default" formmethod="post" data-loading-text="Restaurando..." data-confirm="Restaurar valores por defecto?">Restaurar valores por defecto</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="settings-identity" class="settings-drawer">
+  <div class="drawer-head">
+    <div>
+      <h3>Identidad</h3>
+      <p class="muted">Marca, logos y estilo corporativo, sin exponer toda la parte técnica.</p>
+    </div>
+    <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+  </div>
+  <form class="drawer-body stack js-loading-form" method="post" action="/settings/branding" enctype="multipart/form-data" data-confirm="Guardar cambios de identidad corporativa?">
+    {% if not can_edit_branding %}<fieldset disabled>{% endif %}
+    <div class="brand-preview-mini">
+      <strong>{{ branding.app_name }}</strong>
+      <span>{{ branding.company_name }}</span>
+      <small>{{ branding.primary_claim }}</small>
+    </div>
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Marca</h4>
+          <p class="muted">Solo los campos que de verdad se tocan a menudo.</p>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label>Nombre app<input name="app_name" value="{{ branding.app_name }}"></label>
+        <label>Nombre empresa<input name="company_name" value="{{ branding.company_name }}"></label>
+        <label>Claim principal<input name="primary_claim" value="{{ branding.primary_claim }}"></label>
+        <label>Claim secundario<input name="secondary_claim" value="{{ branding.secondary_claim }}"></label>
+        <label class="span-2">Descripción corta<textarea name="short_description" rows="3">{{ branding.short_description }}</textarea></label>
+      </div>
+    </section>
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Logos</h4>
+          <p class="muted">Subida local para usar en sidebar, login y favicon.</p>
+        </div>
+      </div>
+      <div class="logo-grid">
+        <article class="logo-tile">
+          <div class="logo-tile-head">
+            <h5>Logo principal</h5>
+            {% if branding.logo_url %}<span class="badge">Actual</span>{% endif %}
+          </div>
+          <div class="logo-preview-card small">
+            {% if branding.logo_url %}
+              <img src="{{ branding.logo_url }}" alt="Logo principal">
+              {% if not branding.logo_url.startswith('/static/uploads/branding/') %}
+                <small class="muted">Logo actual: URL externa</small>
+              {% endif %}
+            {% else %}
+              <div class="logo-preview-empty">Sin logo</div>
+            {% endif %}
+          </div>
+          <label>Subir archivo<input name="logo_file" type="file" accept=".png,.jpg,.jpeg,.svg,.webp"></label>
+          <label>Eliminar actual<input name="remove_logo" type="checkbox"></label>
+        </article>
+        <article class="logo-tile">
+          <div class="logo-tile-head">
+            <h5>Logo oscuro</h5>
+            {% if branding.dark_logo_url %}<span class="badge">Actual</span>{% endif %}
+          </div>
+          <div class="logo-preview-card small">
+            {% if branding.dark_logo_url %}
+              <img src="{{ branding.dark_logo_url }}" alt="Logo oscuro">
+              {% if not branding.dark_logo_url.startswith('/static/uploads/branding/') %}
+                <small class="muted">Logo actual: URL externa</small>
+              {% endif %}
+            {% else %}
+              <div class="logo-preview-empty">Sin logo</div>
+            {% endif %}
+          </div>
+          <label>Subir archivo<input name="dark_logo_file" type="file" accept=".png,.jpg,.jpeg,.svg,.webp"></label>
+          <label>Eliminar actual<input name="remove_dark_logo" type="checkbox"></label>
+        </article>
+        <article class="logo-tile">
+          <div class="logo-tile-head">
+            <h5>Favicon</h5>
+            {% if branding.favicon_url %}<span class="badge">Actual</span>{% endif %}
+          </div>
+          <div class="logo-preview-card small favicon">
+            {% if branding.favicon_url %}
+              <img src="{{ branding.favicon_url }}" alt="Favicon">
+              {% if not branding.favicon_url.startswith('/static/uploads/branding/') %}
+                <small class="muted">Logo actual: URL externa</small>
+              {% endif %}
+            {% else %}
+              <div class="logo-preview-empty">Sin icono</div>
+            {% endif %}
+          </div>
+          <label>Subir archivo<input name="favicon_file" type="file" accept=".png,.jpg,.jpeg,.svg,.webp"></label>
+          <label>Eliminar actual<input name="remove_favicon" type="checkbox"></label>
+        </article>
+      </div>
+      <details class="drawer-subsection">
+        <summary>URL externas y compatibilidad</summary>
+        <div class="form-grid">
+          <label>Logo externo<input name="logo_url" value="{{ branding.logo_url if branding.logo_url and not branding.logo_url.startswith('/static/uploads/branding/') else '' }}" placeholder="https://..."></label>
+          <label>Logo oscuro externo<input name="dark_logo_url" value="{{ branding.dark_logo_url if branding.dark_logo_url and not branding.dark_logo_url.startswith('/static/uploads/branding/') else '' }}" placeholder="https://..."></label>
+          <label>Favicon externo<input name="favicon_url" value="{{ branding.favicon_url if branding.favicon_url and not branding.favicon_url.startswith('/static/uploads/branding/') else '' }}" placeholder="https://..."></label>
+        </div>
+      </details>
+    </section>
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Apariencia básica</h4>
+          <p class="muted">Tres o cuatro ajustes útiles, no una pantalla de CSS.</p>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label>Color principal<input type="color" name="theme.buttons.primary" value="{{ branding.theme.buttons.primary }}"></label>
+        <label>Fondo general<input type="color" name="theme.colors.background" value="{{ branding.theme.colors.background }}"></label>
+        <label>Radio botones<input type="number" name="theme.buttons.radius" value="{{ branding.theme.buttons.radius }}"></label>
+        <label>Mostrar logo sidebar<input name="show_logo_sidebar" type="checkbox" {% if branding.show_logo_sidebar %}checked{% endif %}></label>
+        <label>Mostrar nombre app sidebar<input name="show_app_name_sidebar" type="checkbox" {% if branding.show_app_name_sidebar %}checked{% endif %}></label>
+        <label>Mostrar claim sidebar<input name="show_claim_sidebar" type="checkbox" {% if branding.show_claim_sidebar %}checked{% endif %}></label>
+        <label>Mostrar claim login<input name="show_claim_login" type="checkbox" {% if branding.show_claim_login %}checked{% endif %}></label>
+      </div>
+    </section>
+    <details class="drawer-subsection">
+      <summary>Avanzado visual</summary>
+      <div class="form-grid">
+        <label>Primario oscuro<input type="color" name="theme.colors.primary_dark" value="{{ branding.theme.colors.primary_dark }}"></label>
+        <label>Primario claro<input type="color" name="theme.colors.primary_light" value="{{ branding.theme.colors.primary_light }}"></label>
+        <label>Texto<input type="color" name="theme.colors.text" value="{{ branding.theme.colors.text }}"></label>
+        <label>Secundario<input type="color" name="theme.colors.muted" value="{{ branding.theme.colors.muted }}"></label>
+        <label>Superficie<input type="color" name="theme.colors.surface" value="{{ branding.theme.colors.surface }}"></label>
+        <label>Borde<input type="color" name="theme.colors.border" value="{{ branding.theme.colors.border }}"></label>
+        <label>Botón secundario<input type="color" name="theme.buttons.secondary" value="{{ branding.theme.buttons.secondary }}"></label>
+        <label>Texto botón secundario<input type="color" name="theme.buttons.secondary_text" value="{{ branding.theme.buttons.secondary_text }}"></label>
+        <label>Verde acento<input type="color" name="theme.colors.accent_green" value="{{ branding.theme.colors.accent_green }}"></label>
+        <label>Rojo acento<input type="color" name="theme.colors.accent_red" value="{{ branding.theme.colors.accent_red }}"></label>
+        <label>Sidebar fondo<input type="color" name="theme.sidebar.background" value="{{ branding.theme.sidebar.background }}"></label>
+        <label>Sidebar texto<input type="color" name="theme.sidebar.text" value="{{ branding.theme.sidebar.text }}"></label>
+        <label>Sidebar ancho<input name="theme.sidebar.width" value="{{ branding.theme.sidebar.width }}"></label>
+        <label>Botón principal hover<input type="color" name="theme.buttons.primary_hover" value="{{ branding.theme.buttons.primary_hover }}"></label>
+        <label>Botón principal texto<input type="color" name="theme.buttons.primary_text" value="{{ branding.theme.buttons.primary_text }}"></label>
+        <label>Botón peligro<input type="color" name="theme.buttons.danger" value="{{ branding.theme.buttons.danger }}"></label>
+        <label>Botón éxito<input type="color" name="theme.buttons.success" value="{{ branding.theme.buttons.success }}"></label>
+        <label>Tipografía<input name="theme.typography.font_family" value="{{ branding.theme.typography.font_family }}"></label>
+      </div>
+    </details>
+    <div class="drawer-actions">
+      <button data-loading-text="Guardando...">Guardar identidad</button>
+      {% if can_edit_branding %}
+        <button class="secondary js-loading-form" formaction="/settings/branding/reset-default" formmethod="post" data-loading-text="Restaurando..." data-confirm="Restaurar valores por defecto?">Restaurar</button>
+      {% endif %}
+    </div>
+    {% if not can_edit_branding %}</fieldset>{% endif %}
+  </form>
+</dialog>
+
+<dialog id="settings-email" class="settings-drawer">
+  <div class="drawer-head">
+    <div>
+      <h3>Correo</h3>
+      <p class="muted">Recepción, envío y pruebas sin mostrar la pantalla entera.</p>
+    </div>
+    <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+  </div>
+  <div class="drawer-body stack">
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Entorno actual</h4>
+          <p class="muted">Estado real de la base de datos y la empresa activa.</p>
+        </div>
+      </div>
+      <div class="settings-kpis settings-diagnostics-grid">
+        <div><span>Organización</span><strong>{{ diagnostics.company_name }}</strong></div>
+        <div><span>Tenant</span><strong>ID {{ diagnostics.company_id }}</strong></div>
+        <div><span>Estado empresa</span><strong>{{ "Activa" if diagnostics.company_active else "Inactiva" }}</strong></div>
+        <div><span>Usuario</span><strong>{{ diagnostics.email }}</strong></div>
+        <div><span>Rol</span><strong>{{ diagnostics.role }}</strong></div>
+        <div><span>Base de datos</span><strong>{{ diagnostics.database_label }}</strong></div>
+        <div><span>Versión esquema</span><strong>{{ diagnostics.tenant_schema_version or "Sin registrar" }}</strong></div>
+        <div><span>Estado esquema</span><strong>{{ diagnostics.tenant_schema_status | replace('_', ' ') | title }}</strong></div>
+        <div><span>Esquema actual</span><strong>{{ "Sí" if diagnostics.tenant_schema_is_current else "No" }}</strong></div>
+        <div><span>Última comprobación</span><strong>{{ diagnostics.tenant_schema_last_checked_at.strftime("%d/%m/%Y %H:%M") if diagnostics.tenant_schema_last_checked_at else "Sin registro" }}</strong></div>
+        <div><span>IMAP</span><strong>{{ "Configurado" if diagnostics.imap_ready else "Pendiente" }}</strong></div>
+        <div><span>OpenAI / LLM</span><strong>{{ "Configurado" if diagnostics.llm_ready else "Pendiente" }}</strong></div>
+        <div><span>Clientes</span><strong>{{ diagnostics.customers_total }}</strong></div>
+        <div><span>Productos</span><strong>{{ diagnostics.products_total }}</strong></div>
+        <div><span>Pedidos</span><strong>{{ diagnostics.orders_total }}</strong></div>
+        <div><span>Emails sincronizados</span><strong>{{ diagnostics.processed_emails_total }}</strong></div>
+        <div><span>Entradas unificadas</span><strong>{{ diagnostics.emails_total + diagnostics.inbound_total }}</strong></div>
+        <div><span>Canales activos</span><strong>{{ diagnostics.active_channels_total }}</strong></div>
+        <div><span>Jobs en cola</span><strong>{{ diagnostics.jobs_queued }}</strong></div>
+        <div><span>Jobs ejecutando</span><strong>{{ diagnostics.jobs_running }}</strong></div>
+        <div><span>Jobs reintentando</span><strong>{{ diagnostics.jobs_retrying }}</strong></div>
+        <div><span>Jobs fallidos</span><strong>{{ diagnostics.jobs_failed }}</strong></div>
+        <div><span>Jobs cancelados</span><strong>{{ diagnostics.jobs_cancelled }}</strong></div>
+        <div><span>Último seed demo</span><strong>{{ diagnostics.last_seed_at.strftime("%d/%m/%Y %H:%M") if diagnostics.last_seed_at else "Sin ejecutar" }}</strong></div>
+      </div>
+      {% if is_superadmin %}
+        <div class="drawer-actions" style="margin-top:12px">
+          <a class="button secondary compact-button" href="/admin/tenants/{{ diagnostics.company_id }}/diagnostics">Ver diagnóstico admin</a>
+        </div>
+      {% endif %}
+      <div class="drawer-actions" style="margin-top:12px">
+        <a class="button secondary compact-button" href="/jobs/monitor">Abrir visor de jobs</a>
+      </div>
+      {% if diagnostics.tenant_schema_last_error %}
+        <p class="muted">Último error de migración: {{ diagnostics.tenant_schema_last_error }}</p>
+      {% endif %}
+    </section>
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Estado</h4>
+          <p class="muted">{{ email_status.provider_status.imap }} · {{ email_status.provider_status.smtp }}</p>
+        </div>
+        <span class="badge {% if email_status.imap_ready and email_status.smtp_ready %}status-confirmed{% else %}status-doubtful{% endif %}">{% if email_status.imap_ready and email_status.smtp_ready %}Configurado{% else %}Con avisos{% endif %}</span>
+      </div>
+      <div class="settings-kpis">
+        <div><span>Última lectura</span><strong>{{ email_status.last_sync.at.strftime("%d/%m %H:%M") if email_status.last_sync.at else "Sin registro" }}</strong></div>
+        <div><span>Nuevos</span><strong>{{ email_status.last_sync.new }}</strong></div>
+        <div><span>Duplicados</span><strong>{{ email_status.last_sync.duplicates }}</strong></div>
+      </div>
+      {% if email_status.last_sync.message or email_status.last_sync.error %}
+        <p class="muted settings-status-note">{{ email_status.last_sync.error or email_status.last_sync.message }}</p>
+      {% endif %}
+    </section>
+    {% if recent_processed_emails %}
+      <section class="drawer-card">
+        <div class="section-title-row">
+          <div>
+            <h4>Procesados recientes</h4>
+            <p class="muted">Correos ya analizados en los últimos 30 días para comparar de un vistazo con el original.</p>
+          </div>
+          <a class="button secondary compact-button" href="/channels?tab=processed&date_range=30d&sort=date_desc">Abrir bandeja</a>
+        </div>
+        <div class="recent-email-list">
+          {% for email in recent_processed_emails %}
+            <article class="recent-email-row">
+              <div>
+                <strong>{{ email.subject }}</strong>
+                <p class="muted">{{ email.sender }}</p>
+              </div>
+              <div class="recent-email-meta">
+                <span>{{ email.received_label }}</span>
+                <span class="badge">{{ email.status_label }}</span>
+              </div>
+            </article>
+          {% endfor %}
+        </div>
+      </section>
+    {% endif %}
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <h4>Recepción</h4>
+        {% if can_test_email %}<form class="js-loading-form" method="post" action="/settings/email/imap/test"><button class="secondary compact-button" data-loading-text="Probando...">Probar IMAP</button></form>{% endif %}
+      </div>
+      <form class="stack js-loading-form" method="post" action="/settings/email/receive">
+        {% if not can_edit_email %}<fieldset disabled>{% endif %}
+        <div class="form-grid">
+          <label>Proveedor<select name="provider"><option value="imap" {% if email.provider == "imap" %}selected{% endif %}>IMAP</option><option value="gmail" {% if email.provider == "gmail" %}selected{% endif %}>Gmail</option><option value="microsoft365" {% if email.provider == "microsoft365" %}selected{% endif %}>Microsoft 365</option></select></label>
+          <label>Host IMAP<input name="imap_host" value="{{ email.imap_host or '' }}"></label>
+          <label>Puerto IMAP<input name="imap_port" type="number" value="{{ email.imap_port }}"></label>
+          <label>Usuario<input name="imap_username" value="{{ email.imap_username or '' }}"></label>
+          <label>Password<input name="imap_password_encrypted" type="password" placeholder="{{ mask_secret(email.imap_password_encrypted) }}"></label>
+          <label>Carpeta entrada<input name="inbox_folder" value="{{ email.inbox_folder }}"></label>
+          <label>Auto sync<input name="auto_sync_enabled" type="checkbox" {% if email.auto_sync_enabled %}checked{% endif %}></label>
+          <label>Solo no leídos<input name="read_unread_only" type="checkbox" {% if email.read_unread_only %}checked{% endif %}></label>
+          <label>Leer desde fecha<input name="read_from_date" type="date" value="{{ email.read_from_date or '' }}"></label>
+          <label>Backfill hasta<input name="to_date" type="date" value=""></label>
+          <label>Límite backfill<input name="limit" type="number" min="1" max="250" value="100"></label>
+          <label>Frecuencia automática
+            <select name="polling_frequency_minutes">
+              {% set polling_value = email.polling_frequency_minutes if email.polling_frequency_minutes in [1, 2, 5, 10] else 1 %}
+              {% for value in [1, 2, 5, 10] %}
+                <option value="{{ value }}" {% if polling_value == value %}selected{% endif %}>Cada {{ value }} minuto{% if value > 1 %}s{% endif %}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Límite lectura<input name="read_limit" type="number" value="{{ email.read_limit }}"></label>
+        </div>
+        <p class="muted">Cuando la recepción automática está activa, los nuevos correos se guardan y se procesan en segundo plano sin bloquear la app.</p>
+        <div class="drawer-actions">
+          <button data-loading-text="Guardando...">Guardar recepción</button>
+          <button class="secondary js-loading-form" formaction="/settings/email/read" formmethod="post" data-loading-text="Leyendo...">Leer correos</button>
+          <button class="secondary js-loading-form" formaction="/settings/email/backfill" formmethod="post" data-loading-text="Recuperando..." data-confirm="Recuperar histórico IMAP con el rango configurado?">Traer rango</button>
+        </div>
+        {% if not can_edit_email %}</fieldset>{% endif %}
+      </form>
+    </section>
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <h4>Envío</h4>
+        {% if can_test_email %}<form class="js-loading-form" method="post" action="/settings/email/smtp/test"><button class="secondary compact-button" data-loading-text="Probando...">Probar SMTP</button></form>{% endif %}
+      </div>
+      <form class="stack js-loading-form" method="post" action="/settings/email/send">
+        {% if not can_edit_email %}<fieldset disabled>{% endif %}
+        <div class="form-grid">
+          <label>Proveedor<select name="smtp_provider"><option value="smtp" {% if email.smtp_provider == "smtp" %}selected{% endif %}>SMTP</option><option value="gmail_api" {% if email.smtp_provider == "gmail_api" %}selected{% endif %}>Gmail API</option><option value="microsoft_graph" {% if email.smtp_provider == "microsoft_graph" %}selected{% endif %}>Microsoft Graph</option></select></label>
+          <label>Host SMTP<input name="smtp_host" value="{{ email.smtp_host or '' }}"></label>
+          <label>Puerto SMTP<input name="smtp_port" type="number" value="{{ email.smtp_port }}"></label>
+          <label>Usuario SMTP<input name="smtp_username" value="{{ email.smtp_username or '' }}"></label>
+          <label>Password SMTP<input name="smtp_password_encrypted" type="password" placeholder="{{ mask_secret(email.smtp_password_encrypted) }}"></label>
+          <label>Remitente<input name="from_email" value="{{ email.from_email or '' }}"></label>
+          <label>Nombre remitente<input name="from_name" value="{{ email.from_name or '' }}"></label>
+          <label>Reply-To<input name="reply_to" value="{{ email.reply_to or '' }}"></label>
+          <label>Guardar copia<input name="save_internal_copy" type="checkbox" {% if email.save_internal_copy %}checked{% endif %}></label>
+          <label>Mantener hilo<input name="preserve_thread_headers" type="checkbox" {% if email.preserve_thread_headers %}checked{% endif %}></label>
+        </div>
+        <div class="drawer-actions">
+          <button data-loading-text="Guardando...">Guardar envío</button>
+          {% if can_test_email %}
+            <input name="to_email" type="email" placeholder="prueba@cliente.com" required>
+            <button class="secondary js-loading-form" formaction="/settings/email/smtp/send-test" formmethod="post" data-loading-text="Enviando...">Enviar prueba</button>
+          {% endif %}
+        </div>
+        {% if not can_edit_email %}</fieldset>{% endif %}
+      </form>
+    </section>
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <h4>Reglas</h4>
+        <p class="muted">Revisión humana por defecto.</p>
+      </div>
+      <form class="stack js-loading-form" method="post" action="/settings/email/processing">
+        {% if not can_edit_email %}<fieldset disabled>{% endif %}
+        <div class="form-grid">
+          {% for field, label in [("auto_process_on_fetch","Auto procesar"),("process_only_with_attachments","Solo con adjuntos"),("process_only_with_pdf","Solo con PDF"),("process_without_attachments","Sin adjuntos"),("allow_reprocess","Permitir reproceso"),("always_human_review","Revisión humana"),("mark_doubtful_below_threshold","Marcar dudoso"),("mark_no_order_if_detected","Marcar sin pedido")] %}
+            <label>{{ label }}<input name="{{ field }}" type="checkbox" {% if email|attr(field) %}checked{% endif %}></label>
+          {% endfor %}
+          <label>Acción pedido<select name="action_order_detected"><option value="move_processed" {% if email.action_order_detected == "move_processed" %}selected{% endif %}>Mover procesados</option><option value="move_by_result" {% if email.action_order_detected == "move_by_result" %}selected{% endif %}>Mover por resultado</option></select></label>
+          <label>Acción sin pedido<select name="action_no_order"><option value="move_no_order" {% if email.action_no_order == "move_no_order" %}selected{% endif %}>Mover sin pedido</option><option value="mark_read" {% if email.action_no_order == "mark_read" %}selected{% endif %}>Marcar leído</option></select></label>
+          <label>Score auto pedido<input name="minimum_score_auto_order" type="number" value="{{ email.minimum_score_auto_order }}"></label>
+        </div>
+        <div class="drawer-actions">
+          <button data-loading-text="Guardando...">Guardar reglas</button>
+        </div>
+        {% if not can_edit_email %}</fieldset>{% endif %}
+      </form>
+    </section>
+  </div>
+</dialog>
+
+<dialog id="settings-ai" class="settings-drawer">
+  <div class="drawer-head">
+    <div>
+      <h3>Agente IA</h3>
+      <p class="muted">Estado, modelos, funcionamiento y controles técnicos del agente.</p>
+    </div>
+    <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+  </div>
+  <div class="drawer-body stack">
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Estado</h4>
+          <p class="muted">{{ dashboard.ai_module.summary }}</p>
+        </div>
+        <span class="badge status-{{ llm.last_test_ok and 'confirmed' or 'doubtful' }}">{{ "Correcto" if llm.last_test_ok else "Sin validar" }}</span>
+      </div>
+      <div class="settings-kpis">
+        <div>
+          <span>Proveedor</span>
+          <strong>{{ llm.provider }}</strong>
+        </div>
+        <div>
+          <span>Modo</span>
+          <strong>{{ llm.agent_mode }}</strong>
+        </div>
+        <div>
+          <span>Última prueba</span>
+          <strong>{{ llm.last_test_at.strftime("%d/%m %H:%M") if llm.last_test_at else "Sin prueba" }}</strong>
+        </div>
+      </div>
+      <div class="drawer-actions">
+        <form class="js-loading-form" method="post" action="/settings/agent/activate"><button data-loading-text="Activando...">Activar</button></form>
+        <form class="js-loading-form" method="post" action="/settings/agent/pause"><button class="secondary" data-loading-text="Pausando...">Pausar</button></form>
+        <form class="js-loading-form" method="post" action="/settings/test/llm"><button class="secondary" data-loading-text="Probando...">Probar conexión</button></form>
+      </div>
+    </section>
+    <form class="stack js-loading-form" method="post" action="/settings/llm">
+      <section class="drawer-card">
+        <div class="section-title-row">
+          <div>
+            <h4>Configuración básica</h4>
+            <p class="muted">Lo mínimo para dejar el agente funcionando por cliente.</p>
+          </div>
+        </div>
+        <div class="form-grid">
+          <label>Agente activo<input name="agent_enabled" type="checkbox" {% if llm.agent_enabled %}checked{% endif %}></label>
+          <label>Modo<select name="agent_mode"><option value="semiautomatico" {% if llm.agent_mode == "semiautomatico" %}selected{% endif %}>Semiautomático</option><option value="automatico" {% if llm.agent_mode == "automatico" %}selected{% endif %}>Automático</option><option value="desactivado" {% if llm.agent_mode == "desactivado" %}selected{% endif %}>Desactivado</option></select></label>
+          <label>Proveedor<select name="provider">{% for option in llm_provider_options %}<option value="{{ option.value }}" {% if llm.provider == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
+          <label>API key<input name="api_key_encrypted" type="password" placeholder="{{ mask_secret(llm.api_key_encrypted) }}"></label>
+        </div>
+      </section>
+
+      <section class="drawer-card">
+        <div class="section-title-row">
+          <div>
+            <h4>Modelos</h4>
+            <p class="muted">Puedes usar un único modelo o especializar por tarea.</p>
+          </div>
+        </div>
+        <div class="form-grid">
+          <label class="span-2">Usar mismo modelo para todo<input name="use_same_model_for_all" type="checkbox" {% if llm.use_same_model_for_all %}checked{% endif %}></label>
+          <label>Clasificación<input name="classification_model" value="{{ llm.classification_model }}"></label>
+          <label>Extracción<input name="extraction_model" value="{{ llm.extraction_model }}"></label>
+          <label>Validación<input name="validation_model" value="{{ llm.validation_model }}"></label>
+        </div>
+      </section>
+
+      <section class="drawer-card">
+        <div class="section-title-row">
+          <div>
+            <h4>Funcionamiento</h4>
+            <p class="muted">Cómo se comporta el agente antes de decidir si exporta o deja en revisión.</p>
+          </div>
+        </div>
+        <div class="form-grid">
+          <label>Nivel de seguridad<select name="safety_level"><option value="conservador" {% if llm.safety_level == "conservador" %}selected{% endif %}>Conservador</option><option value="equilibrado" {% if llm.safety_level == "equilibrado" %}selected{% endif %}>Equilibrado</option><option value="flexible" {% if llm.safety_level == "flexible" %}selected{% endif %}>Flexible</option></select></label>
+          <p class="muted span-2">La revisión humana sigue activa por defecto; aquí solo decides cuánta autonomía base tiene el agente.</p>
+        </div>
+      </section>
+
+      <section class="drawer-card">
+        <div class="section-title-row">
+          <div>
+            <h4>Capacidades</h4>
+            <p class="muted">Permisos funcionales del agente sobre cada paso del pipeline.</p>
+          </div>
+        </div>
+        <div class="form-grid">
+          {% for field, label in [("can_read_email","Leer correos"),("can_extract_pdf","Extraer PDF"),("can_classify_email","Clasificar correo"),("can_extract_order","Extraer pedido"),("can_suggest_customer","Sugerir cliente"),("can_suggest_products","Sugerir productos"),("can_calculate_score","Calcular score"),("can_create_pending_order","Crear pedido pendiente"),("can_mark_no_order","Marcar no pedido"),("can_reply_customer","Responder cliente")] %}
+            <label>{{ label }}<input name="{{ field }}" type="checkbox" {% if llm|attr(field) %}checked{% endif %}></label>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="drawer-card">
+        <div class="section-title-row">
+          <div>
+            <h4>Pruebas</h4>
+            <p class="muted">Validación rápida antes de dejarlo en producción.</p>
+          </div>
+        </div>
+        <div class="form-grid">
+          <input type="hidden" name="sample_text" value="Cliente de prueba solicita 10 unidades del articulo de prueba.">
+          <p class="muted span-2">El flujo de prueba usa un texto de ejemplo interno para validar clasificación y extracción.</p>
+        </div>
+        <div class="drawer-actions">
+          <button data-loading-text="Guardando...">Guardar IA</button>
+          <button class="secondary js-loading-form" type="submit" formaction="/settings/agent/test-full-flow" formmethod="post" data-loading-text="Probando..." formnovalidate>Probar flujo</button>
+        </div>
+      </section>
+
+      {% if is_superadmin %}
+        <section class="drawer-card">
+          <div class="section-title-row">
+            <div>
+              <h4>Avanzado</h4>
+              <p class="muted">Parámetros técnicos, logs y conexión al proveedor.</p>
+            </div>
+            <button type="button" class="secondary compact-button" data-open-settings="advanced">Abrir Avanzado</button>
+          </div>
+          <div class="form-grid">
+            <label>Base URL<input name="base_url" value="{{ llm.base_url or '' }}" placeholder="https://api.openai.com/v1"></label>
+            <label>Temperatura<input name="temperature" type="number" step="0.1" value="{{ llm.temperature }}"></label>
+            <label>Timeout<input name="timeout_seconds" type="number" value="{{ llm.timeout_seconds }}"></label>
+            <label>Reintentos<input name="retries" type="number" value="{{ llm.retries }}"></label>
+            <label>Max tokens<input name="max_tokens" type="number" value="{{ llm.max_tokens }}"></label>
+            <label>ID organización<input name="organization_id" value="{{ llm.organization_id or '' }}"></label>
+            <label>ID proyecto<input name="project_id" value="{{ llm.project_id or '' }}"></label>
+            <label>Deployment Azure<input name="azure_deployment_name" value="{{ llm.azure_deployment_name or '' }}"></label>
+            <label>Logs detallados<input name="detailed_llm_logs" type="checkbox" {% if llm.detailed_llm_logs %}checked{% endif %}></label>
+            <label>Guardar payloads<input name="store_llm_payloads" type="checkbox" {% if llm.store_llm_payloads %}checked{% endif %}></label>
+            <label>Anonimizar logs<input name="anonymize_llm_logs" type="checkbox" {% if llm.anonymize_llm_logs %}checked{% endif %}></label>
+            <label>Debug<input name="debug_mode" type="checkbox" {% if llm.debug_mode %}checked{% endif %}></label>
+          </div>
+          <p class="muted">Los prompts y versiones siguen en el bloque Avanzado general.</p>
+        </section>
+      {% endif %}
+    </form>
+  </div>
+</dialog>
+
+<dialog id="settings-scoring" class="settings-drawer">
+  <div class="drawer-head">
+    <div>
+      <h3>Confianza y automatización</h3>
+      <p class="muted">{{ dashboard.scoring_module.summary }}</p>
+    </div>
+    <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+  </div>
+  <form class="drawer-body stack js-loading-form" method="post" action="/settings/scoring">
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Umbrales</h4>
+          <p class="muted">Definen cuándo el sistema confía, duda o bloquea.</p>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label>Confianza alta<input name="safe_threshold" type="number" value="{{ scoring.safe_threshold }}"></label>
+        <label>Revisable<input name="review_threshold" type="number" value="{{ scoring.review_threshold }}"></label>
+        <label>Dudoso<input name="doubtful_threshold" type="number" value="{{ scoring.doubtful_threshold }}"></label>
+        <label>Bloqueado<input name="blocked_threshold" type="number" value="{{ scoring.blocked_threshold }}"></label>
+      </div>
+    </section>
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Pesos</h4>
+          <p class="muted">Ajuste fino de cómo calcula el score.</p>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label>Peso cliente<input name="customer_weight" type="number" value="{{ scoring.customer_weight }}"></label>
+        <label>Peso productos<input name="products_weight" type="number" value="{{ scoring.products_weight }}"></label>
+        <label>Peso cantidades<input name="quantities_weight" type="number" value="{{ scoring.quantities_weight }}"></label>
+        <label>Peso coherencia<input name="coherence_weight" type="number" value="{{ scoring.coherence_weight }}"></label>
+        <label>Peso LLM<input name="llm_weight" type="number" value="{{ scoring.llm_weight }}"></label>
+      </div>
+    </section>
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Reglas de bloqueo</h4>
+          <p class="muted">Bloqueos deterministas antes de automatizar la salida.</p>
+        </div>
+      </div>
+      <div class="form-grid">
+        {% for field, label in [("block_without_customer","Bloquear sin cliente"),("block_without_reference","Bloquear sin referencia"),("block_without_quantity","Bloquear sin cantidad"),("block_below_threshold","Bloquear por score")] %}
+          <label>{{ label }}<input name="{{ field }}" type="checkbox" {% if scoring|attr(field) %}checked{% endif %}></label>
+        {% endfor %}
+        <label>Auto-confirmar<input name="allow_auto_confirm" type="checkbox" {% if llm.allow_auto_confirm %}checked{% endif %}></label>
+        <label>Auto-exportar<input name="allow_auto_export" type="checkbox" {% if llm.allow_auto_export %}checked{% endif %}></label>
+      </div>
+    </section>
+    <div class="drawer-actions">
+      <button data-loading-text="Guardando...">Guardar confianza</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="settings-decision" class="settings-drawer settings-drawer-wide">
+  <div class="drawer-head">
+    <div>
+      <h3>Motor de decisión</h3>
+      <p class="muted">Prioridad de fuentes, pesos y reglas de aprendizaje para que el agente elija entre candidatos fiables.</p>
+    </div>
+    <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+  </div>
+  <form class="drawer-body stack js-loading-form" method="post" action="/settings/decision">
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Prioridad de fuentes</h4>
+          <p class="muted">Ordena el camino de decisión desde lo más fiable a lo más contextual.</p>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label>Exacto<input name="exact_priority" type="number" value="{{ decision.exact_priority }}"></label>
+        <label>Alias aprobado<input name="alias_priority" type="number" value="{{ decision.alias_priority }}"></label>
+        <label>Relación cliente-producto<input name="relation_priority" type="number" value="{{ decision.relation_priority }}"></label>
+        <label>Histórico validado<input name="history_priority" type="number" value="{{ decision.history_priority }}"></label>
+        <label>RAG contextual<input name="rag_priority" type="number" value="{{ decision.rag_priority }}"></label>
+        <label>LLM controlado<input name="llm_priority" type="number" value="{{ decision.llm_priority }}"></label>
+      </div>
+      <div class="learning-toggle-grid">
+        <label><input name="enable_exact_match" type="checkbox" {% if decision.enable_exact_match %}checked{% endif %}> Activar exacto</label>
+        <label><input name="enable_alias_match" type="checkbox" {% if decision.enable_alias_match %}checked{% endif %}> Activar alias</label>
+        <label><input name="enable_relation_match" type="checkbox" {% if decision.enable_relation_match %}checked{% endif %}> Activar relación</label>
+        <label><input name="enable_history_match" type="checkbox" {% if decision.enable_history_match %}checked{% endif %}> Activar histórico</label>
+        <label><input name="enable_rag_match" type="checkbox" {% if decision.enable_rag_match %}checked{% endif %}> Activar RAG</label>
+        <label><input name="enable_llm_support" type="checkbox" {% if decision.enable_llm_support %}checked{% endif %}> Activar LLM</label>
+      </div>
+    </section>
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Pesos de confianza</h4>
+          <p class="muted">Estos pesos determinan cómo se calcula la confianza final del pedido.</p>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label>Cliente<input name="customer_weight" type="number" value="{{ decision.customer_weight }}"></label>
+        <label>Productos<input name="product_weight" type="number" value="{{ decision.product_weight }}"></label>
+        <label>Cantidades<input name="quantities_weight" type="number" value="{{ decision.quantities_weight }}"></label>
+        <label>Histórico cliente-producto<input name="history_weight" type="number" value="{{ decision.history_weight }}"></label>
+        <label>Coherencia<input name="coherence_weight" type="number" value="{{ decision.coherence_weight }}"></label>
+        <label>Evidencia RAG<input name="rag_weight" type="number" value="{{ decision.rag_weight }}"></label>
+        <label>LLM<input name="llm_weight" type="number" value="{{ decision.llm_weight }}"></label>
+      </div>
+    </section>
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Reglas de aprendizaje y bloqueo</h4>
+          <p class="muted">Mantén el humano en el circuito y bloquea ambigüedades peligrosas.</p>
+        </div>
+      </div>
+      <div class="form-grid">
+        <label>Modo de aprendizaje<select name="learning_mode"><option value="supervisado" {% if decision.learning_mode == "supervisado" %}selected{% endif %}>Supervisado</option><option value="semisupervisado" {% if decision.learning_mode == "semisupervisado" %}selected{% endif %}>Semisupervisado</option><option value="experimental" {% if decision.learning_mode == "experimental" %}selected{% endif %}>Experimental</option></select></label>
+        <label>Confianza mínima alias<input name="min_alias_confidence" type="number" step="0.01" value="{{ decision.min_alias_confidence }}"></label>
+        <label>Frecuencia mínima histórico<input name="min_history_frequency" type="number" value="{{ decision.min_history_frequency }}"></label>
+        <label>Frecuencia mínima producto<input name="min_product_frequency" type="number" value="{{ decision.min_product_frequency }}"></label>
+        <label>Máx. líneas dudosas<input name="max_doubtful_lines" type="number" value="{{ decision.max_doubtful_lines }}"></label>
+        <label>Revisión humana<input name="always_human_review" type="checkbox" {% if decision.always_human_review %}checked{% endif %}></label>
+        <label>Aprobar alias automáticos<input name="auto_approve_aliases" type="checkbox" {% if decision.auto_approve_aliases %}checked{% endif %}></label>
+        <label>Bloquear cliente nuevo<input name="block_new_customer" type="checkbox" {% if decision.block_new_customer %}checked{% endif %}></label>
+        <label>Bloquear conflictos alias<input name="block_conflicting_aliases" type="checkbox" {% if decision.block_conflicting_aliases %}checked{% endif %}></label>
+        <label>Bloquear sin cantidad<input name="block_missing_quantity" type="checkbox" {% if decision.block_missing_quantity %}checked{% endif %}></label>
+        <label>Bloquear sin referencia<input name="block_missing_reference" type="checkbox" {% if decision.block_missing_reference %}checked{% endif %}></label>
+      </div>
+    </section>
+    <div class="drawer-actions">
+      <button data-loading-text="Guardando...">Guardar motor</button>
+      <a class="button secondary compact-button" href="/settings#knowledge">Abrir conocimiento</a>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="settings-export" class="settings-drawer">
+  <div class="drawer-head">
+    <div>
+      <h3>Exportación</h3>
+      <p class="muted">Formato de archivo para gestión.</p>
+    </div>
+    <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+  </div>
+  <form class="drawer-body stack js-loading-form" method="post" action="/settings/export">
+    <div class="form-grid">
+      <label>Formato<select name="file_type"><option value="csv" {% if export.file_type == "csv" %}selected{% endif %}>CSV</option><option value="txt" {% if export.file_type == "txt" %}selected{% endif %}>TXT</option><option value="json" {% if export.file_type == "json" %}selected{% endif %}>JSON</option></select></label>
+      <label>Separador CSV<input name="csv_separator" value="{{ export.csv_separator }}"></label>
+      <label>Encoding<input name="encoding" value="{{ export.encoding }}"></label>
+      <label>Fecha<input name="date_format" value="{{ export.date_format }}"></label>
+      <label>Separador decimal<input name="decimal_separator" value="{{ export.decimal_separator }}"></label>
+      <label>Incluir cabecera<input name="include_header" type="checkbox" {% if export.include_header %}checked{% endif %}></label>
+      <label>Plantilla nombre<input name="filename_template" value="{{ export.filename_template }}"></label>
+      <label class="span-2">Campos cabecera<textarea name="header_fields" rows="2">{{ export.header_fields }}</textarea></label>
+      <label class="span-2">Campos línea<textarea name="line_fields" rows="2">{{ export.line_fields }}</textarea></label>
+    </div>
+    <div class="drawer-actions">
+      <button data-loading-text="Guardando...">Guardar exportación</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="settings-ftp" class="settings-drawer">
+  <div class="drawer-head">
+    <div>
+      <h3>FTP / SFTP</h3>
+      <p class="muted">Destino de exportación y credenciales.</p>
+    </div>
+    <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+  </div>
+  <form class="drawer-body stack js-loading-form" method="post" action="/settings/ftp">
+    <div class="form-grid">
+      <label>Tipo<select name="connection_type"><option value="sftp" {% if ftp.connection_type == "sftp" %}selected{% endif %}>SFTP</option><option value="ftp" {% if ftp.connection_type == "ftp" %}selected{% endif %}>FTP</option></select></label>
+      <label>Host<input name="host" value="{{ ftp.host or '' }}"></label>
+      <label>Puerto<input name="port" type="number" value="{{ ftp.port }}"></label>
+      <label>Usuario<input name="username" value="{{ ftp.username or '' }}"></label>
+      <label>Password<input name="password_encrypted" type="password" placeholder="{{ mask_secret(ftp.password_encrypted) }}"></label>
+      <label>Clave privada<input name="private_key_encrypted" type="password" placeholder="{{ mask_secret(ftp.private_key_encrypted) }}"></label>
+      <label>Ruta destino<input name="destination_path" value="{{ ftp.destination_path }}"></label>
+      <label>Reintentos<input name="retries" type="number" value="{{ ftp.retries }}"></label>
+      <label>Timeout<input name="timeout_seconds" type="number" value="{{ ftp.timeout_seconds }}"></label>
+      <label>Pasivo<input name="passive_mode" type="checkbox" {% if ftp.passive_mode %}checked{% endif %}></label>
+      <label>Sobrescribir<input name="overwrite_files" type="checkbox" {% if ftp.overwrite_files %}checked{% endif %}></label>
+    </div>
+    <div class="drawer-actions">
+      <button data-loading-text="Guardando...">Guardar FTP</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="settings-advanced" class="settings-drawer settings-drawer-wide">
+  <div class="drawer-head">
+    <div>
+      <h3>Avanzado</h3>
+      <p class="muted">Prompts, versiones y ajustes técnicos.</p>
+    </div>
+    <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+  </div>
+  <div class="drawer-body stack">
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Prompts</h4>
+          <p class="muted">{{ dashboard.prompt_templates|length }} plantillas activas</p>
+        </div>
+        <form class="js-loading-form" method="post" action="/settings/prompts/reset-defaults" data-confirm="Restaurar prompts por defecto?">
+          <button class="secondary compact-button" data-loading-text="Restaurando...">Restaurar</button>
+        </form>
+      </div>
+      <div class="advanced-prompts">
+        {% for prompt in prompts %}
+          {% set versions = prompt_versions[prompt.id] if prompt_versions[prompt.id] else [] %}
+          {% set active_version = versions[0] if versions else none %}
+          <form class="stack js-loading-form prompt-card" method="post" action="/settings/prompts/{{ prompt.id }}">
+            <div class="section-title-row">
+              <div>
+                <h5>{{ prompt.name }}</h5>
+                <p class="muted">Versión {{ active_version.version if active_version else 1 }}</p>
+              </div>
+              <div class="actions">
+                <button class="secondary compact-button" formaction="/settings/prompts/{{ prompt.id }}/duplicate">Duplicar</button>
+              </div>
+            </div>
+            <label>Contenido<textarea name="content" rows="6">{{ active_version.content if active_version else "" }}</textarea></label>
+            <div class="drawer-actions">
+              <button data-loading-text="Guardando...">Guardar prompt</button>
+            </div>
+          </form>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+</dialog>
+
+<script>
+  const settingsSearch = document.getElementById("settings-search");
+  if (settingsSearch) {
+    settingsSearch.addEventListener("input", () => {
+      const value = settingsSearch.value.trim().toLowerCase();
+      document.querySelectorAll(".module-card").forEach((card) => {
+        card.style.display = !value || (card.dataset.search || "").toLowerCase().includes(value) ? "" : "none";
+      });
+    });
+  }
+  function openSettingsDrawer(id) {
+    const dialog = document.getElementById(`settings-${id}`);
+    if (dialog) dialog.showModal();
+  }
+  function closeSettingsDrawer(id) {
+    const dialog = document.getElementById(id);
+    if (dialog) dialog.close();
+  }
+  document.querySelectorAll("[data-open-settings]").forEach((button) => {
+    button.addEventListener("click", () => openSettingsDrawer(button.dataset.openSettings));
+  });
+  document.querySelectorAll("[data-close-settings]").forEach((button) => {
+    button.addEventListener("click", () => closeSettingsDrawer(button.closest("dialog").id));
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,438 @@
+{% extends "base.html" %}
+{% set title = "Aprendizaje" %}
+{% block content %}
+<section class="panel stack learning-shell">
+  <div class="section-title-row learning-hero">
+    <div>
+      <h2>Aprendizaje</h2>
+      <p class="muted">Un único centro para sugerencias, correcciones, documentos, históricos y reglas del agente.</p>
+    </div>
+    <div class="actions">
+      <a class="button secondary compact-button" href="/databases?tab=knowledge">Bases de datos</a>
+      <a class="button secondary compact-button" href="/imports/history">Importaciones</a>
+      <a class="button secondary compact-button" href="/alerts">Alertas</a>
+    </div>
+  </div>
+
+  <section class="history-summary learning-summary">
+    <article class="compact-card compact-card-reviewable">
+      <span>Pendientes</span>
+      <strong>{{ learning.summary.pending_suggestions }}</strong>
+      <small>Sugerencias activas</small>
+    </article>
+    <article class="compact-card compact-card-safe">
+      <span>Correcciones</span>
+      <strong>{{ learning.summary.learned_corrections }}</strong>
+      <small>Ya incorporadas</small>
+    </article>
+    <article class="compact-card compact-card-muted">
+      <span>Alias aprobados</span>
+      <strong>{{ learning.summary.approved_aliases }}</strong>
+      <small>Cliente y producto</small>
+    </article>
+    <article class="compact-card compact-card-muted">
+      <span>Documentos</span>
+      <strong>{{ learning.summary.documents_total }}</strong>
+      <small>{{ learning.summary.documents_indexed }} indexados</small>
+    </article>
+    <article class="compact-card compact-card-muted">
+      <span>Históricos</span>
+      <strong>{{ learning.summary.import_jobs_total }}</strong>
+      <small>Importaciones cargadas</small>
+    </article>
+    <article class="compact-card {% if learning.summary.learning_errors %}compact-card-error{% else %}compact-card-safe{% endif %}">
+      <span>Errores</span>
+      <strong>{{ learning.summary.learning_errors }}</strong>
+      <small>Docs o importaciones</small>
+    </article>
+  </section>
+
+  {% if learning.summary.pending_suggestions or learning.summary.learning_errors %}
+    <section class="learning-banner {% if learning.summary.learning_errors %}learning-banner-error{% else %}learning-banner-warn{% endif %}">
+      <div>
+        <strong>{{ learning.summary.pending_suggestions }} sugerencias pendientes</strong>
+        <p class="muted">
+          {% if learning.summary.learning_errors %}
+            Hay incidencias en documentos o históricos. Revisa también las alertas del sistema.
+          {% else %}
+            El agente tiene aprendizaje pendiente de revisión humana.
+          {% endif %}
+        </p>
+      </div>
+      <div class="actions">
+        <a class="button secondary compact-button" href="/learning?tab=suggestions">Ir a sugerencias</a>
+        <a class="button secondary compact-button" href="/alerts">Ver alertas</a>
+      </div>
+    </section>
+  {% endif %}
+
+  <div class="workbench-tabs learning-tabs">
+    {% for key, label, count in [
+      ("summary", "Resumen", learning.summary.pending_suggestions),
+      ("suggestions", "Sugerencias pendientes", learning.summary.pending_suggestions),
+      ("corrections", "Correcciones aprendidas", learning.summary.learned_corrections),
+      ("documents", "Documentos de conocimiento", learning.summary.documents_total),
+      ("histories", "Históricos importados", learning.summary.import_jobs_total),
+      ("config", "Configuración", 0)
+    ] %}
+      <a class="workbench-tab {% if active_tab == key %}active{% endif %}" href="/learning?tab={{ key }}">
+        <span>{{ label }}</span>
+        <strong>{{ count }}</strong>
+      </a>
+    {% endfor %}
+    {% if technical_access %}
+      <a class="workbench-tab {% if active_tab == 'advanced' %}active{% endif %}" href="/learning?tab=advanced">
+        <span>Avanzado</span>
+        <strong>{{ learning.summary.rag_cases_total }}</strong>
+      </a>
+    {% endif %}
+  </div>
+
+  {% if active_tab == "summary" %}
+    <section class="learning-grid">
+      <article class="panel stack">
+        <div class="section-title-row">
+          <div>
+            <h3>Estado general</h3>
+            <p class="muted">El aprendizaje se apoya en validación humana, RAG controlado y configuración compartida.</p>
+          </div>
+        </div>
+        <div class="learning-status-list">
+          <div><span>Modo del agente</span><strong>{{ learning.summary.agent_mode }}</strong></div>
+          <div><span>Perfil de seguridad</span><strong>{{ learning.summary.safety_level }}</strong></div>
+          <div><span>Revisión humana</span><strong>{{ "Obligatoria" if learning.summary.human_review_required else "Opcional" }}</strong></div>
+          <div><span>Último indexado</span><strong>{{ learning.summary.last_indexing_at.strftime("%d/%m %H:%M") if learning.summary.last_indexing_at else "Sin registro" }}</strong></div>
+          <div><span>Último histórico</span><strong>{{ learning.summary.last_import_at.strftime("%d/%m %H:%M") if learning.summary.last_import_at else "Sin registro" }}</strong></div>
+          <div><span>Casos RAG</span><strong>{{ learning.summary.rag_cases_total }}</strong></div>
+        </div>
+      </article>
+
+      <article class="panel stack">
+        <div class="section-title-row">
+          <div>
+            <h3>Fuentes activas</h3>
+            <p class="muted">Canales disponibles para alimentar el aprendizaje del agente.</p>
+          </div>
+        </div>
+        <div class="chip-list">
+          {% for channel in active_channels %}
+            <span class="badge {% if channel.is_active %}status-confirmed{% else %}status-discarded{% endif %}">{{ channel.name }}</span>
+          {% else %}
+            <span class="muted">No hay canales configurados.</span>
+          {% endfor %}
+        </div>
+        <div class="subpanel">
+          <p><strong>Pendientes de aprendizaje:</strong> {{ learning.summary.pending_suggestions }}</p>
+          <p><strong>Documentos pendientes:</strong> {{ learning.summary.documents_pending }}</p>
+          <p><strong>Documentos excluidos:</strong> {{ learning.summary.documents_excluded }}</p>
+          <p><strong>Errores:</strong> {{ learning.summary.learning_errors }}</p>
+        </div>
+        <div class="actions">
+          <a class="button secondary compact-button" href="/settings/channels">Canales</a>
+          <a class="button secondary compact-button" href="/databases">Bases de datos</a>
+        </div>
+      </article>
+    </section>
+  {% elif active_tab == "suggestions" %}
+    <section class="panel stack">
+      <div class="section-title-row">
+        <div>
+          <h3>Sugerencias pendientes</h3>
+          <p class="muted">Correcciones humanas y alias detectados que todavía no se han consolidado.</p>
+        </div>
+        <span class="badge">{{ learning.summary.pending_suggestions }}</span>
+      </div>
+      <table class="data-table learning-table">
+        <thead>
+          <tr>
+            <th>Tipo</th>
+            <th>Detectado</th>
+            <th>Sugerido</th>
+            <th>Origen</th>
+            <th>Confianza</th>
+            <th>Estado</th>
+            <th>Acción</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in learning.suggestions %}
+            <tr>
+              <td>{{ item.type_label }}</td>
+              <td class="wide-cell">{{ item.detected }}</td>
+              <td class="wide-cell">{{ item.suggested }}</td>
+              <td>
+                <div class="stack-inline">
+                  <span>{{ item.source }}</span>
+                  <small class="muted">{{ item.customer_label or item.product_label or item.order_label or "" }}</small>
+                </div>
+              </td>
+              <td>{% if item.confidence is not none %}{{ "%.0f"|format(item.confidence * 100 if item.confidence <= 1 else item.confidence) }}%{% else %}--{% endif %}</td>
+              <td><span class="badge {{ item.status_class }}">{{ item.status }}</span></td>
+              <td>
+                <div class="actions">
+                  <form class="js-loading-form" method="post" action="{{ item.accept_href }}?tab=suggestions">
+                    <button class="secondary compact-button" data-loading-text="Procesando...">{{ item.action_label }}</button>
+                  </form>
+                  <form class="js-loading-form" method="post" action="{{ item.ignore_href }}?tab=suggestions">
+                    <button class="secondary compact-button" data-loading-text="Ignorando...">Ignorar</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+          {% else %}
+            <tr><td colspan="7" class="muted">No hay sugerencias pendientes.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  {% elif active_tab == "corrections" %}
+    <section class="panel stack">
+      <div class="section-title-row">
+        <div>
+          <h3>Correcciones aprendidas</h3>
+          <p class="muted">Histórico de correcciones humanas ya consolidadas o cerradas.</p>
+        </div>
+      </div>
+      <table class="data-table learning-table">
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th>Tipo</th>
+            <th>Antes</th>
+            <th>Después</th>
+            <th>Cliente</th>
+            <th>Pedido</th>
+            <th>Usuario</th>
+            <th>Estado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in learning.corrections %}
+            <tr>
+              <td>{{ item.created_at.strftime("%d/%m %H:%M") if item.created_at else "--" }}</td>
+              <td>{{ item.type_label }} · {{ item.field_name }}</td>
+              <td class="wide-cell">{{ item.before }}</td>
+              <td class="wide-cell">{{ item.after }}</td>
+              <td>{{ item.customer_label }}</td>
+              <td>{{ item.order_label }}</td>
+              <td>{{ item.user_label }}</td>
+              <td><span class="badge {{ item.status_class }}">{{ item.status }}</span></td>
+            </tr>
+          {% else %}
+            <tr><td colspan="8" class="muted">No hay correcciones registradas.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  {% elif active_tab == "documents" %}
+    <section class="learning-documents-grid">
+      <article class="panel stack">
+        <div class="section-title-row">
+          <div>
+            <h3>Nuevo documento de conocimiento</h3>
+            <p class="muted">Añade una nota, caso o texto de soporte para que entre en el circuito RAG controlado.</p>
+          </div>
+        </div>
+        <form class="stack js-loading-form" method="post" action="/learning/documents?tab=documents">
+          <div class="form-grid">
+            <label class="span-2">Título<input name="title" placeholder="Ej. Política de devoluciones" required></label>
+            <label>Origen<input name="source_type" placeholder="manual" value="manual"></label>
+            <label>Entidad origen<input name="source_entity" placeholder="knowledge_note" value="knowledge_note"></label>
+            <label>ID entidad origen<input name="source_entity_id" type="number" min="0" value="0"></label>
+            <label class="span-2">Contenido<textarea name="content_text" rows="7" placeholder="Pega aquí la información que quieres incorporar al conocimiento del agente"></textarea></label>
+          </div>
+          <div class="actions">
+            <button data-loading-text="Guardando...">Crear documento</button>
+            <a class="button secondary compact-button" href="/imports/history">Revisar históricos importados</a>
+          </div>
+        </form>
+      </article>
+
+      <article class="panel stack">
+        <div class="section-title-row">
+          <div>
+            <h3>Documentos de conocimiento</h3>
+            <p class="muted">Sin exponer embeddings ni detalles internos.</p>
+          </div>
+          <span class="badge">{{ learning.summary.documents_indexed }} indexados</span>
+        </div>
+        <div class="learning-doc-list">
+          {% for item in learning.documents %}
+            <article class="learning-doc-row">
+              <div class="learning-doc-main">
+                <div class="learning-doc-head">
+                  <strong>{{ item.title }}</strong>
+                  <span class="badge {{ 'status-confirmed' if item.status in ['indexed', 'ready', 'completed'] else 'status-doubtful' if item.status in ['pending', 'processing'] else 'status-discarded' }}">{{ item.status_label }}</span>
+                </div>
+                <p class="muted">{{ item.source_label }} · {{ item.entity_label }}{% if item.owner_label %} · {{ item.owner_label }}{% endif %}</p>
+                <p>{{ item.excerpt or "Sin contenido" }}</p>
+                <details class="learning-doc-preview">
+                  <summary>Ver contenido</summary>
+                  <pre>{{ item.content_text }}</pre>
+                </details>
+              </div>
+              <div class="learning-doc-actions">
+                {% if item.can_index %}
+                  <form class="js-loading-form" method="post" action="/learning/documents/{{ item.id }}/index?tab=documents">
+                    <button class="secondary compact-button" data-loading-text="Indexando...">Indexar</button>
+                  </form>
+                {% endif %}
+                {% if item.can_exclude %}
+                  <form class="js-loading-form" method="post" action="/learning/documents/{{ item.id }}/exclude?tab=documents">
+                    <button class="secondary compact-button" data-loading-text="Excluyendo...">Excluir</button>
+                  </form>
+                {% endif %}
+                <form class="js-loading-form" method="post" action="/learning/documents/{{ item.id }}/delete?tab=documents" data-confirm="Este documento se eliminará del conocimiento del agente. ¿Continuar?">
+                  <button class="secondary compact-button danger-soft" data-loading-text="Eliminando...">Eliminar</button>
+                </form>
+              </div>
+            </article>
+          {% else %}
+            <p class="muted">No hay documentos de conocimiento todavía.</p>
+          {% endfor %}
+        </div>
+      </article>
+    </section>
+  {% elif active_tab == "histories" %}
+    <section class="panel stack">
+      <div class="section-title-row">
+        <div>
+          <h3>Históricos importados</h3>
+          <p class="muted">Excel y CSV ya cargados en la base, reutilizables como contexto del aprendizaje.</p>
+        </div>
+        <div class="actions">
+          <a class="button secondary compact-button" href="/imports/history">Abrir histórico completo</a>
+          <a class="button secondary compact-button" href="/databases?tab=imports">Ir a importaciones</a>
+        </div>
+      </div>
+      <table class="data-table learning-table">
+        <thead>
+          <tr>
+            <th>Fecha</th>
+            <th>Entidad</th>
+            <th>Archivo</th>
+            <th>Resumen</th>
+            <th>Mapeo</th>
+            <th>Estado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in learning.histories %}
+            <tr>
+              <td>{{ item.created_at.strftime("%d/%m %H:%M") if item.created_at else "--" }}</td>
+              <td>{{ item.entity_type }}</td>
+              <td class="wide-cell">{{ item.filename }}</td>
+              <td>{{ item.rows_created }} creados · {{ item.rows_updated }} actualizados · {{ item.rows_ignored }} ignorados</td>
+              <td>{{ item.mapping_preview }}</td>
+              <td><span class="badge {{ 'status-confirmed' if item.status in ['completed'] else 'status-doubtful' if item.status in ['pending'] else 'status-discarded' }}">{{ item.status_label }}</span></td>
+            </tr>
+          {% else %}
+            <tr><td colspan="6" class="muted">No hay históricos importados.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  {% elif active_tab == "config" %}
+    <section class="learning-config-grid">
+      <article class="panel stack">
+        <div class="section-title-row">
+          <div>
+            <h3>Configuración de aprendizaje</h3>
+            <p class="muted">Ajusta el comportamiento del agente sin salir de esta pantalla.</p>
+          </div>
+        </div>
+        <form class="stack js-loading-form" method="post" action="/learning/config?tab=config">
+          <div class="form-grid">
+            <label>Modo del agente
+              <select name="agent_mode">
+                {% for value, label in [("semiautomatico","Semiautomático"),("automatico","Automático"),("desactivado","Desactivado")] %}
+                  <option value="{{ value }}" {% if llm.agent_mode == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>Perfil de seguridad
+              <select name="safety_level">
+                {% for value, label in [("conservador","Conservador"),("equilibrado","Equilibrado"),("flexible","Flexible")] %}
+                  <option value="{{ value }}" {% if llm.safety_level == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>Umbral seguro<input type="number" name="safe_threshold" value="{{ scoring.safe_threshold }}"></label>
+            <label>Umbral revisión<input type="number" name="review_threshold" value="{{ scoring.review_threshold }}"></label>
+            <label>Umbral dudoso<input type="number" name="doubtful_threshold" value="{{ scoring.doubtful_threshold }}"></label>
+            <label>Umbral bloqueado<input type="number" name="blocked_threshold" value="{{ scoring.blocked_threshold }}"></label>
+          </div>
+          <div class="learning-toggle-grid">
+            <label><input type="checkbox" name="allow_auto_confirm" {% if llm.allow_auto_confirm %}checked{% endif %}> Permitir auto-confirmación</label>
+            <label><input type="checkbox" name="allow_auto_export" {% if llm.allow_auto_export %}checked{% endif %}> Permitir exportación automática</label>
+            <label><input type="checkbox" name="can_suggest_customer" {% if llm.can_suggest_customer %}checked{% endif %}> Sugerir clientes</label>
+            <label><input type="checkbox" name="can_suggest_products" {% if llm.can_suggest_products %}checked{% endif %}> Sugerir productos</label>
+            <label><input type="checkbox" name="can_read_email" {% if llm.can_read_email %}checked{% endif %}> Leer correo</label>
+            <label><input type="checkbox" name="can_extract_pdf" {% if llm.can_extract_pdf %}checked{% endif %}> Extraer PDFs</label>
+            <label><input type="checkbox" name="can_classify_email" {% if llm.can_classify_email %}checked{% endif %}> Clasificar entradas</label>
+            <label><input type="checkbox" name="can_extract_order" {% if llm.can_extract_order %}checked{% endif %}> Extraer pedido</label>
+            <label><input type="checkbox" name="can_calculate_score" {% if llm.can_calculate_score %}checked{% endif %}> Calcular scoring</label>
+            <label><input type="checkbox" name="can_create_pending_order" {% if llm.can_create_pending_order %}checked{% endif %}> Crear pedido pendiente</label>
+            <label><input type="checkbox" name="can_mark_no_order" {% if llm.can_mark_no_order %}checked{% endif %}> Marcar no pedido</label>
+            <label><input type="checkbox" name="always_human_review" {% if email.always_human_review %}checked{% endif %}> Revisión humana obligatoria</label>
+          </div>
+          <div class="actions">
+            <button data-loading-text="Guardando...">Guardar configuración</button>
+            <a class="button secondary compact-button" href="/settings">Abrir configuración completa</a>
+          </div>
+        </form>
+      </article>
+    </section>
+  {% elif active_tab == "advanced" and technical_access %}
+    <section class="learning-advanced-grid">
+      <article class="panel stack">
+        <div class="section-title-row">
+          <div>
+            <h3>Prompts y plantillas</h3>
+            <p class="muted">Solo para Superadmin. No se muestran embeddings ni contenido técnico de indexado.</p>
+          </div>
+        </div>
+        <div class="learning-prompt-list">
+          {% for prompt in learning.prompts %}
+            <article class="learning-prompt-row">
+              <div>
+                <strong>{{ prompt.name }}</strong>
+                <p class="muted">{{ prompt.purpose }}</p>
+              </div>
+              <span class="badge {% if prompt.active %}status-confirmed{% else %}status-doubtful{% endif %}">{{ "Activa" if prompt.active else "Sin versión activa" }}</span>
+            </article>
+          {% else %}
+            <p class="muted">No hay prompts registrados.</p>
+          {% endfor %}
+        </div>
+      </article>
+
+      <article class="panel stack">
+        <div class="section-title-row">
+          <div>
+            <h3>Casos RAG recientes</h3>
+            <p class="muted">Casos resueltos que ayudan a recuperar precedentes similares.</p>
+          </div>
+        </div>
+        <div class="learning-case-list">
+          {% for case in learning.cases %}
+            <article class="learning-case-row">
+              <div class="learning-case-main">
+                <strong>{{ case.customer_label }}</strong>
+                <p class="muted">{{ case.order_label }}</p>
+                <p>{{ case.summary }}</p>
+              </div>
+              <div class="learning-case-side">
+                <span class="badge">{{ "%.0f"|format(case.score * 100 if case.score <= 1 else case.score) }}%</span>
+                <small>{{ case.resolved_action }}</small>
+              </div>
+            </article>
+          {% else %}
+            <p class="muted">No hay casos resueltos todavía.</p>
+          {% endfor %}
+        </div>
+      </article>
+    </section>
+  {% endif %}
+</section>
+{% endblock %}

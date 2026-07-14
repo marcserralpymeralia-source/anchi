@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% set title = "Histórico" %}
+{% block content %}
+<section class="panel stack history-shell">
+  <div class="section-title-row">
+    <div>
+      <h2>Histórico de pedidos</h2>
+      <p class="muted">Consulta pedidos cerrados, exportados y antiguas entradas sin mezclarlos con la bandeja operativa.</p>
+    </div>
+    <div class="actions">
+      <a class="button secondary" href="/">Gestión</a>
+      <a class="button secondary" href="/channels?tab=processed&date_range=30d&sort=date_desc">Entradas</a>
+    </div>
+  </div>
+
+  <section class="history-summary">
+    <article class="compact-card compact-card-muted"><span>Pedidos</span><strong>{{ summary.orders }}</strong><small>Total visibles</small></article>
+    <article class="compact-card compact-card-reviewable"><span>Revisión</span><strong>{{ tab_counts.review }}</strong><small>Con dudas</small></article>
+    <article class="compact-card compact-card-safe"><span>Listos</span><strong>{{ tab_counts.ready }}</strong><small>Para confirmar</small></article>
+    <article class="compact-card compact-card-error"><span>Bloqueados</span><strong>{{ tab_counts.blocked }}</strong><small>Requieren atención</small></article>
+  </section>
+
+  <div class="workbench-tabs pedidos-tabs">
+    {% for key, label in [
+      ("all", "Todos"),
+      ("current", "Actuales"),
+      ("review", "Pendientes de revisión"),
+      ("ready", "Listos"),
+      ("confirmed", "Confirmados"),
+      ("sent", "Enviados"),
+      ("blocked", "Bloqueados")
+    ] %}
+      <a class="workbench-tab {% if filters.state == key %}active{% endif %}" href="/pedidos?state={{ key }}&kind={{ filters.kind }}&date_range={{ filters.date_range }}&search={{ filters.search|urlencode }}&customer_id={{ filters.customer_id }}">
+        <span>{{ label }}</span><strong>{{ tab_counts[key] }}</strong>
+      </a>
+    {% endfor %}
+  </div>
+
+  <form class="filter-grid history-filters" method="get" action="/pedidos">
+    <input type="hidden" name="page" value="1">
+    <input type="hidden" name="state" value="{{ filters.state }}">
+    <label>Origen
+      <select name="kind">
+        {% for value, label in [("all","Todo"),("orders","Pedidos"),("emails","Correos")] %}
+          <option value="{{ value }}" {% if filters.kind == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Rango
+      <select name="date_range">
+        {% for value, label in [("today","Hoy"),("yesterday","Ayer"),("7d","7 días"),("30d","30 días"),("90d","90 días"),("365d","1 año"),("all","Todo"),("custom","Personalizado")] %}
+          <option value="{{ value }}" {% if filters.date_range == value %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Desde<input type="date" name="date_from" value="{{ filters.date_from }}"></label>
+    <label>Hasta<input type="date" name="date_to" value="{{ filters.date_to }}"></label>
+    <label>Cliente
+      <select name="customer_id">
+        <option value="0">Todos</option>
+        {% for customer in customers %}
+          <option value="{{ customer.id }}" {% if filters.customer_id|string == customer.id|string %}selected{% endif %}>{{ customer.code }} - {{ customer.fiscal_name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Buscar<input name="search" value="{{ filters.search }}" placeholder="Cliente, remitente, asunto, referencia"></label>
+    <label>Tamaño página
+      <select name="page_size">
+        {% for size in pagination.allowed_page_sizes %}
+          <option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>&nbsp;<button class="secondary" data-loading-text="Filtrando...">Filtrar</button></label>
+  </form>
+</section>
+
+<section class="panel stack history-table-panel">
+  <div class="section-title-row">
+    <div>
+      <h3>Listado de pedidos</h3>
+      <span class="badge">{{ pagination.start_item }}-{{ pagination.end_item }} de {{ pagination.total_items }}</span>
+    </div>
+  </div>
+
+  <table class="data-table work-table history-table">
+    <thead>
+      <tr>
+        <th>Estado</th>
+        <th>Fecha</th>
+        <th>Cliente</th>
+        <th>Origen</th>
+        <th>Nº líneas</th>
+        <th>Confianza</th>
+        <th>Última acción</th>
+        <th>Acción</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in items %}
+        <tr class="history-row history-row-{{ item.kind }}">
+          <td>
+            {% if item.kind == "order" %}
+              <span class="badge {{ item.order_status|status_class }}">{{ item.order_status_label }}</span>
+            {% else %}
+              <span class="badge {{ item.agent_status|status_class }}">{{ item.agent_status_label }}</span>
+            {% endif %}
+          </td>
+          <td>{{ item.date.strftime("%Y-%m-%d %H:%M") if item.date else "--" }}</td>
+          <td>{{ item.customer_name or "Sin identificar" }}</td>
+          <td>
+            <div class="history-origin">
+              <span class="badge">{{ item.channel }}</span>
+              <span class="badge">{{ item.origin }}</span>
+              {% if item.has_pdf %}<span class="badge">PDF</span>{% endif %}
+            </div>
+          </td>
+          <td>{{ item.line_count if item.line_count is not none else "--" }}</td>
+          <td>{% if item.score is not none %}<span class="score">{{ "%.0f"|format(item.score) }}%</span>{% else %}<span class="muted">Sin scoring</span>{% endif %}</td>
+          <td>{{ item.action_label }}</td>
+          <td>
+            <div class="actions">
+              <a class="button secondary" href="{{ item.url }}">Abrir</a>
+              {% if item.secondary_url and item.secondary_url != item.url %}
+                <a class="button secondary" href="{{ item.secondary_url }}">Origen</a>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="muted">No hay pedidos para los filtros seleccionados.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% include "components/pagination.html" %}
+</section>
+{% endblock %}

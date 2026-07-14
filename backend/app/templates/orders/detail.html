@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% set title = "Revisión de propuesta #" ~ order.id %}
+{% block content %}
+{% set attachments = order.email.attachments|list if order.email else [] %}
+{% set pdfs = order.email.attachments|selectattr("content_type", "equalto", "application/pdf")|list if order.email else [] %}
+{% set score_value = order.score if order.score is not none else 0 %}
+{% if score_value >= 80 %}
+  {% set score_class = "score-safe" %}
+  {% set score_label = "Alta" %}
+{% elif score_value >= 60 %}
+  {% set score_class = "score-reviewable" %}
+  {% set score_label = "Revisable" %}
+{% elif score_value >= 40 %}
+  {% set score_class = "score-doubtful" %}
+  {% set score_label = "Dudosa" %}
+{% else %}
+  {% set score_class = "score-not-importable" %}
+  {% set score_label = "Bloqueada" %}
+{% endif %}
+
+<article class="panel">
+  <div class="review-modal-header review-modal-header-v3 review-modal-header-compact">
+    <div class="review-header-title">
+      <strong>{{ order.validated_customer.fiscal_name if order.validated_customer else order.customer.fiscal_name if order.customer else order.customer_detected_name or "Cliente sin identificar" }}</strong>
+      <div class="review-header-meta">
+        <span class="badge {{ order.status|status_class }}">{{ order.status|status_label }}</span>
+        <span class="score-badge {{ score_class }}">{{ "%.0f"|format(score_value) }}%</span>
+        <span class="badge">{{ score_label }}</span>
+        <span class="badge">{{ order.lines|length }} líneas</span>
+      </div>
+    </div>
+    <div class="review-header-actions review-header-actions-tight">
+      {% if order.email_id %}
+        <a class="button secondary compact-button" href="/channels?focus=email-{{ order.email_id }}">Ver origen</a>
+      {% endif %}
+      <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/recalculate-score">
+        <button class="secondary compact-button" data-loading-text="Recalculando...">Recalcular</button>
+      </form>
+      <button type="button" class="secondary compact-button" onclick="window.location.href='/orders'">Volver</button>
+    </div>
+  </div>
+</article>
+
+<div class="review-grid review-grid-v3">
+  <section class="review-pane review-entry-pane">
+    <div class="pane-title-row">
+      <h3>Pedido / correo / documento recibido</h3>
+      <span class="badge">{{ attachments|length }} adjuntos</span>
+    </div>
+
+    <article class="subpanel">
+      <div class="section-title-row">
+        <div>
+          <h4>{{ order.email.subject if order.email else "Entrada recibida" }}</h4>
+          <p class="muted">{{ order.email.sender if order.email else "Sin remitente" }}</p>
+        </div>
+        <span class="badge">{{ order.email.detected_type|status_label if order.email else "Pedido" }}</span>
+      </div>
+      <div class="review-inline-summary review-inline-summary-tight">
+        <span><strong>Fecha</strong>{{ order.email.received_at.strftime("%d/%m/%Y %H:%M") if order.email and order.email.received_at else "—" }}</span>
+        <span><strong>Dominio</strong>{{ order.email.sender.split('@')[-1] if order.email and order.email.sender and '@' in order.email.sender else "—" }}</span>
+        <span><strong>Estado</strong>{{ order.status|status_label }}</span>
+      </div>
+    </article>
+
+    <article class="subpanel">
+      <div class="section-title-row">
+        <h4>Correo recibido</h4>
+        <button type="button" class="secondary compact-button" onclick="copyText('order-email-body-{{ order.id }}')">Copiar</button>
+      </div>
+      <pre id="order-email-body-{{ order.id }}" class="doc-text">{{ order.email.body if order.email else "" }}</pre>
+    </article>
+
+    {% include "orders/_review_attachments_block.html" %}
+  </section>
+
+  <section class="review-pane review-proposal-pane">
+    <div class="pane-title-row">
+      <h3>Propuesta del agente</h3>
+      <span class="badge">{{ score_label }}</span>
+    </div>
+
+    <article class="subpanel order-summary-card compact-order-summary-card">
+      <div class="order-kpi-strip">
+        <span><strong>Confianza:</strong> {{ "%.0f"|format(score_value) }}%</span>
+        <span><strong>Estado:</strong> {{ order.status|status_label }}</span>
+        {% if order.review_reasons %}
+          <span class="truncate-inline" title="{{ order.review_reasons }}"><strong>Motivos:</strong> {{ order.review_reasons }}</span>
+        {% endif %}
+      </div>
+      {% if customer_context and customer_context.identified %}
+        {% include "orders/_review_customer_block.html" %}
+      {% endif %}
+      <div class="form-grid compact-order-grid">
+        <label>Cliente validado
+          <select name="validated_customer_id" form="order-review-form-{{ order.id }}">
+            <option value="0">Sin cliente</option>
+            {% for customer in customers %}
+              <option value="{{ customer.id }}" {% if order.validated_customer_id == customer.id %}selected{% endif %}>{{ customer.code }} - {{ customer.fiscal_name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Fecha pedido<input name="order_date" form="order-review-form-{{ order.id }}" value="{{ order.order_date or '' }}"></label>
+        <label>Fecha entrega<input name="requested_delivery_date" form="order-review-form-{{ order.id }}" value="{{ order.requested_delivery_date or '' }}"></label>
+        <label>Estado
+          <select name="status" form="order-review-form-{{ order.id }}">
+            <option value="{{ order.status }}">{{ order.status|status_label }}</option>
+            <option value="pedido_pendiente_revision">Pendiente de revisión</option>
+            <option value="pedido_confirmado">Confirmado</option>
+            <option value="pedido_exportado">Exportado</option>
+            <option value="dudoso">Dudoso</option>
+            <option value="no_importable">No importable</option>
+          </select>
+        </label>
+        <label class="span-2">Observaciones<textarea name="notes" form="order-review-form-{{ order.id }}" rows="2">{{ order.notes or "" }}</textarea></label>
+      </div>
+      <form id="order-review-form-{{ order.id }}" class="js-loading-form" method="post" action="/orders/{{ order.id }}/update">
+        <button class="secondary compact-button" data-loading-text="Guardando...">{{ request.state.branding.microcopy.save_changes }}</button>
+      </form>
+    </article>
+
+    {% include "orders/_review_lines_block.html" %}
+
+    <div class="review-action-bar review-action-bar-v2">
+      <span class="muted review-save-state">Corrige cliente y lineas, revisa el score y procesa en segundos.</span>
+      <div class="footer-actions-primary">
+        <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/confirm" data-confirm="Confirmar pedido?"><button data-loading-text="Confirmando...">{{ request.state.branding.microcopy.confirm_order }}</button></form>
+        <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/export-ftp"><button class="secondary" data-loading-text="Exportando...">{{ request.state.branding.microcopy.send_to_management }}</button></form>
+      </div>
+      <div class="footer-actions-secondary">
+        <details class="footer-more-actions">
+          <summary>Más acciones</summary>
+          <div>
+            <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/generate-export"><button class="secondary" data-loading-text="Generando...">Generar archivo</button></form>
+            <form class="js-loading-form force-form" method="post" action="/orders/{{ order.id }}/force-confirm" data-confirm="Forzar confirmacion?"><input name="force_reason" required placeholder="Motivo"><button class="secondary" data-loading-text="Confirmando...">Forzar</button></form>
+            <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/mark-not-order" data-confirm="Marcar como no pedido?"><button class="secondary danger-soft">Marcar no pedido</button></form>
+            <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/discard" data-confirm="Descartar pedido?"><button class="secondary danger-soft">Descartar</button></form>
+          </div>
+        </details>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+  function copyText(id) {
+    const node = document.getElementById(id);
+    if (node) navigator.clipboard.writeText(node.textContent || "");
+  }
+  function switchOrderPdf(select, frameId) {
+    const frame = document.getElementById(frameId);
+    if (frame && select.value) frame.src = select.value;
+  }
+  function applyOrderLineSuggestion(button) {
+    const lineId = button.dataset.lineId;
+    const productId = button.dataset.productId;
+    if (!lineId || !productId) return;
+    const select = document.querySelector(`select[data-line-product-select="${lineId}"]`);
+    if (!select) return;
+    select.value = productId;
+    const form = select.form;
+    if (form) {
+      form.dataset.dirty = "true";
+      if (typeof form.requestSubmit === "function") {
+        form.requestSubmit();
+      } else {
+        form.submit();
+      }
+    }
+  }
+  document.querySelectorAll(".line-product-select").forEach((select) => {
+    select.addEventListener("change", () => {
+      const form = select.form;
+      if (!form) return;
+      form.dataset.dirty = "true";
+      if (typeof form.requestSubmit === "function") {
+        form.requestSubmit();
+      } else {
+        form.submit();
+      }
+    });
+  });
+</script>
+{% endblock %}

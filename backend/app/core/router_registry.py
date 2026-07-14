@@ -1,0 +1,53 @@
+from __future__ import annotations
+
+from app.auth.routes import router as auth_router
+from app.admin.routes import router as admin_router
+from app.dashboard.routes import router as dashboard_router
+from app.alerts.routes import router as alerts_router
+from app.channels.routes import router as channels_router
+from app.customers.routes import router as customers_router
+from app.databases.routes import router as databases_router
+from app.imports.routes import router as imports_router
+from app.jobs.routes import router as jobs_router
+from app.logs.routes import router as logs_router
+from app.mail.routes import router as mail_router
+from app.learning.routes import router as learning_router
+from app.pages.routes import router as pages_router
+from app.orders.routes import router as orders_router
+from app.products.routes import router as products_router
+from app.settings.channels_routes import router as channels_settings_router
+from app.settings.routes import router as settings_router
+from app.users.routes import router as users_router
+from app.workbench.routes import router as workbench_router
+
+try:  # pragma: no cover - optional during phased extraction
+    from app.health.routes import router as health_router
+except Exception:  # noqa: BLE001
+    health_router = None
+
+
+def get_registered_routers() -> list:
+    routers = [
+        auth_router,
+        admin_router,
+        dashboard_router,
+        pages_router,
+        mail_router,
+        channels_router,
+        workbench_router,
+        alerts_router,
+        learning_router,
+        channels_settings_router,
+        orders_router,
+        databases_router,
+        customers_router,
+        products_router,
+        imports_router,
+        jobs_router,
+        settings_router,
+        users_router,
+        logs_router,
+    ]
+    if health_router is not None:
+        routers.append(health_router)
+    return routers

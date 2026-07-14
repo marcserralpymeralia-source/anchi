@@ -1,0 +1,408 @@
+{% extends "base.html" %}
+{% set title = "Entradas recibidas" %}
+{% block content %}
+<section class="workbench-shell channels-shell">
+  <section class="panel workbench-queue-panel">
+    <div class="workbench-header">
+      <div>
+        <h2>Entradas recibidas</h2>
+        <p>Vista técnica para revisar el origen recibido y su trazabilidad cuando haga falta.</p>
+      </div>
+      <div class="actions">
+        <span class="badge">Anchi demo</span>
+        <a class="button secondary compact-button" href="/settings/channels">Configurar canal</a>
+      </div>
+    </div>
+
+    <div class="compact-metrics channels-summary">
+      <article class="compact-card compact-card-muted"><span>Total</span><strong>{{ summary.total }}</strong></article>
+      <article class="compact-card compact-card-safe"><span>Procesados</span><strong>{{ summary.processed }}</strong></article>
+      <article class="compact-card compact-card-reviewable"><span>Revisión</span><strong>{{ summary.review }}</strong></article>
+      <article class="compact-card compact-card-error"><span>Errores</span><strong>{{ summary.error }}</strong></article>
+    </div>
+
+    <details class="workbench-filters-panel" open>
+      <summary>Filtros</summary>
+      <div class="workbench-tabs">
+        {% for key, label, count in tabs %}
+          {% set href = "/channels?tab=" ~ key ~ "&date_range=" ~ filters.date_range ~ "&customer_id=" ~ filters.customer_id ~ "&search=" ~ (filters.search|urlencode) ~ "&score_min=" ~ filters.score_min ~ "&score_max=" ~ filters.score_max %}
+          <a class="workbench-tab {% if filters.tab == key %}active{% endif %}" href="{{ href }}">
+            <span>{{ label }}</span><strong>{{ count }}</strong>
+          </a>
+        {% endfor %}
+      </div>
+      <form class="workbench-filters-form" method="get" action="/channels">
+        <input type="hidden" name="tab" value="{{ filters.tab }}">
+        <div class="filter-grid workbench-quick-filters">
+          <label>Buscar<input name="search" value="{{ filters.search }}" placeholder="Remitente, asunto o texto"></label>
+          <label>Cliente
+            <select name="customer_id">
+              <option value="0">Todos</option>
+              {% for customer in customers %}
+                <option value="{{ customer.id }}" {% if filters.customer_id == customer.id %}selected{% endif %}>{{ customer.code }} - {{ customer.fiscal_name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Fecha
+            <select name="date_range">
+              {% for value, label in [("30d","Últimos 30 días"),("7d","Últimos 7 días"),("today","Hoy"),("all","Todo")] %}
+                <option value="{{ value }}" {% if filters.date_range == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Score mínimo<input type="number" step="0.01" min="0" max="100" name="score_min" value="{{ filters.score_min }}"></label>
+          <label>Score máximo<input type="number" step="0.01" min="0" max="100" name="score_max" value="{{ filters.score_max }}"></label>
+          <label>Tamaño<select name="page_size">{% for size in pagination.allowed_page_sizes %}<option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>{% endfor %}</select></label>
+          <label>&nbsp;<button class="secondary" data-loading-text="Filtrando...">Filtrar</button></label>
+        </div>
+      </form>
+    </details>
+
+    <div class="work-queue channels-queue">
+      {% for item in channels %}
+        {% set confidence_class = item.confidence_key %}
+        {% set order_href = item.order_href %}
+        {% set row_id = item.entry_id %}
+        {% set source_id = item.email_id if item.kind == "email" else item.message_id %}
+        <article
+          id="{{ row_id }}"
+          class="queue-item queue-item-{{ item.status_key }} queue-item-confidence-{{ confidence_class }}"
+          onclick="openChannelModal('{{ row_id }}')"
+          tabindex="0"
+        >
+          <div class="queue-item-main">
+            <strong class="queue-item-name">{{ item.customer_name }}</strong>
+            <div class="queue-item-tags">
+              <a class="queue-item-tag queue-item-tag-channel" href="/channels?tab={{ item.channel_key }}&date_range={{ filters.date_range }}&customer_id={{ filters.customer_id }}&search={{ filters.search|urlencode }}&score_min={{ filters.score_min }}&score_max={{ filters.score_max }}" onclick="event.stopPropagation();">{{ item.channel_name }}</a>
+              <a class="queue-item-tag queue-item-tag-status" href="/channels?tab={% if item.status_key in ['doubtful','no_order'] %}review{% elif item.status_key in ['not_processed','queued','processing','pending_reprocess'] %}pending{% elif item.status_key == 'error' %}error{% else %}processed{% endif %}&date_range={{ filters.date_range }}&customer_id={{ filters.customer_id }}&search={{ filters.search|urlencode }}&score_min={{ filters.score_min }}&score_max={{ filters.score_max }}" onclick="event.stopPropagation();">{{ item.status_label }}</a>
+              <span class="queue-item-tag queue-item-tag-confidence queue-item-confidence-{{ confidence_class }}">{{ item.confidence_label }}</span>
+              {% if item.has_attachments %}<span class="queue-item-tag">Adjuntos</span>{% endif %}
+            </div>
+            <span class="muted">{{ item.sender or "Sin remitente" }} · {{ item.subject }}</span>
+            <small>{{ item.summary }}</small>
+          </div>
+          <div class="queue-item-actions">
+            <button class="secondary compact-button" type="button" onclick="event.stopPropagation(); openChannelModal('{{ row_id }}')">Abrir</button>
+            {% if order_href %}
+              <a class="button secondary compact-button" href="{{ order_href }}" onclick="event.stopPropagation();">Ver pedido</a>
+            {% endif %}
+          </div>
+          <div class="queue-item-confidence-col queue-item-confidence-{{ confidence_class }}">
+            <span class="queue-item-score queue-item-confidence-{{ confidence_class }}">{% if item.score is not none %}{{ "%.0f"|format(item.score) }}%{% else %}--{% endif %}</span>
+          </div>
+        </article>
+      {% else %}
+        <article class="task-empty">
+          <strong>No hay entradas para mostrar</strong>
+          <span>Prueba a cambiar los filtros o espera a la próxima sincronización.</span>
+        </article>
+      {% endfor %}
+    </div>
+    {% include "components/pagination.html" %}
+  </section>
+</section>
+
+{% for item in channels %}
+  <dialog id="{{ item.entry_id }}-dialog" class="order-review-modal channel-review-modal" data-dirty="false">
+    <div class="review-modal-header review-modal-header-v3">
+      <div class="review-header-title">
+        <strong>{{ item.customer_name }} · {% if item.score is not none %}{{ "%.0f"|format(item.score) }}%{% else %}Sin analizar{% endif %}</strong>
+        <div class="review-header-meta">
+          <span class="badge {{ 'agent-' ~ item.status_key }}">{{ item.status_label }}</span>
+          <span class="badge">{{ item.channel_name }}</span>
+          <span class="badge">{{ item.received_label }}</span>
+        </div>
+      </div>
+      <div class="review-header-actions review-header-actions-tight">
+        {% if item.kind == "email" and item.status_key == "not_processed" %}
+          <form class="js-loading-form" method="post" action="/workbench/email/{{ item.email_id }}/process"><button class="primary compact-button" data-loading-text="Procesando...">Procesar</button></form>
+          <form class="js-loading-form" method="post" action="/workbench/email/{{ item.email_id }}/mark-no-order" data-confirm="Marcar como no pedido?"><button class="secondary compact-button" data-loading-text="Marcando...">Resolver</button></form>
+        {% elif item.order_id %}
+          <a class="button secondary compact-button" href="/orders/{{ item.order_id }}">Ver pedido</a>
+        {% endif %}
+        <button type="button" class="secondary compact-button" onclick="closeChannelModal('{{ item.entry_id }}')">Cerrar</button>
+      </div>
+    </div>
+
+    <div class="review-grid review-grid-v3 channel-review-grid">
+      <section class="review-pane review-entry-pane">
+        <div class="review-inline-summary review-inline-summary-tight">
+          <span><strong>Remitente</strong>{{ item.sender or "Sin remitente" }}</span>
+          <span><strong>Asunto</strong>{{ item.subject }}</span>
+        </div>
+        <details class="review-mail-card review-mail-toggle" open>
+          <summary>Entrada original</summary>
+          <div class="review-mail-body-head">
+            <span class="muted review-mail-snippet">{{ item.summary }}</span>
+            <button type="button" class="secondary compact-button" onclick="copyText('channel-body-{{ item.entry_id }}')">Copiar</button>
+          </div>
+          <pre id="channel-body-{{ item.entry_id }}" class="doc-text review-email-body">{{ item.content_text or item.origin }}</pre>
+        </details>
+
+        {% if item.has_attachments %}
+          <details class="review-attachments-toggle channel-attachments-toggle" id="channel-attachments-toggle-{{ item.entry_id }}">
+            <summary>
+              <span>Adjuntos</span>
+              <strong>{{ item.attachments|length }}</strong>
+            </summary>
+            <div class="review-attachments-body">
+              <div class="review-attachment-list" role="list">
+                {% for attachment in item.attachments %}
+                  {% set attachment_kind = "pdf" if attachment.is_pdf or attachment.content_type == "application/pdf" else "image" if attachment.content_type and attachment.content_type.startswith("image/") else "csv" if attachment.filename.lower().endswith(".csv") or attachment.content_type in ["text/csv", "application/csv"] else "text" if attachment.content_type and attachment.content_type.startswith("text/") or attachment.filename.lower().endswith((".txt", ".log", ".md", ".eml", ".json")) else "sheet" if attachment.filename.lower().endswith((".xls", ".xlsx", ".ods")) else "doc" if attachment.filename.lower().endswith((".doc", ".docx")) else "unsupported" %}
+                  <button
+                    type="button"
+                    class="review-attachment-item"
+                    role="listitem"
+                    data-entry-id="{{ item.entry_id }}"
+                    data-preview-kind="{{ attachment_kind }}"
+                    data-preview-url="/channels/{{ item.kind }}/{{ source_id }}/attachments/{{ attachment.id }}/preview"
+                    data-download-url="/channels/{{ item.kind }}/{{ source_id }}/attachments/{{ attachment.id }}"
+                    data-filename="{{ attachment.filename }}"
+                    data-content-type="{{ attachment.content_type or '' }}"
+                    data-size-bytes="{{ attachment.size_bytes or 0 }}"
+                    data-extracted-text="{{ attachment.extracted_text or attachment.ocr_text or attachment.transcription_text or '' }}"
+                    onclick="selectChannelAttachmentPreview(event, this)"
+                  >
+                    <span class="review-attachment-item-main">
+                      <strong>{{ attachment.filename }}</strong>
+                      <span>{{ attachment_kind|upper }}{% if attachment.size_bytes %} · {{ attachment.size_bytes }} B{% endif %}</span>
+                    </span>
+                    <span class="review-attachment-item-action">Previsualizar</span>
+                  </button>
+                {% endfor %}
+              </div>
+              <div class="review-attachment-preview" id="channel-attachment-preview-{{ item.entry_id }}">
+                <div class="review-attachment-preview-empty">Selecciona un adjunto para verlo aquí.</div>
+              </div>
+            </div>
+          </details>
+        {% endif %}
+      </section>
+
+      <section class="review-pane generated-pane">
+        <div class="pane-title-row">
+          <h3>Estado operativo</h3>
+          <span class="badge">{{ item.source_label }}</span>
+        </div>
+        <article class="subpanel">
+          <div class="settings-kpis channel-kpis">
+            <div><span>Confianza</span><strong>{% if item.score is not none %}{{ "%.0f"|format(item.score) }}%{% else %}--{% endif %}</strong></div>
+            <div><span>Canal</span><strong>{{ item.channel_name }}</strong></div>
+            <div><span>Pedido</span><strong>{% if item.order_id %}Sí{% else %}No{% endif %}</strong></div>
+          </div>
+        </article>
+        <article class="subpanel">
+          <h4>Contexto</h4>
+          <p><strong>Cliente:</strong> {{ item.customer_name }}</p>
+          <p><strong>Estado:</strong> {{ item.status_label }}</p>
+          <p><strong>Canal:</strong> {{ item.origin }}</p>
+          {% if item.order_id %}<p><strong>Pedido:</strong> <a href="/orders/{{ item.order_id }}">#{{ item.order_id }}</a></p>{% endif %}
+        </article>
+        <article class="subpanel">
+          <h4>Acciones rápidas</h4>
+          <div class="actions">
+            <button type="button" class="secondary compact-button" onclick="openChannelModal('{{ item.entry_id }}')">Mantener abierto</button>
+            {% if item.order_id %}
+              <a class="button secondary compact-button" href="/orders/{{ item.order_id }}">Ver pedido</a>
+            {% endif %}
+          </div>
+        </article>
+      </section>
+    </div>
+  </dialog>
+{% endfor %}
+
+<script>
+  function openChannelModal(entryId) {
+    const dialog = document.getElementById(`${entryId}-dialog`);
+    if (dialog) dialog.showModal();
+  }
+  function closeChannelModal(entryId) {
+    const dialog = document.getElementById(`${entryId}-dialog`);
+    if (dialog) dialog.close();
+  }
+  async function copyText(id) {
+    const node = document.getElementById(id);
+    if (!node) return;
+    const text = node.innerText || node.textContent || "";
+    try {
+      await navigator.clipboard.writeText(text);
+    } catch (error) {
+      const temp = document.createElement("textarea");
+      temp.value = text;
+      document.body.appendChild(temp);
+      temp.select();
+      document.execCommand("copy");
+      temp.remove();
+    }
+  }
+  function humanSize(bytes) {
+    const value = Number(bytes) || 0;
+    if (value <= 0) return "";
+    if (value < 1024) return `${value} B`;
+    if (value < 1024 * 1024) return `${(value / 1024).toFixed(value < 10_240 ? 1 : 0)} KB`;
+    return `${(value / (1024 * 1024)).toFixed(value < 10 * 1024 * 1024 ? 1 : 0)} MB`;
+  }
+  function escapeHtml(value) {
+    return String(value || "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#39;");
+  }
+  function parseDelimitedText(text) {
+    const raw = String(text || "").replace(/^\uFEFF/, "").trim();
+    if (!raw) return [];
+    const lines = raw.split(/\r?\n/).filter(Boolean);
+    if (!lines.length) return [];
+    const candidates = [",", ";", "\t", "|"];
+    let delimiter = ",";
+    let maxColumns = 0;
+    candidates.forEach((candidate) => {
+      const columns = lines[0].split(candidate).length;
+      if (columns > maxColumns) {
+        maxColumns = columns;
+        delimiter = candidate;
+      }
+    });
+    return lines.slice(0, 12).map((line) => line.split(delimiter).map((cell) => cell.trim()));
+  }
+  function renderAttachmentPreviewEmpty(entryId, message, downloadUrl = "") {
+    const preview = document.getElementById(`channel-attachment-preview-${entryId}`);
+    if (!preview) return;
+    preview.innerHTML = `
+      <div class="review-attachment-preview-empty">
+        <strong>${escapeHtml(message)}</strong>
+        ${downloadUrl ? `<a class="button secondary compact-button" href="${escapeHtml(downloadUrl)}" target="_blank">Descargar</a>` : ""}
+      </div>
+    `;
+  }
+  function renderAttachmentPreviewLoading(entryId, filename) {
+    const preview = document.getElementById(`channel-attachment-preview-${entryId}`);
+    if (!preview) return;
+    preview.innerHTML = `
+      <div class="review-attachment-preview-empty">
+        <strong>${escapeHtml(filename)}</strong>
+        <span>Cargando previsualización...</span>
+      </div>
+    `;
+  }
+  async function renderAttachmentPreviewContent(entryId, attachmentNode) {
+    const preview = document.getElementById(`channel-attachment-preview-${entryId}`);
+    if (!preview) return;
+    const kind = attachmentNode.dataset.previewKind || "unsupported";
+    const previewUrl = attachmentNode.dataset.previewUrl || "";
+    const downloadUrl = attachmentNode.dataset.downloadUrl || "";
+    const filename = attachmentNode.dataset.filename || "Adjunto";
+    const sizeLabel = humanSize(attachmentNode.dataset.sizeBytes);
+    const extractedText = (attachmentNode.dataset.extractedText || "").trim();
+    renderAttachmentPreviewLoading(entryId, filename);
+    if (!previewUrl) {
+      renderAttachmentPreviewEmpty(entryId, "No se puede previsualizar este archivo.", downloadUrl);
+      return;
+    }
+    if (kind === "pdf") {
+      preview.innerHTML = `
+        <div class="review-attachment-preview-head">
+          <div><strong>${escapeHtml(filename)}</strong><span>${escapeHtml(sizeLabel)}</span></div>
+          <a class="button secondary compact-button" target="_blank" href="${escapeHtml(previewUrl)}">Abrir</a>
+        </div>
+        <iframe class="review-attachment-frame" src="${escapeHtml(previewUrl)}"></iframe>
+      `;
+      return;
+    }
+    if (kind === "image") {
+      preview.innerHTML = `
+        <div class="review-attachment-preview-head">
+          <div><strong>${escapeHtml(filename)}</strong><span>${escapeHtml(sizeLabel)}</span></div>
+          <a class="button secondary compact-button" target="_blank" href="${escapeHtml(previewUrl)}">Abrir</a>
+        </div>
+        <div class="review-attachment-image-wrap">
+          <img class="review-attachment-image" src="${escapeHtml(previewUrl)}" alt="${escapeHtml(filename)}">
+        </div>
+      `;
+      return;
+    }
+    if (kind === "csv") {
+      try {
+        const response = await fetch(previewUrl, {credentials: "same-origin"});
+        if (response.ok) {
+          const text = await response.text();
+          const rows = parseDelimitedText(text);
+          if (rows.length) {
+            const [header, ...body] = rows;
+            const visibleRows = body.slice(0, 8);
+            preview.innerHTML = `
+              <div class="review-attachment-preview-head">
+                <div><strong>${escapeHtml(filename)}</strong><span>${escapeHtml(sizeLabel)}</span></div>
+                <a class="button secondary compact-button" target="_blank" href="${escapeHtml(previewUrl)}">Abrir</a>
+              </div>
+              <div class="review-attachment-table-wrap">
+                <table class="review-attachment-table">
+                  <thead><tr>${header.map((cell) => `<th>${escapeHtml(cell)}</th>`).join("")}</tr></thead>
+                  <tbody>${visibleRows.map((row) => `<tr>${header.map((_, index) => `<td>${escapeHtml(row[index] || "")}</td>`).join("")}</tr>`).join("")}</tbody>
+                </table>
+              </div>
+            `;
+            return;
+          }
+        }
+      } catch (error) {
+        console.warn("No se pudo cargar el CSV", error);
+      }
+    }
+    if (kind === "sheet" || kind === "text" || kind === "doc" || extractedText) {
+      let text = extractedText;
+      if (!text) {
+        try {
+          const response = await fetch(previewUrl, {credentials: "same-origin"});
+          if (response.ok) {
+            text = await response.text();
+          }
+        } catch (error) {
+          console.warn("No se pudo cargar el adjunto", error);
+        }
+      }
+      text = String(text || "").trim();
+      if (!text) {
+        renderAttachmentPreviewEmpty(entryId, "No se puede previsualizar este archivo.", downloadUrl);
+        return;
+      }
+      preview.innerHTML = `
+        <div class="review-attachment-preview-head">
+          <div><strong>${escapeHtml(filename)}</strong><span>${escapeHtml(sizeLabel)}</span></div>
+          <a class="button secondary compact-button" target="_blank" href="${escapeHtml(previewUrl)}">Abrir</a>
+        </div>
+        <pre class="review-attachment-text">${escapeHtml(text)}</pre>
+      `;
+      return;
+    }
+    renderAttachmentPreviewEmpty(entryId, "No se puede previsualizar este archivo.", downloadUrl);
+  }
+  function selectChannelAttachmentPreview(event, button) {
+    event.preventDefault();
+    const entryId = button.dataset.entryId;
+    const details = document.getElementById(`channel-attachments-toggle-${entryId}`);
+    if (details && !details.open) details.open = true;
+    const list = button.closest(".review-attachment-list");
+    if (list) list.querySelectorAll(".is-selected").forEach((node) => node.classList.remove("is-selected"));
+    button.classList.add("is-selected");
+    renderAttachmentPreviewContent(entryId, button);
+  }
+  document.querySelectorAll(".channel-attachments-toggle").forEach((details) => {
+    details.addEventListener("toggle", () => {
+      if (!details.open) return;
+      const list = details.querySelector(".review-attachment-list");
+      const selected = list ? list.querySelector(".review-attachment-item.is-selected") : null;
+      const first = list ? list.querySelector(".review-attachment-item") : null;
+      if (!selected && first) first.click();
+    });
+  });
+  const focusKey = new URLSearchParams(window.location.search).get("focus");
+  if (focusKey) {
+    const dialog = document.getElementById(`${focusKey}-dialog`);
+    if (dialog) dialog.showModal();
+  }
+</script>
+{% endblock %}

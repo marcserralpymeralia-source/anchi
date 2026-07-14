@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% set title = "Importacion: mapeo de columnas" %}
+{% block content %}
+<section class="panel stack">
+  <p><strong>Archivo:</strong> {{ preview.filename }} · <strong>Filas:</strong> {{ preview.rows_total }}</p>
+  <form class="stack js-loading-form" method="post" action="/imports/validate">
+    <input type="hidden" name="token" value="{{ preview.token }}">
+    <input type="hidden" name="filename" value="{{ preview.filename }}">
+    <input type="hidden" name="entity_type" value="{{ preview.entity_type }}">
+    <input type="hidden" name="encoding" value="{{ encoding }}">
+    <table>
+      <thead><tr><th>Columna detectada</th><th>Ejemplo</th><th>Campo destino</th></tr></thead>
+      <tbody>
+      {% for column in preview.columns %}
+        <tr>
+          <td>{{ column }}</td>
+          <td>{{ preview.preview_rows[0][column] if preview.preview_rows else "" }}</td>
+          <td>
+            <select name="map__{{ column }}">
+              <option value="__skip__">No importar</option>
+              {% for field, label in preview.fields.items() %}
+                <option value="{{ field }}" {% if preview.guessed_mapping.get(column) == field %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <h2>Vista previa</h2>
+    <table>
+      <thead><tr>{% for column in preview.columns %}<th>{{ column }}</th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for row in preview.preview_rows %}
+        <tr>{% for column in preview.columns %}<td>{{ row[column] }}</td>{% endfor %}</tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <div class="actions">
+      <button data-loading-text="Validando...">Validar importacion</button>
+      <a class="button secondary" href="{{ '/customers' if preview.entity_type == 'customers' else '/products' }}">Cancelar</a>
+    </div>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,1 @@
+from app.admin.diagnostics import company_diagnostics, company_diagnostics_overview

@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+{% set title = "Importacion completada" %}
+{% block content %}
+<section class="panel stack">
+  <p><strong>Archivo:</strong> {{ job.filename }}</p>
+  <p>{{ job.rows_created }} creados · {{ job.rows_updated }} actualizados · {{ job.rows_ignored }} ignorados</p>
+  <div class="actions">
+    <a class="button" href="{{ destination }}">Volver</a>
+    <a class="button secondary" href="/imports/history">Historico de importaciones</a>
+  </div>
+</section>
+{% endblock %}

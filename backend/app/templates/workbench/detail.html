@@ -1,0 +1,241 @@
+{% if kind == "order" %}
+  {% set email_attachments = order.email.attachments if order.email else [] %}
+  {% set pdfs = email_attachments|selectattr("is_pdf")|list if order.email else [] %}
+  {% set doubt_count = order.lines|selectattr("validation_status", "ne", "validated")|list|length %}
+  {% set primary_action_label = "Confirmar pedido" if item.order_status_label == "Listo para confirmar" else "Resolver incidencia" if order.status in ["dudoso", "no_importable"] or item.scoring_category in ["doubtful", "blocked"] else "Guardar cambios" %}
+  <div class="review-modal-header review-modal-header-v3">
+    <div class="review-header-title">
+      <strong>{{ item.customer_name }} · {{ "%.0f"|format(order.score or 0) }}% · {{ item.order_status_label|status_label }}</strong>
+      <div class="review-header-meta">
+        <span class="badge agent-{{ item.agent_status }}">{{ item.agent_status_label }}</span>
+        <span class="badge">{{ item.origin }}</span>
+      </div>
+    </div>
+    <div class="review-header-actions review-header-actions-tight">
+      <button type="submit" form="order-meta-form-{{ order.id }}" class="primary compact-button review-primary-action" data-loading-text="Guardando...">{{ primary_action_label }}</button>
+      <details class="review-actions-menu">
+        <summary class="secondary compact-button">Acciones</summary>
+        <div class="review-actions-menu-panel">
+          {% if order.email_id %}<form class="js-loading-form" method="post" action="/workbench/email/{{ order.email_id }}/process"><button class="secondary compact-button" data-loading-text="Reprocesando...">Revisar de nuevo</button></form>{% endif %}
+          <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/confirm" data-confirm="Confirmar pedido?"><button class="secondary compact-button" data-loading-text="Confirmando...">Confirmar pedido</button></form>
+          <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/recalculate-score"><button class="secondary compact-button" data-loading-text="Recalculando...">Recalcular confianza</button></form>
+          <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/export-ftp"><button class="secondary compact-button" data-loading-text="Exportando...">Enviar a gestión</button></form>
+          <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/mark-not-order" data-confirm="Marcar como no pedido?"><button class="secondary compact-button" data-loading-text="Marcando...">Marcar como no pedido</button></form>
+          <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/discard" data-confirm="Descartar pedido?"><button class="secondary compact-button" data-loading-text="Descartando...">Descartar</button></form>
+        </div>
+      </details>
+      <button type="button" class="secondary compact-button" onclick="closeWorkbenchDetailModal()">Cerrar</button>
+    </div>
+  </div>
+
+  <div class="review-grid review-grid-v3">
+    <section class="review-pane review-entry-pane">
+      <div class="review-inline-summary review-inline-summary-tight">
+        <span>{{ (order.email.sender if order.email else item.customer_name) }} · {{ item.origin }} · {{ item.order_status_label|status_label }}{% if order.email and order.email.attachments %} · {{ order.email.attachments|length }} adjuntos{% endif %}</span>
+      </div>
+      <details class="review-mail-card review-mail-toggle" open>
+        <summary>Correo recibido</summary>
+        <div class="review-mail-body-head">
+          <span class="muted review-mail-snippet">{{ (order.email.body if order.email else "")[:120] }}</span>
+          <button type="button" class="secondary compact-button" onclick="const box=this.closest('details'); const expanded=box.classList.toggle('is-expanded'); this.textContent=expanded ? 'Ocultar' : 'Ver completo';">Ver completo</button>
+        </div>
+        <pre id="dash-email-body-{{ order.id }}" class="doc-text review-email-body">{{ order.email.body if order.email else "" }}</pre>
+      </details>
+      {% if order.email and email_attachments %}
+        <details class="review-attachments-toggle" id="review-attachments-toggle-{{ order.id }}">
+          <summary>
+            <span>Adjuntos</span>
+            <strong>{{ email_attachments|length }}</strong>
+          </summary>
+          <div class="review-attachments-body">
+            <div class="review-attachment-list" role="list">
+              {% for attachment in email_attachments %}
+                {% set attachment_kind = "pdf" if attachment.is_pdf or attachment.content_type == "application/pdf" else "image" if attachment.content_type and attachment.content_type.startswith("image/") else "csv" if attachment.filename.lower().endswith(".csv") or attachment.content_type in ["text/csv", "application/csv"] else "text" if attachment.content_type and attachment.content_type.startswith("text/") or attachment.filename.lower().endswith((".txt", ".log", ".md", ".eml", ".json")) else "doc" if attachment.filename.lower().endswith((".doc", ".docx")) else "sheet" if attachment.filename.lower().endswith((".xls", ".xlsx", ".ods")) else "unsupported" %}
+                <button
+                  type="button"
+                  class="review-attachment-item"
+                  role="listitem"
+                  data-order-id="{{ order.id }}"
+                  data-attachment-id="{{ attachment.id }}"
+                  data-preview-kind="{{ attachment_kind }}"
+                  data-preview-url="/orders/{{ order.id }}/attachments/{{ attachment.id }}/preview"
+                  data-download-url="/orders/{{ order.id }}/attachments/{{ attachment.id }}"
+                  data-filename="{{ attachment.filename }}"
+                  data-content-type="{{ attachment.content_type or '' }}"
+                  data-size-bytes="{{ attachment.size_bytes or 0 }}"
+                  data-extracted-text="{{ attachment.extracted_text or '' }}"
+                  onclick="selectOrderAttachmentPreview(event, this)"
+                >
+                  <span class="review-attachment-item-main">
+                    <strong>{{ attachment.filename }}</strong>
+                    <span>
+                      {{ "PDF" if attachment_kind == "pdf" else "Imagen" if attachment_kind == "image" else "CSV" if attachment_kind == "csv" else "Texto" if attachment_kind == "text" else "DOC" if attachment_kind == "doc" else "Hoja" if attachment_kind == "sheet" else "Adjunto" }}
+                      {% if attachment.size_bytes %} · {{ attachment.size_bytes }} B{% endif %}
+                    </span>
+                  </span>
+                  <span class="review-attachment-item-action">Previsualizar</span>
+                </button>
+              {% endfor %}
+            </div>
+            <div class="review-attachment-preview" id="review-attachment-preview-{{ order.id }}">
+              <div class="review-attachment-preview-empty">Selecciona un adjunto para verlo aquí.</div>
+            </div>
+          </div>
+        </details>
+      {% endif %}
+    </section>
+
+    <section class="review-pane review-proposal-pane">
+      <form id="order-meta-form-{{ order.id }}" class="stack js-loading-form dirty-form review-meta-form" method="post" action="/orders/{{ order.id }}/update">
+        <input type="hidden" name="order_date" value="{{ order.order_date or '' }}">
+        <input type="hidden" name="requested_delivery_date" value="{{ order.requested_delivery_date or '' }}">
+        <details class="review-customer-toggle" id="review-customer-toggle-{{ order.id }}">
+          <summary>Cambiar cliente</summary>
+          <div class="review-customer-inline">
+            <label>Cliente
+              <select name="validated_customer_id">
+                <option value="0">Sin cliente</option>
+                {% for customer in customers %}
+                  <option value="{{ customer.id }}" {% if order.validated_customer_id == customer.id %}selected{% endif %}>{{ customer.code }} - {{ customer.fiscal_name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <button class="secondary compact-button" data-loading-text="Guardando...">Guardar cliente</button>
+          </div>
+        </details>
+        <div class="review-proposal-head review-proposal-head-compact">
+          <span class="review-proposal-caption">Artículos interpretados</span>
+          <span class="review-proposal-note">{% if order.lines|length == 1 %}1 línea{% else %}{{ order.lines|length }} líneas{% endif %}{% if doubt_count %} · {{ doubt_count }} incidencias{% endif %}</span>
+        </div>
+      </form>
+      <article class="subpanel review-lines-panel">
+        <table class="line-table review-lines-table review-lines-table-compact">
+          <thead><tr><th>Texto recibido</th><th>Producto propuesto</th><th>Cant.</th><th>U.</th><th>Incidencia</th><th>Acción</th></tr></thead>
+          <tbody>
+          {% for line in order.lines %}
+            {% set line_is_doubtful = line.validation_status != 'validated' or not line.validated_product_id or line.doubt_reason %}
+            <tr class="{% if line_is_doubtful %}line-doubtful{% endif %}">
+              <td class="line-source-cell">{{ line.original_text or "" }}</td>
+              <td class="product-detected-cell"><strong>{{ line.detected_product or "Producto no identificado" }}</strong><span>{{ line.detected_reference or "Sin referencia detectada" }}</span></td>
+              <td>
+                <form id="line-form-{{ line.id }}" class="js-loading-form" method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}"></form>
+                <input form="line-form-{{ line.id }}" name="quantity" type="number" step="0.01" value="{{ line.quantity or 0 }}">
+              </td>
+              <td><input form="line-form-{{ line.id }}" name="unit" value="{{ line.unit or '' }}" placeholder="Unidad"></td>
+              <td>
+                <span class="badge {% if line_is_doubtful %}warn{% else %}status-confirmed{% endif %}">{{ line.validation_status }}</span>
+                {% if line.doubt_reason %}<small class="line-doubt">{{ line.doubt_reason }}</small>{% endif %}
+              </td>
+              <td>
+                <div class="line-actions line-actions-v2">
+                  {% if not line.validated_product_id %}
+                    <button type="button" class="secondary compact-button" title="Asociar producto" data-line-picker-trigger="{{ line.id }}" onclick="openLineProductPicker('{{ line.id }}')">Asociar producto</button>
+                    <div id="line-product-picker-{{ line.id }}" class="line-product-picker" hidden>
+                      <select form="line-form-{{ line.id }}" name="validated_product_id" class="line-product-select" data-line-product-select="{{ line.id }}" title="Elegir producto">
+                        <option value="0">Sin referencia</option>
+                        {% for product in products %}
+                          <option value="{{ product.id }}">{{ product.reference }} - {{ product.name }}</option>
+                        {% endfor %}
+                      </select>
+                    </div>
+                  {% else %}
+                    <button form="line-form-{{ line.id }}" class="secondary compact-button" title="Aceptar">Aceptar</button>
+                  {% endif %}
+                  <form method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}/duplicate"><button class="secondary compact-button icon-button" title="Duplicar linea">⧉</button></form>
+                  <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}/delete" data-confirm="Eliminar linea de pedido?"><button class="secondary compact-button icon-button" data-loading-text="..." title="Eliminar linea">×</button></form>
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </article>
+    </section>
+  </div>
+{% elif kind == "email" %}
+  <div class="review-modal-header review-modal-header-v3">
+    <div class="review-header-title">
+      <strong>{{ email.sender }} · {{ "%.0f"|format(item.score or 0) if item.score is not none else "Sin score" }}</strong>
+      <div class="review-header-meta">
+        <span class="badge agent-{{ item.agent_status }}">{{ item.agent_status_label }}</span>
+        <span class="badge">{{ item.origin }}</span>
+      </div>
+    </div>
+    <div class="review-header-actions review-header-actions-tight">
+      <button type="button" class="secondary compact-button" onclick="closeWorkbenchDetailModal()">Cerrar</button>
+    </div>
+  </div>
+  <div class="review-grid review-grid-v3">
+    <section class="review-pane review-entry-pane">
+      <div class="review-inline-summary review-inline-summary-tight">
+        <span>{{ email.sender }} · {{ email.received_at.strftime("%Y-%m-%d %H:%M") }} · {{ item.agent_status_label }}</span>
+      </div>
+      <article class="subpanel">
+        <p><strong>Asunto:</strong> {{ email.subject }}</p>
+        <p><strong>Adjuntos:</strong> {{ email.attachments|length }}</p>
+      </article>
+      <article class="subpanel">
+        <div class="section-title-row"><h4>Cuerpo del correo</h4><button type="button" class="secondary" onclick="copyText('pending-email-body-{{ email.id }}')">Copiar</button></div>
+        <pre id="pending-email-body-{{ email.id }}" class="doc-text">{{ email.body or "" }}</pre>
+      </article>
+      {% if email.attachments %}
+        <details class="review-attachments-toggle" id="review-attachments-toggle-{{ email.id }}" open>
+          <summary>
+            <span>Adjuntos</span>
+            <strong>{{ email.attachments|length }}</strong>
+          </summary>
+          <div class="review-attachments-body">
+            <div class="review-attachment-list" role="list">
+              {% for attachment in email.attachments %}
+                {% set attachment_kind = "pdf" if attachment.is_pdf or attachment.content_type == "application/pdf" else "image" if attachment.content_type and attachment.content_type.startswith("image/") else "csv" if attachment.filename.lower().endswith(".csv") or attachment.content_type in ["text/csv", "application/csv"] else "text" if attachment.content_type and attachment.content_type.startswith("text/") or attachment.filename.lower().endswith((".txt", ".log", ".md", ".eml", ".json")) else "doc" if attachment.filename.lower().endswith((".doc", ".docx")) else "sheet" if attachment.filename.lower().endswith((".xls", ".xlsx", ".ods")) else "unsupported" %}
+                <button
+                  type="button"
+                  class="review-attachment-item"
+                  role="listitem"
+                  data-order-id="{{ email.id }}"
+                  data-attachment-id="{{ attachment.id }}"
+                  data-preview-kind="{{ attachment_kind }}"
+                  data-preview-url="/workbench/email/{{ email.id }}/attachments/{{ attachment.id }}"
+                  data-download-url="/workbench/email/{{ email.id }}/attachments/{{ attachment.id }}"
+                  data-filename="{{ attachment.filename }}"
+                  data-content-type="{{ attachment.content_type or '' }}"
+                  data-size-bytes="{{ attachment.size_bytes or 0 }}"
+                  data-extracted-text="{{ attachment.extracted_text or '' }}"
+                  onclick="selectOrderAttachmentPreview(event, this)"
+                >
+                  <span class="review-attachment-item-main">
+                    <strong>{{ attachment.filename }}</strong>
+                    <span>
+                      {{ "PDF" if attachment_kind == "pdf" else "Imagen" if attachment_kind == "image" else "CSV" if attachment_kind == "csv" else "Texto" if attachment_kind == "text" else "DOC" if attachment_kind == "doc" else "Hoja" if attachment_kind == "sheet" else "Adjunto" }}
+                    </span>
+                  </span>
+                  <span class="review-attachment-item-action">Previsualizar</span>
+                </button>
+              {% endfor %}
+            </div>
+            <div class="review-attachment-preview" id="review-attachment-preview-{{ email.id }}">
+              <div class="review-attachment-preview-empty">Selecciona un adjunto para verlo aquí.</div>
+            </div>
+          </div>
+        </details>
+      {% endif %}
+    </section>
+    <section class="review-pane">
+      <article class="review-score-card score-without">
+        <div class="score-main">{% if item.agent_status == "not_processed" %}Sin analizar{% else %}{{ item.agent_status_label }}{% endif %}</div>
+        <div>{{ "Pendiente de analizar" if item.agent_status == "not_processed" else item.detected_type|status_label }}</div>
+        <div class="score-meter"><span style="width:0%"></span></div>
+        <p class="muted">{% if item.agent_status == "not_processed" %}Esta entrada todavia no ha pasado por el agente. Puedes revisarla, procesarla ahora o descartarla.{% else %}Esta entrada no tiene pedido asociado en la cola. Puedes cerrarla, reprocesarla o responder al cliente.{% endif %}</p>
+      </article>
+      <article class="subpanel">
+        <h4>Acciones disponibles</h4>
+        <div class="actions">
+          <form class="js-loading-form" method="post" action="/workbench/email/{{ email.id }}/process"><button data-loading-text="Procesando...">Revisar</button></form>
+          <form class="js-loading-form" method="post" action="/workbench/email/{{ email.id }}/mark-no-order" data-confirm="Marcar esta entrada como no pedido?"><button class="secondary">Marcar como no pedido</button></form>
+          <form class="js-loading-form" method="post" action="/workbench/email/{{ email.id }}/discard" data-confirm="Descartar este correo?"><button class="secondary">Descartar</button></form>
+          <form class="js-loading-form" method="post" action="/workbench/email/{{ email.id }}/close"><button class="secondary">Marcar cerrado</button></form>
+        </div>
+      </article>
+    </section>
+  </div>
+{% endif %}
