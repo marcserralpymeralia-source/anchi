@@ -41,6 +41,8 @@
 - Cubrir ese presupuesto con `backend/tests/test_orders_detail_optimization.py`.
 - No volver a cargar cliente, producto o adjuntos completos por relaciones lazy dentro de `/orders/{order_id}`.
 - Mantener el detalle de pedido basado en snapshots y candidatos compartidos, no en catálogos completos embebidos.
+- Mantener `/channels?tab=processed&date_range=30d` por debajo de 20 consultas SQL y 3 consultas duplicadas en los escenarios small, medium y large tras la fase 6E.
+- Mantener la bandeja de canales basada en pagina SQL visible, resumen agregado y adjuntos cargados solo para las filas visibles.
 - No filtrar secretos en logs estructurados ni en trazas persistidas.
 - Documentar cualquier fallo que no se corrija en ese momento.
 

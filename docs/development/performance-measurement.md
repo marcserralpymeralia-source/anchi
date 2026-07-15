@@ -79,3 +79,7 @@ El listado general de pedidos ya no incrusta el detalle completo por fila. Ahora
 ## Nota de la fase 6D
 
 El detalle de pedido deja de comportarse como una pantalla de carga amplia para cliente y producto. La medicion de la fase 6D se centra en un render estable del pedido con snapshot de cabecera, candidatos compartidos y sin recuperar catalogos completos por relaciones lazy. El benchmark refleja ese cambio porque ya no arrastra cientos de registros en memoria para pintar una sola ficha operativa.
+
+## Nota de la fase 6E
+
+La bandeja `/channels` pasa a medir una pagina visible real y un resumen agregado, sin ejecutar consultas por fila ni cargar colecciones completas para flags o estados visibles. El render inicial mantiene la misma experiencia operativa, pero ahora la carga se concentra en una consulta principal paginada, un agregado de contadores y un fetch acotado de adjuntos para las filas visibles.

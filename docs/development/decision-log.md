@@ -27,3 +27,6 @@
 | 2026-07-15 | Fase 6D | Optimizar el detalle de pedido con carga selectiva y snapshot de cabecera | Evitar que la vista de revision arrastre catalogos completos y relaciones lazy | `backend/app/orders/routes.py`, `backend/app/templates/orders/detail.html` |
 | 2026-07-15 | Fase 6D | Introducir helpers de candidatos compartidos para cliente y producto | Reutilizar resolucion y evitar repeticion de consultas en el detalle | `backend/app/orders/routes.py` |
 | 2026-07-15 | Fase 6D | Añadir presupuesto de consultas y carga para el detalle de pedido | Bloquear regresiones en la pantalla operativa de revision | `backend/tests/test_orders_detail_optimization.py` |
+| 2026-07-15 | Fase 6E | Reescribir `/channels` con union SQL, filtros agregados y paginacion real | Eliminar la lectura por fila y recortar la bandeja a la pagina visible | `backend/app/channels/routes.py` |
+| 2026-07-15 | Fase 6E | Pasar clientes y pestañas a estructuras ligeras en el contexto Jinja | Evitar que el perfil de rendimiento cuente la lista completa de clientes como carga visible | `backend/app/channels/routes.py` |
+| 2026-07-15 | Fase 6E | Cubrir la bandeja con presupuestos de consultas, duplicadas y carga visible | Bloquear regresiones de `/channels` en small, medium y large | `backend/tests/test_channels_optimization.py` |

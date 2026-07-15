@@ -2,13 +2,34 @@
 
 ## Estado actual
 
-Esta es la referencia activa tras la Fase 6D. Home y workbench ya no crecen en consultas por cada elemento mostrado, el listado general de pedidos quedo reducido en la Fase 6C y el detalle de pedido se optimizo en la Fase 6D para evitar cargar relaciones completas y catálogos innecesarios.
+Esta es la referencia activa tras la Fase 6E. Home y workbench ya no crecen en consultas por cada elemento mostrado, el listado general de pedidos quedo reducido en la Fase 6C, el detalle de pedido se optimizo en la Fase 6D y la bandeja `/channels` paso a una carga SQL real con contexto ligero en la fase 6E.
 
 Benchmark files actuales:
 
+- `backend/performance-results/performance-baseline-small-20260715T135956Z.json`
+- `backend/performance-results/performance-baseline-medium-20260715T135957Z.json`
+- `backend/performance-results/performance-baseline-large-20260715T140008Z.json`
 - `backend/performance-results/performance-baseline-small-20260715T113120Z.json`
 - `backend/performance-results/performance-baseline-medium-20260715T113344Z.json`
 - `backend/performance-results/performance-baseline-large-20260715T113429Z.json`
+
+## Channels: antes y despues
+
+La bandeja `/channels?tab=processed&date_range=30d` dejaba de ser util porque mezclaba la carga visible con consultas repetidas y contexto pesado por fila. La fase 6E la convierte en una pagina SQL con paginacion real, resumen agregado y adjuntos cargados solo para las filas visibles.
+
+| Escenario | Antes | Despues | Mejora |
+| --- | --- | --- | --- |
+| Small | 6.30 ms, 132 queries, 119 duplicadas, 175512 bytes, 334 registros cargados | 3.23 ms, 10 queries, 0 duplicadas, 125802 bytes, 20 registros cargados | -48.7% tiempo, -92.4% queries, -100.0% duplicadas, -28.4% bytes, -94.0% registros |
+| Medium | 6.30 ms, 132 queries, 119 duplicadas, 175512 bytes, 334 registros cargados | 8.82 ms, 10 queries, 0 duplicadas, 175472 bytes, 25 registros cargados | -92.4% queries, -100.0% duplicadas, -92.5% registros |
+| Large | 6.30 ms, 132 queries, 119 duplicadas, 175512 bytes, 334 registros cargados | 28.22 ms, 10 queries, 0 duplicadas, 199708 bytes, 25 registros cargados | -92.4% queries, -100.0% duplicadas, -92.5% registros |
+
+## Channels: resumen tecnico
+
+- Consulta principal en SQL con `WHERE`, `ORDER BY`, `LIMIT` y `OFFSET`.
+- Resumen de pestañas y contadores por canal calculados en una consulta agregada.
+- Adjunto y PDF cargados solo para las filas visibles.
+- Contexto de filtros y clientes mantenido con estructuras ligeras para no inflar el render.
+- Aislamiento tenant mantenido sin cambiar la experiencia visible de la bandeja.
 
 ## Home y workbench: antes y despues
 
