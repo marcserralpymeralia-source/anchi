@@ -29,6 +29,8 @@ Resumen:
 4. Arranca la app y personaliza desde Configuracion.
 5. Importa clientes y productos reales.
 
+Para migraciones de esquema y verificaciones formales consulta [docs/schema-migrations.md](docs/schema-migrations.md).
+
 ## Configuracion sensible
 
 En produccion define siempre una `SECRET_KEY` propia y una `ENCRYPTION_KEY` Fernet distinta:

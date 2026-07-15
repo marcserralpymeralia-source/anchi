@@ -30,6 +30,7 @@ from app.orders.routes import _customer_label, _sync_customer_product_knowledge,
 from app.settings.integrations import backfill_imap_emails, read_latest_imap_emails
 from app.settings.service import get_or_create_settings
 from app.jobs.service import claim_next_job, fail_job, finish_job, job_payload, job_trace, recover_stale_jobs, update_job_progress
+from app.tenancy.migrations import tenant_migration_report
 from app.tenancy.database import tenant_db_session
 
 logger = logging.getLogger(__name__)
@@ -408,12 +409,23 @@ def _process_bulk_action(db, job: BackgroundJob, payload: dict) -> dict:
 
 def _handle_tenant_jobs(tenant: MasterTenantDatabase, owner: str) -> dict[str, int]:
     if not tenant.database_url:
-        return {"recovered": 0, "processed": 0}
+        return {"recovered": 0, "processed": 0, "blocked": 0}
     session_factory = tenant_db_session(tenant.database_url)
     db = session_factory()
     recovered_jobs = 0
     processed_jobs = 0
+    blocked_jobs = 0
     try:
+        schema_report = tenant_migration_report(db, tenant.company_id, persist=False)
+        if not schema_report.get("is_current"):
+            logger.warning(
+                "tenant schema incompatible company=%s status=%s version=%s checksum=%s",
+                tenant.company_id,
+                schema_report.get("status"),
+                schema_report.get("version"),
+                schema_report.get("checksum"),
+            )
+            return {"recovered": 0, "processed": 0, "blocked": 1}
         recovered = recover_stale_jobs(db, owner=owner, job_types=JOB_TYPES)
         recovered_jobs += len(recovered)
         while True:
@@ -486,12 +498,12 @@ def _handle_tenant_jobs(tenant: MasterTenantDatabase, owner: str) -> dict[str, i
                     )
     finally:
         db.close()
-    return {"recovered": recovered_jobs, "processed": processed_jobs}
+    return {"recovered": recovered_jobs, "processed": processed_jobs, "blocked": blocked_jobs}
 
 
 def run_worker_cycle() -> dict[str, int]:
     configure_logging()
-    summary = {"tenants": 0, "recovered": 0, "processed": 0}
+    summary = {"tenants": 0, "recovered": 0, "processed": 0, "blocked": 0}
     master_db = MasterSessionLocal()
     try:
         tenants = master_db.scalars(
@@ -505,6 +517,7 @@ def run_worker_cycle() -> dict[str, int]:
             tenant_summary = _handle_tenant_jobs(tenant, owner=_identity())
             summary["recovered"] += tenant_summary["recovered"]
             summary["processed"] += tenant_summary["processed"]
+            summary["blocked"] += tenant_summary.get("blocked", 0)
     finally:
         master_db.close()
     logger.info(

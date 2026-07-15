@@ -25,6 +25,7 @@ from app.imports.service import create_preview  # noqa: E402
 from app.jobs.service import claim_next_job, enqueue_job, fail_job, finish_job, recover_stale_jobs, retry_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
+from app.tenancy.migrations import upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import _process_import_job, run_worker_cycle  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 
@@ -233,6 +234,7 @@ class JobsReliabilityTests(unittest.TestCase):
     def test_worker_cycle_processes_job_once(self):
         self._seed_master()
         self._seed_llm()
+        upgrade_tenant_schema(self.tenant_engine, company_id=1, application_version="1.2.3")
         db = self.TenantSession()
         email = Email(company_id=1, external_id="mail-2", sender="cliente@example.com", subject="Pedido worker", body="3 cajas")
         db.add(email)

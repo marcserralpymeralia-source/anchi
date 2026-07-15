@@ -4,12 +4,13 @@ from collections.abc import Generator
 from functools import lru_cache
 
 from fastapi import Depends, HTTPException, Request, status
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.db.database import Base, ensure_schema_for_engine
 from app.master.database import get_master_db
 from app.master.service import load_tenant_context
+from app.db.database import Base
+from app.tenancy.migrations import upgrade_tenant_schema
 
 
 def _connect_args(database_url: str) -> dict[str, object]:
@@ -26,10 +27,22 @@ def tenant_db_session(database_url: str):
     return sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
-def ensure_tenant_schema(database_url: str) -> None:
+def _infer_company_id(engine) -> int | None:  # noqa: ANN001
+    inspector = inspect(engine)
+    if "companies" not in inspector.get_table_names():
+        return None
+    with engine.connect() as conn:
+        value = conn.execute(text("SELECT id FROM companies ORDER BY id ASC LIMIT 1")).scalar()
+    return int(value) if value is not None else None
+
+
+def ensure_tenant_schema(database_url: str, *, company_id: int | None = None, application_version: str | None = None, baseline: bool = False) -> dict:
     engine = get_tenant_engine(database_url)
     Base.metadata.create_all(bind=engine)
-    ensure_schema_for_engine(engine)
+    resolved_company_id = company_id if company_id is not None else _infer_company_id(engine)
+    if resolved_company_id is None:
+        resolved_company_id = 1
+    return upgrade_tenant_schema(engine, company_id=resolved_company_id, application_version=application_version, baseline=baseline)
 
 
 def get_tenant_db(request: Request, master_db: Session = Depends(get_master_db)) -> Generator[Session, None, None]:

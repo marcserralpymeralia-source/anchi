@@ -102,3 +102,21 @@ class EmailSyncState(MasterBase):
     company: Mapped[MasterCompany] = relationship()
 
     __table_args__ = (UniqueConstraint("company_id", "channel_key"),)
+
+
+class MasterSchemaMigration(MasterBase):
+    __tablename__ = "schema_migrations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    version: Mapped[str] = mapped_column(String(80), default="0")
+    name: Mapped[str] = mapped_column(String(180), default="unregistered")
+    checksum: Mapped[str | None] = mapped_column(String(120))
+    execution_ms: Mapped[int] = mapped_column(Integer, default=0)
+    application_version: Mapped[str | None] = mapped_column(String(80))
+    status: Mapped[str] = mapped_column(String(30), default="missing")
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

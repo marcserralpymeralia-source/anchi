@@ -5,11 +5,11 @@ from pathlib import Path
 from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.db.database import Base, ensure_schema_for_engine
+from app.db.database import Base
 from app.db import models as operational_models  # noqa: F401
 from app.master.models import MasterCompany, MasterTenantDatabase
 from app.master.service import slugify
-from app.tenancy.migrations import ensure_tenant_migration_record
+from app.tenancy.migrations import ensure_tenant_migration_record, ensure_tenant_schema
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -74,7 +74,6 @@ def provision_company_database(master_db: Session, legacy_db: Session, company: 
     target_path = tenant_database_path(company)
     engine = create_engine(database_url, connect_args={"check_same_thread": False})
     Base.metadata.create_all(bind=engine)
-    ensure_schema_for_engine(engine)
     session_factory = _session_factory(database_url)
     target_db = session_factory()
     try:
@@ -85,11 +84,15 @@ def provision_company_database(master_db: Session, legacy_db: Session, company: 
             tenant_db.provisioned_at = tenant_db.provisioned_at or company.updated_at
             tenant_db.health_status = "ok"
             tenant_db.notes = f"Provisioned at {target_path.as_posix()}"
-            ensure_tenant_migration_record(target_db, company.id, notes="Provisioned tenant schema")
             was_provisioned = True
         else:
             tenant_db.health_status = "ok"
-            ensure_tenant_migration_record(target_db, company.id, notes="Tenant schema verified during provisioning")
+        ensure_tenant_schema(database_url, company_id=company.id)
+        ensure_tenant_migration_record(
+            target_db,
+            company.id,
+            notes="Provisioned tenant schema" if was_provisioned else "Tenant schema verified during provisioning",
+        )
     finally:
         target_db.close()
     master_db.commit()

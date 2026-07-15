@@ -56,6 +56,15 @@
 - Garantizar que el worker tenga una entrada CLI estable y que no procese un job antes de su fecha de reintento.
 - No activar profiling en produccion.
 
+## Migraciones
+
+- No modificar las bases originales durante inventario, baseline o simulacion.
+- Ejecutar `dry-run` sin escribir tablas, columnas, indices, filas ni ledger.
+- Baselinear solo esquemas reconocibles y no ambiguos.
+- Resolver master y tenants desde la base master, no desde rutas arbitrarias de CLI.
+- Crear y usar copias de trabajo con timestamp antes de aplicar cualquier upgrade real.
+- Registrar el inventario y el plan operativo de cada base antes de tocar una base original.
+
 ## Documentacion
 
 - Enumerar archivos modificados.

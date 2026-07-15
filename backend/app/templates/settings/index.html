@@ -370,6 +370,9 @@
         <div><span>Rol</span><strong>{{ diagnostics.role }}</strong></div>
         <div><span>Base de datos</span><strong>{{ diagnostics.database_label }}</strong></div>
         <div><span>Versión esquema</span><strong>{{ diagnostics.tenant_schema_version or "Sin registrar" }}</strong></div>
+        <div><span>Nombre esquema</span><strong>{{ diagnostics.tenant_schema_name or "Sin registrar" }}</strong></div>
+        <div><span>Checksum</span><strong>{{ diagnostics.tenant_schema_checksum[:10] if diagnostics.tenant_schema_checksum else "Sin registrar" }}</strong></div>
+        <div><span>Tiempo migración</span><strong>{{ diagnostics.tenant_schema_execution_ms ~ " ms" if diagnostics.tenant_schema_execution_ms is not none else "Sin registro" }}</strong></div>
         <div><span>Estado esquema</span><strong>{{ diagnostics.tenant_schema_status | replace('_', ' ') | title }}</strong></div>
         <div><span>Esquema actual</span><strong>{{ "Sí" if diagnostics.tenant_schema_is_current else "No" }}</strong></div>
         <div><span>Última comprobación</span><strong>{{ diagnostics.tenant_schema_last_checked_at.strftime("%d/%m/%Y %H:%M") if diagnostics.tenant_schema_last_checked_at else "Sin registro" }}</strong></div>
