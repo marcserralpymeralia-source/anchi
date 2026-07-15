@@ -12,6 +12,7 @@ from app.core.pagination import paginate
 from app.tenancy.database import get_tenant_db
 from app.db.models import CustomerProductKnowledge, Order, OrderLine, Product, ProductAlias, User
 from app.imports.service import import_products, read_table, read_table_from_bytes
+from app.master_data.service import upsert_product
 from app.logs.service import log_action
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -150,37 +151,39 @@ def save_product(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
-    product = db.get(Product, id) if id else None
-    if not product:
-        product = Product(company_id=user.company_id, reference=reference, name=name)
-        db.add(product)
-        db.flush()
-    if product.company_id == user.company_id and product.deleted_at is None:
-        product.reference = reference
-        product.name = name
-        product.description = name
-        product.brand = brand
-        product.usual_supplier = usual_supplier
-        product.alternative_code = alternative_code
-        product.family = family
-        product.subfamily = subfamily
-        product.sale_price = sale_price
-        product.discount_percent = discount_percent
-        product.size_group = size_group
-        product.colors = colors
-        product.entry_date = entry_date
-        product.obsolete = obsolete
-        product.article_type = article_type
-        product.description_cont = description_cont
-        product.warehouse_location_code = warehouse_location_code
-        product.replenishment_warehouse = replenishment_warehouse
-        product.sale_unit = sale_unit
-        product.status = "inactive" if obsolete else status
-        db.query(ProductAlias).filter(ProductAlias.product_id == product.id).delete()
-        for alias in [a.strip() for a in aliases.split(",") if a.strip()]:
-            db.add(ProductAlias(company_id=user.company_id, product_id=product.id, alias=alias))
-        db.commit()
-        log_action(db, company_id=user.company_id, user=user, action="product.save", entity_type="product", entity_id=product.id, message=f"Producto guardado: {reference}")
+    product_data = {
+        "reference": reference,
+        "name": name,
+        "brand": brand,
+        "usual_supplier": usual_supplier,
+        "alternative_code": alternative_code,
+        "family": family,
+        "subfamily": subfamily,
+        "sale_price": "" if sale_price is None else str(sale_price),
+        "discount_percent": "" if discount_percent is None else str(discount_percent),
+        "size_group": size_group,
+        "colors": colors,
+        "entry_date": entry_date,
+        "obsolete": "on" if obsolete else "",
+        "article_type": article_type,
+        "description_cont": description_cont,
+        "warehouse_location_code": warehouse_location_code,
+        "replenishment_warehouse": replenishment_warehouse,
+        "sale_unit": sale_unit,
+        "aliases": aliases,
+        "status": "inactive" if obsolete else status,
+    }
+    product = upsert_product(
+        db,
+        company_id=user.company_id,
+        data=product_data,
+        source="manual",
+        actor_id=user.id,
+        product_id=id or None,
+        conflict_policy="update_existing",
+    ).entity
+    db.commit()
+    log_action(db, company_id=user.company_id, user=user, action="product.save", entity_type="product", entity_id=product.id, message=f"Producto guardado: {reference}")
     return RedirectResponse("/products", status_code=303)
 
 

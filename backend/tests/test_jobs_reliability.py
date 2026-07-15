@@ -215,7 +215,7 @@ class JobsReliabilityTests(unittest.TestCase):
             "entity_type": "customers",
             "encoding": "utf-8",
             "mapping": preview["guessed_mapping"],
-            "mode": "create_update",
+            "mode": "update_existing",
             "save_template": False,
             "template_name": "",
         }

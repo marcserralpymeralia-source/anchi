@@ -10,8 +10,9 @@ from app.core.pagination import normalize_page
 from app.auth.dependencies import current_user
 from app.master.service import TenantUser
 from app.tenancy.database import get_tenant_db
-from app.db.models import Customer, CustomerAlias, CustomerContactPoint, CustomerDomain, User
+from app.db.models import Customer, CustomerContactPoint, User
 from app.databases.service import build_customer_context, customer_knowledge_overview, build_databases_context
+from app.master_data.service import upsert_customer
 from app.imports.service import import_customers, read_table
 from app.logs.service import log_action
 
@@ -331,42 +332,37 @@ def save_customer(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
-    customer = db.get(Customer, id) if id else None
-    if not customer:
-        customer = Customer(company_id=user.company_id, code=code, fiscal_name=fiscal_name)
-        db.add(customer)
-        db.flush()
-    if customer.company_id == user.company_id and customer.deleted_at is None:
-        customer.code = code
-        customer.fiscal_name = fiscal_name
-        customer.tax_id = tax_id
-        customer.delegation = delegation
-        customer.phone = phone
-        customer.city = city
-        customer.province = province
-        customer.assigned_salesperson = assigned_salesperson
-        customer.accounting_code = accounting_code
-        customer.company_inactive = company_inactive
-        customer.category = category
-        customer.commercial_name = commercial_name
-        customer.primary_email = primary_email
-        customer.status = "inactive" if company_inactive else status
-        db.query(CustomerAlias).filter(CustomerAlias.customer_id == customer.id).delete()
-        db.query(CustomerDomain).filter(CustomerDomain.customer_id == customer.id).delete()
-        for alias in [a.strip() for a in aliases.split(",") if a.strip()]:
-            db.add(CustomerAlias(company_id=user.company_id, customer_id=customer.id, alias=alias))
-        for domain in [d.strip().lower() for d in domains.split(",") if d.strip()]:
-            db.add(CustomerDomain(company_id=user.company_id, customer_id=customer.id, domain=domain))
-        _sync_customer_contact_points(
-            db,
-            customer=customer,
-            emails=associated_emails,
-            phones=associated_phones,
-            domains=domains,
-            aliases=aliases,
-        )
-        db.commit()
-        log_action(db, company_id=user.company_id, user=user, action="customer.save", entity_type="customer", entity_id=customer.id, message=f"Cliente guardado: {code}")
+    customer_data = {
+        "code": code,
+        "fiscal_name": fiscal_name,
+        "tax_id": tax_id,
+        "delegation": delegation,
+        "phone": phone,
+        "city": city,
+        "province": province,
+        "assigned_salesperson": assigned_salesperson,
+        "accounting_code": accounting_code,
+        "company_inactive": "on" if company_inactive else "",
+        "category": category,
+        "commercial_name": commercial_name,
+        "primary_email": primary_email,
+        "associated_emails": associated_emails,
+        "associated_phones": associated_phones,
+        "domains": domains,
+        "aliases": aliases,
+        "status": "inactive" if company_inactive else status,
+    }
+    customer = upsert_customer(
+        db,
+        company_id=user.company_id,
+        data=customer_data,
+        source="manual",
+        actor_id=user.id,
+        customer_id=id or None,
+        conflict_policy="update_existing",
+    ).entity
+    db.commit()
+    log_action(db, company_id=user.company_id, user=user, action="customer.save", entity_type="customer", entity_id=customer.id, message=f"Cliente guardado: {code}")
     return RedirectResponse("/customers?view=list", status_code=303)
 
 

@@ -32,6 +32,72 @@ IMAP_TIMEOUT_SECONDS = 20
 SYNC_LOCKS: dict[int, threading.Lock] = {}
 
 
+def classify_integration_error(error: Exception | str) -> str:
+    message = str(error).lower()
+    if any(marker in message for marker in ("auth", "credential", "password", "invalid login", "permission denied")):
+        return "authentication_failed" if "permission" not in message else "permission_denied"
+    if "timeout" in message or "timed out" in message:
+        return "timeout"
+    if any(marker in message for marker in ("rate limit", "too many requests")):
+        return "rate_limited"
+    if any(marker in message for marker in ("faltan", "missing", "incomplet", "required", "invalid configuration")):
+        return "invalid_configuration"
+    if any(marker in message for marker in ("denied", "forbidden")):
+        return "permission_denied"
+    if any(marker in message for marker in ("network", "connection", "refused", "unreachable", "socket", "smtp", "imap")):
+        return "connection_failed"
+    return "unexpected_error"
+
+
+def validate_imap_config(settings: EmailSettings) -> dict:
+    password = decrypt_secret(settings.imap_password_encrypted)
+    if not settings.imap_host or not settings.imap_username or not password:
+        return {"ok": False, "error_type": "invalid_configuration", "message": "Faltan host, usuario o password IMAP."}
+    return {"ok": True, "error_type": None, "message": "Configuracion IMAP valida."}
+
+
+def validate_smtp_config(settings: EmailSettings) -> dict:
+    password = decrypt_secret(settings.smtp_password_encrypted)
+    if not settings.smtp_host or not settings.smtp_username or not password or not (settings.from_email or settings.smtp_username):
+        return {"ok": False, "error_type": "invalid_configuration", "message": "Faltan host, usuario o password SMTP."}
+    return {"ok": True, "error_type": None, "message": "Configuracion SMTP valida."}
+
+
+def validate_openai_config(settings: LLMSettings) -> dict:
+    if settings.provider not in {"openai", "openai_compatible", "azure_openai"}:
+        return {"ok": False, "error_type": "invalid_configuration", "message": f"Proveedor IA no soportado: {settings.provider}."}
+    if not decrypt_secret(settings.api_key_encrypted):
+        return {"ok": False, "error_type": "invalid_configuration", "message": "Falta API key de OpenAI."}
+    return {"ok": True, "error_type": None, "message": "Configuracion IA valida."}
+
+
+def redact_email_config(settings: EmailSettings) -> dict:
+    return {
+        "imap_host": settings.imap_host,
+        "imap_port": settings.imap_port,
+        "imap_username": settings.imap_username,
+        "imap_password": "••••••••" if settings.imap_password_encrypted else "",
+        "smtp_host": settings.smtp_host,
+        "smtp_port": settings.smtp_port,
+        "smtp_username": settings.smtp_username,
+        "smtp_password": "••••••••" if settings.smtp_password_encrypted else "",
+        "from_email": settings.from_email,
+        "provider": settings.provider,
+        "smtp_provider": settings.smtp_provider,
+    }
+
+
+def redact_llm_config(settings: LLMSettings) -> dict:
+    return {
+        "provider": settings.provider,
+        "base_url": settings.base_url,
+        "classification_model": settings.classification_model,
+        "extraction_model": settings.extraction_model,
+        "validation_model": settings.validation_model,
+        "api_key": "••••••••" if settings.api_key_encrypted else "",
+    }
+
+
 def _parse_imap_date(value: str | None) -> date | None:
     if not value:
         return None
@@ -53,9 +119,10 @@ def _imap_search_criteria(*, start_date: date | None = None, end_date: date | No
 
 
 def test_imap_connection(settings: EmailSettings) -> dict:
+    validation = validate_imap_config(settings)
+    if not validation["ok"]:
+        return {"ok": False, "error_type": validation["error_type"], "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": validation["message"]}
     password = decrypt_secret(settings.imap_password_encrypted)
-    if not settings.imap_host or not settings.imap_username or not password:
-        return {"ok": False, "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": "Faltan host, usuario o password IMAP."}
     try:
         client = _imap_client(settings)
         client.login(settings.imap_username, password)
@@ -73,7 +140,7 @@ def test_imap_connection(settings: EmailSettings) -> dict:
         found = int((data[0] or b"0").decode(errors="ignore") or 0)
         return {"ok": True, "found": found, "new": len(ids), "duplicates": 0, "last_email": last_email, "message": f"Conexion correcta. Correos en carpeta: {found}. Coinciden con el filtro: {len(ids)}."}
     except (imaplib.IMAP4.error, socket.timeout, OSError) as exc:
-        return {"ok": False, "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": f"Error IMAP: {exc}"}
+        return {"ok": False, "error_type": classify_integration_error(exc), "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": f"Error IMAP: {exc}"}
 
 
 def _imap_client(settings: EmailSettings):
@@ -489,29 +556,30 @@ def _smtp_client(settings: EmailSettings):
 
 
 def test_smtp_connection(settings: EmailSettings) -> dict:
+    validation = validate_smtp_config(settings)
+    if not validation["ok"]:
+        return {"ok": False, "error_type": validation["error_type"], "message": validation["message"]}
     password = decrypt_secret(settings.smtp_password_encrypted)
-    if not settings.smtp_host or not settings.smtp_username or not password:
-        return {"ok": False, "message": "Faltan host, usuario o password SMTP."}
     try:
         client = _smtp_client(settings)
         client.login(settings.smtp_username, password)
         client.quit()
         return {"ok": True, "message": "Conexion SMTP correcta."}
     except smtplib.SMTPAuthenticationError:
-        return {"ok": False, "message": "Error de autenticacion SMTP."}
+        return {"ok": False, "error_type": "authentication_failed", "message": "Error de autenticacion SMTP."}
     except smtplib.SMTPServerDisconnected:
-        return {"ok": False, "message": "Error de servidor SMTP: conexion cerrada."}
+        return {"ok": False, "error_type": "connection_failed", "message": "Error de servidor SMTP: conexion cerrada."}
     except (socket.timeout, TimeoutError):
-        return {"ok": False, "message": "Timeout conectando con SMTP."}
+        return {"ok": False, "error_type": "timeout", "message": "Timeout conectando con SMTP."}
     except (smtplib.SMTPException, OSError) as exc:
-        return {"ok": False, "message": f"Error SMTP: {exc}"}
+        return {"ok": False, "error_type": classify_integration_error(exc), "message": f"Error SMTP: {exc}"}
 
 
 def send_test_email(settings: EmailSettings, to_email: str, subject: str, message: str) -> dict:
     password = decrypt_secret(settings.smtp_password_encrypted)
     from_email = settings.from_email or settings.smtp_username
     if not settings.smtp_host or not settings.smtp_username or not password or not from_email:
-        return {"ok": False, "message": "Faltan datos SMTP o remitente."}
+        return {"ok": False, "error_type": "invalid_configuration", "message": "Faltan datos SMTP o remitente."}
     try:
         email = EmailMessage()
         email["From"] = f"{settings.from_name} <{from_email}>" if settings.from_name else from_email
@@ -533,21 +601,20 @@ def send_test_email(settings: EmailSettings, to_email: str, subject: str, messag
         client.quit()
         return {"ok": True, "message": "Correo de prueba enviado correctamente."}
     except smtplib.SMTPAuthenticationError:
-        return {"ok": False, "message": "Error de autenticacion SMTP."}
+        return {"ok": False, "error_type": "authentication_failed", "message": "Error de autenticacion SMTP."}
     except smtplib.SMTPRecipientsRefused:
-        return {"ok": False, "message": "El servidor rechazo el destinatario."}
+        return {"ok": False, "error_type": "permission_denied", "message": "El servidor rechazo el destinatario."}
     except (socket.timeout, TimeoutError):
-        return {"ok": False, "message": "Timeout enviando el correo de prueba."}
+        return {"ok": False, "error_type": "timeout", "message": "Timeout enviando el correo de prueba."}
     except (smtplib.SMTPException, OSError) as exc:
-        return {"ok": False, "message": f"Error SMTP: {exc}"}
+        return {"ok": False, "error_type": classify_integration_error(exc), "message": f"Error SMTP: {exc}"}
 
 
 def call_openai(settings: LLMSettings, messages: list[dict], model: str) -> dict:
-    if settings.provider not in {"openai", "openai_compatible", "azure_openai"}:
-        return {"ok": False, "message": f"Proveedor IA no soportado para procesamiento real: {settings.provider}."}
+    validation = validate_openai_config(settings)
+    if not validation["ok"]:
+        return {"ok": False, "error_type": validation["error_type"], "message": validation["message"]}
     api_key = decrypt_secret(settings.api_key_encrypted)
-    if not api_key:
-        return {"ok": False, "message": "Falta API key de OpenAI."}
     base_url = (settings.base_url or "https://api.openai.com/v1").rstrip("/")
     payload = {
         "model": model,
@@ -570,13 +637,13 @@ def call_openai(settings: LLMSettings, messages: list[dict], model: str) -> dict
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode(errors="ignore")
             if exc.code in {401, 403}:
-                return {"ok": False, "message": "API key invalida o sin permisos para el proveedor IA."}
+                return {"ok": False, "error_type": "authentication_failed", "message": "API key invalida o sin permisos para el proveedor IA."}
             if exc.code == 404:
-                return {"ok": False, "message": f"Modelo o endpoint no encontrado: {model}."}
+                return {"ok": False, "error_type": "invalid_configuration", "message": f"Modelo o endpoint no encontrado: {model}."}
             last_error = f"Error OpenAI HTTP {exc.code}: {detail[:300]}"
         except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
             last_error = f"Timeout o error de conexion con OpenAI: {exc}"
-    return {"ok": False, "message": last_error or "Error desconocido conectando con OpenAI."}
+    return {"ok": False, "error_type": classify_integration_error(last_error or "Error desconocido conectando con OpenAI."), "message": last_error or "Error desconocido conectando con OpenAI."}
 
 
 def classify_sample(settings: LLMSettings, prompt: str, text: str) -> dict:

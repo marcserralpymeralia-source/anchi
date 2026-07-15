@@ -15,6 +15,21 @@ except Exception:  # pragma: no cover - optional dependency fallback
     DocxDocument = None
 
 from app.db.models import Customer, CustomerAlias, CustomerContactPoint, CustomerDomain, ImportJob, ImportMappingTemplate, Product, ProductAlias, User
+from app.master_data.service import (
+    find_customer_match,
+    find_product_match,
+    is_valid_email,
+    is_valid_phone,
+    normalize_conflict_policy,
+    normalize_email,
+    normalize_phone,
+    replace_customer_aliases,
+    replace_customer_contact_points,
+    replace_customer_domains,
+    replace_product_aliases,
+    upsert_customer,
+    upsert_product,
+)
 
 PREVIEW_DIR = Path(__file__).resolve().parents[1] / "storage" / "import_previews"
 PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
@@ -473,10 +488,10 @@ def confirm_import(
     save_template: bool = False,
     template_name: str = "",
 ) -> ImportJob:
-    created = updated = ignored = 0
-    allow_create = mode in {"create", "create_update"}
-    allow_update = mode in {"update", "create_update"}
-    for _, row in df.iterrows():
+    created = updated = ignored = rows_error = 0
+    errors: list[str] = []
+    conflict_policy = normalize_conflict_policy(mode)
+    for row_index, row in df.iterrows():
         data = mapped_row(row, mapping)
         if entity_type == "customers":
             key = data.get("code")
@@ -484,61 +499,69 @@ def confirm_import(
             if not key and not name:
                 ignored += 1
                 continue
-            item, match_reason = _customer_lookup(db, company_id, data)
-            if not item and not allow_create and not allow_update:
+            existing, match_reason = find_customer_match(db, company_id, data)
+            if existing and conflict_policy in {"skip_existing", "create_only"}:
                 ignored += 1
                 continue
-            if item and allow_update:
-                apply_customer_data(item, data)
-                updated += 1
-            elif not item and allow_create:
-                item = Customer(company_id=company_id, code=key or name[:80], fiscal_name=name or key)
-                apply_customer_data(item, data)
-                db.add(item)
-                db.flush()
+            if existing and conflict_policy == "error_on_conflict":
+                rows_error += 1
+                errors.append(f"Fila {row_index + 2}: conflicto existente para {match_reason or 'cliente'}")
+                continue
+            try:
+                outcome = upsert_customer(
+                    db,
+                    company_id=company_id,
+                    data=data,
+                    source="import",
+                    actor_id=user.id,
+                    customer_id=existing.id if existing else None,
+                    conflict_policy=conflict_policy,
+                )
+            except ValueError as exc:
+                rows_error += 1
+                errors.append(f"Fila {row_index + 2}: {exc}")
+                continue
+            if outcome.action == "created":
                 created += 1
+            elif outcome.action == "updated":
+                updated += 1
             else:
                 ignored += 1
                 continue
-            aliases = _split_multi_values(data.get("aliases", ""))
-            domains = [value.lower() for value in _split_multi_values(data.get("domains", ""))]
-            emails = _split_multi_values(data.get("primary_email", "")) + _split_multi_values(data.get("associated_emails", ""))
-            phones = _split_multi_values(data.get("phone", "")) + _split_multi_values(data.get("associated_phones", ""))
-            for alias in aliases:
-                if not db.query(CustomerAlias).filter(CustomerAlias.customer_id == item.id, CustomerAlias.alias == alias).one_or_none():
-                    db.add(CustomerAlias(company_id=company_id, customer_id=item.id, alias=alias))
-            for domain in domains:
-                if not db.query(CustomerDomain).filter(CustomerDomain.customer_id == item.id, CustomerDomain.domain == domain).one_or_none():
-                    db.add(CustomerDomain(company_id=company_id, customer_id=item.id, domain=domain))
-            for email in [value for value in emails if _is_valid_email(value)]:
-                if not db.query(CustomerContactPoint).filter(CustomerContactPoint.customer_id == item.id, CustomerContactPoint.type == "email", CustomerContactPoint.value == _normalize_email(email)).one_or_none():
-                    db.add(CustomerContactPoint(company_id=company_id, customer_id=item.id, type="email", value=_normalize_email(email), label="importado", source="import"))
-            for phone in [value for value in phones if _is_valid_phone(value)]:
-                normalized_phone = _normalize_phone(phone)
-                if not db.query(CustomerContactPoint).filter(CustomerContactPoint.customer_id == item.id, CustomerContactPoint.type.in_(["phone", "whatsapp"]), CustomerContactPoint.value == normalized_phone).one_or_none():
-                    db.add(CustomerContactPoint(company_id=company_id, customer_id=item.id, type="phone", value=normalized_phone, label="importado", source="import"))
         else:
             key = data.get("reference")
             name = data.get("name")
             if not key and not name:
                 ignored += 1
                 continue
-            item = db.query(Product).filter(Product.company_id == company_id, Product.reference == key).one_or_none() if key else None
-            if item and allow_update:
-                apply_product_data(item, data)
-                updated += 1
-            elif not item and allow_create:
-                item = Product(company_id=company_id, reference=key or name[:100], name=name or key)
-                apply_product_data(item, data)
-                db.add(item)
-                db.flush()
-                created += 1
-            else:
+            existing, match_reason = find_product_match(db, company_id, data)
+            if existing and conflict_policy in {"skip_existing", "create_only"}:
                 ignored += 1
                 continue
-            db.query(ProductAlias).filter(ProductAlias.product_id == item.id).delete()
-            for alias in [a.strip() for a in data.get("aliases", "").split(",") if a.strip()]:
-                db.add(ProductAlias(company_id=company_id, product_id=item.id, alias=alias))
+            if existing and conflict_policy == "error_on_conflict":
+                rows_error += 1
+                errors.append(f"Fila {row_index + 2}: conflicto existente para {match_reason or 'producto'}")
+                continue
+            try:
+                outcome = upsert_product(
+                    db,
+                    company_id=company_id,
+                    data=data,
+                    source="import",
+                    actor_id=user.id,
+                    product_id=existing.id if existing else None,
+                    conflict_policy=conflict_policy,
+                )
+            except ValueError as exc:
+                rows_error += 1
+                errors.append(f"Fila {row_index + 2}: {exc}")
+                continue
+            if outcome.action == "created":
+                created += 1
+            elif outcome.action == "updated":
+                updated += 1
+            else:
+                ignored += 1
     if save_template and template_name:
         existing = db.query(ImportMappingTemplate).filter(
             ImportMappingTemplate.company_id == company_id,
@@ -558,6 +581,7 @@ def confirm_import(
         rows_created=created,
         rows_updated=updated,
         rows_ignored=ignored,
+        errors=json.dumps(errors[:50]) if errors else None,
         mapping_used=json.dumps(mapping),
     )
     db.add(job)
@@ -568,10 +592,10 @@ def confirm_import(
 def import_customers(db: Session, *, company_id: int, filename: str, df: pd.DataFrame) -> ImportJob:
     mapping = guess_mapping("customers", [str(column) for column in df.columns])
     validation_user = User(id=0, company_id=company_id, role_id=0, email="system", name="system", password_hash="")
-    return confirm_import(db, company_id=company_id, user=validation_user, entity_type="customers", filename=filename, df=df, mapping=mapping, mode="create_update")
+    return confirm_import(db, company_id=company_id, user=validation_user, entity_type="customers", filename=filename, df=df, mapping=mapping, mode="update_existing")
 
 
 def import_products(db: Session, *, company_id: int, filename: str, df: pd.DataFrame) -> ImportJob:
     mapping = guess_mapping("products", [str(column) for column in df.columns])
     validation_user = User(id=0, company_id=company_id, role_id=0, email="system", name="system", password_hash="")
-    return confirm_import(db, company_id=company_id, user=validation_user, entity_type="products", filename=filename, df=df, mapping=mapping, mode="create_update")
+    return confirm_import(db, company_id=company_id, user=validation_user, entity_type="products", filename=filename, df=df, mapping=mapping, mode="update_existing")

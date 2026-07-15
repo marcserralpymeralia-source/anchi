@@ -9,7 +9,7 @@ import os
 from unittest.mock import patch
 
 from fastapi import HTTPException
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, func
 from sqlalchemy.orm import sessionmaker
 from fastapi.responses import JSONResponse
 
@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.security import hash_password  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import BackgroundJob, Customer, Order, OrderLine, Product  # noqa: E402
+from app.db.models import BackgroundJob, Customer, CustomerAlias, EmailSettings, LLMSettings, Order, OrderLine, Product, ProductAlias  # noqa: E402
 from app.jobs.service import cancel_job, claim_next_job, retry_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
@@ -33,6 +33,9 @@ from app.orders.routes import _soft_delete_order  # noqa: E402
 from app.admin.diagnostics import company_diagnostics  # noqa: E402
 from app.core.middleware import branding_middleware  # noqa: E402
 from app.core.app_factory import internal_server_error_response  # noqa: E402
+from app.core.encryption import encrypt_secret  # noqa: E402
+from app.master_data.service import normalize_conflict_policy, upsert_customer, upsert_product  # noqa: E402
+from app.settings.integrations import classify_integration_error, redact_email_config, validate_imap_config, validate_openai_config, validate_smtp_config  # noqa: E402
 
 
 class FakeRequest:
@@ -217,6 +220,97 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.assertGreaterEqual(data["orders_total"], 1)
         self.assertIn("schema_report", data)
         master_db.close()
+
+    def test_master_data_upserts_reuse_the_same_flow(self):
+        self.assertEqual(normalize_conflict_policy("create_update"), "update_existing")
+        self.assertEqual(normalize_conflict_policy("create_only"), "create_only")
+        db = self.TenantSession()
+        customer = upsert_customer(
+            db,
+            company_id=1,
+            data={
+                "code": "C001",
+                "fiscal_name": "Cliente Uno",
+                "primary_email": "uno@example.com",
+                "associated_emails": "ventas@uno.example.com",
+                "associated_phones": "666111222",
+                "domains": "uno.example.com",
+                "aliases": "Cliente Uno SL",
+            },
+            source="manual",
+            actor_id=1,
+        ).entity
+        product = upsert_product(
+            db,
+            company_id=1,
+            data={
+                "reference": "P001",
+                "name": "Caja Demo",
+                "sale_unit": "cajas",
+                "aliases": "Caja de prueba",
+                "sale_price": "12.5",
+            },
+            source="manual",
+            actor_id=1,
+        ).entity
+        db.commit()
+        db.refresh(customer)
+        db.refresh(product)
+        self.assertEqual(customer.fiscal_name, "Cliente Uno")
+        self.assertEqual(product.reference, "P001")
+
+        updated_customer = upsert_customer(
+            db,
+            company_id=1,
+            data={
+                "code": "C001",
+                "fiscal_name": "Cliente Uno Actualizado",
+                "primary_email": "uno@example.com",
+                "domains": "uno.example.com",
+                "aliases": "Cliente Uno SL",
+                "status": "active",
+            },
+            source="manual",
+            actor_id=1,
+            customer_id=customer.id,
+        ).entity
+        updated_product = upsert_product(
+            db,
+            company_id=1,
+            data={
+                "reference": "P001",
+                "name": "Caja Demo Actualizada",
+                "sale_unit": "cajas",
+                "aliases": "Caja de prueba",
+                "sale_price": "13.5",
+            },
+            source="manual",
+            actor_id=1,
+            product_id=product.id,
+        ).entity
+        db.commit()
+        self.assertEqual(updated_customer.id, customer.id)
+        self.assertEqual(updated_customer.fiscal_name, "Cliente Uno Actualizado")
+        self.assertEqual(updated_product.id, product.id)
+        self.assertEqual(updated_product.name, "Caja Demo Actualizada")
+        self.assertEqual(db.scalar(select(func.count()).select_from(CustomerAlias)) or 0, 1)
+        self.assertEqual(db.scalar(select(func.count()).select_from(ProductAlias)) or 0, 1)
+        db.close()
+
+    def test_integration_validation_and_redaction_helpers(self):
+        db = self.TenantSession()
+        db.add(EmailSettings(company_id=1, imap_host="imap.example.com", imap_username="demo@example.com", imap_password_encrypted=encrypt_secret("secret"), smtp_host="smtp.example.com", smtp_username="demo@example.com", smtp_password_encrypted=encrypt_secret("secret"), from_email="demo@example.com"))
+        db.add(LLMSettings(company_id=1, provider="openai", api_key_encrypted=encrypt_secret("api-key")))
+        db.commit()
+        settings = db.get(EmailSettings, 1)
+        llm = db.get(LLMSettings, 1)
+        self.assertTrue(validate_imap_config(settings)["ok"])
+        self.assertTrue(validate_smtp_config(settings)["ok"])
+        self.assertTrue(validate_openai_config(llm)["ok"])
+        self.assertEqual(classify_integration_error("timeout connecting to smtp"), "timeout")
+        self.assertEqual(classify_integration_error("permission denied"), "permission_denied")
+        self.assertEqual(redact_email_config(settings)["imap_password"], "••••••••")
+        db.close()
 
     def test_request_id_is_added_to_responses_and_errors(self):
         request = FakeRequest()

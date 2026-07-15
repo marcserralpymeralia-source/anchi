@@ -1,48 +1,20 @@
-from datetime import datetime, timezone
-
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import current_user
+from app.db.models import Customer, Product
 from app.master.service import TenantUser
 from app.core.templating import templates
 from app.tenancy.database import get_tenant_db
-from app.db.models import Customer, CustomerAlias, CustomerContactPoint, CustomerDomain, Product, ProductAlias, User
 from app.databases.service import build_databases_context
 from app.imports.service import create_preview
+from app.master_data.service import upsert_customer, upsert_product
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
 
 router = APIRouter(tags=["databases"])
-
-
-def _sync_contact_points(
-    db: Session,
-    *,
-    customer: Customer,
-    associated_emails: str = "",
-    associated_phones: str = "",
-    domains: str = "",
-    aliases: str = "",
-) -> None:
-    db.query(CustomerContactPoint).filter(CustomerContactPoint.customer_id == customer.id).delete()
-    now = datetime.now(timezone.utc)
-    def _items(raw: str) -> list[str]:
-        return [item.strip() for item in raw.replace(";", ",").split(",") if item.strip()]
-    if customer.primary_email:
-        db.add(CustomerContactPoint(company_id=customer.company_id, customer_id=customer.id, type="email", value=customer.primary_email.strip().lower(), label="principal", is_primary=True, active=True, confidence=0.9, source="manual", first_seen_at=now, last_seen_at=now))
-    if customer.phone:
-        db.add(CustomerContactPoint(company_id=customer.company_id, customer_id=customer.id, type="phone", value=customer.phone.strip(), label="principal", is_primary=True, active=True, confidence=0.8, source="manual", first_seen_at=now, last_seen_at=now))
-    for email in _items(associated_emails):
-        db.add(CustomerContactPoint(company_id=customer.company_id, customer_id=customer.id, type="email", value=email.lower(), label="asociado", is_primary=False, active=True, confidence=0.7, source="manual", first_seen_at=now, last_seen_at=now))
-    for phone in _items(associated_phones):
-        db.add(CustomerContactPoint(company_id=customer.company_id, customer_id=customer.id, type="phone", value=phone, label="asociado", is_primary=False, active=True, confidence=0.7, source="manual", first_seen_at=now, last_seen_at=now))
-    for domain in _items(domains):
-        db.add(CustomerContactPoint(company_id=customer.company_id, customer_id=customer.id, type="domain", value=domain.lower(), label="dominio", is_primary=False, active=True, confidence=0.8, source="manual", first_seen_at=now, last_seen_at=now))
-    for alias in _items(aliases):
-        db.add(CustomerContactPoint(company_id=customer.company_id, customer_id=customer.id, type="alias", value=alias.lower(), label="alias", is_primary=False, active=True, confidence=0.7, source="manual", first_seen_at=now, last_seen_at=now))
 
 
 @router.get("/databases")
@@ -122,45 +94,39 @@ def save_customer(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
-    customer = db.get(Customer, id) if id else None
-    if not customer:
-        customer = Customer(company_id=user.company_id, code=code, fiscal_name=fiscal_name)
-        db.add(customer)
-        db.flush()
-    if customer.company_id == user.company_id:
-        customer.code = code
-        customer.fiscal_name = fiscal_name
-        customer.tax_id = tax_id
-        customer.delegation = delegation
-        customer.phone = phone
-        customer.city = city
-        customer.province = province
-        customer.assigned_salesperson = assigned_salesperson
-        customer.accounting_code = accounting_code
-        customer.company_inactive = company_inactive
-        customer.category = category
-        customer.commercial_name = commercial_name
-        customer.primary_email = primary_email
-        customer.address = address
-        customer.country = country
-        customer.notes = notes
-        customer.status = "inactive" if company_inactive else status
-        db.query(CustomerAlias).filter(CustomerAlias.customer_id == customer.id).delete()
-        db.query(CustomerDomain).filter(CustomerDomain.customer_id == customer.id).delete()
-        for alias in [a.strip() for a in aliases.split(",") if a.strip()]:
-            db.add(CustomerAlias(company_id=user.company_id, customer_id=customer.id, alias=alias))
-        for domain in [d.strip().lower() for d in domains.split(",") if d.strip()]:
-            db.add(CustomerDomain(company_id=user.company_id, customer_id=customer.id, domain=domain))
-        _sync_contact_points(
-            db,
-            customer=customer,
-            associated_emails=associated_emails,
-            associated_phones=associated_phones,
-            domains=domains,
-            aliases=aliases,
-        )
-        db.commit()
-        log_action(db, company_id=user.company_id, user=user, action="database.customer.save", entity_type="customer", entity_id=customer.id, message=f"Cliente guardado: {code}")
+    customer = upsert_customer(
+        db,
+        company_id=user.company_id,
+        data={
+            "code": code,
+            "fiscal_name": fiscal_name,
+            "tax_id": tax_id,
+            "delegation": delegation,
+            "phone": phone,
+            "city": city,
+            "province": province,
+            "assigned_salesperson": assigned_salesperson,
+            "accounting_code": accounting_code,
+            "company_inactive": "on" if company_inactive else "",
+            "category": category,
+            "commercial_name": commercial_name,
+            "primary_email": primary_email,
+            "associated_emails": associated_emails,
+            "associated_phones": associated_phones,
+            "address": address,
+            "country": country,
+            "notes": notes,
+            "domains": domains,
+            "aliases": aliases,
+            "status": "inactive" if company_inactive else status,
+        },
+        source="manual",
+        actor_id=user.id,
+        customer_id=id or None,
+        conflict_policy="update_existing",
+    ).entity
+    db.commit()
+    log_action(db, company_id=user.company_id, user=user, action="database.customer.save", entity_type="customer", entity_id=customer.id, message=f"Cliente guardado: {code}")
     return RedirectResponse("/databases?tab=customers", status_code=303)
 
 
@@ -192,39 +158,40 @@ def save_product(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
-    product = db.get(Product, id) if id else None
-    if not product:
-        product = Product(company_id=user.company_id, reference=reference, name=name)
-        db.add(product)
-        db.flush()
-    if product.company_id == user.company_id:
-        product.reference = reference
-        product.name = name
-        product.description = name
-        product.brand = brand
-        product.usual_supplier = usual_supplier
-        product.alternative_code = alternative_code
-        product.family = family
-        product.subfamily = subfamily
-        product.sale_price = sale_price
-        product.discount_percent = discount_percent
-        product.size_group = size_group
-        product.colors = colors
-        product.entry_date = entry_date
-        product.obsolete = obsolete
-        product.article_type = article_type
-        product.description_cont = description_cont
-        product.warehouse_location_code = warehouse_location_code
-        product.replenishment_warehouse = replenishment_warehouse
-        product.sale_unit = sale_unit
-        product.ean = ean
-        product.notes = notes
-        product.status = "inactive" if obsolete else status
-        db.query(ProductAlias).filter(ProductAlias.product_id == product.id).delete()
-        for alias in [a.strip() for a in aliases.split(",") if a.strip()]:
-            db.add(ProductAlias(company_id=user.company_id, product_id=product.id, alias=alias))
-        db.commit()
-        log_action(db, company_id=user.company_id, user=user, action="database.product.save", entity_type="product", entity_id=product.id, message=f"Producto guardado: {reference}")
+    product = upsert_product(
+        db,
+        company_id=user.company_id,
+        data={
+            "reference": reference,
+            "name": name,
+            "brand": brand,
+            "usual_supplier": usual_supplier,
+            "alternative_code": alternative_code,
+            "family": family,
+            "subfamily": subfamily,
+            "sale_price": "" if sale_price is None else str(sale_price),
+            "discount_percent": "" if discount_percent is None else str(discount_percent),
+            "size_group": size_group,
+            "colors": colors,
+            "entry_date": entry_date,
+            "obsolete": "on" if obsolete else "",
+            "article_type": article_type,
+            "description_cont": description_cont,
+            "warehouse_location_code": warehouse_location_code,
+            "replenishment_warehouse": replenishment_warehouse,
+            "sale_unit": sale_unit,
+            "ean": ean,
+            "notes": notes,
+            "aliases": aliases,
+            "status": "inactive" if obsolete else status,
+        },
+        source="manual",
+        actor_id=user.id,
+        product_id=id or None,
+        conflict_policy="update_existing",
+    ).entity
+    db.commit()
+    log_action(db, company_id=user.company_id, user=user, action="database.product.save", entity_type="product", entity_id=product.id, message=f"Producto guardado: {reference}")
     return RedirectResponse("/databases?tab=products", status_code=303)
 
 

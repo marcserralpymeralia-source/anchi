@@ -27,9 +27,10 @@
     <input type="hidden" name="mapping_json" value='{{ mapping_json }}'>
     <label>Modo
       <select name="mode">
-        <option value="create_update">Crear y actualizar</option>
-        <option value="create">Crear nuevos solamente</option>
-        <option value="update">Actualizar existentes solamente</option>
+        <option value="update_existing">Crear o actualizar</option>
+        <option value="create_only">Crear solo nuevos</option>
+        <option value="skip_existing">Omitir existentes</option>
+        <option value="error_on_conflict">Error si hay conflicto</option>
       </select>
     </label>
     <label><input type="checkbox" name="save_template"> Guardar plantilla de mapeo</label>
