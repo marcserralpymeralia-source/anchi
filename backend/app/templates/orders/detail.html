@@ -4,6 +4,7 @@
 {% set attachments = order.email.attachments|list if order.email else [] %}
 {% set pdfs = order.email.attachments|selectattr("content_type", "equalto", "application/pdf")|list if order.email else [] %}
 {% set score_value = order.score if order.score is not none else 0 %}
+{% set customer_title = customer_context.customer.name if customer_context and customer_context.identified else order.customer_detected_name or "Cliente sin identificar" %}
 {% if score_value >= 80 %}
   {% set score_class = "score-safe" %}
   {% set score_label = "Alta" %}
@@ -21,7 +22,7 @@
 <article class="panel">
   <div class="review-modal-header review-modal-header-v3 review-modal-header-compact">
     <div class="review-header-title">
-      <strong>{{ order.validated_customer.fiscal_name if order.validated_customer else order.customer.fiscal_name if order.customer else order.customer_detected_name or "Cliente sin identificar" }}</strong>
+      <strong>{{ customer_title }}</strong>
       <div class="review-header-meta">
         <span class="badge {{ order.status|status_class }}">{{ order.status|status_label }}</span>
         <span class="score-badge {{ score_class }}">{{ "%.0f"|format(score_value) }}%</span>

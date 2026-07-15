@@ -15,7 +15,6 @@ from app.auth.dependencies import current_user
 from app.master.service import TenantUser
 from app.core.pagination import paginate
 from app.db.models import Customer, CustomerAlias, CustomerContactPoint, CustomerDomain, Email, EmailAttachment, ExportFile, FTPSettings, ManualCorrection, Order, OrderLine, Product, ProductAlias, RagCase, ScoringSettings, User, utcnow
-from app.databases.service import build_customer_context
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
 from app.settings.service import get_or_create_settings
@@ -78,8 +77,183 @@ def _product_label(line: OrderLine) -> str:
     return f"{product.reference} · {product.name}" if product else "Sin producto"
 
 
+def _candidate_terms(*values: str | None) -> list[str]:
+    terms: list[str] = []
+    for value in values:
+        cleaned = " ".join((value or "").strip().split())
+        if cleaned and cleaned not in terms:
+            terms.append(cleaned)
+    return terms
+
+
 def _normalize_match_text(value: str | None) -> str:
     return " ".join((value or "").strip().lower().split())
+
+
+def _fmt_dt(value: datetime | None) -> str:
+    return value.strftime("%d/%m/%Y %H:%M") if value else "--"
+
+
+def _review_customer_snapshot(db: Session, order: Order, customer: Customer | None) -> dict:
+    if not customer:
+        return {"identified": False}
+    last_order_at = db.scalar(
+        select(func.max(Order.created_at)).where(
+            Order.company_id == customer.company_id,
+            or_(Order.customer_id == customer.id, Order.validated_customer_id == customer.id),
+            Order.deleted_at.is_(None),
+        )
+    )
+    return {
+        "identified": True,
+        "customer": {
+            "id": customer.id,
+            "code": customer.code,
+            "name": customer.fiscal_name,
+            "commercial_name": customer.commercial_name or "",
+            "email": customer.primary_email or "",
+            "phone": customer.phone or "",
+            "delegation": customer.delegation or "",
+            "status": customer.status or "active",
+            "confidence": order.customer_score or 0,
+            "primary_endpoint": customer.primary_email or customer.phone or "",
+            "habitual_channel": "Email" if customer.primary_email else ("Teléfono" if customer.phone else "Sin dato"),
+            "last_order_at": _fmt_dt(last_order_at),
+            "knowledge_url": f"/customers/{customer.id}/knowledge",
+        },
+    }
+
+
+def _review_customer_candidates(
+    db: Session,
+    *,
+    company_id: int,
+    order: Order,
+    query: str = "",
+    limit: int = 12,
+) -> list[Customer]:
+    current_ids = {value for value in {order.customer_id, order.validated_customer_id} if value}
+    stmt = select(Customer).where(Customer.company_id == company_id, Customer.deleted_at.is_(None))
+    match_conditions = []
+    if query.strip():
+        like = f"%{query.strip()}%"
+        match_conditions.append(
+            or_(
+                Customer.code.ilike(like),
+                Customer.fiscal_name.ilike(like),
+                Customer.commercial_name.ilike(like),
+                Customer.primary_email.ilike(like),
+                Customer.phone.ilike(like),
+                Customer.tax_id.ilike(like),
+            )
+        )
+    else:
+        terms = _candidate_terms(order.customer_detected_name, order.email.sender if order.email else None, order.email.subject if order.email else None)
+        if terms:
+            for term in terms[:4]:
+                match_conditions.append(
+                    or_(
+                        Customer.code.ilike(f"%{term}%"),
+                        Customer.fiscal_name.ilike(f"%{term}%"),
+                        Customer.commercial_name.ilike(f"%{term}%"),
+                        Customer.primary_email.ilike(f"%{term}%"),
+                        Customer.phone.ilike(f"%{term}%"),
+                        Customer.tax_id.ilike(f"%{term}%"),
+                    )
+                )
+    if current_ids and match_conditions:
+        stmt = stmt.where(or_(Customer.id.in_(list(current_ids)), *match_conditions))
+    elif current_ids:
+        stmt = stmt.where(Customer.id.in_(list(current_ids)))
+    elif match_conditions:
+        stmt = stmt.where(or_(*match_conditions))
+    stmt = stmt.options(
+        load_only(
+            Customer.id,
+            Customer.code,
+            Customer.fiscal_name,
+            Customer.commercial_name,
+            Customer.primary_email,
+            Customer.phone,
+            Customer.delegation,
+            Customer.status,
+        )
+    )
+    order_by_clauses = []
+    if current_ids:
+        order_by_clauses.append(case((Customer.id.in_(list(current_ids)), 0), else_=1))
+    order_by_clauses.append(Customer.fiscal_name.asc())
+    stmt = stmt.order_by(*order_by_clauses).limit(limit)
+    return db.scalars(stmt).all()
+
+
+def _review_product_candidates(
+    db: Session,
+    *,
+    company_id: int,
+    order: Order,
+    query: str = "",
+    limit: int = 12,
+) -> list[Product]:
+    current_ids = {
+        value
+        for value in {
+            *(line.product_id for line in (order.lines or [])),
+            *(line.validated_product_id for line in (order.lines or [])),
+        }
+        if value
+    }
+    stmt = select(Product).where(Product.company_id == company_id, Product.deleted_at.is_(None))
+    match_conditions = []
+    if query.strip():
+        terms = _candidate_terms(query)
+    else:
+        terms = _candidate_terms(
+            order.customer_detected_name,
+            order.email.sender if order.email else None,
+            order.email.subject if order.email else None,
+            *(line.detected_reference for line in (order.lines or [])),
+            *(line.detected_product for line in (order.lines or [])),
+            *(line.original_text for line in (order.lines or [])),
+        )
+    if terms:
+        for term in terms[:6]:
+            match_conditions.append(
+                or_(
+                    Product.reference.ilike(f"%{term}%"),
+                    Product.alternative_code.ilike(f"%{term}%"),
+                    Product.name.ilike(f"%{term}%"),
+                    Product.description.ilike(f"%{term}%"),
+                    Product.family.ilike(f"%{term}%"),
+                    Product.subfamily.ilike(f"%{term}%"),
+                    Product.ean.ilike(f"%{term}%"),
+                    exists().where(ProductAlias.company_id == company_id, ProductAlias.product_id == Product.id, ProductAlias.alias.ilike(f"%{term}%")),
+                )
+            )
+    if current_ids and match_conditions:
+        stmt = stmt.where(or_(Product.id.in_(list(current_ids)), *match_conditions))
+    elif current_ids:
+        stmt = stmt.where(Product.id.in_(list(current_ids)))
+    elif match_conditions:
+        stmt = stmt.where(or_(*match_conditions))
+    stmt = stmt.options(
+        load_only(
+            Product.id,
+            Product.reference,
+            Product.alternative_code,
+            Product.name,
+            Product.family,
+            Product.subfamily,
+            Product.ean,
+        ),
+        selectinload(Product.aliases).load_only(ProductAlias.id, ProductAlias.alias),
+    )
+    order_by_clauses = []
+    if current_ids:
+        order_by_clauses.append(case((Product.id.in_(list(current_ids)), 0), else_=1))
+    order_by_clauses.append(Product.reference.asc())
+    stmt = stmt.order_by(*order_by_clauses).limit(limit)
+    return db.scalars(stmt).all()
 
 
 def _product_suggestions_for_line(products: list[Product], line: OrderLine, limit: int = 3) -> list[dict]:
@@ -346,18 +520,115 @@ def create_mock_order(db: Session = Depends(get_tenant_db), user: TenantUser = D
 
 
 @router.get("/{order_id}")
-def order_detail(order_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def order_detail(
+    order_id: int,
+    request: Request,
+    customer_q: str = "",
+    product_q: str = "",
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
     order = db.scalar(
         select(Order)
         .where(Order.id == order_id, Order.company_id == user.company_id)
-        .options(selectinload(Order.lines).selectinload(OrderLine.product), selectinload(Order.lines).selectinload(OrderLine.validated_product), selectinload(Order.email).selectinload(Email.attachments), selectinload(Order.customer), selectinload(Order.validated_customer))
+        .options(
+            load_only(
+                Order.id,
+                Order.email_id,
+                Order.customer_id,
+                Order.validated_customer_id,
+                Order.customer_detected_name,
+                Order.customer_score,
+                Order.order_date,
+                Order.requested_delivery_date,
+                Order.notes,
+                Order.score,
+                Order.status,
+                Order.review_reasons,
+                Order.created_at,
+                Order.confirmed_at,
+                Order.exported_at,
+            ),
+            selectinload(Order.lines)
+            .load_only(
+                OrderLine.id,
+                OrderLine.company_id,
+                OrderLine.order_id,
+                OrderLine.product_id,
+                OrderLine.validated_product_id,
+                OrderLine.original_text,
+                OrderLine.detected_reference,
+                OrderLine.detected_product,
+                OrderLine.quantity,
+                OrderLine.unit,
+                OrderLine.extraction_confidence,
+                OrderLine.line_score,
+                OrderLine.validation_status,
+                OrderLine.doubt_reason,
+            ),
+            selectinload(Order.email)
+            .load_only(
+                Email.id,
+                Email.sender,
+                Email.subject,
+                Email.body,
+                Email.detected_type,
+                Email.received_at,
+                Email.external_id,
+                Email.extracted_text,
+            )
+            .selectinload(Email.attachments)
+            .load_only(
+                EmailAttachment.id,
+                EmailAttachment.filename,
+                EmailAttachment.content_type,
+                EmailAttachment.size_bytes,
+                EmailAttachment.extracted_text,
+                EmailAttachment.extraction_error,
+                EmailAttachment.is_pdf,
+            ),
+        )
     )
-    products = db.scalars(select(Product).where(Product.company_id == user.company_id).options(selectinload(Product.aliases)).order_by(Product.reference)).all()
-    customers = db.scalars(select(Customer).where(Customer.company_id == user.company_id).order_by(Customer.fiscal_name)).all()
-    exports = db.scalars(select(ExportFile).where(ExportFile.order_id == order_id).order_by(ExportFile.created_at.desc())).all()
-    customer_context = build_customer_context(db, user.company_id, (order.validated_customer_id or order.customer_id) if order else None, order=order)
+    products = _review_product_candidates(db, company_id=user.company_id, order=order, query=product_q) if order else []
+    customers = _review_customer_candidates(db, company_id=user.company_id, order=order, query=customer_q) if order else []
+    customer_source = None
+    if order:
+        customer_source = db.scalar(
+            select(Customer)
+            .where(
+                Customer.company_id == user.company_id,
+                Customer.deleted_at.is_(None),
+                Customer.id == (order.validated_customer_id or order.customer_id),
+            )
+            .options(
+                load_only(
+                    Customer.id,
+                    Customer.code,
+                    Customer.fiscal_name,
+                    Customer.commercial_name,
+                    Customer.primary_email,
+                    Customer.phone,
+                    Customer.delegation,
+                    Customer.status,
+                )
+            )
+        )
+    customer_context = _review_customer_snapshot(db, order, customer_source) if order else {"identified": False}
     line_suggestions = {line.id: _product_suggestions_for_line(products, line) for line in (order.lines or [])}
-    return templates.TemplateResponse("orders/detail.html", {"request": request, "user": user, "order": order, "products": products, "customers": customers, "exports": exports, "customer_context": customer_context, "line_suggestions": line_suggestions})
+    return templates.TemplateResponse(
+        "orders/detail.html",
+        {
+            "request": request,
+            "user": user,
+            "order": order,
+            "products": products,
+            "customers": customers,
+            "customer_context": customer_context,
+            "line_suggestions": line_suggestions,
+            "customer_q": customer_q,
+            "product_q": product_q,
+        },
+    )
 
 
 @router.post("/{order_id}/customer")
