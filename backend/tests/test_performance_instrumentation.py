@@ -134,6 +134,26 @@ class PerformanceInstrumentationTests(unittest.TestCase):
         finally:
             fixture.cleanup()
 
+    def test_channels_processed_page_handles_timezone_normalization(self):
+        fixture = build_performance_fixture("small")
+        try:
+            with performance_test_client(fixture) as client:
+                response = client.get("/channels?tab=processed&date_range=30d")
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn("internal_error", response.text.lower())
+        finally:
+            fixture.cleanup()
+
+    def test_history_page_loads_with_scoring_settings_present(self):
+        fixture = build_performance_fixture("small")
+        try:
+            with performance_test_client(fixture) as client:
+                response = client.get("/history?date_range=90d")
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn("internal_error", response.text.lower())
+        finally:
+            fixture.cleanup()
+
     def test_benchmark_script_writes_json_and_csv(self):
         with tempfile.TemporaryDirectory() as output_dir:
             payload = run_benchmark("small", runs=1, output_dir=Path(output_dir))

@@ -8,7 +8,7 @@
 | Tests jobs | `backend/` | `APP_ENV=test ./.venv/bin/python -m unittest tests.test_jobs_reliability` | Verificado | Cobertura de idempotencia, retries, recovery y worker |
 | Tests observabilidad | `backend/` | `APP_ENV=test ./.venv/bin/python -m unittest tests.test_observability` | Verificado | Cubre contexto, trazas, health y diagnosticos |
 | Tests de seguridad | `backend/` | `./.venv/bin/python -m unittest tests.test_security_config` | Pendiente | Cobertura nueva de entorno y config |
-| Suite completa | `backend/` | `APP_ENV=test ./.venv/bin/python -m unittest discover -s tests` | Verificado | 42 tests OK |
+| Suite completa | `backend/` | `APP_ENV=test ./.venv/bin/python -m unittest discover -s tests` | Verificado | 51 tests OK |
 | Test individual | `backend/` | `No configurado actualmente` | No configurado actualmente | No se identifico un test unitario mas granular |
 | Tests rendimiento | `backend/` | `APP_ENV=test ./.venv/bin/python -m unittest tests.test_performance_instrumentation` | Verificado | Cubre profiling, repeticion de consultas, fixtures temporales y script |
 | Compilacion | `backend/` | `./.venv/bin/python -m compileall app` | Verificado | Sin errores |

@@ -61,8 +61,7 @@ La carpeta de salida es `backend/performance-results/` y esta excluida de Git.
 
 ## Fallos confirmados durante la medicion
 
-- `/channels` devuelve `500` por una comparacion entre datetimes naive y aware.
-- `/history` devuelve `500` por una referencia a `get_or_create_settings` no definida.
+- `/channels` ya no devuelve `500`; se corrigio la comparacion entre datetimes naive y aware.
+- `/history` ya no devuelve `500`; se corrigio la referencia a `get_or_create_settings`.
 
-Estos fallos se documentan como parte de la linea base. No se corrigen en esta fase.
-
+Estos fallos quedaron cerrados en la fase 6A y el benchmark se rerun con exito para reflejar el estado actual.

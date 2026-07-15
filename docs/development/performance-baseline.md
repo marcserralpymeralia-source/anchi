@@ -6,7 +6,7 @@
 
 ## Resumen ejecutivo
 
-La app ya dispone de una linea base objetiva de rendimiento con tres escenarios sinteticos. La carga mas costosa esta concentrada en la bandeja principal y en el detalle de pedidos cuando crece el volumen de datos.
+La app ya dispone de una linea base objetiva de rendimiento con tres escenarios sinteticos. La carga mas costosa sigue concentrada en la bandeja principal y en el detalle de pedidos cuando crece el volumen de datos, pero los fallos de `channels` y `history` ya quedaron corregidos y vuelven a entrar en la medicion normal.
 
 ## Ranking de rendimiento
 
@@ -14,38 +14,38 @@ La app ya dispone de una linea base objetiva de rendimiento con tres escenarios 
 
 | Posicion | Endpoint | Tiempo mediano | SQL | Duplicadas | Estado |
 |---|---|---:|---:|---:|---:|
-| 1 | `/channels?tab=processed&date_range=30d` | 17.64 ms | 0 | 0 | 500 |
-| 2 | `/orders?date_range=90d` | 17.51 ms | 37 | 21 | 200 |
-| 3 | `/products` | 4.84 ms | 9 | 0 | 200 |
-| 4 | `/settings` | 4.52 ms | 68 | 0 | 200 |
-| 5 | `/history?date_range=90d` | 4.19 ms | 0 | 0 | 500 |
+| 1 | `/orders?date_range=90d` | 17.43 ms | 37 | 21 | 200 |
+| 2 | `/history?date_range=90d` | 4.45 ms | 33 | 0 | 200 |
+| 3 | `/products` | 4.31 ms | 9 | 0 | 200 |
+| 4 | `/` | 4.08 ms | 50 | 39 | 200 |
+| 5 | `/settings` | 3.83 ms | 68 | 0 | 200 |
 
 ### Escenario medium
 
 | Posicion | Endpoint | Tiempo mediano | SQL | Duplicadas | Estado |
 |---|---|---:|---:|---:|---:|
-| 1 | `/orders?date_range=90d` | 230.76 ms | 42 | 26 | 200 |
-| 2 | `/channels?tab=processed&date_range=30d` | 70.18 ms | 0 | 0 | 500 |
-| 3 | `/jobs/monitor` | 8.82 ms | 14 | 5 | 200 |
-| 4 | `/orders/1` | 7.19 ms | 25 | 2 | 200 |
-| 5 | `/` | 6.08 ms | 202 | 191 | 200 |
+| 1 | `/orders?date_range=90d` | 232.67 ms | 42 | 26 | 200 |
+| 2 | `/history?date_range=90d` | 12.20 ms | 153 | 141 | 200 |
+| 3 | `/jobs/monitor` | 8.71 ms | 14 | 5 | 200 |
+| 4 | `/channels?tab=processed&date_range=30d` | 6.51 ms | 132 | 119 | 200 |
+| 5 | `/orders/1` | 6.49 ms | 25 | 2 | 200 |
 
 ### Escenario large
 
 | Posicion | Endpoint | Tiempo mediano | SQL | Duplicadas | Estado |
 |---|---|---:|---:|---:|---:|
-| 1 | `/orders?date_range=90d` | 480.21 ms | 42 | 26 | 200 |
-| 2 | `/channels?tab=processed&date_range=30d` | 133.40 ms | 0 | 0 | 500 |
-| 3 | `/orders/1` | 15.21 ms | 26 | 2 | 200 |
-| 4 | `/` | 11.90 ms | 410 | 399 | 200 |
-| 5 | `/jobs/monitor` | 9.11 ms | 14 | 5 | 200 |
+| 1 | `/orders?date_range=90d` | 496.89 ms | 42 | 26 | 200 |
+| 2 | `/history?date_range=90d` | 18.58 ms | 313 | 301 | 200 |
+| 3 | `/orders/1` | 16.13 ms | 26 | 2 | 200 |
+| 4 | `/` | 12.06 ms | 410 | 399 | 200 |
+| 5 | `/channels?tab=processed&date_range=30d` | 9.91 ms | 245 | 232 | 200 |
 
 ## Cuellos de botella confirmados
 
 - La lista de pedidos crece con el volumen y eleva mucho el tiempo total y el render de plantilla.
 - La home mantiene un numero alto de consultas y consultas duplicadas, sobre todo en escenarios medio y alto.
 - El detalle de pedido carga bastante contexto y se nota mas en `large`.
-- `channels` no puede formar parte de una medicion sana hasta corregir el bug de datetimes.
+- `channels` y `history` ya no fallan; ahora quedan dentro de la linea base como rutas normales.
 
 ## N+1 confirmados
 
@@ -64,11 +64,9 @@ La app ya dispone de una linea base objetiva de rendimiento con tres escenarios 
 - El benchmark no altera la frecuencia de polling ni la estrategia de sincronizacion.
 - Las rutas de medicion siguen siendo llamadas sincronas para obtener una foto real del coste actual.
 
-## Objetivos para la Fase 6
+## Objetivos para la Fase 6A
 
-- Reducir peso de la home y de la bandeja.
-- Limitar el coste del detalle de pedido.
-- Encapsular mejor partes del render en bloques reutilizables.
-- Corregir los errores confirmados de `channels` y `history`.
-- Mantener el benchmark para comparar la evolucion futura.
-
+- Corregir los fallos de `channels` y `history`.
+- Mantener el benchmark como referencia valida.
+- Seguir reduciendo peso de home y bandeja en fases posteriores.
+- Conservar la linea base sintetica para comparar futuras mejoras.

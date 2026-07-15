@@ -41,6 +41,14 @@ def _format_dt(value: datetime | None) -> str:
     return value.strftime("%d/%m/%Y %H:%M") if value else "--"
 
 
+def _aware(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
 def _clip(text: str | None, limit: int = 180) -> str:
     value = " ".join((text or "").split())
     if len(value) <= limit:
@@ -111,7 +119,7 @@ def _build_email_item(email: Email, order: Order | None, inbound: InboundMessage
         "subject": subject or "Sin asunto",
         "content_text": body or subject or "",
         "summary": _clip(body or subject or "Entrada sin contenido"),
-        "received_at": email.received_at,
+        "received_at": _aware(email.received_at),
         "received_label": _format_dt(email.received_at),
         "status_key": status_key,
         "status_label": status_label,
@@ -166,7 +174,7 @@ def _build_inbound_item(message: InboundMessage, order: Order | None, channel: I
         "subject": message.subject or "Sin asunto",
         "content_text": body or message.subject or "",
         "summary": _clip(body or message.subject or "Entrada sin contenido"),
-        "received_at": message.received_at,
+        "received_at": _aware(message.received_at),
         "received_label": _format_dt(message.received_at),
         "status_key": status_key,
         "status_label": status_label,
@@ -263,7 +271,11 @@ def _filter_rows(rows: list[dict], *, tab: str, date_range: str, search: str, cu
         else:
             cutoff = None
         if cutoff:
-            filtered = [row for row in filtered if row["received_at"] >= cutoff]
+            filtered = [
+                row
+                for row in filtered
+                if (received_at := _aware(row["received_at"])) is not None and received_at >= cutoff
+            ]
 
     if customer_id:
         filtered = [row for row in filtered if row["customer_id"] == customer_id]

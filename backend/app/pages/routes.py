@@ -14,6 +14,7 @@ from app.dashboard.service import workbench_summary
 from app.db.models import Customer, Email, Order, ScoringSettings
 from app.dashboard.service import email_workbench_item, order_workbench_item, suggest_customer_for_email
 from app.master.service import TenantUser
+from app.settings.service import get_or_create_settings
 from app.tenancy.database import get_tenant_db
 
 router = APIRouter(tags=["pages"])
@@ -22,8 +23,8 @@ router = APIRouter(tags=["pages"])
 def _history_bounds(date_range: str, date_from: str, date_to: str) -> tuple[datetime | None, datetime | None]:
     now = datetime.now(timezone.utc)
     if date_from or date_to:
-        start = datetime.fromisoformat(date_from).replace(tzinfo=timezone.utc) if date_from else None
-        end = datetime.fromisoformat(f"{date_to}T23:59:59").replace(tzinfo=timezone.utc) if date_to else None
+        start = _aware(datetime.fromisoformat(date_from)) if date_from else None
+        end = _aware(datetime.fromisoformat(f"{date_to}T23:59:59")) if date_to else None
         return start, end
     ranges = {
         "today": (datetime.combine(now.date(), datetime.min.time(), tzinfo=timezone.utc), None),
@@ -37,6 +38,14 @@ def _history_bounds(date_range: str, date_from: str, date_to: str) -> tuple[date
         "365d": (now - timedelta(days=365), None),
     }
     return ranges.get(date_range, (None, None))
+
+
+def _aware(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 @router.get("/")
@@ -127,7 +136,7 @@ def pedidos_page(
         item = order_workbench_item(order, scoring_settings)
         item.update({
             "kind_label": "Pedido",
-            "date": order.created_at,
+            "date": _aware(order.created_at),
             "url": f"/orders/{order.id}",
             "secondary_url": f"/channels?tab=processed&date_range=30d&search={quote_plus(order.email.subject or order.email.sender or order.customer_detected_name or '')}" if order.email else "/orders",
             "title": item["customer_name"] or order.customer_detected_name or "Pedido",
@@ -140,7 +149,7 @@ def pedidos_page(
         item = email_workbench_item(email)
         item.update({
             "kind_label": "Correo",
-            "date": email.received_at,
+            "date": _aware(email.received_at),
             "url": f"/channels?tab=processed&date_range=30d&search={quote_plus(email.subject or email.sender or '')}",
             "secondary_url": f"/channels?tab=email&date_range=30d&search={quote_plus(email.sender or email.subject or '')}",
             "title": email.subject or "Correo sin asunto",
