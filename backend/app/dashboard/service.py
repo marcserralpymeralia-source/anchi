@@ -6,19 +6,12 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.core.pagination import normalize_page
 from app.db.models import Customer, CustomerContactPoint, CustomerDomain, Email, FTPSettings, LLMSettings, Order, OrderLine, ScoringSettings
+from app.orders.state import CONFIRMED_ORDER_STATUSES, ERROR_ORDER_STATUSES, ORDER_STATE, PENDING_ORDER_STATUSES
 from app.settings.service import get_or_create_settings
 
 
 def scoring_category(score: float | None, settings: ScoringSettings) -> str:
-    if score is None:
-        return "without_score"
-    if score >= settings.safe_threshold:
-        return "safe"
-    if score >= settings.review_threshold:
-        return "reviewable"
-    if score >= settings.doubtful_threshold:
-        return "doubtful"
-    return "not_importable"
+    return ORDER_STATE.scoring_category(score, settings)
 
 
 def category_label(category: str) -> str:
@@ -32,18 +25,7 @@ def category_label(category: str) -> str:
 
 
 def order_operational_category(order: Order, settings: ScoringSettings, *, line_metrics_by_order: dict[int, dict[str, int]] | None = None) -> str:
-    if order.status in {"error_exportacion", "error_procesamiento"}:
-        return "error"
-    if validate_blockers(order, settings, line_metrics_by_order=line_metrics_by_order):
-        return "blocked"
-    category = scoring_category(order.score, settings)
-    if category == "safe" and order.status in {"pedido_pendiente_revision", "pending_review"}:
-        return "ready"
-    if category in {"reviewable", "doubtful"} or order.status in {"dudoso", "no_importable"}:
-        return "review"
-    if order.status == "pedido_exportado":
-        return "exported"
-    return "normal"
+    return ORDER_STATE.operational_state(order, settings, line_metrics=line_metrics_by_order)
 
 
 def _order_line_metrics(order: Order, line_metrics_by_order: dict[int, dict[str, int]] | None = None) -> dict[str, int]:
@@ -97,17 +79,7 @@ def _load_order_line_metrics(db: Session, company_id: int, order_ids: list[int])
 
 
 def validate_blockers(order: Order, settings: ScoringSettings, *, line_metrics_by_order: dict[int, dict[str, int]] | None = None) -> list[str]:
-    blockers: list[str] = []
-    metrics = _order_line_metrics(order, line_metrics_by_order)
-    if settings.block_without_customer and not order.validated_customer_id:
-        blockers.append("Cliente no identificado")
-    if settings.block_without_reference and metrics["missing_product_count"] > 0:
-        blockers.append("Productos sin referencia")
-    if settings.block_without_quantity and metrics["invalid_quantity_count"] > 0:
-        blockers.append("Cantidad dudosa")
-    if settings.block_below_threshold and (order.score is None or order.score < settings.doubtful_threshold):
-        blockers.append("Confianza baja")
-    return blockers
+    return ORDER_STATE.validate_blockers(order, settings, line_metrics=line_metrics_by_order)
 
 
 def order_origin(order: Order) -> str:
@@ -912,10 +884,10 @@ def dashboard_summary(db: Session, company_id: int, filters: dict) -> dict:
         "orders_detected": len(orders),
         "non_order_emails": len([email for email in emails if email.detected_type == "no_pedido"]),
         "doubtful_emails": len([email for email in emails if email.detected_type == "dudoso"]),
-        "pending_review": len([order for order in orders if order.status in {"pedido_pendiente_revision", "pending_review"}]),
-        "confirmed": len([order for order in orders if order.status in {"pedido_validado", "pedido_confirmado"}]),
+        "pending_review": len([order for order in orders if order.status in PENDING_ORDER_STATUSES]),
+        "confirmed": len([order for order in orders if order.status in CONFIRMED_ORDER_STATUSES]),
         "exported": len([order for order in orders if order.status == "pedido_exportado"]),
-        "errors": len([order for order in orders if order.status.startswith("error")]),
+        "errors": len([order for order in orders if order.status.startswith("error") or order.status in ERROR_ORDER_STATUSES]),
         "average_score": average_score,
     }
     return {

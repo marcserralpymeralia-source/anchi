@@ -13,6 +13,7 @@ from app.core.templating import templates
 from app.dashboard.service import workbench_summary
 from app.db.models import Customer, Email, Order, OrderLine, ScoringSettings
 from app.dashboard.service import _customer_suggestion_maps, _load_order_line_metrics, email_workbench_item, order_workbench_item, suggest_customer_for_email
+from app.orders.state import ERROR_ORDER_STATUSES, PENDING_ORDER_STATUSES, REVIEW_ORDER_STATUSES, TERMINAL_ORDER_STATUSES
 from app.master.service import TenantUser
 from app.settings.service import get_or_create_settings
 from app.tenancy.database import get_tenant_db
@@ -71,14 +72,14 @@ def _history_order_state_expr(settings: ScoringSettings, metrics):
     scoring_category = _history_scoring_category_expr(settings)
     blocked_expr = _history_blocked_expr(settings, metrics)
     return case(
-        (Order.status.in_(("error_exportacion", "error_procesamiento")), literal("error")),
+        (Order.status.in_(tuple(ERROR_ORDER_STATUSES)), literal("error")),
         (blocked_expr, literal("blocked")),
         (
-            and_(scoring_category == "safe", Order.status.in_(("pedido_pendiente_revision", "pending_review"))),
+            and_(scoring_category == "safe", Order.status.in_(tuple(PENDING_ORDER_STATUSES))),
             literal("ready"),
         ),
         (
-            or_(scoring_category.in_(("reviewable", "doubtful")), Order.status.in_(("dudoso", "no_importable"))),
+            or_(scoring_category.in_(("reviewable", "doubtful")), Order.status.in_(tuple(REVIEW_ORDER_STATUSES))),
             literal("review"),
         ),
         (Order.status == "pedido_exportado", literal("exported")),
@@ -164,23 +165,23 @@ def _history_order_rows_stmt(
         like = f"%{search}%"
         stmt = stmt.where(or_(Email.subject.ilike(like), Email.sender.ilike(like), Order.customer_detected_name.ilike(like)))
     if state == "current":
-        stmt = stmt.where(Order.status.not_in(("pedido_confirmado", "pedido_exportado", "cerrado", "cancelado", "descartado")))
+        stmt = stmt.where(Order.status.not_in(tuple(TERMINAL_ORDER_STATUSES)))
     elif state == "review":
         stmt = stmt.where(
             or_(
                 scoring_category.in_(("reviewable", "doubtful")),
                 blocked_expr,
-                Order.status.in_(("dudoso", "no_importable")),
+                Order.status.in_(tuple(REVIEW_ORDER_STATUSES)),
             )
         )
     elif state == "ready":
-        stmt = stmt.where(and_(scoring_category == "safe", Order.status.in_(("pedido_pendiente_revision", "pending_review"))))
+        stmt = stmt.where(and_(scoring_category == "safe", Order.status.in_(tuple(PENDING_ORDER_STATUSES))))
     elif state == "confirmed":
         stmt = stmt.where(Order.status.in_(("pedido_confirmado", "pedido_validado")))
     elif state == "sent":
         stmt = stmt.where(Order.status == "pedido_exportado")
     elif state == "blocked":
-        stmt = stmt.where(or_(blocked_expr, Order.status.in_(("dudoso", "no_importable"))))
+        stmt = stmt.where(or_(blocked_expr, Order.status.in_(tuple(REVIEW_ORDER_STATUSES))))
     return stmt
 
 
@@ -294,7 +295,6 @@ def pedidos_page(
     scoring_settings = get_or_create_settings(db, ScoringSettings, user.company_id)
     allowed_kind = kind if kind in {"all", "orders", "emails"} else "all"
     allowed_state = state if state in {"all", "current", "review", "ready", "confirmed", "sent", "blocked"} else "all"
-    terminal_order_statuses = {"pedido_confirmado", "pedido_exportado", "cerrado", "cancelado", "descartado"}
     suggestion_maps = _customer_suggestion_maps(db, user.company_id)
 
     order_base_stmt = _history_order_rows_stmt(
@@ -363,7 +363,7 @@ def pedidos_page(
                             (
                                 and_(
                                     base_union.c.kind == "order",
-                                    base_union.c.order_status.notin_(terminal_order_statuses),
+                                    base_union.c.order_status.notin_(TERMINAL_ORDER_STATUSES),
                                 ),
                                 1,
                             ),
@@ -381,7 +381,7 @@ def pedidos_page(
                                     or_(
                                         base_union.c.order_state == "blocked",
                                         base_union.c.scoring_category.in_(("reviewable", "doubtful")),
-                                        base_union.c.order_status.in_(("dudoso", "no_importable")),
+                                        base_union.c.order_status.in_(tuple(REVIEW_ORDER_STATUSES)),
                                     ),
                                 ),
                                 1,
@@ -401,7 +401,7 @@ def pedidos_page(
                                         or_(
                                             base_union.c.order_state == "blocked",
                                             base_union.c.scoring_category.in_(("reviewable", "doubtful")),
-                                            base_union.c.order_status.in_(("dudoso", "no_importable")),
+                                            base_union.c.order_status.in_(tuple(REVIEW_ORDER_STATUSES)),
                                         ),
                                     ),
                                     and_(base_union.c.kind == "email", base_union.c.agent_status.in_(("error", "doubtful"))),
@@ -455,7 +455,7 @@ def pedidos_page(
                             (
                                 and_(
                                     base_union.c.kind == "order",
-                                    or_(base_union.c.order_state == "blocked", base_union.c.order_status.in_(("dudoso", "no_importable"))),
+                                    or_(base_union.c.order_state == "blocked", base_union.c.order_status.in_(tuple(REVIEW_ORDER_STATUSES))),
                                 ),
                                 1,
                             ),
@@ -493,7 +493,7 @@ def pedidos_page(
                                         or_(
                                             current_union.c.order_state == "blocked",
                                             current_union.c.scoring_category.in_(("reviewable", "doubtful")),
-                                            current_union.c.order_status.in_(("dudoso", "no_importable")),
+                                            current_union.c.order_status.in_(tuple(REVIEW_ORDER_STATUSES)),
                                         ),
                                     ),
                                     and_(current_union.c.kind == "email", current_union.c.agent_status.in_(("error", "doubtful"))),

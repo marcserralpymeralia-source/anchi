@@ -17,6 +17,7 @@ from app.core.pagination import paginate
 from app.db.models import Customer, CustomerAlias, CustomerContactPoint, CustomerDomain, Email, EmailAttachment, ExportFile, FTPSettings, ManualCorrection, Order, OrderLine, Product, ProductAlias, RagCase, ScoringSettings, User, utcnow
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
+from app.orders.state import ORDER_STATE, PENDING_ORDER_STATUSES, REVIEW_ORDER_STATUSES
 from app.settings.service import get_or_create_settings
 from app.tenancy.database import get_tenant_db
 
@@ -27,18 +28,24 @@ _DELETE_ROLES = {"Administrador", "Superadmin", "Owner", "Propietario"}
 
 
 def order_score_category(score: float | None, scoring: ScoringSettings) -> tuple[str, str]:
-    if score is None:
-        return "without_score", "Sin scoring"
-    if score >= scoring.safe_threshold:
-        return "safe", "Seguro"
-    if score >= scoring.review_threshold:
-        return "reviewable", "Revisable"
-    if score >= scoring.doubtful_threshold:
-        return "doubtful", "Dudoso"
-    return "not_importable", "No importable"
+    category = ORDER_STATE.scoring_category(score, scoring)
+    return {
+        "without_score": ("without_score", "Sin scoring"),
+        "safe": ("safe", "Seguro"),
+        "reviewable": ("reviewable", "Revisable"),
+        "doubtful": ("doubtful", "Dudoso"),
+        "not_importable": ("not_importable", "No importable"),
+    }.get(category, (category, category.title()))
 
 
-def order_alerts(order: Order, *, line_count: int | None = None, doubtful_count: int | None = None, has_pdf: bool | None = None) -> dict:
+def order_alerts(
+    order: Order,
+    scoring: ScoringSettings,
+    *,
+    line_count: int | None = None,
+    doubtful_count: int | None = None,
+    has_pdf: bool | None = None,
+) -> dict:
     if line_count is None or doubtful_count is None or has_pdf is None:
         lines = order.lines or []
         doubtful_lines = [line for line in lines if line.validation_status != "validated" or not line.validated_product_id or line.doubt_reason]
@@ -50,21 +57,21 @@ def order_alerts(order: Order, *, line_count: int | None = None, doubtful_count:
         "doubtful_count": int(doubtful_count or 0),
         "has_pdf": bool(has_pdf),
         "has_notes": bool(order.notes),
-        "requires_review": bool((doubtful_count or 0) or order.status in {"pedido_pendiente_revision", "pending_review", "dudoso", "no_importable"}),
+        "requires_review": bool((doubtful_count or 0) or order.status in PENDING_ORDER_STATUSES | REVIEW_ORDER_STATUSES),
     }
 
 
 def validate_confirmation(order: Order, scoring: ScoringSettings) -> list[str]:
-    errors: list[str] = []
+    errors = ORDER_STATE.validate_blockers(order, scoring)
     if scoring.block_without_customer and not order.validated_customer_id:
-        errors.append("No se puede confirmar porque no hay cliente validado.")
+        errors = ["No se puede confirmar porque no hay cliente validado.", *errors]
     if scoring.block_without_reference and any(not line.validated_product_id for line in order.lines):
-        errors.append("No se puede confirmar porque hay lineas sin referencia validada.")
+        errors = ["No se puede confirmar porque hay lineas sin referencia validada.", *errors]
     if scoring.block_without_quantity and any(line.quantity is None or line.quantity <= 0 for line in order.lines):
-        errors.append("No se puede confirmar porque hay lineas sin cantidad valida.")
+        errors = ["No se puede confirmar porque hay lineas sin cantidad valida.", *errors]
     if scoring.block_below_threshold and order.score < scoring.doubtful_threshold:
-        errors.append("No se puede confirmar porque el scoring esta por debajo del umbral minimo.")
-    return errors
+        errors = ["No se puede confirmar porque el scoring esta por debajo del umbral minimo.", *errors]
+    return list(dict.fromkeys(errors))
 
 
 def _customer_label(order: Order) -> str:
@@ -414,9 +421,9 @@ def list_orders(
         stmt = stmt.where(pdf_exists if has_pdf == "yes" else ~pdf_exists)
     if requires_review:
         if requires_review == "yes":
-            stmt = stmt.where(or_(Order.status.in_(["pedido_pendiente_revision", "pending_review", "dudoso", "no_importable"]), Order.score < scoring.safe_threshold))
+            stmt = stmt.where(or_(Order.status.in_(("pedido_pendiente_revision", "pending_review", "dudoso", "no_importable")), Order.score < scoring.safe_threshold))
         else:
-            stmt = stmt.where(Order.status.in_(["pedido_confirmado", "pedido_exportado"]))
+            stmt = stmt.where(Order.status.in_(("pedido_confirmado", "pedido_exportado")))
     joined_email = False
     if email_type:
         stmt = stmt.join(Email, Order.email_id == Email.id).where(Email.detected_type == email_type)
@@ -503,6 +510,7 @@ def list_orders(
     alerts = {
         order.id: order_alerts(
             order,
+            scoring,
             line_count=line_metrics.get(order.id, {}).get("line_count", 0),
             doubtful_count=line_metrics.get(order.id, {}).get("doubtful_count", 0),
             has_pdf=pdf_flags.get(order.id, False),
@@ -694,7 +702,7 @@ def update_order(
         order.requested_delivery_date = requested_delivery_date
         order.notes = notes
         if status:
-            order.status = status
+            ORDER_STATE.change_state(order, status)
         if validated_customer_id and validated_customer_id != previous_customer_id:
             new_customer = db.get(Customer, validated_customer_id)
             old_customer = db.get(Customer, previous_customer_id) if previous_customer_id else None
@@ -824,7 +832,7 @@ def update_order_line(
             is_manual=bool(new_product or old_quantity != quantity or old_unit != unit),
         )
         order.score = ScoringService().score_order(db, order)
-        order.status = ScoringService().status_for_score(db, user.company_id, order.score)
+        ORDER_STATE.apply_score(db, order, user.company_id, order.score)
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.line.update", entity_type="order_line", entity_id=line.id, message="Linea de pedido actualizada")
     return RedirectResponse("/orders", status_code=303)
@@ -937,7 +945,7 @@ def recalculate_score(order_id: int, db: Session = Depends(get_tenant_db), user:
     order = db.get(Order, order_id)
     if order and order.company_id == user.company_id:
         order.score = ScoringService().score_order(db, order)
-        order.status = ScoringService().status_for_score(db, user.company_id, order.score)
+        ORDER_STATE.apply_score(db, order, user.company_id, order.score)
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.recalculate_score", entity_type="order", entity_id=order.id, message=f"Scoring recalculado: {order.score}")
     return RedirectResponse("/orders", status_code=303)
@@ -951,8 +959,7 @@ def confirm_order(order_id: int, db: Session = Depends(get_tenant_db), user: Ten
         if errors:
             log_action(db, company_id=user.company_id, user=user, action="order.confirm.blocked", entity_type="order", entity_id=order.id, message=" | ".join(errors))
             return RedirectResponse("/orders", status_code=303)
-        order.status = "pedido_confirmado"
-        order.confirmed_at = datetime.now(timezone.utc)
+        ORDER_STATE.confirm(order, when=datetime.now(timezone.utc))
         for line in order.lines or []:
             _sync_customer_product_knowledge(
                 db,
@@ -981,8 +988,7 @@ def confirm_order(order_id: int, db: Session = Depends(get_tenant_db), user: Ten
 def force_confirm_order(order_id: int, force_reason: str = Form(...), db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     order = db.get(Order, order_id)
     if order and order.company_id == user.company_id and user.role.name in {"Administrador", "Supervisor"} and force_reason.strip():
-        order.status = "pedido_confirmado"
-        order.confirmed_at = utcnow()
+        ORDER_STATE.confirm(order, when=utcnow())
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.force_confirm", entity_type="order", entity_id=order.id, message=f"Confirmacion forzada: {force_reason}")
     return RedirectResponse("/orders", status_code=303)
@@ -1026,7 +1032,7 @@ def export_ftp(order_id: int, db: Session = Depends(get_tenant_db), user: Tenant
 def mark_not_order(order_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     order = db.get(Order, order_id)
     if order and order.company_id == user.company_id:
-        order.status = "no_pedido"
+        ORDER_STATE.mark_no_order(order)
         if order.email:
             order.email.detected_type = "no_pedido"
             order.email.status = "no_pedido"
@@ -1060,7 +1066,7 @@ def mark_not_order(order_id: int, db: Session = Depends(get_tenant_db), user: Te
 def discard_order(order_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     order = db.get(Order, order_id)
     if order and order.company_id == user.company_id:
-        order.status = "descartado"
+        ORDER_STATE.discard(order)
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.discard", entity_type="order", entity_id=order.id, message="Pedido descartado")
     return RedirectResponse("/orders", status_code=303)

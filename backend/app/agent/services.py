@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from app.agent.platform import UnifiedOrderPipelineService
 from app.db.models import Customer, CustomerAlias, CustomerContactPoint, CustomerDomain, Email, EmailAttachment, EmailSettings, InboundMessage, InputChannel, LLMSettings, Order, OrderLine, Product, ProductAlias, PromptTemplate, PromptVersion, ScoringSettings
+from app.orders.state import ORDER_STATE
 from app.logs.service import log_action
 from app.settings.integrations import call_openai
 from app.settings.service import get_or_create_settings
@@ -150,14 +151,7 @@ class ScoringService:
         return round(min(score, 100), 2)
 
     def status_for_score(self, db: Session, company_id: int, score: float) -> str:
-        settings = get_or_create_settings(db, ScoringSettings, company_id)
-        if score >= settings.safe_threshold:
-            return "pedido_pendiente_revision"
-        if score >= settings.review_threshold:
-            return "pedido_pendiente_revision"
-        if score >= settings.doubtful_threshold:
-            return "dudoso"
-        return "no_importable"
+        return ORDER_STATE.status_for_score(db, company_id, score)
 
 
 def _json_from_content(content: str) -> dict:

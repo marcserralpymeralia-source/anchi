@@ -17,13 +17,17 @@ def status_label(value: str | None) -> str:
     labels = {
         "pedido_pendiente_revision": "Pendiente de revision",
         "pending_review": "Pendiente de revision",
-        "pedido_validado": "Confirmado",
         "pedido_confirmado": "Confirmado",
+        "pedido_validado": "Confirmado",
         "pedido_exportado": "Exportado",
         "error_exportacion": "Error de exportacion",
         "error_procesamiento": "Error de procesamiento",
         "no_pedido": "No contiene pedido",
         "descartado": "Descartado",
+        "deleted": "Eliminado",
+        "archived_deleted": "Eliminado",
+        "cerrado": "Cerrado",
+        "cancelado": "Cancelado",
         "sent": "Enviado",
         "error": "Error",
         "pedido": "Pedido",
@@ -45,13 +49,15 @@ def status_class(value: str | None) -> str:
         return "status-confirmed"
     if value == "pedido_exportado":
         return "status-exported"
+    if value in {"cerrado", "cancelado"}:
+        return "status-confirmed"
     if value.startswith("error"):
         return "status-error"
     if value == "no_pedido":
         return "status-no-order"
     if value in {"dudoso", "no_importable"}:
         return "status-doubtful"
-    if value == "descartado":
+    if value in {"descartado", "deleted", "archived_deleted"}:
         return "status-discarded"
     return ""
 

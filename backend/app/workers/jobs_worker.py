@@ -23,6 +23,7 @@ from app.core.observability import observability_scope
 from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, FTPSettings, ImportJob, Order, ScoringSettings
 from app.exports.service import ExportService, FTPService
 from app.logs.service import log_action
+from app.orders.state import ORDER_STATE
 from app.master.database import MasterSessionLocal
 from app.master.models import MasterTenantDatabase
 from app.imports.service import confirm_import, guess_mapping, read_preview
@@ -233,7 +234,7 @@ def _process_export_job(db, job: BackgroundJob, payload: dict) -> dict:
     ok = True
     if send_via_ftp:
         ok = FTPService().send(export) if ftp_settings.host else False
-    order.status = "pedido_exportado" if ok else "error_exportacion"
+    ORDER_STATE.export(order, ok=ok, when=_now())
     export.status = "sent" if ok else "error"
     if ok:
         order.exported_at = order.exported_at or _now()
@@ -306,7 +307,7 @@ def _process_bulk_action(db, job: BackgroundJob, payload: dict) -> dict:
                     processor.process_email(db, order.email)
                 else:
                     order.score = ScoringService().score_order(db, order)
-                    order.status = ScoringService().status_for_score(db, job.company_id, order.score)
+                    ORDER_STATE.apply_score(db, order, job.company_id, order.score)
                 db.commit()
                 processed += 1
             elif action == "confirm":
@@ -315,8 +316,7 @@ def _process_bulk_action(db, job: BackgroundJob, payload: dict) -> dict:
                     skipped += 1
                     update_job_progress(db, job, int(((processed + skipped) / total) * 100))
                     continue
-                order.status = "pedido_confirmado"
-                order.confirmed_at = _now()
+                ORDER_STATE.confirm(order, when=_now())
                 for line in order.lines or []:
                     _sync_customer_product_knowledge(
                         db,
@@ -342,7 +342,7 @@ def _process_bulk_action(db, job: BackgroundJob, payload: dict) -> dict:
                 export = ExportService().generate_csv(db, order)
                 ftp_settings = get_or_create_settings(db, FTPSettings, job.company_id)
                 ok = FTPService().send(export) if ftp_settings.host else False
-                order.status = "pedido_exportado" if ok else "error_exportacion"
+                ORDER_STATE.export(order, ok=ok, when=_now())
                 if ok:
                     order.exported_at = _now()
                     export.status = "sent"
@@ -351,23 +351,23 @@ def _process_bulk_action(db, job: BackgroundJob, payload: dict) -> dict:
                 db.commit()
                 processed += 1
             elif action in {"delete", "discard"}:
-                order.status = "descartado"
+                ORDER_STATE.discard(order)
                 db.commit()
                 processed += 1
             elif action == "mark_no_order":
-                order.status = "no_pedido"
+                ORDER_STATE.mark_no_order(order)
                 if order.email:
                     order.email.detected_type = "no_pedido"
                     order.email.status = "no_pedido"
                 db.commit()
                 processed += 1
             elif action == "change_state" and target_state:
-                order.status = target_state
+                ORDER_STATE.change_state(order, target_state)
                 db.commit()
                 processed += 1
             elif action == "recalculate":
                 order.score = ScoringService().score_order(db, order)
-                order.status = ScoringService().status_for_score(db, job.company_id, order.score)
+                ORDER_STATE.apply_score(db, order, job.company_id, order.score)
                 db.commit()
                 processed += 1
             else:
