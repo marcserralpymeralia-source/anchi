@@ -29,6 +29,8 @@
 - Ejecutar tests especificos de configuracion segura.
 - Mantener request_id y correlation_id en la traza de request, logs y jobs.
 - Exponer health/live, health/ready y metricas internas basicas.
+- Medir tiempo total, SQL, consultas duplicadas, renderizado Jinja, tamaño de respuesta y volumen de registros en requests criticos.
+- Mantener un benchmark reproducible con salida en JSON/CSV y datos sintéticos temporales.
 - No filtrar secretos en logs estructurados ni en trazas persistidas.
 - Documentar cualquier fallo que no se corrija en ese momento.
 
@@ -40,6 +42,7 @@
 - No permitir acceso cruzado entre dos companias con IDs coincidentes en bases distintas.
 - Mantener jobs idempotentes, con reintentos limitados, historial de intentos y recovery de jobs bloqueados.
 - Garantizar que el worker tenga una entrada CLI estable y que no procese un job antes de su fecha de reintento.
+- No activar profiling en produccion.
 
 ## Documentacion
 

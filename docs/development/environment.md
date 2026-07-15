@@ -44,6 +44,7 @@ Sin exponer valores secretos:
 - `JOB_STALE_AFTER_SECONDS`
 - `LOG_FORMAT`
 - `LOG_LEVEL`
+- `PERFORMANCE_PROFILING_ENABLED`
 - `DEFAULT_COMPANY_NAME`
 - `DEFAULT_ADMIN_EMAIL`
 - `DEFAULT_ADMIN_PASSWORD`
@@ -94,10 +95,12 @@ El worker usa la misma resolucion de tenant que el proceso web y recupera jobs b
 
 - `LOG_FORMAT=json` deja trazas estructuradas listas para correlacionar request y jobs.
 - `LOG_LEVEL=info` mantiene una salida compacta y útil para desarrollo y demo.
+- `PERFORMANCE_PROFILING_ENABLED=true` activa la linea base objetiva de rendimiento en desarrollo y test.
 - `GET /health/live` comprueba que el proceso esta vivo sin tocar bases.
 - `GET /health/ready` valida master, tenant y métricas basicas.
 - `GET /health/metrics` expone el snapshot interno de requests y jobs.
 - `GET /logs` permite filtrar por `request_id`, `correlation_id`, accion y entidad.
+- `backend/performance-results/` almacena las salidas generadas por el benchmark y no se versiona.
 
 ## Problemas conocidos del entorno
 

@@ -1,5 +1,16 @@
+from __future__ import annotations
+
+import typing
+import warnings
+from time import perf_counter
+
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
+from starlette.background import BackgroundTask
+from starlette.responses import HTMLResponse
+from starlette.templating import _TemplateResponse
+
+from app.core.performance import performance_profiling_enabled, record_template_render
 
 
 def status_label(value: str | None) -> str:
@@ -56,7 +67,107 @@ def page_url(request: Request, page: int | None = None, page_size: int | None = 
     return f"{request.url.path}?{query}" if query else request.url.path
 
 
-templates = Jinja2Templates(directory="app/templates")
+class PerformanceTemplateResponse(HTMLResponse):
+    def __init__(
+        self,
+        template: typing.Any,
+        context: dict[str, typing.Any],
+        *,
+        template_name: str,
+        status_code: int = 200,
+        headers: typing.Mapping[str, str] | None = None,
+        media_type: str | None = None,
+        background: BackgroundTask | None = None,
+    ):
+        self.template = template
+        self.context = context
+        self.template_name = template_name
+        started_at = perf_counter()
+        content = template.render(context)
+        record_template_render(template_name, context, perf_counter() - started_at)
+        super().__init__(content, status_code, headers, media_type, background)
+
+    async def __call__(self, scope, receive, send):  # noqa: ANN001
+        request = self.context.get("request")
+        request_scope = getattr(request, "scope", {}) if request is not None else {}
+        extensions = request_scope.get("extensions", {})
+        if "http.response.debug" in extensions:
+            await send(
+                {
+                    "type": "http.response.debug",
+                    "info": {
+                        "template": self.template,
+                        "context": self.context,
+                    },
+                }
+            )
+        await super().__call__(scope, receive, send)
+
+
+class PerformanceAwareTemplates(Jinja2Templates):
+    def TemplateResponse(self, *args: typing.Any, **kwargs: typing.Any) -> _TemplateResponse | PerformanceTemplateResponse:  # noqa: N802
+        if not performance_profiling_enabled():
+            return super().TemplateResponse(*args, **kwargs)
+
+        if args:
+            if isinstance(args[0], str):
+                warnings.warn(
+                    "The `name` is not the first parameter anymore. "
+                    "The first parameter should be the `Request` instance.\n"
+                    'Replace `TemplateResponse(name, {"request": request})` by `TemplateResponse(request, name)`.',
+                    DeprecationWarning,
+                )
+                name = args[0]
+                context = args[1] if len(args) > 1 else kwargs.get("context", {})
+                status_code = args[2] if len(args) > 2 else kwargs.get("status_code", 200)
+                headers = args[3] if len(args) > 3 else kwargs.get("headers")
+                media_type = args[4] if len(args) > 4 else kwargs.get("media_type")
+                background = args[5] if len(args) > 5 else kwargs.get("background")
+                if "request" not in context:
+                    raise ValueError('context must include a "request" key')
+                request = context["request"]
+            else:
+                request = args[0]
+                name = args[1] if len(args) > 1 else kwargs["name"]
+                context = args[2] if len(args) > 2 else kwargs.get("context", {})
+                status_code = args[3] if len(args) > 3 else kwargs.get("status_code", 200)
+                headers = args[4] if len(args) > 4 else kwargs.get("headers")
+                media_type = args[5] if len(args) > 5 else kwargs.get("media_type")
+                background = args[6] if len(args) > 6 else kwargs.get("background")
+        else:
+            if "request" not in kwargs:
+                warnings.warn(
+                    "The `TemplateResponse` now requires the `request` argument.\n"
+                    'Replace `TemplateResponse(name, {"context": context})` by `TemplateResponse(request, name)`.',
+                    DeprecationWarning,
+                )
+                if "request" not in kwargs.get("context", {}):
+                    raise ValueError('context must include a "request" key')
+            context = kwargs.get("context", {})
+            request = kwargs.get("request", context.get("request"))
+            name = typing.cast(str, kwargs["name"])
+            status_code = kwargs.get("status_code", 200)
+            headers = kwargs.get("headers")
+            media_type = kwargs.get("media_type")
+            background = kwargs.get("background")
+
+        context.setdefault("request", request)
+        for context_processor in self.context_processors:
+            context.update(context_processor(request))
+
+        template = self.get_template(name)
+        return PerformanceTemplateResponse(
+            template,
+            context,
+            template_name=name,
+            status_code=status_code,
+            headers=headers,
+            media_type=media_type,
+            background=background,
+        )
+
+
+templates = PerformanceAwareTemplates(directory="app/templates")
 templates.env.filters["status_label"] = status_label
 templates.env.filters["status_class"] = status_class
 templates.env.globals["page_url"] = page_url

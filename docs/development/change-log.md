@@ -38,3 +38,9 @@
 | 2026-07-15 | Fase 4 | `backend/app/jobs/service.py`, `backend/app/workers/jobs_worker.py`, `backend/app/jobs/routes.py`, `backend/app/templates/jobs/*` | Se propago la traza a jobs y al monitor operativo | `tests.test_observability` |
 | 2026-07-15 | Fase 4 | `backend/app/health/routes.py`, `backend/app/admin/routes.py`, `backend/app/admin/diagnostics.py`, `backend/app/templates/admin/diagnostics.html` | Se expusieron health/live, health/ready, metrics y observabilidad en diagnostico | `tests.test_observability` |
 | 2026-07-15 | Fase 4 | `backend/.env.example`, `docs/development/*` | Se documentaron variables, comandos y validaciones de observabilidad | Revision manual |
+| 2026-07-15 | Fase 5 | `backend/app/core/performance.py` | Se agrego el collector de rendimiento y las cabeceras `X-Perf-*` | `tests.test_performance_instrumentation` |
+| 2026-07-15 | Fase 5 | `backend/app/core/templating.py` | Se midio el render de templates Jinja dentro del collector | `tests.test_performance_instrumentation` |
+| 2026-07-15 | Fase 5 | `backend/scripts/performance_data.py` | Se crearon escenarios sinteticos para benchmark aislado master + tenant | `tests.test_performance_instrumentation`, `scripts/measure_performance.py` |
+| 2026-07-15 | Fase 5 | `backend/scripts/measure_performance.py` | Se introdujo el benchmark reproducible con salida JSON/CSV | `APP_ENV=test ./.venv/bin/python scripts/measure_performance.py --scenario small|medium|large` |
+| 2026-07-15 | Fase 5 | `backend/tests/test_performance_instrumentation.py` | Se añadio cobertura de profiling, headers y escritura de resultados | `APP_ENV=test ./.venv/bin/python -m unittest tests.test_performance_instrumentation` |
+| 2026-07-15 | Fase 5 | `docs/development/performance-measurement.md`, `docs/development/performance-baseline.md`, `docs/development/phases/phase-05-performance-baseline.md` | Se documento la linea base objetiva y los riesgos pendientes | Revision manual |

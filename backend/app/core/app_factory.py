@@ -11,6 +11,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.core.performance import configure_performance
 from app.core.lifespan import app_lifespan
 from app.core.middleware import branding_middleware
 from app.core.router_registry import get_registered_routers
@@ -37,6 +38,7 @@ def internal_server_error_response(request) -> JSONResponse:  # noqa: ANN001
 
 def create_app() -> FastAPI:
     configure_logging()
+    configure_performance()
     settings = get_settings()
     app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=app_lifespan)
     app.add_middleware(

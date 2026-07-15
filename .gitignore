@@ -24,6 +24,7 @@ backend/.venv/
 *.sqlite3
 backend/storage/
 backend/app/storage/
+backend/performance-results/
 /attachments/
 /exports/
 /runtime/

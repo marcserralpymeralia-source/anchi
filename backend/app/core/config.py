@@ -140,6 +140,10 @@ class Settings(BaseSettings):
     email_signature_text: str = "Equipo de pedidos"
     log_format: str = Field(default="json", validation_alias=AliasChoices("LOG_FORMAT", "APP_LOG_FORMAT"))
     log_level: str = Field(default="info", validation_alias=AliasChoices("LOG_LEVEL", "APP_LOG_LEVEL"))
+    performance_profiling_enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("PERFORMANCE_PROFILING_ENABLED", "ENABLE_PERFORMANCE_PROFILING"),
+    )
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -181,6 +185,8 @@ class Settings(BaseSettings):
         if self.log_format not in {"json", "text"}:
             raise ValueError("LOG_FORMAT must be json or text")
         self.log_level = (self.log_level or "info").strip().lower()
+        if self.environment == "production" and self.performance_profiling_enabled:
+            raise ValueError("PERFORMANCE_PROFILING_ENABLED cannot be enabled in production")
 
         if self.tenant_db_encryption_key and not _is_valid_fernet_key(self.tenant_db_encryption_key):
             raise ValueError("ENCRYPTION_KEY must be a valid Fernet key")
