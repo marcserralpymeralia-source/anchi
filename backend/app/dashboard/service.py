@@ -1,11 +1,11 @@
 from datetime import datetime, timedelta, timezone
 from math import ceil
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.pagination import normalize_page
-from app.db.models import Customer, CustomerContactPoint, CustomerDomain, Email, EmailAttachment, FTPSettings, LLMSettings, Order, OrderLine, ScoringSettings
+from app.db.models import Customer, CustomerContactPoint, CustomerDomain, Email, FTPSettings, LLMSettings, Order, OrderLine, ScoringSettings
 from app.settings.service import get_or_create_settings
 
 
@@ -31,10 +31,10 @@ def category_label(category: str) -> str:
     }.get(category, category)
 
 
-def order_operational_category(order: Order, settings: ScoringSettings) -> str:
+def order_operational_category(order: Order, settings: ScoringSettings, *, line_metrics_by_order: dict[int, dict[str, int]] | None = None) -> str:
     if order.status in {"error_exportacion", "error_procesamiento"}:
         return "error"
-    if validate_blockers(order, settings):
+    if validate_blockers(order, settings, line_metrics_by_order=line_metrics_by_order):
         return "blocked"
     category = scoring_category(order.score, settings)
     if category == "safe" and order.status in {"pedido_pendiente_revision", "pending_review"}:
@@ -46,14 +46,64 @@ def order_operational_category(order: Order, settings: ScoringSettings) -> str:
     return "normal"
 
 
-def validate_blockers(order: Order, settings: ScoringSettings) -> list[str]:
-    blockers: list[str] = []
+def _order_line_metrics(order: Order, line_metrics_by_order: dict[int, dict[str, int]] | None = None) -> dict[str, int]:
+    if line_metrics_by_order and order.id is not None and order.id in line_metrics_by_order:
+        return line_metrics_by_order[order.id]
     lines = order.lines or []
+    return {
+        "line_count": len(lines),
+        "doubt_count": sum(1 for line in lines if line.validation_status != "validated" or not line.validated_product_id or line.doubt_reason),
+        "missing_product_count": sum(1 for line in lines if not line.validated_product_id),
+        "invalid_quantity_count": sum(1 for line in lines if line.quantity is None or line.quantity <= 0),
+    }
+
+
+def _load_order_line_metrics(db: Session, company_id: int, order_ids: list[int]) -> dict[int, dict[str, int]]:
+    if not order_ids:
+        return {}
+    rows = db.execute(
+        select(
+            OrderLine.order_id,
+            func.count(OrderLine.id).label("line_count"),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            (OrderLine.validation_status != "validated")
+                            | (OrderLine.validated_product_id.is_(None))
+                            | (OrderLine.doubt_reason.is_not(None)),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ).label("doubt_count"),
+            func.coalesce(func.sum(case((OrderLine.validated_product_id.is_(None), 1), else_=0)), 0).label("missing_product_count"),
+            func.coalesce(func.sum(case(((OrderLine.quantity.is_(None)) | (OrderLine.quantity <= 0), 1), else_=0)), 0).label("invalid_quantity_count"),
+        )
+        .where(OrderLine.company_id == company_id, OrderLine.order_id.in_(order_ids))
+        .group_by(OrderLine.order_id)
+    ).all()
+    return {
+        int(row.order_id): {
+            "line_count": int(row.line_count or 0),
+            "doubt_count": int(row.doubt_count or 0),
+            "missing_product_count": int(row.missing_product_count or 0),
+            "invalid_quantity_count": int(row.invalid_quantity_count or 0),
+        }
+        for row in rows
+    }
+
+
+def validate_blockers(order: Order, settings: ScoringSettings, *, line_metrics_by_order: dict[int, dict[str, int]] | None = None) -> list[str]:
+    blockers: list[str] = []
+    metrics = _order_line_metrics(order, line_metrics_by_order)
     if settings.block_without_customer and not order.validated_customer_id:
         blockers.append("Cliente no identificado")
-    if settings.block_without_reference and any(not line.validated_product_id for line in lines):
+    if settings.block_without_reference and metrics["missing_product_count"] > 0:
         blockers.append("Productos sin referencia")
-    if settings.block_without_quantity and any(line.quantity is None or line.quantity <= 0 for line in lines):
+    if settings.block_without_quantity and metrics["invalid_quantity_count"] > 0:
         blockers.append("Cantidad dudosa")
     if settings.block_below_threshold and (order.score is None or order.score < settings.doubtful_threshold):
         blockers.append("Confianza baja")
@@ -61,28 +111,29 @@ def validate_blockers(order: Order, settings: ScoringSettings) -> list[str]:
 
 
 def order_origin(order: Order) -> str:
-    has_pdf = bool(order.email and any(att.is_pdf or att.content_type == "application/pdf" for att in order.email.attachments))
+    has_pdf = bool(order.email and order.email.has_pdf)
     has_body = bool(order.email and order.email.body)
+    has_attachments = bool(order.email and order.email.has_attachments)
     if has_pdf and has_body:
         return "PDF + Email"
     if has_pdf:
         return "PDF"
+    if has_attachments:
+        return "Adjunto"
     if has_body:
         return "Email"
     return "Sin documento"
 
 
-def order_issue_summary(order: Order, settings: ScoringSettings) -> str:
-    blockers = validate_blockers(order, settings)
+def order_issue_summary(order: Order, settings: ScoringSettings, *, line_metrics_by_order: dict[int, dict[str, int]] | None = None) -> str:
+    blockers = validate_blockers(order, settings, line_metrics_by_order=line_metrics_by_order)
     if blockers:
         return " · ".join(blockers)
-    lines = order.lines or []
-    doubtful_products = sum(1 for line in lines if not line.validated_product_id)
-    doubtful_qty = sum(1 for line in lines if line.quantity is None or line.quantity <= 0)
-    if doubtful_products:
-        return f"{doubtful_products} productos no encontrados"
-    if doubtful_qty:
-        return f"{doubtful_qty} cantidades dudosas"
+    metrics = _order_line_metrics(order, line_metrics_by_order)
+    if metrics["missing_product_count"]:
+        return f"{metrics['missing_product_count']} productos no encontrados"
+    if metrics["invalid_quantity_count"]:
+        return f"{metrics['invalid_quantity_count']} cantidades dudosas"
     if order.customer_identification_method:
         return f"Cliente por {order.customer_identification_method}"
     return "Sin incidencias relevantes"
@@ -120,8 +171,8 @@ def recent_processed_emails_overview(db: Session, company_id: int, *, days: int 
     ]
 
 
-def order_priority(order: Order, settings: ScoringSettings) -> tuple[int, str]:
-    op = order_operational_category(order, settings)
+def order_priority(order: Order, settings: ScoringSettings, *, line_metrics_by_order: dict[int, dict[str, int]] | None = None) -> tuple[int, str]:
+    op = order_operational_category(order, settings, line_metrics_by_order=line_metrics_by_order)
     if op == "error":
         return 1, "Error"
     if op == "blocked":
@@ -135,8 +186,8 @@ def order_priority(order: Order, settings: ScoringSettings) -> tuple[int, str]:
     return 6, "Baja"
 
 
-def order_action(order: Order, settings: ScoringSettings) -> tuple[str, str]:
-    op = order_operational_category(order, settings)
+def order_action(order: Order, settings: ScoringSettings, *, line_metrics_by_order: dict[int, dict[str, int]] | None = None) -> tuple[str, str]:
+    op = order_operational_category(order, settings, line_metrics_by_order=line_metrics_by_order)
     if op == "error":
         return "Reintentar envio", "retry"
     if op == "blocked":
@@ -146,16 +197,11 @@ def order_action(order: Order, settings: ScoringSettings) -> tuple[str, str]:
     return "Revisar", "review"
 
 
-def build_order_item(order: Order, settings: ScoringSettings, *, include_line_metrics: bool = True) -> dict:
+def build_order_item(order: Order, settings: ScoringSettings, *, include_line_metrics: bool = True, line_metrics_by_order: dict[int, dict[str, int]] | None = None) -> dict:
     category = scoring_category(order.score, settings)
-    priority_rank, priority_label = order_priority(order, settings)
-    action_label, action_type = order_action(order, settings)
-    lines = (order.lines or []) if include_line_metrics else []
-    doubtful_lines = (
-        [line for line in lines if line.validation_status != "validated" or not line.validated_product_id or line.doubt_reason]
-        if include_line_metrics
-        else []
-    )
+    metrics = _order_line_metrics(order, line_metrics_by_order)
+    priority_rank, priority_label = order_priority(order, settings, line_metrics_by_order=line_metrics_by_order)
+    action_label, action_type = order_action(order, settings, line_metrics_by_order=line_metrics_by_order)
     return {
         "id": order.id,
         "kind": "order",
@@ -167,16 +213,16 @@ def build_order_item(order: Order, settings: ScoringSettings, *, include_line_me
         "subject": order.email.subject if order.email else "",
         "sender": order.email.sender if order.email else "",
         "origin": order_origin(order),
-        "line_count": len(lines) if include_line_metrics else 0,
-        "doubt_count": len(doubtful_lines) if include_line_metrics else 0,
-        "doubt_text": order_issue_summary(order, settings) if include_line_metrics else "",
+        "line_count": metrics["line_count"] if include_line_metrics else 0,
+        "doubt_count": metrics["doubt_count"] if include_line_metrics else 0,
+        "doubt_text": order_issue_summary(order, settings, line_metrics_by_order=line_metrics_by_order) if include_line_metrics else "",
         "score": order.score,
         "category": category,
         "category_label": category_label(category),
         "status": order.status,
         "action_label": action_label,
         "action_type": action_type,
-        "has_pdf": order_origin(order).startswith("PDF") or "PDF" in order_origin(order),
+        "has_pdf": bool(order.email and order.email.has_pdf),
         "detail_url": f"/workbench/item/order/{order.id}/detail",
     }
 
@@ -245,11 +291,11 @@ def agent_status_label(status: str) -> str:
     }.get(status, status)
 
 
-def order_workbench_item(order: Order, settings: ScoringSettings, *, include_line_metrics: bool = True) -> dict:
-    item = build_order_item(order, settings, include_line_metrics=include_line_metrics)
+def order_workbench_item(order: Order, settings: ScoringSettings, *, include_line_metrics: bool = True, line_metrics_by_order: dict[int, dict[str, int]] | None = None) -> dict:
+    item = build_order_item(order, settings, include_line_metrics=include_line_metrics, line_metrics_by_order=line_metrics_by_order)
     agent_status = email_agent_status(order.email, order) if order.email else "order_detected"
-    op_category = order_operational_category(order, settings)
-    action_label, action_type = order_action(order, settings)
+    op_category = order_operational_category(order, settings, line_metrics_by_order=line_metrics_by_order)
+    action_label, action_type = order_action(order, settings, line_metrics_by_order=line_metrics_by_order)
     return {
         "id": f"order-{order.id}",
         "kind": "order",
@@ -265,7 +311,7 @@ def order_workbench_item(order: Order, settings: ScoringSettings, *, include_lin
         "agent_status_label": agent_status_label(agent_status),
         "detected_type": order.email.detected_type if order.email else "pedido",
         "has_pdf": item["has_pdf"],
-        "has_attachments": bool(order.email and order.email.attachments),
+        "has_attachments": bool(order.email and order.email.has_attachments),
         "origin": item["origin"],
         "score": item["score"],
         "scoring_category": "blocked" if op_category == "blocked" else item["category"],
@@ -303,7 +349,7 @@ def email_workbench_item(email: Email) -> dict:
         "agent_status_label": agent_status_label(agent_status),
         "detected_type": email.detected_type or "",
         "has_pdf": email_has_pdf(email),
-        "has_attachments": bool(email.has_attachments or email.attachments),
+        "has_attachments": bool(email.has_attachments),
         "origin": email_origin(email),
         "score": None,
         "scoring_category": "without_score",
@@ -321,55 +367,64 @@ def email_workbench_item(email: Email) -> dict:
     }
 
 
-def suggest_customer_for_email(db: Session, company_id: int, email: Email) -> str:
+def _customer_suggestion_maps(db: Session, company_id: int) -> dict[str, dict[str, str]]:
+    email_matches = db.execute(
+        select(CustomerContactPoint.value, Customer.fiscal_name)
+        .join(Customer, Customer.id == CustomerContactPoint.customer_id)
+        .where(
+            CustomerContactPoint.company_id == company_id,
+            CustomerContactPoint.type == "email",
+            CustomerContactPoint.active == True,  # noqa: E712
+        )
+    ).all()
+    domain_matches = db.execute(
+        select(CustomerContactPoint.value, Customer.fiscal_name)
+        .join(Customer, Customer.id == CustomerContactPoint.customer_id)
+        .where(
+            CustomerContactPoint.company_id == company_id,
+            CustomerContactPoint.type == "domain",
+            CustomerContactPoint.active == True,  # noqa: E712
+        )
+    ).all()
+    customer_domains = db.execute(
+        select(CustomerDomain.domain, Customer.fiscal_name)
+        .join(Customer, Customer.id == CustomerDomain.customer_id)
+        .where(CustomerDomain.company_id == company_id)
+    ).all()
+    return {
+        "email": {str(value).strip().lower(): fiscal_name for value, fiscal_name in email_matches if value},
+        "domain": {str(value).strip().lower(): fiscal_name for value, fiscal_name in domain_matches if value},
+        "customer_domain": {str(value).strip().lower(): fiscal_name for value, fiscal_name in customer_domains if value},
+    }
+
+
+def suggest_customer_for_email(db: Session, company_id: int, email: Email, *, suggestion_maps: dict[str, dict[str, str]] | None = None) -> str:
     if "@" not in email.sender:
         return ""
     sender = email.sender.strip().lower()
     domain = sender.split("@")[-1]
-    exact = db.scalar(
-        select(CustomerContactPoint).where(
-            CustomerContactPoint.company_id == company_id,
-            CustomerContactPoint.type == "email",
-            CustomerContactPoint.active == True,  # noqa: E712
-            CustomerContactPoint.value.ilike(sender),
-        )
-    )
-    if exact:
-        customer = db.get(Customer, exact.customer_id)
-        if customer:
-            return customer.fiscal_name
-    dom_point = db.scalar(
-        select(CustomerContactPoint).where(
-            CustomerContactPoint.company_id == company_id,
-            CustomerContactPoint.type == "domain",
-            CustomerContactPoint.active == True,  # noqa: E712
-            CustomerContactPoint.value == domain,
-        )
-    )
-    if dom_point:
-        customer = db.get(Customer, dom_point.customer_id)
-        if customer:
-            return customer.fiscal_name
-    match = db.scalar(
-        select(Customer)
-        .join(CustomerDomain, CustomerDomain.customer_id == Customer.id)
-        .where(Customer.company_id == company_id, CustomerDomain.company_id == company_id, CustomerDomain.domain == domain)
-    )
-    return match.fiscal_name if match else ""
+    lookup = suggestion_maps or _customer_suggestion_maps(db, company_id)
+    if sender in lookup["email"]:
+        return lookup["email"][sender]
+    if domain in lookup["domain"]:
+        return lookup["domain"][domain]
+    if domain in lookup["customer_domain"]:
+        return lookup["customer_domain"][domain]
+    return ""
 
 
-def filter_orders_for_operation(orders: list[Order], settings: ScoringSettings, filters: dict) -> list[Order]:
+def filter_orders_for_operation(orders: list[Order], settings: ScoringSettings, filters: dict, line_metrics_by_order: dict[int, dict[str, int]] | None = None) -> list[Order]:
     work_status = filters.get("work_status")
     if work_status:
-        orders = [order for order in orders if order_operational_category(order, settings) == work_status]
+        orders = [order for order in orders if order_operational_category(order, settings, line_metrics_by_order=line_metrics_by_order) == work_status]
     issue_type = filters.get("issue_type")
     if issue_type:
         if issue_type == "cliente_no_identificado":
             orders = [order for order in orders if not order.validated_customer_id]
         elif issue_type == "producto_no_encontrado":
-            orders = [order for order in orders if any(not line.validated_product_id for line in order.lines)]
+            orders = [order for order in orders if _order_line_metrics(order, line_metrics_by_order)["missing_product_count"] > 0]
         elif issue_type == "cantidad_dudosa":
-            orders = [order for order in orders if any(line.quantity is None or line.quantity <= 0 for line in order.lines)]
+            orders = [order for order in orders if _order_line_metrics(order, line_metrics_by_order)["invalid_quantity_count"] > 0]
         elif issue_type == "error_exportacion":
             orders = [order for order in orders if order.status == "error_exportacion"]
         elif issue_type in {"error_correo", "error_llm", "error_ftp"}:
@@ -383,7 +438,7 @@ def filter_orders_for_operation(orders: list[Order], settings: ScoringSettings, 
         orders = [order for order in orders if email_has_pdf(order.email) == want_pdf]
     requires_review = filters.get("requires_review")
     if requires_review:
-        orders = [order for order in orders if (order_operational_category(order, settings) in {"review", "blocked", "error"}) == (requires_review == "yes")]
+        orders = [order for order in orders if (order_operational_category(order, settings, line_metrics_by_order=line_metrics_by_order) in {"review", "blocked", "error"}) == (requires_review == "yes")]
     return orders
 
 
@@ -391,10 +446,7 @@ def operational_summary(db: Session, company_id: int, filters: dict) -> dict:
     settings = get_or_create_settings(db, ScoringSettings, company_id)
     today = datetime.now(timezone.utc).date()
     orders_stmt = select(Order).where(Order.company_id == company_id).options(
-        selectinload(Order.email).selectinload(Email.attachments),
-        selectinload(Order.lines),
-        selectinload(Order.lines).selectinload(OrderLine.product),
-        selectinload(Order.lines).selectinload(OrderLine.validated_product),
+        selectinload(Order.email),
         selectinload(Order.customer),
         selectinload(Order.validated_customer),
     )
@@ -454,11 +506,12 @@ def operational_summary(db: Session, company_id: int, filters: dict) -> dict:
         orders_stmt = orders_stmt.where(or_(Email.subject.ilike(like), Order.customer_detected_name.ilike(like)))
         emails_stmt = emails_stmt.where(or_(Email.subject.ilike(like), Email.sender.ilike(like)))
     orders = db.scalars(orders_stmt.order_by(Order.created_at.desc())).unique().all()
+    line_metrics_by_order = _load_order_line_metrics(db, company_id, [order.id for order in orders])
     emails = db.scalars(emails_stmt.order_by(Email.received_at.desc())).all()
     if filters.get("scoring_category"):
         orders = [order for order in orders if scoring_category(order.score, settings) == filters["scoring_category"]]
-    orders = filter_orders_for_operation(orders, settings, filters)
-    items = [build_order_item(order, settings, include_line_metrics=load_line_details) for order in orders]
+    orders = filter_orders_for_operation(orders, settings, filters, line_metrics_by_order)
+    items = [build_order_item(order, settings, include_line_metrics=True, line_metrics_by_order=line_metrics_by_order) for order in orders]
     items.sort(key=lambda item: (item["priority_rank"], -item["date"].timestamp()))
     page, page_size = normalize_page(int(filters.get("page") or 1), int(filters.get("page_size") or 25))
     total_items = len(items)
@@ -467,7 +520,7 @@ def operational_summary(db: Session, company_id: int, filters: dict) -> dict:
     paged_items = items[start:start + page_size]
     distribution = {key: {"count": 0, "percentage": 0} for key in ["safe", "reviewable", "doubtful", "blocked", "without_score"]}
     for order in orders:
-        op = order_operational_category(order, settings)
+        op = order_operational_category(order, settings, line_metrics_by_order=line_metrics_by_order)
         key = "blocked" if op == "blocked" else scoring_category(order.score, settings)
         if key == "not_importable":
             key = "blocked"
@@ -475,15 +528,15 @@ def operational_summary(db: Session, company_id: int, filters: dict) -> dict:
     denom = sum(v["count"] for v in distribution.values()) or 1
     for value in distribution.values():
         value["percentage"] = round(value["count"] * 100 / denom, 1)
-    ready = [order for order in orders if order_operational_category(order, settings) == "ready"]
-    review = [order for order in orders if order_operational_category(order, settings) == "review"]
-    blocked = [order for order in orders if order_operational_category(order, settings) == "blocked"]
-    errors = [order for order in orders if order_operational_category(order, settings) == "error"]
+    ready = [order for order in orders if order_operational_category(order, settings, line_metrics_by_order=line_metrics_by_order) == "ready"]
+    review = [order for order in orders if order_operational_category(order, settings, line_metrics_by_order=line_metrics_by_order) == "review"]
+    blocked = [order for order in orders if order_operational_category(order, settings, line_metrics_by_order=line_metrics_by_order) == "blocked"]
+    errors = [order for order in orders if order_operational_category(order, settings, line_metrics_by_order=line_metrics_by_order) == "error"]
     exported_today = [order for order in orders if order.status == "pedido_exportado" and order.exported_at and order.exported_at.date() == today]
     alerts = []
     if errors:
         alerts.append({"type": "error_exportacion", "level": "error", "message": f"{len(errors)} pedidos tienen errores de exportacion o procesamiento.", "action_label": "Reintentar", "url": "/?work_status=error"})
-    product_issues = [order for order in orders if any(not line.validated_product_id for line in order.lines)]
+    product_issues = [order for order in orders if _order_line_metrics(order, line_metrics_by_order)["missing_product_count"] > 0]
     if product_issues:
         alerts.append({"type": "producto_no_encontrado", "level": "warning", "message": f"{len(product_issues)} pedidos tienen productos no encontrados.", "action_label": "Revisar", "url": "/?issue_type=producto_no_encontrado"})
     doubtful_emails = [email for email in emails if email.detected_type == "dudoso"]
@@ -556,20 +609,11 @@ def workbench_summary(db: Session, company_id: int, filters: dict, *, include_me
         if status_map.get(filters["agent_status"]):
             mapped_filters["email_type"] = status_map[filters["agent_status"]]
 
-    load_line_details = include_metrics or bool(mapped_filters.get("issue_type") or mapped_filters.get("requires_review"))
     order_load_options = [
         selectinload(Order.email),
         selectinload(Order.customer),
         selectinload(Order.validated_customer),
     ]
-    if load_line_details:
-        order_load_options.extend(
-            [
-                selectinload(Order.lines),
-                selectinload(Order.lines).selectinload(OrderLine.product),
-                selectinload(Order.lines).selectinload(OrderLine.validated_product),
-            ]
-        )
     orders_stmt = select(Order).where(Order.company_id == company_id).options(*order_load_options)
     today = datetime.now(timezone.utc).date()
     quick_range = mapped_filters.get("quick_range")
@@ -606,10 +650,15 @@ def workbench_summary(db: Session, company_id: int, filters: dict, *, include_me
         like = f"%{mapped_filters['search']}%"
         orders_stmt = orders_stmt.join(Email, Order.email_id == Email.id).where(or_(Email.subject.ilike(like), Order.customer_detected_name.ilike(like)))
     orders = db.scalars(orders_stmt.order_by(Order.created_at.desc())).unique().all()
+    line_metrics_by_order = _load_order_line_metrics(db, company_id, [order.id for order in orders])
     if mapped_filters.get("scoring_category"):
         orders = [order for order in orders if scoring_category(order.score, settings) == mapped_filters["scoring_category"]]
-    orders = filter_orders_for_operation(orders, settings, mapped_filters)
-    order_items = [order_workbench_item(order, settings, include_line_metrics=load_line_details) for order in orders]
+    orders = filter_orders_for_operation(orders, settings, mapped_filters, line_metrics_by_order)
+    include_line_details = include_metrics or bool(mapped_filters.get("issue_type") or mapped_filters.get("requires_review"))
+    order_items = [
+        order_workbench_item(order, settings, include_line_metrics=include_line_details, line_metrics_by_order=line_metrics_by_order)
+        for order in orders
+    ]
     order_email_ids = {item["email_id"] for item in order_items if item["email_id"]}
 
     emails_stmt = select(Email).where(Email.company_id == company_id)
@@ -635,12 +684,13 @@ def workbench_summary(db: Session, company_id: int, filters: dict, *, include_me
     if order_email_ids:
         emails_stmt = emails_stmt.where(~Email.id.in_(order_email_ids))
     emails = db.scalars(emails_stmt.order_by(Email.received_at.desc())).unique().all()
+    suggestion_maps = _customer_suggestion_maps(db, company_id) if emails else None
     email_items = []
     for email in emails:
         if email.id in order_email_ids:
             continue
         item = email_workbench_item(email)
-        item["suggested_customer"] = suggest_customer_for_email(db, company_id, email)
+        item["suggested_customer"] = suggest_customer_for_email(db, company_id, email, suggestion_maps=suggestion_maps)
         if item["suggested_customer"]:
             item["customer_name"] = item["suggested_customer"]
         email_items.append(item)
@@ -757,10 +807,7 @@ def workbench_summary(db: Session, company_id: int, filters: dict, *, include_me
 def dashboard_summary(db: Session, company_id: int, filters: dict) -> dict:
     settings = get_or_create_settings(db, ScoringSettings, company_id)
     orders_stmt = select(Order).where(Order.company_id == company_id).options(
-        selectinload(Order.email).selectinload(Email.attachments),
-        selectinload(Order.lines),
-        selectinload(Order.lines).selectinload(OrderLine.product),
-        selectinload(Order.lines).selectinload(OrderLine.validated_product),
+        selectinload(Order.email),
         selectinload(Order.customer),
         selectinload(Order.validated_customer),
     )

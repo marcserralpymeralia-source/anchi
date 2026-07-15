@@ -65,3 +65,7 @@ La carpeta de salida es `backend/performance-results/` y esta excluida de Git.
 - `/history` ya no devuelve `500`; se corrigio la referencia a `get_or_create_settings`.
 
 Estos fallos quedaron cerrados en la fase 6A y el benchmark se rerun con exito para reflejar el estado actual.
+
+## Nota de la fase 6B
+
+En la fase 6B, home y workbench dejan de depender de carga lazy por fila para su render inicial. La vista usa metadatos agregados de lineas y un mapa compartido de sugerencias de cliente para reducir consultas repetidas sin cambiar la experiencia visible ni el comportamiento de la pantalla.

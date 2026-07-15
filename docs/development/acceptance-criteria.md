@@ -31,6 +31,8 @@
 - Exponer health/live, health/ready y metricas internas basicas.
 - Medir tiempo total, SQL, consultas duplicadas, renderizado Jinja, tamaño de respuesta y volumen de registros en requests criticos.
 - Mantener un benchmark reproducible con salida en JSON/CSV y datos sintéticos temporales.
+- Mantener home y workbench bajo 12 consultas SQL y 1 consulta duplicada en los escenarios small y medium tras la fase 6B.
+- Cubrir ese presupuesto con `backend/tests/test_home_workbench_optimization.py`.
 - No filtrar secretos en logs estructurados ni en trazas persistidas.
 - Documentar cualquier fallo que no se corrija en ese momento.
 
