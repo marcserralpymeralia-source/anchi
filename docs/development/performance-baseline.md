@@ -2,13 +2,16 @@
 
 ## Estado actual
 
-Esta es la referencia activa tras la Fase 6E. Home y workbench ya no crecen en consultas por cada elemento mostrado, el listado general de pedidos quedo reducido en la Fase 6C, el detalle de pedido se optimizo en la Fase 6D y la bandeja `/channels` paso a una carga SQL real con contexto ligero en la fase 6E.
+Esta es la referencia activa tras la Fase 6F. Home y workbench ya no crecen en consultas por cada elemento mostrado, el listado general de pedidos quedo reducido en la Fase 6C, el detalle de pedido se optimizo en la Fase 6D, la bandeja `/channels` paso a una carga SQL real en la Fase 6E y `/history` dejo de cargar la coleccion completa para trabajar con paginacion y agregados SQL.
 
 Benchmark files actuales:
 
 - `backend/performance-results/performance-baseline-small-20260715T135956Z.json`
 - `backend/performance-results/performance-baseline-medium-20260715T135957Z.json`
 - `backend/performance-results/performance-baseline-large-20260715T140008Z.json`
+- `backend/performance-results/performance-baseline-small-20260715T142118Z.json`
+- `backend/performance-results/performance-baseline-medium-20260715T142119Z.json`
+- `backend/performance-results/performance-baseline-large-20260715T142120Z.json`
 - `backend/performance-results/performance-baseline-small-20260715T113120Z.json`
 - `backend/performance-results/performance-baseline-medium-20260715T113344Z.json`
 - `backend/performance-results/performance-baseline-large-20260715T113429Z.json`
@@ -30,6 +33,26 @@ La bandeja `/channels?tab=processed&date_range=30d` dejaba de ser util porque me
 - Adjunto y PDF cargados solo para las filas visibles.
 - Contexto de filtros y clientes mantenido con estructuras ligeras para no inflar el render.
 - Aislamiento tenant mantenido sin cambiar la experiencia visible de la bandeja.
+
+## History: antes y despues
+
+La fase 6F convierte `/history` en una pagina SQL paginada, con filtros, resumen y ordenacion resueltos en base de datos. El objetivo era eliminar la carga completa de historial y limitar el trabajo a la pagina visible.
+
+| Escenario | Antes | Despues |
+| --- | --- | --- |
+| Small | 4.39 ms, 33 queries, 21 duplicadas, 39023 bytes, 60 registros cargados | 18.74 ms, 19 queries, 3 duplicadas, 39023 bytes, 60 registros cargados |
+| Medium | 6.29 ms, 153 queries, 141 duplicadas, 78848 bytes, 350 registros cargados | 27.05 ms, 19 queries, 3 duplicadas, 56040 bytes, 210 registros cargados |
+| Large | 25.01 ms, 313 queries, 301 duplicadas, 98378 bytes, 730 registros cargados | 29.92 ms, 19 queries, 3 duplicadas, 75487 bytes, 430 registros cargados |
+
+Nota: el mayor avance de esta fase esta en la reduccion de consultas y duplicadas. El tiempo medido sigue dependiendo bastante del volumen sintetico y del coste de render de la pagina visible.
+
+## History: resumen tecnico
+
+- Consulta unificada de pedidos y correos con filtros SQL.
+- Paginacion, orden y conteos por pestaña resueltos en base de datos.
+- Carga ORM solo para los elementos visibles de la pagina actual.
+- Reutilizacion de mapas de sugerencia de cliente y metadatos de lineas.
+- Menos trabajo en Python antes del render Jinja.
 
 ## Home y workbench: antes y despues
 

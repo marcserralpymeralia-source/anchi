@@ -151,6 +151,8 @@ class PerformanceInstrumentationTests(unittest.TestCase):
                 response = client.get("/history?date_range=90d")
             self.assertEqual(response.status_code, 200)
             self.assertNotIn("internal_error", response.text.lower())
+            self.assertIn("X-Perf-SQL-Count", response.headers)
+            self.assertLess(int(response.headers["X-Perf-SQL-Count"]), 25)
         finally:
             fixture.cleanup()
 

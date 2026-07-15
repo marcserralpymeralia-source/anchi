@@ -30,3 +30,6 @@
 | 2026-07-15 | Fase 6E | Reescribir `/channels` con union SQL, filtros agregados y paginacion real | Eliminar la lectura por fila y recortar la bandeja a la pagina visible | `backend/app/channels/routes.py` |
 | 2026-07-15 | Fase 6E | Pasar clientes y pestañas a estructuras ligeras en el contexto Jinja | Evitar que el perfil de rendimiento cuente la lista completa de clientes como carga visible | `backend/app/channels/routes.py` |
 | 2026-07-15 | Fase 6E | Cubrir la bandeja con presupuestos de consultas, duplicadas y carga visible | Bloquear regresiones de `/channels` en small, medium y large | `backend/tests/test_channels_optimization.py` |
+| 2026-07-15 | Fase 6F | Reescribir `/history` con union SQL, filtros y paginacion real | Evitar cargar el historial completo en memoria y reducir el trabajo a la pagina visible | `backend/app/pages/routes.py` |
+| 2026-07-15 | Fase 6F | Reutilizar metadatos compartidos de sugerencias y lineas en `/history` | Evitar consultas repetidas por fila durante el render | `backend/app/pages/routes.py` |
+| 2026-07-15 | Fase 6F | Acompañar la optimizacion de `/history` con un presupuesto de consultas en tests | Bloquear regresiones de rendimiento en la ruta de historial | `backend/tests/test_performance_instrumentation.py` |

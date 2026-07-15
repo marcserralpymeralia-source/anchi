@@ -83,3 +83,7 @@ El detalle de pedido deja de comportarse como una pantalla de carga amplia para 
 ## Nota de la fase 6E
 
 La bandeja `/channels` pasa a medir una pagina visible real y un resumen agregado, sin ejecutar consultas por fila ni cargar colecciones completas para flags o estados visibles. El render inicial mantiene la misma experiencia operativa, pero ahora la carga se concentra en una consulta principal paginada, un agregado de contadores y un fetch acotado de adjuntos para las filas visibles.
+
+## Nota de la fase 6F
+
+La pantalla `/history` deja de materializar el historial completo en memoria y pasa a resolver filtros, ordenacion, resumen y paginacion desde SQL. La vista sigue mostrando correos y pedidos mezclados en la misma experiencia operativa, pero ahora la carga se centra en la pagina visible y en un conjunto acotado de filas ORM.
