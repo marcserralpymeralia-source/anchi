@@ -126,3 +126,44 @@ La optimizacion del detalle de pedido quedo documentada como una pantalla de tra
 - El detalle de pedido deja de arrastrar cargas completas de cliente y producto.
 - La respuesta del detalle se mantiene compacta y sin dependencias lazy visibles desde Jinja.
 - La optimizacion del detalle no introduce regresion funcional en la ruta ni en la renderizacion principal.
+
+## Fase 6G - benchmark global
+
+La Fase 6G no introduce optimizacion nueva. Su cierre confirma el estado final del bloque de rendimiento con el benchmark completo y compara el resultado con la linea base inicial del commit `01a2b26`.
+
+### Consolidado final de rutas criticas
+
+| Ruta | Small | Medium | Large |
+| --- | --- | --- | --- |
+| `/` | 2.24 ms, 11 q, 1 dup, 95 KB, 20 registros | 2.96 ms, 11 q, 1 dup, 114 KB, 25 registros | 3.09 ms, 11 q, 1 dup, 114 KB, 25 registros |
+| `/workbench` | 0.37 ms, 11 q, 1 dup, 16 KB, 0 registros | 0.67 ms, 11 q, 1 dup, 21 KB, 0 registros | 1.12 ms, 11 q, 1 dup, 21 KB, 0 registros |
+| `/channels?tab=processed&date_range=30d` | 3.28 ms, 10 q, 0 dup, 125 KB, 20 registros | 8.78 ms, 10 q, 0 dup, 175 KB, 25 registros | 51.60 ms, 10 q, 0 dup, 199 KB, 25 registros |
+| `/orders?date_range=90d` | 4.75 ms, 14 q, 1 dup, 56 KB, 20 registros | 6.22 ms, 14 q, 1 dup, 78 KB, 25 registros | 18.86 ms, 14 q, 1 dup, 97 KB, 25 registros |
+| `/orders/1` | 1.88 ms, 14 q, 0 dup, 30 KB, 3 registros | 16.53 ms, 14 q, 0 dup, 30 KB, 3 registros | 117.96 ms, 14 q, 0 dup, 30 KB, 3 registros |
+| `/history?date_range=90d` | 4.86 ms, 19 q, 3 dup, 39 KB, 60 registros | 8.29 ms, 19 q, 3 dup, 56 KB, 210 registros | 22.45 ms, 19 q, 3 dup, 75 KB, 430 registros |
+| `/jobs/monitor` | 0.79 ms, 14 q, 5 dup, 17 KB, 0 registros | 23.24 ms, 14 q, 5 dup, 79 KB, 25 registros | 15.81 ms, 14 q, 5 dup, 79 KB, 25 registros |
+| `/customers` | 2.42 ms, 32 q, 4 dup, 94 KB, 40 registros | 3.60 ms, 32 q, 0 dup, 112 KB, 50 registros | 8.60 ms, 32 q, 0 dup, 112 KB, 50 registros |
+| `/products` | 4.45 ms, 9 q, 0 dup, 114 KB, 20 registros | 6.29 ms, 9 q, 0 dup, 138 KB, 25 registros | 10.85 ms, 9 q, 0 dup, 138 KB, 25 registros |
+| `/imports/quick` | 0.53 ms, 15 q, 4 dup, 16 KB, 0 registros | 0.64 ms, 15 q, 4 dup, 16 KB, 0 registros | 1.46 ms, 15 q, 4 dup, 16 KB, 0 registros |
+| `/settings` | 4.62 ms, 68 q, 25 dup, 73 KB, 22 registros | 15.13 ms, 68 q, 25 dup, 73 KB, 22 registros | 12.57 ms, 68 q, 25 dup, 73 KB, 22 registros |
+| `/alerts` | 0.71 ms, 8 q, 0 dup, 28 KB, 4 registros | 6.60 ms, 8 q, 0 dup, 89 KB, 4 registros | 3.07 ms, 8 q, 0 dup, 89 KB, 4 registros |
+| `/logs` | 0.37 ms, 5 q, 0 dup, 15 KB, 1 registro | 3.65 ms, 5 q, 0 dup, 56 KB, 91 registros | 5.03 ms, 5 q, 0 dup, 97 KB, 181 registros |
+| `/admin/diagnostics` | 0.69 ms, 22 q, 5 dup, 18 KB, 1 registro | 1.95 ms, 22 q, 5 dup, 18 KB, 1 registro | 1.74 ms, 22 q, 5 dup, 18 KB, 1 registro |
+
+### Comparacion con la base inicial
+
+| Ruta | Baseline inicial 01a2b26 | Estado final | Lectura |
+| --- | --- | --- | --- |
+| `/` | 6.08 ms, 202 q, 191 dup | 2.96 ms, 11 q, 1 dup | Caida estructural fuerte y estable |
+| `/orders?date_range=90d` | 230.76 ms, 42 q, 26 dup | 6.22 ms, 14 q, 1 dup | Reduccion muy grande de coste y de ruido ORM |
+| `/orders/1` | 7.19 ms, 25 q, 2 dup | 16.53 ms, 14 q, 0 dup | Queries mejoran; tiempo sigue sensible al render y al volumen sintetico |
+| `/channels?tab=processed&date_range=30d` | 70.18 ms y 500 en small por la regresion, sin baseline util estable | 8.78 ms, 10 q, 0 dup | La ruta queda recuperada y ya es medible con normalidad |
+| `/history?date_range=90d` | 4.19 ms en small, pero la ruta estaba rota en escenarios posteriores | 8.29 ms, 19 q, 3 dup | Ya no hay 500 y la pagina trabaja sobre SQL paginado |
+
+### Conclusiones de cierre
+
+- La mejora estructural mas clara sigue siendo la reduccion de consultas y duplicadas.
+- Los tiempos siguen dependiendo de SQLite, del volumen sintetico y del render de plantilla en algunas rutas.
+- `jobs/monitor`, `settings`, `customers`, `products` y `logs` son ahora los principales candidatos para repetir medicion en PostgreSQL antes de sacar conclusiones de latencia fina.
+- No se han introducido regresiones funcionales en la suite completa.
+- El bloque de rendimiento puede darse por cerrado a nivel documental.

@@ -87,3 +87,7 @@ La bandeja `/channels` pasa a medir una pagina visible real y un resumen agregad
 ## Nota de la fase 6F
 
 La pantalla `/history` deja de materializar el historial completo en memoria y pasa a resolver filtros, ordenacion, resumen y paginacion desde SQL. La vista sigue mostrando correos y pedidos mezclados en la misma experiencia operativa, pero ahora la carga se centra en la pagina visible y en un conjunto acotado de filas ORM.
+
+## Nota de la fase 6G
+
+La Fase 6G no cambia el comportamiento de la app. Ejecuta el benchmark global final, contrasta los resultados con la base inicial de `01a2b26`, y cierra el bloque de rendimiento dejando claras las rutas que ya estan estabilizadas y las que conviene revalidar sobre PostgreSQL.

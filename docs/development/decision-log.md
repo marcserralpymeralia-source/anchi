@@ -33,3 +33,4 @@
 | 2026-07-15 | Fase 6F | Reescribir `/history` con union SQL, filtros y paginacion real | Evitar cargar el historial completo en memoria y reducir el trabajo a la pagina visible | `backend/app/pages/routes.py` |
 | 2026-07-15 | Fase 6F | Reutilizar metadatos compartidos de sugerencias y lineas en `/history` | Evitar consultas repetidas por fila durante el render | `backend/app/pages/routes.py` |
 | 2026-07-15 | Fase 6F | Acompañar la optimizacion de `/history` con un presupuesto de consultas en tests | Bloquear regresiones de rendimiento en la ruta de historial | `backend/tests/test_performance_instrumentation.py` |
+| 2026-07-15 | Fase 6G | Cerrar el bloque de rendimiento con benchmark global y comparacion contra `01a2b26` | Separar mejora estructural de ruido de timings y fijar la base final | `docs/development/performance-baseline.md`, `docs/development/performance-measurement.md`, `docs/development/phases/phase-06g-global-benchmark-and-closure.md` |
