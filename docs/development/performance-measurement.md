@@ -50,6 +50,8 @@ Los tres escenarios usan datos sinteticos y temporales. No se uso informacion re
 - `/logs`
 - `/admin/diagnostics`
 
+La fase 6C se concentro solo en el listado general de pedidos (`/orders`) y dejo intacto el detalle (`/orders/{order_id}`), que sigue siendo una pantalla de trabajo completa.
+
 ## Salida del benchmark
 
 El benchmark escribe dos ficheros por ejecucion:
@@ -69,3 +71,7 @@ Estos fallos quedaron cerrados en la fase 6A y el benchmark se rerun con exito p
 ## Nota de la fase 6B
 
 En la fase 6B, home y workbench dejan de depender de carga lazy por fila para su render inicial. La vista usa metadatos agregados de lineas y un mapa compartido de sugerencias de cliente para reducir consultas repetidas sin cambiar la experiencia visible ni el comportamiento de la pantalla.
+
+## Nota de la fase 6C
+
+El listado general de pedidos ya no incrusta el detalle completo por fila. Ahora carga una pagina SQL real, trae solo las relaciones necesarias para la tabla visible y calcula alertas con agregados por pagina. El resultado es una reduccion fuerte de HTML, consultas y memoria, manteniendo los filtros operativos y sin tocar el detalle completo del pedido.

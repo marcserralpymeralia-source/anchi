@@ -21,3 +21,6 @@
 | 2026-07-15 | Fase 6B | Sustituir cargas lazy por metadatos agregados en home y workbench | Eliminar el crecimiento lineal de consultas en la carga inicial sin cambiar la experiencia visible | `backend/app/dashboard/service.py` |
 | 2026-07-15 | Fase 6B | Compartir el mapa de sugerencias de cliente en workbench | Evitar tres consultas por email y reutilizar la resolucion de sugerencias en bloque | `backend/app/dashboard/service.py` |
 | 2026-07-15 | Fase 6B | Añadir un test de presupuesto de consultas para home y workbench | Bloquear regresiones estructurales en la carga inicial | `backend/tests/test_home_workbench_optimization.py` |
+| 2026-07-15 | Fase 6C | Optimizar solo el listado general de pedidos y no el detalle | Reducir el peso de la pantalla de gestion sin tocar la experiencia completa de revision | `backend/app/orders/routes.py`, `backend/app/templates/orders/list.html` |
+| 2026-07-15 | Fase 6C | Sustituir el bloque oculto por agregados por pagina en pedidos | Evitar cargar lineas, adjuntos y exportaciones completas por cada fila | `backend/app/orders/routes.py`, `backend/app/templates/orders/list.html` |
+| 2026-07-15 | Fase 6C | Añadir presupuesto de consultas y tamano para el listado de pedidos | Bloquear regresiones de rendimiento en la vista operativa principal | `backend/tests/test_orders_list_optimization.py` |

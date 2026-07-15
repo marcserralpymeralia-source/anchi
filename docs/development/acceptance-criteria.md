@@ -33,6 +33,10 @@
 - Mantener un benchmark reproducible con salida en JSON/CSV y datos sintéticos temporales.
 - Mantener home y workbench bajo 12 consultas SQL y 1 consulta duplicada en los escenarios small y medium tras la fase 6B.
 - Cubrir ese presupuesto con `backend/tests/test_home_workbench_optimization.py`.
+- Mantener el listado general de pedidos bajo 20 consultas SQL y 3 consultas duplicadas en los escenarios small, medium y large tras la fase 6C.
+- Mantener `/orders?date_range=90d` por debajo de 500 KB de HTML en scenario medium tras la fase 6C.
+- Cubrir ese presupuesto con `backend/tests/test_orders_list_optimization.py`.
+- No degradar en mas de un 10% las rutas de control medidas en scenario medium tras una optimizacion de listado.
 - No filtrar secretos en logs estructurados ni en trazas persistidas.
 - Documentar cualquier fallo que no se corrija en ese momento.
 

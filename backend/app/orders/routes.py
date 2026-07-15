@@ -5,8 +5,8 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
-from sqlalchemy import exists, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import case, exists, func, or_, select
+from sqlalchemy.orm import Session, load_only, selectinload
 
 from app.core.templating import templates
 from app.agent.platform import LearningService
@@ -39,16 +39,19 @@ def order_score_category(score: float | None, scoring: ScoringSettings) -> tuple
     return "not_importable", "No importable"
 
 
-def order_alerts(order: Order) -> dict:
-    lines = order.lines or []
-    doubtful_lines = [line for line in lines if line.validation_status != "validated" or not line.validated_product_id or line.doubt_reason]
-    has_pdf = bool(order.email and any(attachment.content_type == "application/pdf" for attachment in order.email.attachments))
+def order_alerts(order: Order, *, line_count: int | None = None, doubtful_count: int | None = None, has_pdf: bool | None = None) -> dict:
+    if line_count is None or doubtful_count is None or has_pdf is None:
+        lines = order.lines or []
+        doubtful_lines = [line for line in lines if line.validation_status != "validated" or not line.validated_product_id or line.doubt_reason]
+        line_count = len(lines)
+        doubtful_count = len(doubtful_lines)
+        has_pdf = bool(order.email and any(attachment.content_type == "application/pdf" for attachment in order.email.attachments))
     return {
-        "line_count": len(lines),
-        "doubtful_count": len(doubtful_lines),
-        "has_pdf": has_pdf,
+        "line_count": int(line_count or 0),
+        "doubtful_count": int(doubtful_count or 0),
+        "has_pdf": bool(has_pdf),
         "has_notes": bool(order.notes),
-        "requires_review": bool(doubtful_lines or order.status in {"pedido_pendiente_revision", "pending_review", "dudoso", "no_importable"}),
+        "requires_review": bool((doubtful_count or 0) or order.status in {"pedido_pendiente_revision", "pending_review", "dudoso", "no_importable"}),
     }
 
 
@@ -264,24 +267,75 @@ def list_orders(
         "customer_asc": Order.customer_detected_name.asc(),
     }
     stmt = stmt.options(
-        selectinload(Order.lines).selectinload(OrderLine.product),
-        selectinload(Order.lines).selectinload(OrderLine.validated_product),
-        selectinload(Order.email).selectinload(Email.attachments),
-        selectinload(Order.customer),
-        selectinload(Order.validated_customer),
+        load_only(
+            Order.id,
+            Order.email_id,
+            Order.customer_id,
+            Order.validated_customer_id,
+            Order.customer_detected_name,
+            Order.score,
+            Order.status,
+            Order.notes,
+            Order.created_at,
+        ),
+        selectinload(Order.email).load_only(Email.id, Email.sender, Email.subject, Email.detected_type, Email.received_at, Email.external_id),
+        selectinload(Order.customer).load_only(Customer.id, Customer.code, Customer.fiscal_name),
+        selectinload(Order.validated_customer).load_only(Customer.id, Customer.code, Customer.fiscal_name),
     ).order_by(sort_map.get(sort, Order.created_at.desc()))
     orders, pagination = paginate(db, stmt, page=page, page_size=page_size)
-    customers = db.scalars(select(Customer).where(Customer.company_id == user.company_id, Customer.deleted_at.is_(None)).order_by(Customer.fiscal_name)).all()
-    statuses = db.scalars(select(Order.status).where(Order.company_id == user.company_id).distinct().order_by(Order.status)).all()
-    products = db.scalars(select(Product).where(Product.company_id == user.company_id, Product.deleted_at.is_(None)).order_by(Product.reference)).all()
-    exports_by_order = {
-        order.id: db.scalars(select(ExportFile).where(ExportFile.order_id == order.id).order_by(ExportFile.created_at.desc())).all()
-        for order in orders
-    }
+    customers = tuple(db.scalars(select(Customer).where(Customer.company_id == user.company_id, Customer.deleted_at.is_(None)).order_by(Customer.fiscal_name)).all())
+    statuses = tuple(db.scalars(select(Order.status).where(Order.company_id == user.company_id).distinct().order_by(Order.status)).all())
+    order_ids = [order.id for order in orders]
+    line_metrics: dict[int, dict[str, int]] = {}
+    pdf_flags: dict[int, bool] = {}
+    if order_ids:
+        doubtful_case = case(
+            (
+                or_(
+                    OrderLine.validation_status != "validated",
+                    OrderLine.validated_product_id.is_(None),
+                    OrderLine.doubt_reason.is_not(None),
+                ),
+                1,
+            ),
+            else_=0,
+        )
+        for order_id, line_count, doubtful_count in db.execute(
+            select(
+                OrderLine.order_id,
+                func.count(OrderLine.id).label("line_count"),
+                func.coalesce(func.sum(doubtful_case), 0).label("doubtful_count"),
+            )
+            .where(OrderLine.order_id.in_(order_ids))
+            .group_by(OrderLine.order_id)
+        ):
+            line_metrics[int(order_id)] = {
+                "line_count": int(line_count or 0),
+                "doubtful_count": int(doubtful_count or 0),
+            }
+        for order_id, pdf_count in db.execute(
+            select(
+                Order.id,
+                func.count(EmailAttachment.id).label("pdf_count"),
+            )
+            .join(Email, Order.email_id == Email.id)
+            .join(EmailAttachment, EmailAttachment.email_id == Email.id)
+            .where(Order.id.in_(order_ids), EmailAttachment.content_type == "application/pdf")
+            .group_by(Order.id)
+        ):
+            pdf_flags[int(order_id)] = bool(pdf_count)
     filters = {"date_from": date_from, "date_to": date_to, "customer_id": customer_id, "score_min": score_min, "score_max": score_max, "status": status, "email_type": email_type, "sender": sender, "search": search, "scoring_category": scoring_category, "has_pdf": has_pdf, "requires_review": requires_review, "sort": sort}
     categories = {order.id: order_score_category(order.score, scoring) for order in orders}
-    alerts = {order.id: order_alerts(order) for order in orders}
-    return templates.TemplateResponse("orders/list.html", {"request": request, "user": user, "orders": orders, "customers": customers, "products": products, "statuses": statuses, "pagination": pagination, "filters": filters, "scoring": scoring, "categories": categories, "alerts": alerts, "exports_by_order": exports_by_order})
+    alerts = {
+        order.id: order_alerts(
+            order,
+            line_count=line_metrics.get(order.id, {}).get("line_count", 0),
+            doubtful_count=line_metrics.get(order.id, {}).get("doubtful_count", 0),
+            has_pdf=pdf_flags.get(order.id, False),
+        )
+        for order in orders
+    }
+    return templates.TemplateResponse("orders/list.html", {"request": request, "user": user, "orders": orders, "customers": customers, "statuses": statuses, "pagination": pagination, "filters": filters, "scoring": scoring, "categories": categories, "alerts": alerts})
 
 
 @router.post("/mock")
