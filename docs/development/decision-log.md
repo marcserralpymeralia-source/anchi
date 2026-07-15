@@ -24,3 +24,6 @@
 | 2026-07-15 | Fase 6C | Optimizar solo el listado general de pedidos y no el detalle | Reducir el peso de la pantalla de gestion sin tocar la experiencia completa de revision | `backend/app/orders/routes.py`, `backend/app/templates/orders/list.html` |
 | 2026-07-15 | Fase 6C | Sustituir el bloque oculto por agregados por pagina en pedidos | Evitar cargar lineas, adjuntos y exportaciones completas por cada fila | `backend/app/orders/routes.py`, `backend/app/templates/orders/list.html` |
 | 2026-07-15 | Fase 6C | Añadir presupuesto de consultas y tamano para el listado de pedidos | Bloquear regresiones de rendimiento en la vista operativa principal | `backend/tests/test_orders_list_optimization.py` |
+| 2026-07-15 | Fase 6D | Optimizar el detalle de pedido con carga selectiva y snapshot de cabecera | Evitar que la vista de revision arrastre catalogos completos y relaciones lazy | `backend/app/orders/routes.py`, `backend/app/templates/orders/detail.html` |
+| 2026-07-15 | Fase 6D | Introducir helpers de candidatos compartidos para cliente y producto | Reutilizar resolucion y evitar repeticion de consultas en el detalle | `backend/app/orders/routes.py` |
+| 2026-07-15 | Fase 6D | Añadir presupuesto de consultas y carga para el detalle de pedido | Bloquear regresiones en la pantalla operativa de revision | `backend/tests/test_orders_detail_optimization.py` |

@@ -75,3 +75,7 @@ En la fase 6B, home y workbench dejan de depender de carga lazy por fila para su
 ## Nota de la fase 6C
 
 El listado general de pedidos ya no incrusta el detalle completo por fila. Ahora carga una pagina SQL real, trae solo las relaciones necesarias para la tabla visible y calcula alertas con agregados por pagina. El resultado es una reduccion fuerte de HTML, consultas y memoria, manteniendo los filtros operativos y sin tocar el detalle completo del pedido.
+
+## Nota de la fase 6D
+
+El detalle de pedido deja de comportarse como una pantalla de carga amplia para cliente y producto. La medicion de la fase 6D se centra en un render estable del pedido con snapshot de cabecera, candidatos compartidos y sin recuperar catalogos completos por relaciones lazy. El benchmark refleja ese cambio porque ya no arrastra cientos de registros en memoria para pintar una sola ficha operativa.

@@ -37,6 +37,10 @@
 - Mantener `/orders?date_range=90d` por debajo de 500 KB de HTML en scenario medium tras la fase 6C.
 - Cubrir ese presupuesto con `backend/tests/test_orders_list_optimization.py`.
 - No degradar en mas de un 10% las rutas de control medidas en scenario medium tras una optimizacion de listado.
+- Mantener el detalle de pedido bajo 15 consultas SQL, 2 consultas duplicadas, 140 KB de HTML y 108 registros cargados en los escenarios small, medium y large tras la fase 6D.
+- Cubrir ese presupuesto con `backend/tests/test_orders_detail_optimization.py`.
+- No volver a cargar cliente, producto o adjuntos completos por relaciones lazy dentro de `/orders/{order_id}`.
+- Mantener el detalle de pedido basado en snapshots y candidatos compartidos, no en catálogos completos embebidos.
 - No filtrar secretos en logs estructurados ni en trazas persistidas.
 - Documentar cualquier fallo que no se corrija en ese momento.
 

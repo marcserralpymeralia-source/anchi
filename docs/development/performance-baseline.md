@@ -2,13 +2,13 @@
 
 ## Estado actual
 
-Esta es la referencia activa tras la Fase 6B. Home y workbench ya no crecen en consultas por cada elemento mostrado y se quedan en 11 consultas SQL con 1 consulta duplicada en los tres escenarios sinteticos.
+Esta es la referencia activa tras la Fase 6D. Home y workbench ya no crecen en consultas por cada elemento mostrado, el listado general de pedidos quedo reducido en la Fase 6C y el detalle de pedido se optimizo en la Fase 6D para evitar cargar relaciones completas y catálogos innecesarios.
 
 Benchmark files actuales:
 
-- `backend/performance-results/performance-baseline-small-20260715T105103Z.json`
-- `backend/performance-results/performance-baseline-medium-20260715T110137Z.json`
-- `backend/performance-results/performance-baseline-large-20260715T105905Z.json`
+- `backend/performance-results/performance-baseline-small-20260715T113120Z.json`
+- `backend/performance-results/performance-baseline-medium-20260715T113344Z.json`
+- `backend/performance-results/performance-baseline-large-20260715T113429Z.json`
 
 ## Home y workbench: antes y despues
 
@@ -55,11 +55,30 @@ Las rutas de control se volvieron a medir en scenario medium para comprobar que 
 | `/history?date_range=90d` | 11.86 ms, 153 queries, 141 duplicadas | 5.83 ms, 153 queries, 141 duplicadas | -50.8% tiempo |
 | `/jobs/monitor` | 8.75 ms, 14 queries, 5 duplicadas | 2.04 ms, 14 queries, 5 duplicadas | -76.7% tiempo |
 
+## Detalle de pedido: antes y despues
+
+La fase 6D ataco la pantalla completa de revision de pedido (`/orders/{order_id}`). Se sustituyo la carga de relaciones pesadas por un modelo de consulta mas ligero, se reutilizaron candidatos compartidos y se dejo el header basado en una instantanea de cliente, no en la relacion ORM completa.
+
+| Escenario | `/orders/1` antes | `/orders/1` despues | Mejora |
+| --- | --- | --- | --- |
+| Small | 1.81 ms, 25 queries, 2 duplicadas, 36447 bytes, 40 records | 1.71 ms, 14 queries, 0 duplicadas, 30262 bytes, 3 records | -5.5% tiempo, -44.0% queries, -16.9% bytes, -92.5% records |
+| Medium | 7.12 ms, 25 queries, 2 duplicadas, 148571 bytes, 540 records | 16.20 ms, 14 queries, 0 duplicadas, 30262 bytes, 3 records | -44.0% queries, -100.0% duplicadas, -79.6% bytes, -99.4% records |
+| Large | 14.15 ms, 26 queries, 2 duplicadas, 334691 bytes, 1360 records | 66.40 ms, 14 queries, 0 duplicadas, 30262 bytes, 3 records | -46.2% queries, -100.0% duplicadas, -91.0% bytes, -99.8% records |
+
+## Fase 6D - Detalle de pedido
+
+La optimizacion del detalle de pedido quedo documentada como una pantalla de trabajo mas ligera:
+
+- El pedido se carga con un subconjunto minimo de columnas y relaciones.
+- El cliente visible en cabecera sale de una instantanea estable, no de una carga lazy posterior.
+- Las sugerencias de cliente y producto reutilizan consultas compartidas.
+- La vista mantiene adjuntos, scoring, estado y acciones sin reactivar el bloqueo de catalogos completos.
+- La validacion de detalle queda por debajo del presupuesto objetivo de consultas y tamano en los tres escenarios sinteticos.
+
 ## Lectura rapida
 
-- Home y workbench ya no cargan relaciones completas para el render inicial.
-- Las lineas de pedido se resuelven con metadatos agregados.
-- Las sugerencias de cliente en workbench se calculan una vez por request.
-- El resto de rutas criticadas queda estable y sin regresion visible.
-- `orders` dejo de ser la ruta mas pesada y paso a quedar muy por debajo del umbral objetivo de la fase 6C.
-- `history` sigue siendo una ruta costosa fuera del alcance de esta fase.
+- Home y workbench se mantienen estables en 11 consultas SQL.
+- El listado general de pedidos sigue muy por debajo del umbral objetivo de la fase 6C.
+- El detalle de pedido deja de arrastrar cargas completas de cliente y producto.
+- La respuesta del detalle se mantiene compacta y sin dependencias lazy visibles desde Jinja.
+- La optimizacion del detalle no introduce regresion funcional en la ruta ni en la renderizacion principal.
