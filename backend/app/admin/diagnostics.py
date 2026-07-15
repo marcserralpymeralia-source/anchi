@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import BackgroundJob, Company, Customer, Email, EmailSettings, InboundMessage, InputChannel, LLMSettings, Order, Product
+from app.db.models import BackgroundJob, Company, Conversation, Customer, Email, EmailSettings, InboundMessage, InputChannel, LLMSettings, Order, Product
 from app.core.metrics import snapshot_metrics
 from app.master.models import MasterCompany, MasterTenantDatabase
 from app.settings.email_config import email_config_status
@@ -19,6 +19,7 @@ def _zero_payload(company: Company | None, tenant_db: MasterTenantDatabase | Non
         "orders_total": 0,
         "emails_total": 0,
         "inbound_total": 0,
+        "conversations_total": 0,
         "active_channels_total": 0,
         "jobs_total": 0,
         "jobs_queued": 0,
@@ -78,6 +79,7 @@ def company_diagnostics(master_db: Session, company_id: int) -> dict:
             "orders_total": db.scalar(select(func.count()).select_from(Order).where(Order.company_id == company_id)) or 0,
             "emails_total": db.scalar(select(func.count()).select_from(Email).where(Email.company_id == company_id)) or 0,
             "inbound_total": db.scalar(select(func.count()).select_from(InboundMessage).where(InboundMessage.company_id == company_id)) or 0,
+            "conversations_total": db.scalar(select(func.count()).select_from(Conversation).where(Conversation.company_id == company_id)) or 0,
             "active_channels_total": db.scalar(select(func.count()).select_from(InputChannel).where(InputChannel.company_id == company_id, InputChannel.is_active == True)) or 0,  # noqa: E712
             "jobs_total": db.scalar(select(func.count()).select_from(BackgroundJob).where(BackgroundJob.company_id == company_id)) or 0,
             "jobs_queued": db.scalar(select(func.count()).select_from(BackgroundJob).where(BackgroundJob.company_id == company_id, BackgroundJob.status == "queued")) or 0,

@@ -1184,6 +1184,7 @@ class UnifiedOrderPipelineService:
                 customer_score = candidate_confidence
         order = Order(
             company_id=inbound_message.company_id,
+            conversation_id=inbound_message.conversation_id,
             email_id=email.id if email else None,
             customer_id=customer.id if customer else None,
             validated_customer_id=customer.id if customer else None,

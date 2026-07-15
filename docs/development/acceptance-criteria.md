@@ -43,6 +43,8 @@
 - Mantener el detalle de pedido basado en snapshots y candidatos compartidos, no en catálogos completos embebidos.
 - Mantener `/channels?tab=processed&date_range=30d` por debajo de 20 consultas SQL y 3 consultas duplicadas en los escenarios small, medium y large tras la fase 6E.
 - Mantener la bandeja de canales basada en pagina SQL visible, resumen agregado y adjuntos cargados solo para las filas visibles.
+- Mantener un contrato comun de mensaje y conversacion con email como adaptador inicial, deduplicacion por tenant/proveedor/external_id y relacion orden-conversacion compatible.
+- Preservar la compatibilidad con mensajes y pedidos existentes durante la migracion del nuevo modelo comun.
 - No filtrar secretos en logs estructurados ni en trazas persistidas.
 - Documentar cualquier fallo que no se corrija en ese momento.
 
@@ -55,12 +57,14 @@
 - Mantener jobs idempotentes, con reintentos limitados, historial de intentos y recovery de jobs bloqueados.
 - Garantizar que el worker tenga una entrada CLI estable y que no procese un job antes de su fecha de reintento.
 - No activar profiling en produccion.
+- No introducir un segundo sistema paralelo de pedidos al modelar mensajes y conversaciones.
 
 ## Migraciones
 
 - No modificar las bases originales durante inventario, baseline o simulacion.
 - Ejecutar `dry-run` sin escribir tablas, columnas, indices, filas ni ledger.
 - Baselinear solo esquemas reconocibles y no ambiguos.
+- Bloquear la migracion si la deduplicacion de mensajes no puede garantizarse por tenant/proveedor/external_id.
 - Resolver master y tenants desde la base master, no desde rutas arbitrarias de CLI.
 - Crear y usar copias de trabajo con timestamp antes de aplicar cualquier upgrade real.
 - Registrar el inventario y el plan operativo de cada base antes de tocar una base original.

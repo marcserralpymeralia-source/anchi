@@ -546,6 +546,28 @@ class InputChannel(Base):
     __table_args__ = (UniqueConstraint("company_id", "key"),)
 
 
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    channel_id: Mapped[int | None] = mapped_column(ForeignKey("input_channels.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(50), default="imap")
+    external_thread_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"))
+    assigned_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    status: Mapped[str] = mapped_column(String(50), default="open")
+    subject: Mapped[str | None] = mapped_column(String(500))
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    messages: Mapped[list["InboundMessage"]] = relationship(back_populates="conversation")
+    orders: Mapped[list["Order"]] = relationship(back_populates="conversation")
+
+    __table_args__ = (UniqueConstraint("company_id", "channel_id", "provider", "external_thread_id"),)
+
+
 class ChannelSetting(Base):
     __tablename__ = "channel_settings"
 
@@ -568,6 +590,8 @@ class InboundMessage(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
     channel_id: Mapped[int] = mapped_column(ForeignKey("input_channels.id"), index=True)
+    provider: Mapped[str] = mapped_column(String(50), default="imap")
+    conversation_id: Mapped[int | None] = mapped_column(ForeignKey("conversations.id"), index=True)
     source_external_id: Mapped[str | None] = mapped_column(String(255), index=True)
     source_thread_id: Mapped[str | None] = mapped_column(String(255), index=True)
     direction: Mapped[str] = mapped_column(String(30), default="inbound")
@@ -595,7 +619,10 @@ class InboundMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
+    conversation: Mapped[Conversation | None] = relationship(back_populates="messages")
     attachments: Mapped[list["MessageAttachment"]] = relationship(cascade="all, delete-orphan")
+
+    __table_args__ = (UniqueConstraint("company_id", "channel_id", "provider", "source_external_id"),)
 
 
 class MessageAttachment(Base):
@@ -837,6 +864,7 @@ class Email(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    conversation_id: Mapped[int | None] = mapped_column(ForeignKey("conversations.id"), index=True)
     external_id: Mapped[str | None] = mapped_column(String(255), index=True)
     sender: Mapped[str] = mapped_column(String(255))
     subject: Mapped[str] = mapped_column(String(500))
@@ -852,6 +880,7 @@ class Email(Base):
     processing_result_json: Mapped[str | None] = mapped_column(Text)
     last_processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
+    conversation: Mapped[Conversation | None] = relationship()
     attachments: Mapped[list["EmailAttachment"]] = relationship(cascade="all, delete-orphan")
 
 
@@ -876,6 +905,7 @@ class Order(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    conversation_id: Mapped[int | None] = mapped_column(ForeignKey("conversations.id"), index=True)
     email_id: Mapped[int | None] = mapped_column(ForeignKey("emails.id"))
     customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"))
     validated_customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"))
@@ -896,6 +926,7 @@ class Order(Base):
     exported_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     email: Mapped[Email | None] = relationship()
+    conversation: Mapped[Conversation | None] = relationship(back_populates="orders")
     customer: Mapped[Customer | None] = relationship(foreign_keys=[customer_id])
     validated_customer: Mapped[Customer | None] = relationship(foreign_keys=[validated_customer_id])
     lines: Mapped[list["OrderLine"]] = relationship(cascade="all, delete-orphan")

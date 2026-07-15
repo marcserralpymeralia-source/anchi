@@ -58,6 +58,7 @@ TENANT_COMPAT_COLUMNS = {
         "deleted_by": "INTEGER",
     },
     "orders": {
+        "conversation_id": "INTEGER",
         "deleted_at": "DATETIME",
         "deleted_by": "INTEGER",
         "delete_reason": "TEXT",
@@ -177,6 +178,7 @@ TENANT_COMPAT_COLUMNS = {
         "updated_at": "DATETIME",
     },
     "emails": {
+        "conversation_id": "INTEGER",
         "agent_status": "VARCHAR(80) DEFAULT 'not_processed'",
         "has_attachments": "BOOLEAN DEFAULT 0",
         "has_pdf": "BOOLEAN DEFAULT 0",
@@ -250,6 +252,18 @@ TENANT_COMPAT_COLUMNS = {
         "created_at": "DATETIME",
         "updated_at": "DATETIME",
     },
+    "conversations": {
+        "channel_id": "INTEGER",
+        "provider": "VARCHAR(50) DEFAULT 'imap'",
+        "external_thread_id": "VARCHAR(255)",
+        "customer_id": "INTEGER",
+        "assigned_user_id": "INTEGER",
+        "status": "VARCHAR(50) DEFAULT 'open'",
+        "subject": "VARCHAR(500)",
+        "last_activity_at": "DATETIME",
+        "created_at": "DATETIME",
+        "updated_at": "DATETIME",
+    },
     "channel_settings": {
         "value_type": "VARCHAR(50) DEFAULT 'string'",
         "is_secret": "BOOLEAN DEFAULT 0",
@@ -258,6 +272,8 @@ TENANT_COMPAT_COLUMNS = {
     },
     "inbound_messages": {
         "channel_id": "INTEGER",
+        "provider": "VARCHAR(50) DEFAULT 'imap'",
+        "conversation_id": "INTEGER",
         "source_thread_id": "VARCHAR(255)",
         "direction": "VARCHAR(30) DEFAULT 'inbound'",
         "recipient": "VARCHAR(255)",
@@ -425,6 +441,173 @@ def _apply_tenant_job_reliability(engine, dry_run: bool) -> list[str]:  # noqa: 
     return actions
 
 
+def _apply_tenant_messages(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    from sqlalchemy import MetaData, Table, func, insert, select
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db.models import Conversation, Email, InboundMessage, InputChannel, Order
+    from app.messages.service import get_or_create_conversation
+    from app.migrations.runner import MigrationError
+
+    actions: list[str] = []
+    if "conversations" not in inspect(engine).get_table_names():
+        actions.append("CREATE TABLE conversations (...)")
+        if not dry_run:
+            Conversation.__table__.create(bind=engine, checkfirst=True)
+    elif not dry_run:
+        Conversation.__table__.create(bind=engine, checkfirst=True)
+    actions.extend(ensure_columns(engine, "emails", {"conversation_id": "INTEGER"}, dry_run=dry_run))
+    actions.extend(ensure_columns(engine, "inbound_messages", {"provider": "VARCHAR(50) DEFAULT 'imap'", "conversation_id": "INTEGER"}, dry_run=dry_run))
+    actions.extend(ensure_columns(engine, "orders", {"conversation_id": "INTEGER"}, dry_run=dry_run))
+    actions.extend(ensure_unique_index(engine, "conversations", "uq_conversations_thread", ("company_id", "channel_id", "provider", "external_thread_id"), dry_run=dry_run))
+    actions.extend(ensure_unique_index(engine, "inbound_messages", "uq_inbound_messages_dedupe", ("company_id", "channel_id", "provider", "source_external_id"), dry_run=dry_run))
+    if dry_run:
+        return actions
+
+    def _cell(row, column_name: str, default=None):  # noqa: ANN001
+        if hasattr(row, "_mapping"):
+            return row._mapping.get(column_name, default)
+        return getattr(row, column_name, default)
+
+    metadata = MetaData()
+    emails_table = Table("emails", metadata, autoload_with=engine)
+    inbound_table = Table("inbound_messages", metadata, autoload_with=engine)
+    orders_table = Table("orders", metadata, autoload_with=engine)
+    input_channels_table = Table("input_channels", metadata, autoload_with=engine)
+
+    session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = session_factory()
+    try:
+        duplicate_inbound = db.execute(
+            select(
+                inbound_table.c.company_id,
+                inbound_table.c.channel_id,
+                inbound_table.c.provider,
+                inbound_table.c.source_external_id,
+                func.count().label("rows"),
+            )
+            .where(inbound_table.c.source_external_id.is_not(None))
+            .group_by(
+                inbound_table.c.company_id,
+                inbound_table.c.channel_id,
+                inbound_table.c.provider,
+                inbound_table.c.source_external_id,
+            )
+            .having(func.count() > 1)
+        ).mappings().all()
+        if duplicate_inbound:
+            first = duplicate_inbound[0]
+            raise MigrationError(
+                "Duplicados de inbound_messages impiden crear la unicidad: "
+                f"company_id={first['company_id']} channel_id={first['channel_id']} provider={first['provider']} source_external_id={first['source_external_id']}"
+            )
+        existing_channels = db.execute(
+            select(
+                input_channels_table.c.id,
+                input_channels_table.c.company_id,
+                input_channels_table.c.key,
+            ).where(input_channels_table.c.key == "email")
+        ).mappings().all()
+        email_channel_ids = {row["company_id"]: row["id"] for row in existing_channels}
+
+        email_query = select(emails_table).order_by(emails_table.c.company_id, emails_table.c.id)
+        for email in db.execute(email_query).mappings().all():
+            company_id = _cell(email, "company_id")
+            email_id = _cell(email, "id")
+            channel_id = email_channel_ids.get(company_id)
+            if not channel_id:
+                if dry_run:
+                    continue
+                result = db.execute(
+                    insert(input_channels_table).values(
+                        company_id=company_id,
+                        key="email",
+                        name="Email",
+                        channel_type="message",
+                        is_active=True,
+                        is_default=True,
+                        supports_text=True,
+                        supports_attachments=True,
+                        supports_documents=True,
+                    )
+                )
+                channel_id = result.lastrowid
+                email_channel_ids[company_id] = channel_id
+            conversation = get_or_create_conversation(
+                db,
+                company_id=company_id,
+                channel_id=channel_id,
+                provider="imap",
+                external_thread_id=_cell(email, "external_id"),
+                subject=_cell(email, "subject"),
+                last_activity_at=_cell(email, "received_at"),
+            )
+            db.execute(emails_table.update().where(emails_table.c.id == email_id).values(conversation_id=conversation.id))
+
+            inbound_where = [inbound_table.c.company_id == company_id]
+            if _cell(email, "external_id") is not None:
+                inbound_where.append(inbound_table.c.source_external_id == _cell(email, "external_id"))
+            inbound_message = db.execute(select(inbound_table).where(*inbound_where)).mappings().one_or_none()
+            if inbound_message:
+                db.execute(
+                    inbound_table.update()
+                    .where(inbound_table.c.id == _cell(inbound_message, "id"))
+                    .values(conversation_id=conversation.id, provider=_cell(inbound_message, "provider") or "imap")
+                )
+            order_rows = db.execute(
+                select(orders_table.c.id).where(
+                    orders_table.c.company_id == company_id,
+                    orders_table.c.email_id == email_id,
+                )
+            ).mappings().all()
+            for order_row in order_rows:
+                db.execute(
+                    orders_table.update()
+                    .where(orders_table.c.id == order_row["id"])
+                    .values(conversation_id=conversation.id)
+                )
+
+        message_query = select(inbound_table).order_by(inbound_table.c.company_id, inbound_table.c.id)
+        for message in db.execute(message_query).mappings().all():
+            if _cell(message, "conversation_id"):
+                continue
+            company_id = _cell(message, "company_id")
+            message_id = _cell(message, "id")
+            channel_id = _cell(message, "channel_id")
+            if not channel_id:
+                channel = db.execute(
+                    select(input_channels_table.c.id).where(
+                        input_channels_table.c.company_id == company_id,
+                        input_channels_table.c.key == "email",
+                    )
+                ).mappings().one_or_none()
+                if channel:
+                    channel_id = channel["id"]
+            if not channel_id:
+                continue
+            conversation = get_or_create_conversation(
+                db,
+                company_id=company_id,
+                channel_id=channel_id,
+                provider=_cell(message, "provider") or "imap",
+                external_thread_id=_cell(message, "source_thread_id") or _cell(message, "source_external_id"),
+                subject=_cell(message, "subject"),
+                customer_id=_cell(message, "customer_id"),
+                last_activity_at=_cell(message, "received_at"),
+            )
+            db.execute(inbound_table.update().where(inbound_table.c.id == message_id).values(conversation_id=conversation.id))
+            if _cell(message, "order_id"):
+                order_row = db.execute(
+                    select(orders_table.c.id, orders_table.c.conversation_id).where(orders_table.c.company_id == company_id, orders_table.c.id == _cell(message, "order_id"))
+                ).mappings().one_or_none()
+                if order_row and not order_row.get("conversation_id"):
+                    db.execute(orders_table.update().where(orders_table.c.id == order_row["id"]).values(conversation_id=conversation.id))
+        db.commit()
+    finally:
+        db.close()
+    return actions
+
+
 def _apply_master_metadata(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     from app.master.models import MasterSchemaMigration
 
@@ -455,6 +638,12 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant job reliability",
         checksum=checksum_text("tenant", "job_reliability", "background_jobs", "job_attempts"),
         upgrade=_apply_tenant_job_reliability,
+    ),
+    MigrationSpec(
+        version="2026.07.15.4",
+        name="tenant messages and conversations",
+        checksum=checksum_text("tenant", "messages_and_conversations", "conversations", "inbound_messages", "emails", "orders"),
+        upgrade=_apply_tenant_messages,
     ),
 ]
 

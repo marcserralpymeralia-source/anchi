@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.security import hash_password  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import BackgroundJob, Customer, Email, JobAttempt, Order, OrderLine, TenantSchemaMigration  # noqa: E402
+from app.db.models import BackgroundJob, Conversation, Customer, Email, JobAttempt, Order, OrderLine, TenantSchemaMigration  # noqa: E402
 from app.jobs.service import enqueue_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.migrations import CURRENT_MASTER_SCHEMA_CHECKSUM, CURRENT_MASTER_SCHEMA_NAME, CURRENT_MASTER_SCHEMA_VERSION, master_migration_report, upgrade_master_schema  # noqa: E402
@@ -87,6 +87,17 @@ class SchemaMigrationTests(unittest.TestCase):
         with self.tenant_engine.begin() as conn:
             conn.execute(text("CREATE TABLE misc (id INTEGER PRIMARY KEY, label TEXT)"))
             conn.execute(text("INSERT INTO misc (id, label) VALUES (1, 'orphan')"))
+
+    def _seed_legacy_messages_schema(self) -> None:
+        with self.tenant_engine.begin() as conn:
+            conn.execute(text("CREATE TABLE input_channels (id INTEGER PRIMARY KEY, company_id INTEGER, key VARCHAR(80), name VARCHAR(150), channel_type VARCHAR(50), is_active BOOLEAN, is_default BOOLEAN, supports_text BOOLEAN, supports_attachments BOOLEAN, supports_documents BOOLEAN)"))
+            conn.execute(text("CREATE TABLE emails (id INTEGER PRIMARY KEY, company_id INTEGER, external_id VARCHAR(255), sender VARCHAR(255), subject VARCHAR(500), body TEXT, extracted_text TEXT, received_at DATETIME)"))
+            conn.execute(text("CREATE TABLE inbound_messages (id INTEGER PRIMARY KEY, company_id INTEGER, channel_id INTEGER, source_external_id VARCHAR(255), source_thread_id VARCHAR(255), provider VARCHAR(50), sender VARCHAR(255), subject VARCHAR(500), original_content TEXT, received_at DATETIME, customer_id INTEGER, order_id INTEGER, status VARCHAR(80), processing_step VARCHAR(80))"))
+            conn.execute(text("CREATE TABLE orders (id INTEGER PRIMARY KEY, company_id INTEGER, email_id INTEGER, customer_detected_name VARCHAR(255), status VARCHAR(80), score FLOAT, created_at DATETIME)"))
+            conn.execute(text("INSERT INTO input_channels (id, company_id, key, name, channel_type, is_active, is_default, supports_text, supports_attachments, supports_documents) VALUES (1, 1, 'email', 'Email', 'message', 1, 1, 1, 1, 1)"))
+            conn.execute(text("INSERT INTO emails (id, company_id, external_id, sender, subject, body, extracted_text, received_at) VALUES (1, 1, 'mail-legacy', 'cliente@example.com', 'Pedido legado', '10 cajas', '10 cajas', CURRENT_TIMESTAMP)"))
+            conn.execute(text("INSERT INTO inbound_messages (id, company_id, channel_id, source_external_id, source_thread_id, provider, sender, subject, original_content, received_at, customer_id, order_id, status, processing_step) VALUES (1, 1, 1, 'mail-legacy', 'thread-legacy', 'imap', 'cliente@example.com', 'Pedido legado', '10 cajas', CURRENT_TIMESTAMP, NULL, NULL, 'received', 'received')"))
+            conn.execute(text("INSERT INTO orders (id, company_id, email_id, customer_detected_name, status, score, created_at) VALUES (1, 1, 1, 'Cliente legado', 'pedido_pendiente_revision', 88, CURRENT_TIMESTAMP)"))
 
     def _seed_checksum_mismatch(self) -> None:
         self._create_tables_without_ledger(self.tenant_engine, Base.metadata)
@@ -240,6 +251,25 @@ class SchemaMigrationTests(unittest.TestCase):
         inspection = inspect_database_url(f"sqlite:///{self.master_path.as_posix()}", logical_name="master-copy")
         self.assertEqual(inspection["classification"], "versioned-current")
         self.assertTrue(inspection["baseline_safe"])
+
+    def test_upgrade_messages_schema_creates_conversations_and_links_legacy_data(self):
+        self._seed_legacy_messages_schema()
+        result = upgrade_tenant_schema(self.tenant_engine, company_id=1, application_version="1.2.3")
+        self.assertTrue(result["is_current"])
+
+        db = self.TenantSession()
+        try:
+            conversation_count = db.scalar(select(func.count()).select_from(Conversation)) or 0
+            email_conversation_id = db.execute(text("SELECT conversation_id FROM emails WHERE id = 1")).scalar_one()
+            order_conversation_id = db.execute(text("SELECT conversation_id FROM orders WHERE id = 1")).scalar_one()
+            inbound = db.execute(text("SELECT conversation_id FROM inbound_messages WHERE id = 1")).scalar_one()
+        finally:
+            db.close()
+
+        self.assertEqual(conversation_count, 1)
+        self.assertIsNotNone(email_conversation_id)
+        self.assertIsNotNone(order_conversation_id)
+        self.assertIsNotNone(inbound)
 
     def test_duplicate_jobs_are_blocked_by_inspection(self):
         with self.tenant_engine.begin() as conn:

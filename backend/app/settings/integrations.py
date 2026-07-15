@@ -17,7 +17,8 @@ from uuid import uuid4
 from sqlalchemy.orm import Session
 
 from app.core.encryption import decrypt_secret
-from app.db.models import Email, EmailAttachment, EmailSettings, InboundMessage, InputChannel, LLMSettings, MessageAttachment
+from app.db.models import Email, EmailAttachment, EmailSettings, InboundMessage, LLMSettings, MessageAttachment
+from app.messages.service import upsert_inbound_message
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
 
@@ -377,57 +378,45 @@ def _is_attachment(part: EmailMessage) -> bool:
     return bool(filename) or disposition in {"attachment", "inline"} and content_type not in {"text/plain", "text/html"}
 
 
-def _create_input_channel(db: Session, company_id: int) -> InputChannel:
-    channel = db.query(InputChannel).filter(InputChannel.company_id == company_id, InputChannel.key == "email").one_or_none()
-    if channel:
-        return channel
-    channel = InputChannel(
-        company_id=company_id,
-        key="email",
-        name="Email",
-        channel_type="message",
-        is_active=True,
-        is_default=True,
-        supports_text=True,
-        supports_attachments=True,
-        supports_audio=False,
-        supports_documents=True,
-    )
-    db.add(channel)
-    db.flush()
-    return channel
-
-
 def _create_inbound_message(db: Session, company_id: int, email: Email, settings: EmailSettings, msg: EmailMessage, body: str) -> InboundMessage:
-    channel = _create_input_channel(db, company_id)
-    inbound_message = InboundMessage(
+    inbound_message, conversation = upsert_inbound_message(
+        db,
         company_id=company_id,
-        channel_id=channel.id,
-        source_external_id=email.external_id,
-        source_thread_id=msg.get("In-Reply-To") or msg.get("References"),
+        channel_key="email",
+        provider=settings.provider or "imap",
+        external_id=email.external_id,
         sender=email.sender,
-        recipient=settings.connected_email or settings.imap_username,
+        recipients=[settings.connected_email or settings.imap_username] if (settings.connected_email or settings.imap_username) else [],
         subject=email.subject,
-        original_content=body,
-        raw_payload_json=json.dumps(
-            {
-                "message_id": email.external_id,
-                "from": email.sender,
-                "subject": email.subject,
-                "date": msg.get("Date"),
-                "imap_mailbox": settings.mailbox,
-            },
-            ensure_ascii=False,
-        ),
+        text_content=body,
+        direction="inbound",
+        external_thread_id=msg.get("In-Reply-To") or msg.get("References"),
+        received_at=email.received_at,
+        metadata={
+            "message_id": email.external_id,
+            "from": email.sender,
+            "subject": email.subject,
+            "date": msg.get("Date"),
+            "imap_mailbox": settings.mailbox,
+        },
         content_type="email",
-        status="received",
-        processing_step="received",
         has_attachments=False,
         has_pdf=False,
         has_audio=False,
     )
-    db.add(inbound_message)
-    db.flush()
+    email.conversation_id = conversation.id
+    inbound_message.conversation_id = conversation.id
+    inbound_message.provider = settings.provider or "imap"
+    inbound_message.raw_payload_json = inbound_message.raw_payload_json or json.dumps(
+        {
+            "message_id": email.external_id,
+            "from": email.sender,
+            "subject": email.subject,
+            "date": msg.get("Date"),
+            "imap_mailbox": settings.mailbox,
+        },
+        ensure_ascii=False,
+    )
     return inbound_message
 
 

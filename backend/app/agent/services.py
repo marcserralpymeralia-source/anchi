@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from app.agent.platform import UnifiedOrderPipelineService
 from app.db.models import Customer, CustomerAlias, CustomerContactPoint, CustomerDomain, Email, EmailAttachment, EmailSettings, InboundMessage, InputChannel, LLMSettings, Order, OrderLine, Product, ProductAlias, PromptTemplate, PromptVersion, ScoringSettings
+from app.messages.service import get_or_create_conversation
 from app.orders.state import ORDER_STATE
 from app.logs.service import log_action
 from app.settings.integrations import call_openai
@@ -208,6 +209,7 @@ class AgentProcessingService:
             inbound_message = InboundMessage(
                 company_id=email.company_id,
                 channel_id=channel.id if channel else None,
+                provider="imap",
                 source_external_id=email.external_id,
                 sender=email.sender,
                 subject=email.subject,
@@ -220,6 +222,20 @@ class AgentProcessingService:
                 has_pdf=bool(email.has_pdf),
             )
             db.add(inbound_message)
+            db.flush()
+        if not inbound_message.conversation_id:
+            conversation = get_or_create_conversation(
+                db,
+                company_id=inbound_message.company_id,
+                channel_id=inbound_message.channel_id,
+                provider=inbound_message.provider,
+                external_thread_id=inbound_message.source_thread_id or inbound_message.source_external_id,
+                subject=inbound_message.subject,
+                customer_id=inbound_message.customer_id,
+                last_activity_at=inbound_message.received_at,
+            )
+            inbound_message.conversation_id = conversation.id
+            email.conversation_id = conversation.id
             db.flush()
         if not force_order:
             if inbound_message.order_id:
@@ -320,6 +336,7 @@ class AgentProcessingService:
         customer, method, customer_score = self.matching.find_customer(db, email.company_id, sender=email.sender, detected_name=detected_name, detected_code=detected_code)
         order = Order(
             company_id=email.company_id,
+            conversation_id=email.conversation_id,
             email_id=email.id,
             customer_id=customer.id if customer else None,
             validated_customer_id=customer.id if customer else None,
