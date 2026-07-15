@@ -20,6 +20,7 @@ from app.settings.agent_config import agent_metrics, agent_status, apply_safety_
 from app.settings.branding import branding_to_dict, delete_brand_asset, get_or_create_branding, reset_branding, store_brand_asset, update_branding_from_form
 from app.settings.email_config import TEMPLATE_VARIABLES, email_config_status, email_templates, ensure_default_email_templates, serialize_email_settings
 from app.settings.integrations import classify_sample, extract_sample, send_test_email, test_imap_connection, test_smtp_connection
+from app.settings.application import run_connection_test, update_settings_section_async
 from app.settings.service import get_or_create_settings, update_with_form
 from app.dashboard.service import recent_processed_emails_overview
 from app.jobs.service import enqueue_job
@@ -544,121 +545,16 @@ def reset_company_default(db: Session = Depends(get_tenant_db), user: TenantUser
 
 @router.post("/{section}")
 async def update_settings(section: str, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
-    formdata = await request.form()
-    form = {key: value for key, value in formdata.items() if not isinstance(value, UploadFile)}
-    if section == "company":
-        company = db.get(Company, user.company_id)
-        if not company:
-            return RedirectResponse("/settings", status_code=303)
-        for field in ["name", "legal_name", "tax_id", "email", "phone", "web", "address", "country", "currency", "notification_email", "responsible_contact", "language", "timezone", "date_format", "decimal_separator"]:
-            if field in form:
-                setattr(company, field, form[field])
-        company.active = form.get("active") == "on"
-        logo_file = formdata.get("logo_file")
-        if form.get("remove_logo") == "on":
-            delete_brand_asset(company.logo_url)
-            company.logo_url = None
-        elif isinstance(logo_file, UploadFile) and logo_file.filename:
-            delete_brand_asset(company.logo_url)
-            company.logo_url = await store_brand_asset(user.company_id, logo_file, "company-logo")
-        elif form.get("logo_url"):
-            company.logo_url = form["logo_url"].strip()
-        if not company.currency:
-            company.currency = "EUR"
-    elif section == "email":
-        instance = get_or_create_settings(db, EmailSettings, user.company_id)
-        form.setdefault("imap_use_ssl", "off")
-        update_with_form(instance, form, {"client_secret_encrypted", "access_token_encrypted", "refresh_token_encrypted", "imap_password_encrypted"})
-    elif section == "llm":
-        instance = get_or_create_settings(db, LLMSettings, user.company_id)
-        bool_fields = [
-            "agent_enabled", "use_same_model_for_all", "can_read_email", "can_extract_pdf", "can_classify_email", "can_extract_order",
-            "can_suggest_customer", "can_suggest_products", "can_calculate_score", "can_create_pending_order", "can_mark_no_order",
-            "can_reply_customer", "allow_auto_confirm", "allow_auto_export", "detailed_llm_logs", "store_llm_payloads", "anonymize_llm_logs",
-            "debug_mode",
-        ]
-        for field in bool_fields:
-            form.setdefault(field, "off")
-        if form.get("use_same_model_for_all") == "on":
-            model = form.get("classification_model") or instance.classification_model
-            form["extraction_model"] = model
-            form["validation_model"] = model
-        update_with_form(instance, form, {"api_key_encrypted"})
-        if instance.provider == "disabled" or instance.agent_mode == "desactivado":
-            instance.agent_enabled = False
-        instance.updated_by = user.id
-        instance.updated_at = datetime.now(timezone.utc)
-        apply_safety_level(get_or_create_settings(db, ScoringSettings, user.company_id), instance.safety_level)
-    elif section == "ftp":
-        instance = get_or_create_settings(db, FTPSettings, user.company_id)
-        for field in ["passive_mode", "overwrite_files"]:
-            form.setdefault(field, "off")
-        update_with_form(instance, form, {"password_encrypted", "private_key_encrypted"})
-    elif section == "export":
-        instance = get_or_create_settings(db, ExportSettings, user.company_id)
-        form.setdefault("include_header", "off")
-        update_with_form(instance, form)
-    elif section == "scoring":
-        instance = get_or_create_settings(db, ScoringSettings, user.company_id)
-        for field in ["block_without_customer", "block_without_reference", "block_without_quantity", "block_below_threshold"]:
-            form.setdefault(field, "off")
-        update_with_form(instance, form)
-        llm = get_or_create_settings(db, LLMSettings, user.company_id)
-        for field in ["allow_auto_confirm", "allow_auto_export"]:
-            setattr(llm, field, form.get(field) == "on")
-        llm.updated_by = user.id
-        llm.updated_at = datetime.now(timezone.utc)
-    elif section == "decision":
-        instance = get_or_create_settings(db, DecisionSettings, user.company_id)
-        for field in [
-            "enable_exact_match",
-            "enable_alias_match",
-            "enable_relation_match",
-            "enable_history_match",
-            "enable_rag_match",
-            "enable_llm_support",
-            "always_human_review",
-            "auto_approve_aliases",
-            "block_new_customer",
-            "block_conflicting_aliases",
-            "block_missing_quantity",
-            "block_missing_reference",
-        ]:
-            form.setdefault(field, "off")
-        update_with_form(instance, form)
-        instance.updated_at = datetime.now(timezone.utc)
-    db.commit()
+    anchor = await update_settings_section_async(section, request, db, user)
     log_action(db, company_id=user.company_id, user=user, action=f"settings.{section}.update", entity_type="settings", message=f"Configuracion actualizada: {section}")
-    anchor = "agent-ai" if section == "llm" else "decision" if section == "decision" else section
     return RedirectResponse(f"/settings#{anchor}", status_code=303)
 
 
 @router.post("/test/{section}")
 def test_connection(section: str, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
-    if section == "email":
-        result = test_imap_connection(get_or_create_settings(db, EmailSettings, user.company_id))
-        settings = get_or_create_settings(db, EmailSettings, user.company_id)
-        settings.last_imap_test_at = datetime.now(timezone.utc)
-        settings.last_imap_test_ok = result["ok"]
-        settings.last_imap_test_message = result["message"]
-        db.commit()
-        log_action(db, company_id=user.company_id, user=user, action="email.test", entity_type="settings", message=result["message"])
-    elif section == "llm":
-        llm = get_or_create_settings(db, LLMSettings, user.company_id)
-        start = perf_counter()
-        result = classify_sample(llm, "Clasifica el texto como pedido o no_pedido. Responde solo una palabra.", "Pedido de 10 unidades del articulo de prueba.")
-        elapsed_ms = int((perf_counter() - start) * 1000)
-        llm.last_test_at = datetime.now(timezone.utc)
-        llm.last_test_ok = result["ok"]
-        llm.last_test_message = f"{result['message']} Modelo: {llm.classification_model}. Tiempo: {elapsed_ms} ms."
-        llm.last_error = None if result["ok"] else result["message"]
-        llm.last_response_ms = elapsed_ms
-        db.commit()
-        log_action(db, company_id=user.company_id, user=user, action="agent.connection_test", entity_type="settings", entity_id=llm.id, message=llm.last_test_message)
-    else:
-        result = {"message": f"Prueba no disponible para {section}."}
-        log_action(db, company_id=user.company_id, user=user, action=f"settings.{section}.test", entity_type="settings", message=result["message"])
-    return RedirectResponse("/settings#agent-ai", status_code=303)
+    result, anchor = run_connection_test(section, db, user)
+    log_action(db, company_id=user.company_id, user=user, action=f"settings.{section}.test", entity_type="settings", message=result["message"])
+    return RedirectResponse(f"/settings#{anchor}", status_code=303)
 
 
 @router.post("/email/imap/test")
