@@ -10,6 +10,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.core.config import get_settings
+from app.core.logging import configure_logging
 from app.core.lifespan import app_lifespan
 from app.core.middleware import branding_middleware
 from app.core.router_registry import get_registered_routers
@@ -19,18 +20,23 @@ from app.settings.branding import branding_css_vars
 
 def internal_server_error_response(request) -> JSONResponse:  # noqa: ANN001
     request_id = getattr(request.state, "request_id", None)
+    correlation_id = getattr(request.state, "correlation_id", None) or request_id
     payload = {
         "error": "internal_error",
         "message": "Ha ocurrido un error interno.",
         "request_id": request_id,
+        "correlation_id": correlation_id,
     }
     response = JSONResponse(status_code=500, content=payload)
     if request_id:
         response.headers["X-Request-ID"] = request_id
+    if correlation_id:
+        response.headers["X-Correlation-ID"] = correlation_id
     return response
 
 
 def create_app() -> FastAPI:
+    configure_logging()
     settings = get_settings()
     app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=app_lifespan)
     app.add_middleware(

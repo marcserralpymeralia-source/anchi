@@ -33,6 +33,8 @@
         <div><dt>Tipo</dt><dd>{{ job.job_type.replace('_', ' ') | title }}</dd></div>
         <div><dt>Estado</dt><dd>{{ job.status.replace('_', ' ') | title }}</dd></div>
         <div><dt>Empresa</dt><dd>{{ job.company_id }}</dd></div>
+        <div><dt>Request ID</dt><dd>{{ request_id or "Sin request_id" }}</dd></div>
+        <div><dt>Correlation ID</dt><dd>{{ correlation_id or "Sin correlation_id" }}</dd></div>
         <div><dt>Clave</dt><dd>{{ job.dedupe_key or "Sin clave" }}</dd></div>
         <div><dt>Progreso</dt><dd>{{ job.progress or 0 }}%</dd></div>
         <div><dt>Intentos</dt><dd>{{ job.attempt_count }}</dd></div>
@@ -51,7 +53,7 @@
         <div><dt>Lock restante</dt><dd>{{ job.lock_remaining_seconds }} s</dd></div>
         <div><dt>Edad</dt><dd>{{ (job.age_seconds // 60) if job.age_seconds else 0 }} min</dd></div>
         <div><dt>Duración</dt><dd>{{ (job.runtime_seconds // 60) if job.runtime_seconds else 0 }} min</dd></div>
-        <div><dt>Request ID</dt><dd>{{ request_id or "Sin request_id" }}</dd></div>
+        <div><dt>Trace job</dt><dd>{% if job.trace_request_id or job.trace_correlation_id %}<div class="trace-pills">{% if job.trace_request_id %}<span class="job-pill">Req {{ job.trace_request_id[:8] }}</span>{% endif %}{% if job.trace_correlation_id %}<span class="job-pill">Corr {{ job.trace_correlation_id[:8] }}</span>{% endif %}{% if job.trace_user_id %}<span class="job-pill">User {{ job.trace_user_id }}</span>{% endif %}{% if job.trace_worker_id %}<span class="job-pill">Worker {{ job.trace_worker_id }}</span>{% endif %}</div>{% else %}Sin traza de origen{% endif %}</dd></div>
       </div>
       <div class="drawer-actions">
         <form class="js-loading-form" method="post" action="/jobs/{{ job.id }}/retry">
@@ -104,6 +106,12 @@
             <strong>{{ log.created_label }}</strong>
             <span>{{ log.action }}</span>
             <p>{{ log.message }}</p>
+            <div class="trace-pills">
+              {% if log.request_id %}<span class="job-pill">Req {{ log.request_id[:8] }}</span>{% endif %}
+              {% if log.correlation_id %}<span class="job-pill">Corr {{ log.correlation_id[:8] }}</span>{% endif %}
+              {% if log.job_id %}<span class="job-pill">Job #{{ log.job_id }}</span>{% endif %}
+              {% if log.worker_id %}<span class="job-pill">Worker {{ log.worker_id }}</span>{% endif %}
+            </div>
           </article>
         {% else %}
           <p class="muted">Todavía no hay eventos registrados para este job.</p>

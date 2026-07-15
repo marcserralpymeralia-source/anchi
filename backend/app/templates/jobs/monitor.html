@@ -99,6 +99,12 @@
             {% if job.dedupe_key %}
               <span class="job-pill">Clave {{ job.dedupe_key[:10] }}</span>
             {% endif %}
+            {% if job.trace_request_id %}
+              <span class="job-pill">Req {{ job.trace_request_id[:8] }}</span>
+            {% endif %}
+            {% if job.trace_correlation_id %}
+              <span class="job-pill">Corr {{ job.trace_correlation_id[:8] }}</span>
+            {% endif %}
           </div>
           <div class="job-card-preview">
             <div>

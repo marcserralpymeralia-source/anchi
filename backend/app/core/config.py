@@ -138,6 +138,8 @@ class Settings(BaseSettings):
     branding_dark_logo_url: str = ""
     branding_favicon_url: str = ""
     email_signature_text: str = "Equipo de pedidos"
+    log_format: str = Field(default="json", validation_alias=AliasChoices("LOG_FORMAT", "APP_LOG_FORMAT"))
+    log_level: str = Field(default="info", validation_alias=AliasChoices("LOG_LEVEL", "APP_LOG_LEVEL"))
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
@@ -175,6 +177,10 @@ class Settings(BaseSettings):
             raise ValueError("JOB_RETRY_MAX_SECONDS must be greater than or equal to JOB_RETRY_BASE_SECONDS")
         if self.job_stale_after_seconds <= 0:
             raise ValueError("JOB_STALE_AFTER_SECONDS must be greater than zero")
+        self.log_format = (self.log_format or "json").strip().lower()
+        if self.log_format not in {"json", "text"}:
+            raise ValueError("LOG_FORMAT must be json or text")
+        self.log_level = (self.log_level or "info").strip().lower()
 
         if self.tenant_db_encryption_key and not _is_valid_fernet_key(self.tenant_db_encryption_key):
             raise ValueError("ENCRYPTION_KEY must be a valid Fernet key")

@@ -19,6 +19,10 @@
     <article class="compact-card compact-card-reviewable"><span>IMAP listo</span><strong>{{ totals.imap_ready }}</strong><small>Conexión email</small></article>
     <article class="compact-card compact-card-safe"><span>IA lista</span><strong>{{ totals.llm_ready }}</strong><small>OpenAI / LLM</small></article>
     <article class="compact-card compact-card-error"><span>Tenant OK</span><strong>{{ totals.tenant_ok }}</strong><small>DB y esquema</small></article>
+    <article class="compact-card compact-card-muted"><span>Requests</span><strong>{{ totals.requests_total }}</strong><small>Observabilidad</small></article>
+    <article class="compact-card compact-card-safe"><span>Jobs</span><strong>{{ totals.jobs_total }}</strong><small>Procesados</small></article>
+    <article class="compact-card compact-card-error"><span>Jobs fallidos</span><strong>{{ totals.jobs_failed }}</strong><small>Últimos estados</small></article>
+    <article class="compact-card compact-card-reviewable"><span>Latencia media</span><strong>{{ totals.avg_request_ms | round(0) }}</strong><small>ms por request</small></article>
   </section>
 </section>
 
@@ -54,23 +58,33 @@
             <span class="job-pill">Jobs {{ company.jobs_total }}</span>
           </div>
 
-          <div class="job-card-preview">
-            <div>
-              <span class="job-preview-label">Última sincronización</span>
-              <p>{% if company.last_sync_at %}{{ company.last_sync_at.strftime("%d/%m/%Y %H:%M") }}{% else %}Sin sincronización{% endif %}</p>
-            </div>
-            <div>
-              <span class="job-preview-label">Mensajes</span>
-              <p>{% if company.last_sync_message %}{{ company.last_sync_message }}{% else %}Sin mensaje{% endif %}</p>
-            </div>
-            {% if company.schema_report.last_error %}
-              <div class="job-error-block">
-                <span class="job-preview-label">Esquema</span>
-                <p>{{ company.schema_report.last_error }}</p>
+            <div class="job-card-preview">
+              <div>
+                <span class="job-preview-label">Última sincronización</span>
+                <p>{% if company.last_sync_at %}{{ company.last_sync_at.strftime("%d/%m/%Y %H:%M") }}{% else %}Sin sincronización{% endif %}</p>
               </div>
-            {% endif %}
+              <div>
+                <span class="job-preview-label">Mensajes</span>
+                <p>{% if company.last_sync_message %}{{ company.last_sync_message }}{% else %}Sin mensaje{% endif %}</p>
+              </div>
+              {% if company.schema_report.last_error %}
+                <div class="job-error-block">
+                  <span class="job-preview-label">Esquema</span>
+                  <p>{{ company.schema_report.last_error }}</p>
+                </div>
+              {% endif %}
+            </div>
+            <div class="job-card-preview">
+              <div>
+                <span class="job-preview-label">Observabilidad</span>
+                <p>Requests {{ company.observability.requests_total }} · Jobs {{ company.observability.jobs_total }} · Fallidos {{ company.observability.jobs_by_status.get('failed', 0) }}</p>
+              </div>
+              <div>
+                <span class="job-preview-label">Latencia media</span>
+                <p>{{ company.observability.requests_avg_duration_ms | round(0) }} ms</p>
+              </div>
+            </div>
           </div>
-        </div>
 
         <div class="job-card-side">
           <div class="job-progress">

@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.observability import encode_trace_payload, split_trace_payload
 from app.db.models import BackgroundJob, JobAttempt
 
 ACTIVE_JOB_STATUSES = {"queued", "running", "retrying"}
@@ -168,12 +169,13 @@ def enqueue_job(
     settings = _settings()
     configured_max_retries = max(0, int((max_retries if max_retries is not None else DEFAULT_MAX_RETRIES.get(job_type, 3))))
     max_retries_final = min(configured_max_retries, max(0, settings.job_max_attempts - 1))
+    stored_payload = encode_trace_payload(normalized_payload)
     job = BackgroundJob(
         company_id=company_id,
         job_type=job_type,
         dedupe_key=key,
         status="queued",
-        payload_json=_dumps(normalized_payload),
+        payload_json=_dumps(stored_payload),
         created_by_user_id=created_by_user_id,
         max_retries=max_retries_final,
         queued_at=_now(),
@@ -455,4 +457,12 @@ def update_job_progress(db: Session, job: BackgroundJob, progress: int) -> Backg
 
 
 def job_payload(job: BackgroundJob) -> dict:
-    return _loads(job.payload_json)
+    payload = _loads(job.payload_json)
+    cleaned, _trace = split_trace_payload(payload)
+    return cleaned
+
+
+def job_trace(job: BackgroundJob) -> dict:
+    payload = _loads(job.payload_json)
+    _cleaned, trace = split_trace_payload(payload)
+    return trace

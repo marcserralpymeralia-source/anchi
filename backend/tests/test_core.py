@@ -40,6 +40,8 @@ class FakeRequest:
         self.scope = {"session": session or {}}
         self.headers = {"host": host}
         self.state = SimpleNamespace()
+        self.url = SimpleNamespace(path="/demo")
+        self.method = "GET"
 
 
 class CoreSecurityAndJobsTests(unittest.TestCase):
@@ -228,9 +230,11 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
 
         request_id = response.headers.get("X-Request-ID")
         self.assertTrue(request_id)
+        self.assertEqual(response.headers.get("X-Correlation-ID"), request_id)
 
         error_response = internal_server_error_response(request)
         self.assertEqual(error_response.headers.get("X-Request-ID"), request_id)
+        self.assertEqual(error_response.headers.get("X-Correlation-ID"), request_id)
         self.assertIn(request_id, error_response.body.decode("utf-8"))
 
 

@@ -13,9 +13,10 @@ from app.auth.dependencies import current_user
 from app.core.pagination import normalize_page
 from app.core.templating import templates
 from app.db.models import AuditLog, BackgroundJob, JobAttempt
-from app.jobs.service import cancel_job, get_job, list_jobs, retry_job
+from app.jobs.service import cancel_job, get_job, job_payload, job_trace, list_jobs, retry_job
 from app.master.service import TenantUser
 from app.tenancy.database import get_tenant_db
+from app.logs.service import parse_audit_log_message
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -27,10 +28,11 @@ def _aware(value: datetime | None) -> datetime | None:
 
 
 def _serialize_job(job) -> dict:
+    trace = job_trace(job)
     payload_preview = ""
     result_preview = ""
     try:
-        payload_data = json.loads(job.payload_json or "{}")
+        payload_data = job_payload(job)
         if isinstance(payload_data, dict):
             payload_preview = ", ".join(f"{key}={value}" for key, value in list(payload_data.items())[:4])
     except json.JSONDecodeError:
@@ -85,6 +87,12 @@ def _serialize_job(job) -> dict:
         "heartbeat_age_seconds": heartbeat_age_seconds,
         "payload_preview": payload_preview,
         "result_preview": result_preview,
+        "trace_request_id": trace.get("request_id"),
+        "trace_correlation_id": trace.get("correlation_id"),
+        "trace_tenant_id": trace.get("tenant_id"),
+        "trace_user_id": trace.get("user_id"),
+        "trace_membership_id": trace.get("membership_id"),
+        "trace_worker_id": trace.get("worker_id"),
     }
 
 
@@ -192,15 +200,22 @@ def jobs_detail_page(job_id: int, request: Request, db: Session = Depends(get_te
         .order_by(AuditLog.created_at.desc())
         .limit(12)
     ).all()
-    log_items = [
-        {
-            "created_at": log.created_at,
-            "created_label": log.created_at.strftime("%d/%m %H:%M") if log.created_at else "",
-            "action": log.action,
-            "message": log.message,
-        }
-        for log in logs
-    ]
+    log_items = []
+    for log in logs:
+        parsed = parse_audit_log_message(log.message)
+        context = parsed.get("context") or {}
+        log_items.append(
+            {
+                "created_at": log.created_at,
+                "created_label": log.created_at.strftime("%d/%m %H:%M") if log.created_at else "",
+                "action": log.action,
+                "message": parsed.get("message") or "",
+                "request_id": context.get("request_id"),
+                "correlation_id": context.get("correlation_id"),
+                "job_id": context.get("job_id"),
+                "worker_id": context.get("worker_id"),
+            }
+        )
     attempts = db.scalars(
         select(JobAttempt)
         .where(
@@ -233,6 +248,7 @@ def jobs_detail_page(job_id: int, request: Request, db: Session = Depends(get_te
             "logs": log_items,
             "attempts": attempt_items,
             "request_id": getattr(request.state, "request_id", None),
+            "correlation_id": getattr(request.state, "correlation_id", None) or serialized.get("trace_correlation_id") or getattr(request.state, "request_id", None),
         },
     )
 

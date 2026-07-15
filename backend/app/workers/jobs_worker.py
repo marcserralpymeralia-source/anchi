@@ -17,6 +17,9 @@ from sqlalchemy.orm import selectinload
 from app.agent.platform import LearningService
 from app.agent.services import AgentProcessingService, ScoringService
 from app.core.config import get_settings
+from app.core.logging import configure_logging
+from app.core.metrics import record_job
+from app.core.observability import observability_scope
 from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, FTPSettings, ImportJob, Order, ScoringSettings
 from app.exports.service import ExportService, FTPService
 from app.logs.service import log_action
@@ -26,7 +29,7 @@ from app.imports.service import confirm_import, guess_mapping, read_preview
 from app.orders.routes import _customer_label, _sync_customer_product_knowledge, validate_confirmation
 from app.settings.integrations import backfill_imap_emails, read_latest_imap_emails
 from app.settings.service import get_or_create_settings
-from app.jobs.service import claim_next_job, fail_job, finish_job, job_payload, recover_stale_jobs, update_job_progress
+from app.jobs.service import claim_next_job, fail_job, finish_job, job_payload, job_trace, recover_stale_jobs, update_job_progress
 from app.tenancy.database import tenant_db_session
 
 logger = logging.getLogger(__name__)
@@ -421,25 +424,73 @@ def _handle_tenant_jobs(tenant: MasterTenantDatabase, owner: str) -> dict[str, i
             )
             if not job:
                 break
-            try:
-                result = _process_job(db, job)
-                if isinstance(result, dict) and result.get("ok") is False:
-                    raise RuntimeError(str(result.get("message") or "El job devolvio ok=false."))
-                finish_job(db, job, result)
-                log_action(db, company_id=job.company_id, user=None, action=f"job.{job.job_type}.success", entity_type="job", entity_id=job.id, message=result.get("message") or "Trabajo completado")
-                processed_jobs += 1
-            except Exception as exc:  # noqa: BLE001
-                logger.exception("Job fallido company=%s job=%s", job.company_id, job.job_type)
-                should_retry = job.attempt_count < (max(0, job.max_retries or 0) + 1) and _is_retryable_exception(exc)
-                failed_job = fail_job(db, job, str(exc), retry=should_retry, error_type=exc.__class__.__name__)
-                action_suffix = "retrying" if failed_job.status == "retrying" else "failed"
-                log_action(db, company_id=job.company_id, user=None, action=f"job.{job.job_type}.{action_suffix}", entity_type="job", entity_id=job.id, message=str(exc))
+            trace = job_trace(job)
+            with observability_scope(
+                request_id=trace.get("request_id"),
+                correlation_id=trace.get("correlation_id") or trace.get("request_id"),
+                tenant_id=job.company_id,
+                user_id=trace.get("user_id"),
+                membership_id=trace.get("membership_id"),
+                job_id=job.id,
+                worker_id=owner,
+                route=f"job:{job.job_type}",
+                method="worker",
+            ):
+                try:
+                    logger.info(
+                        "job.start",
+                        extra={
+                            "event": "job.start",
+                            "job_id": job.id,
+                            "job_type": job.job_type,
+                            "company_id": job.company_id,
+                            "worker_id": owner,
+                        },
+                    )
+                    record_job(job_type=job.job_type, status="started")
+                    result = _process_job(db, job)
+                    if isinstance(result, dict) and result.get("ok") is False:
+                        raise RuntimeError(str(result.get("message") or "El job devolvio ok=false."))
+                    finish_job(db, job, result)
+                    record_job(job_type=job.job_type, status="success")
+                    log_action(db, company_id=job.company_id, user=None, action=f"job.{job.job_type}.success", entity_type="job", entity_id=job.id, message=result.get("message") or "Trabajo completado")
+                    processed_jobs += 1
+                    logger.info(
+                        "job.end",
+                        extra={
+                            "event": "job.end",
+                            "job_id": job.id,
+                            "job_type": job.job_type,
+                            "company_id": job.company_id,
+                            "worker_id": owner,
+                            "status": "success",
+                        },
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception("Job fallido company=%s job=%s", job.company_id, job.job_type)
+                    should_retry = job.attempt_count < (max(0, job.max_retries or 0) + 1) and _is_retryable_exception(exc)
+                    failed_job = fail_job(db, job, str(exc), retry=should_retry, error_type=exc.__class__.__name__)
+                    record_job(job_type=job.job_type, status=failed_job.status)
+                    action_suffix = "retrying" if failed_job.status == "retrying" else "failed"
+                    log_action(db, company_id=job.company_id, user=None, action=f"job.{job.job_type}.{action_suffix}", entity_type="job", entity_id=job.id, message=str(exc))
+                    logger.info(
+                        "job.end",
+                        extra={
+                            "event": "job.end",
+                            "job_id": job.id,
+                            "job_type": job.job_type,
+                            "company_id": job.company_id,
+                            "worker_id": owner,
+                            "status": failed_job.status,
+                        },
+                    )
     finally:
         db.close()
     return {"recovered": recovered_jobs, "processed": processed_jobs}
 
 
 def run_worker_cycle() -> dict[str, int]:
+    configure_logging()
     summary = {"tenants": 0, "recovered": 0, "processed": 0}
     master_db = MasterSessionLocal()
     try:
@@ -478,6 +529,7 @@ def _worker_loop() -> None:
 
 
 def start_job_worker() -> None:
+    configure_logging()
     global _worker_started
     if _worker_started:
         return
@@ -486,6 +538,7 @@ def start_job_worker() -> None:
 
 
 def main() -> None:
+    configure_logging()
     _worker_loop()
 
 

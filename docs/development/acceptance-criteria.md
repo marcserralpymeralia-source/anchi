@@ -27,6 +27,9 @@
 - Ejecutar los tests relacionados antes de cerrar una fase.
 - Ejecutar validacion sintactica.
 - Ejecutar tests especificos de configuracion segura.
+- Mantener request_id y correlation_id en la traza de request, logs y jobs.
+- Exponer health/live, health/ready y metricas internas basicas.
+- No filtrar secretos en logs estructurados ni en trazas persistidas.
 - Documentar cualquier fallo que no se corrija en ese momento.
 
 ## Compatibilidad

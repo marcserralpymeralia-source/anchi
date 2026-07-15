@@ -1,19 +1,65 @@
 {% extends "base.html" %}
 {% set title = "Logs" %}
 {% block content %}
-<table>
-  <thead><tr><th>Fecha</th><th>Accion</th><th>Entidad</th><th>Mensaje</th></tr></thead>
-  <tbody>
-  {% for log in logs %}
-    <tr>
-      <td>{{ log.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
-      <td>{{ log.action }}</td>
-      <td>{{ log.entity_type or "" }} {{ log.entity_id or "" }}</td>
-      <td>{{ log.message }}</td>
-    </tr>
-  {% else %}
-    <tr><td colspan="4" class="muted">Sin logs todavia.</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
+<section class="panel stack">
+  <div class="section-title-row">
+    <div>
+      <h2>Logs de auditoría</h2>
+      <p class="muted">Acciones operativas con request, correlación y trazas de tenant visibles de un vistazo.</p>
+    </div>
+  </div>
+
+  <form class="filter-grid" method="get" action="/logs">
+    <label>Acción<input name="action" value="{{ filters.action }}" placeholder="email.saved"></label>
+    <label>Entidad<input name="entity_type" value="{{ filters.entity_type }}" placeholder="order, email..."></label>
+    <label>Request ID<input name="request_id" value="{{ filters.request_id }}" placeholder="traza de request"></label>
+    <label>Correlation ID<input name="correlation_id" value="{{ filters.correlation_id }}" placeholder="correlación"></label>
+    <label>Buscar<input name="search" value="{{ filters.search }}" placeholder="Texto o acción"></label>
+    <label>&nbsp;<button class="secondary" data-loading-text="Filtrando...">Filtrar</button></label>
+  </form>
+</section>
+
+<section class="panel stack">
+  <div class="section-title-row">
+    <div>
+      <h3>Eventos</h3>
+      <span class="badge">{{ logs|length }} resultados</span>
+    </div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Fecha</th>
+        <th>Acción</th>
+        <th>Mensaje</th>
+        <th>Traza</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for log in logs %}
+        <tr>
+          <td>{{ log.created_label }}</td>
+          <td>
+            <strong>{{ log.action }}</strong>
+            {% if log.entity_type %}
+              <div class="muted">{{ log.entity_type }}{% if log.entity_id %} #{{ log.entity_id }}{% endif %}</div>
+            {% endif %}
+          </td>
+          <td>{{ log.message }}</td>
+          <td>
+            <div class="trace-pills">
+              {% if log.request_id %}<span class="job-pill">Req {{ log.request_id[:8] }}</span>{% endif %}
+              {% if log.correlation_id %}<span class="job-pill">Corr {{ log.correlation_id[:8] }}</span>{% endif %}
+              {% if log.job_id %}<span class="job-pill">Job #{{ log.job_id }}</span>{% endif %}
+              {% if log.worker_id %}<span class="job-pill">Worker {{ log.worker_id }}</span>{% endif %}
+            </div>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="muted">Sin logs todavia.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
 {% endblock %}

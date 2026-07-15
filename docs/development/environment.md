@@ -42,6 +42,8 @@ Sin exponer valores secretos:
 - `JOB_RETRY_BASE_SECONDS`
 - `JOB_RETRY_MAX_SECONDS`
 - `JOB_STALE_AFTER_SECONDS`
+- `LOG_FORMAT`
+- `LOG_LEVEL`
 - `DEFAULT_COMPANY_NAME`
 - `DEFAULT_ADMIN_EMAIL`
 - `DEFAULT_ADMIN_PASSWORD`
@@ -87,6 +89,15 @@ APP_ENV=development ./.venv/bin/python -m app.workers.jobs_worker
 ```
 
 El worker usa la misma resolucion de tenant que el proceso web y recupera jobs bloqueados al arrancar.
+
+## Observabilidad
+
+- `LOG_FORMAT=json` deja trazas estructuradas listas para correlacionar request y jobs.
+- `LOG_LEVEL=info` mantiene una salida compacta y útil para desarrollo y demo.
+- `GET /health/live` comprueba que el proceso esta vivo sin tocar bases.
+- `GET /health/ready` valida master, tenant y métricas basicas.
+- `GET /health/metrics` expone el snapshot interno de requests y jobs.
+- `GET /logs` permite filtrar por `request_id`, `correlation_id`, accion y entidad.
 
 ## Problemas conocidos del entorno
 

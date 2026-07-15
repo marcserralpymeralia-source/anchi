@@ -4,6 +4,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.models import BackgroundJob, Company, Customer, Email, EmailSettings, InboundMessage, InputChannel, LLMSettings, Order, Product
+from app.core.metrics import snapshot_metrics
 from app.master.models import MasterCompany, MasterTenantDatabase
 from app.settings.email_config import email_config_status
 from app.settings.service import get_or_create_settings
@@ -42,6 +43,7 @@ def _zero_payload(company: Company | None, tenant_db: MasterTenantDatabase | Non
             "last_error": None,
             "is_current": False,
         },
+        "observability": snapshot_metrics(),
     }
 
 
@@ -92,6 +94,7 @@ def company_diagnostics(master_db: Session, company_id: int) -> dict:
             "last_sync_message": email_settings.last_sync_message,
             "email_status": email_config_status(email_settings),
             "schema_report": schema_report,
+            "observability": snapshot_metrics(),
         }
     finally:
         db.close()
