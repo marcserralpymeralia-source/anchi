@@ -1,5 +1,7 @@
 | Fecha | Fase | Archivo | Cambio | Validacion |
 |---|---|---|---|---|
+| 2026-07-16 | Fase 8 | `backend/app/master/models.py`, `backend/app/db/models.py`, `backend/app/settings/integrations.py`, `backend/app/agent/prompt_runtime.py`, `backend/app/agent/services.py`, `backend/app/agent/platform.py`, `backend/app/workers/email_worker.py`, `backend/app/workers/jobs_worker.py` | Se añadieron checkpoints IMAP, ejecuciones de prompt registradas, validacion estricta de salidas y aprendizaje controlado | Validacion pendiente |
+| 2026-07-16 | Fase 8 | `backend/scripts/evaluate_agent.py`, `backend/tests/fixtures/agent_evaluation.json`, `backend/tests/test_email_ai_learning.py`, `docs/development/acceptance-criteria.md`, `docs/development/decision-log.md` | Se preparo una utilidad reproducible para evaluar salidas del agente contra fixtures y se documentaron los nuevos criterios | Validacion pendiente |
 | 2026-07-14 | Fase 0 | `AGENTS.md` | Se añadio una instruccion minima de alcance y validacion | `git status`, revision manual |
 | 2026-07-14 | Fase 0 | `docs/development/environment.md` | Guia del entorno de desarrollo | Revisado manualmente |
 | 2026-07-14 | Fase 0 | `docs/development/validation-commands.md` | Tabla de comandos oficiales | Validada contra repo y pruebas |

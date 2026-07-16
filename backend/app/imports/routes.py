@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from html import unescape
 from types import SimpleNamespace
 
@@ -10,7 +11,7 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import current_user
 from app.master.service import TenantUser
 from app.core.templating import templates
-from app.db.models import Company, ImportJob, ImportMappingTemplate
+from app.db.models import Company, ImportJob, ImportMappingTemplate, LLMSettings, Order, OrderLine, ScoringSettings
 from app.jobs.service import enqueue_job
 from app.imports.quick import analysis_context, _text_from_upload
 from app.imports.service import confirm_import, create_preview, read_preview, validate_import

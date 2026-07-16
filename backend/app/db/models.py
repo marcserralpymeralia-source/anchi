@@ -594,6 +594,10 @@ class InboundMessage(Base):
     conversation_id: Mapped[int | None] = mapped_column(ForeignKey("conversations.id"), index=True)
     source_external_id: Mapped[str | None] = mapped_column(String(255), index=True)
     source_thread_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    source_message_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    source_mailbox: Mapped[str | None] = mapped_column(String(255), index=True)
+    source_uidvalidity: Mapped[str | None] = mapped_column(String(120), index=True)
+    source_uid: Mapped[str | None] = mapped_column(String(120), index=True)
     direction: Mapped[str] = mapped_column(String(30), default="inbound")
     sender: Mapped[str | None] = mapped_column(String(255))
     recipient: Mapped[str | None] = mapped_column(String(255))
@@ -866,6 +870,10 @@ class Email(Base):
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
     conversation_id: Mapped[int | None] = mapped_column(ForeignKey("conversations.id"), index=True)
     external_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    message_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    imap_mailbox: Mapped[str | None] = mapped_column(String(255), index=True)
+    imap_uidvalidity: Mapped[str | None] = mapped_column(String(120), index=True)
+    imap_uid: Mapped[str | None] = mapped_column(String(120), index=True)
     sender: Mapped[str] = mapped_column(String(255))
     subject: Mapped[str] = mapped_column(String(500))
     body: Mapped[str | None] = mapped_column(Text)
@@ -1030,6 +1038,53 @@ class PromptVersion(Base):
     content: Mapped[str] = mapped_column(Text)
     created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PromptExecution(Base):
+    __tablename__ = "prompt_executions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    prompt_template_id: Mapped[int | None] = mapped_column(ForeignKey("prompt_templates.id"), index=True)
+    prompt_name: Mapped[str] = mapped_column(String(150))
+    prompt_purpose: Mapped[str] = mapped_column(String(100), index=True)
+    prompt_version: Mapped[int] = mapped_column(Integer, default=0)
+    model: Mapped[str] = mapped_column(String(100))
+    parameters_json: Mapped[str] = mapped_column(Text, default="{}")
+    input_reference: Mapped[str | None] = mapped_column(String(255))
+    output_status: Mapped[str] = mapped_column(String(50), default="pending")
+    validation_errors_json: Mapped[str | None] = mapped_column(Text)
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_cost: Mapped[float | None] = mapped_column(Float)
+    response_hash: Mapped[str | None] = mapped_column(String(120))
+    response_excerpt: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LearningProposal(Base):
+    __tablename__ = "learning_proposals"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    source_type: Mapped[str] = mapped_column(String(80), index=True)
+    source_value: Mapped[str] = mapped_column(String(255))
+    target_type: Mapped[str] = mapped_column(String(80), index=True)
+    target_id: Mapped[int | None] = mapped_column(Integer)
+    suggested_action: Mapped[str] = mapped_column(String(80))
+    evidence_count: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(40), default="proposed")
+    source_correction_id: Mapped[int | None] = mapped_column(Integer)
+    conflict_reason: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    reviewed_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class TenantSchemaMigration(Base):

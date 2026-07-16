@@ -683,8 +683,8 @@ def pause_agent(db: Session = Depends(get_tenant_db), user: TenantUser = Depends
 def test_agent_full_flow(sample_text: str = Form("Cliente de prueba solicita 10 unidades del articulo de prueba."), db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     llm = get_or_create_settings(db, LLMSettings, user.company_id)
     start = perf_counter()
-    classification = classify_sample(llm, active_prompt_content(db, user.company_id, "classification"), sample_text)
-    extraction = extract_sample(llm, active_prompt_content(db, user.company_id, "extraction"), sample_text) if classification.get("ok") else {"ok": False, "message": "No se ejecuto extraccion porque fallo la clasificacion."}
+    classification = classify_sample(db, llm, user.company_id, sample_text, active_prompt_content(db, user.company_id, "classification"))
+    extraction = extract_sample(db, llm, user.company_id, sample_text, active_prompt_content(db, user.company_id, "extraction")) if classification.get("ok") else {"ok": False, "message": "No se ejecuto extraccion porque fallo la clasificacion."}
     elapsed_ms = int((perf_counter() - start) * 1000)
     ok = classification.get("ok") and extraction.get("ok")
     llm.last_test_at = datetime.now(timezone.utc)
@@ -702,7 +702,7 @@ def test_llm_classification(sample_text: str = Form(...), db: Session = Depends(
     start = perf_counter()
     prompt = active_prompt_content(db, user.company_id, "classification")
     llm = get_or_create_settings(db, LLMSettings, user.company_id)
-    result = classify_sample(llm, prompt, sample_text)
+    result = classify_sample(db, llm, user.company_id, sample_text, prompt)
     llm.last_test_at = datetime.now(timezone.utc)
     llm.last_test_ok = result["ok"]
     llm.last_test_message = f"Clasificacion: {result['message']} Tiempo: {int((perf_counter() - start) * 1000)} ms."
@@ -717,7 +717,7 @@ def test_llm_extraction(sample_text: str = Form(...), db: Session = Depends(get_
     start = perf_counter()
     prompt = active_prompt_content(db, user.company_id, "extraction")
     llm = get_or_create_settings(db, LLMSettings, user.company_id)
-    result = extract_sample(llm, prompt, sample_text)
+    result = extract_sample(db, llm, user.company_id, sample_text, prompt)
     llm.last_test_at = datetime.now(timezone.utc)
     llm.last_test_ok = result["ok"]
     llm.last_test_message = f"Extraccion: {result['message']} Tiempo: {int((perf_counter() - start) * 1000)} ms."

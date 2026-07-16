@@ -106,9 +106,9 @@ def analysis_context(
     if not agent_text:
         agent_text = f"Asunto: {subject}\nRemitente: {sender}".strip()
     try:
-        classification = classify_sample(llm, _active_prompt_content(db, user.company_id, "classification"), agent_text)
+        classification = classify_sample(db, llm, user.company_id, agent_text, _active_prompt_content(db, user.company_id, "classification"))
         if classification.get("ok"):
-            extraction = extract_sample(llm, _active_prompt_content(db, user.company_id, "extraction"), agent_text)
+            extraction = extract_sample(db, llm, user.company_id, agent_text, _active_prompt_content(db, user.company_id, "extraction"))
             if extraction.get("ok"):
                 extraction_payload = json.loads(extraction.get("content", "{}"))
     except Exception as exc:  # noqa: BLE001

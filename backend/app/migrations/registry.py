@@ -180,6 +180,10 @@ TENANT_COMPAT_COLUMNS = {
     "emails": {
         "conversation_id": "INTEGER",
         "agent_status": "VARCHAR(80) DEFAULT 'not_processed'",
+        "message_id": "VARCHAR(255)",
+        "imap_mailbox": "VARCHAR(255)",
+        "imap_uidvalidity": "VARCHAR(120)",
+        "imap_uid": "VARCHAR(120)",
         "has_attachments": "BOOLEAN DEFAULT 0",
         "has_pdf": "BOOLEAN DEFAULT 0",
         "processing_error": "TEXT",
@@ -275,6 +279,10 @@ TENANT_COMPAT_COLUMNS = {
         "provider": "VARCHAR(50) DEFAULT 'imap'",
         "conversation_id": "INTEGER",
         "source_thread_id": "VARCHAR(255)",
+        "source_message_id": "VARCHAR(255)",
+        "source_mailbox": "VARCHAR(255)",
+        "source_uidvalidity": "VARCHAR(120)",
+        "source_uid": "VARCHAR(120)",
         "direction": "VARCHAR(30) DEFAULT 'inbound'",
         "recipient": "VARCHAR(255)",
         "original_content": "TEXT",
@@ -620,6 +628,93 @@ def _apply_master_metadata(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     return []
 
 
+def _apply_master_email_sync_state(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    from app.master.models import EmailSyncState
+
+    actions: list[str] = []
+    if "email_sync_state" not in inspect(engine).get_table_names():
+        actions.append("CREATE TABLE email_sync_state (...)")
+        if not dry_run:
+            EmailSyncState.__table__.create(bind=engine, checkfirst=True)
+        return actions
+    if not dry_run:
+        EmailSyncState.__table__.create(bind=engine, checkfirst=True)
+    actions.extend(
+        ensure_columns(
+            engine,
+            "email_sync_state",
+            {
+                "mailbox": "VARCHAR(255)",
+                "uidvalidity": "VARCHAR(120)",
+                "last_successful_sync_at": "DATETIME",
+                "last_error_type": "VARCHAR(120)",
+                "sync_status": "VARCHAR(50) DEFAULT 'idle'",
+                "last_checkpoint_uid": "VARCHAR(120)",
+                "backfill_status": "VARCHAR(50) DEFAULT 'idle'",
+                "backfill_total": "INTEGER DEFAULT 0",
+                "backfill_processed": "INTEGER DEFAULT 0",
+                "backfill_created": "INTEGER DEFAULT 0",
+                "backfill_duplicates": "INTEGER DEFAULT 0",
+                "backfill_errors": "INTEGER DEFAULT 0",
+                "backfill_last_uid": "VARCHAR(120)",
+                "backfill_checkpoint_json": "TEXT",
+                "backfill_started_at": "DATETIME",
+                "backfill_last_checkpoint_at": "DATETIME",
+                "backfill_paused_at": "DATETIME",
+                "backfill_completed_at": "DATETIME",
+                "backfill_cancelled_at": "DATETIME",
+            },
+            dry_run=dry_run,
+        )
+    )
+    return actions
+
+
+def _apply_tenant_ai_learning(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    from app.db.models import LearningProposal, PromptExecution
+
+    actions: list[str] = []
+    if "prompt_executions" not in inspect(engine).get_table_names():
+        actions.append("CREATE TABLE prompt_executions (...)")
+        if not dry_run:
+            PromptExecution.__table__.create(bind=engine, checkfirst=True)
+    elif not dry_run:
+        PromptExecution.__table__.create(bind=engine, checkfirst=True)
+    if "learning_proposals" not in inspect(engine).get_table_names():
+        actions.append("CREATE TABLE learning_proposals (...)")
+        if not dry_run:
+            LearningProposal.__table__.create(bind=engine, checkfirst=True)
+    elif not dry_run:
+        LearningProposal.__table__.create(bind=engine, checkfirst=True)
+    actions.extend(
+        ensure_columns(
+            engine,
+            "emails",
+            {
+                "message_id": "VARCHAR(255)",
+                "imap_mailbox": "VARCHAR(255)",
+                "imap_uidvalidity": "VARCHAR(120)",
+                "imap_uid": "VARCHAR(120)",
+            },
+            dry_run=dry_run,
+        )
+    )
+    actions.extend(
+        ensure_columns(
+            engine,
+            "inbound_messages",
+            {
+                "source_message_id": "VARCHAR(255)",
+                "source_mailbox": "VARCHAR(255)",
+                "source_uidvalidity": "VARCHAR(120)",
+                "source_uid": "VARCHAR(120)",
+            },
+            dry_run=dry_run,
+        )
+    )
+    return actions
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -645,6 +740,12 @@ TENANT_SCHEMA_MIGRATIONS = [
         checksum=checksum_text("tenant", "messages_and_conversations", "conversations", "inbound_messages", "emails", "orders"),
         upgrade=_apply_tenant_messages,
     ),
+    MigrationSpec(
+        version="2026.07.16.1",
+        name="tenant ai execution and learning control",
+        checksum=checksum_text("tenant", "ai_execution_and_learning_control", "prompt_executions", "learning_proposals", "emails", "inbound_messages"),
+        upgrade=_apply_tenant_ai_learning,
+    ),
 ]
 
 MASTER_SCHEMA_MIGRATIONS = [
@@ -653,6 +754,12 @@ MASTER_SCHEMA_MIGRATIONS = [
         name="master schema ledger",
         checksum=checksum_text("master", "schema_ledger"),
         upgrade=_apply_master_metadata,
+    ),
+    MigrationSpec(
+        version="2026.07.16.1",
+        name="master email sync checkpoints",
+        checksum=checksum_text("master", "email_sync_checkpoints", "email_sync_state"),
+        upgrade=_apply_master_email_sync_state,
     ),
 ]
 

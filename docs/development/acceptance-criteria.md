@@ -56,6 +56,10 @@
 - No permitir acceso cruzado entre dos companias con IDs coincidentes en bases distintas.
 - Mantener jobs idempotentes, con reintentos limitados, historial de intentos y recovery de jobs bloqueados.
 - Garantizar que el worker tenga una entrada CLI estable y que no procese un job antes de su fecha de reintento.
+- Mantener el correo IMAP con checkpoints por UID/UIDVALIDITY, deduplicacion y estado de backfill persistido en master.
+- Registrar cada ejecucion de prompt en `prompt_executions` y validar la salida estructurada antes de usarla.
+- Mantener propuestas de aprendizaje controladas, revisables y separadas del dato operativo.
+- Proveer una utilidad de evaluacion reproducible para comparar salidas esperadas y reales del agente sin llamar a IA real en tests.
 - No activar profiling en produccion.
 - No introducir un segundo sistema paralelo de pedidos al modelar mensajes y conversaciones.
 

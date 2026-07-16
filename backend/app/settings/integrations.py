@@ -14,10 +14,13 @@ from email.message import EmailMessage
 from pathlib import Path
 from uuid import uuid4
 
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
+from app.agent.prompt_runtime import run_prompt_execution
 from app.core.encryption import decrypt_secret
 from app.db.models import Email, EmailAttachment, EmailSettings, InboundMessage, LLMSettings, MessageAttachment
+from app.master.models import EmailSyncState
 from app.messages.service import upsert_inbound_message
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
@@ -37,6 +40,14 @@ def classify_integration_error(error: Exception | str) -> str:
     message = str(error).lower()
     if any(marker in message for marker in ("auth", "credential", "password", "invalid login", "permission denied")):
         return "authentication_failed" if "permission" not in message else "permission_denied"
+    if any(marker in message for marker in ("uidvalidity", "uid validity")):
+        return "uidvalidity_changed"
+    if any(marker in message for marker in ("mailbox not found", "no such mailbox", "folder not found", "selected mailbox", "unknown mailbox")):
+        return "mailbox_not_found"
+    if any(marker in message for marker in ("parse", "could not parse", "bad message", "message parse", "header parse")):
+        return "message_parse_failed"
+    if any(marker in message for marker in ("attachment", "mime", "payload decode", "content transfer")):
+        return "attachment_failed"
     if "timeout" in message or "timed out" in message:
         return "timeout"
     if any(marker in message for marker in ("rate limit", "too many requests")):
@@ -108,12 +119,22 @@ def _parse_imap_date(value: str | None) -> date | None:
         return None
 
 
-def _imap_search_criteria(*, start_date: date | None = None, end_date: date | None = None, unread_only: bool = True) -> list[str]:
+def _imap_search_criteria(
+    *,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    unread_only: bool = True,
+    start_uid: str | None = None,
+    end_uid: str | None = None,
+) -> list[str]:
     criteria: list[str] = []
     if start_date:
         criteria.extend(["SINCE", start_date.strftime("%d-%b-%Y")])
     if end_date:
         criteria.extend(["BEFORE", (end_date + timedelta(days=1)).strftime("%d-%b-%Y")])
+    if start_uid or end_uid:
+        uid_range = f"{start_uid or '1'}:{end_uid or '*'}"
+        criteria.extend(["UID", uid_range])
     if unread_only:
         criteria.append("UNSEEN")
     return criteria or ["ALL"]
@@ -154,6 +175,125 @@ def _imap_client(settings: EmailSettings):
     return client
 
 
+def _imap_uidvalidity(client, mailbox: str) -> str | None:  # noqa: ANN001
+    try:
+        status, data = client.status(mailbox, "(UIDVALIDITY)")
+        if status != "OK" or not data:
+            return None
+        text = " ".join(item.decode(errors="ignore") if isinstance(item, bytes) else str(item) for item in data)
+        match = re.search(r"UIDVALIDITY\s+(\d+)", text)
+        return match.group(1) if match else None
+    except Exception:
+        return None
+
+
+def _imap_uid(fetch_meta: str, fallback: str) -> str:
+    match = re.search(r"UID\s+(\d+)", fetch_meta or "")
+    return match.group(1) if match else fallback
+
+
+def _normalized_email_external_id(mailbox: str, uidvalidity: str | None, uid: str) -> str:
+    return f"{mailbox}:{uidvalidity or 'unknown'}:{uid}"
+
+
+def _existing_email_for_imap(
+    db: Session,
+    *,
+    company_id: int,
+    mailbox: str,
+    uidvalidity: str | None,
+    uid: str,
+    message_id: str | None,
+    external_id: str,
+) -> Email | None:
+    conditions = [Email.external_id == external_id]
+    if message_id:
+        conditions.append(Email.message_id == message_id)
+    if uidvalidity:
+        conditions.append(and_(Email.imap_mailbox == mailbox, Email.imap_uidvalidity == uidvalidity, Email.imap_uid == uid))
+    return db.scalar(select(Email).where(Email.company_id == company_id, or_(*conditions)))
+
+
+def _update_sync_checkpoint(
+    sync_state: EmailSyncState | None,
+    sync_session: Session | None,
+    *,
+    mailbox: str | None,
+    uidvalidity: str | None,
+    last_uid: str | None,
+    saved: int,
+    duplicates: int,
+    attachments_saved: int,
+    found: int,
+    status: str,
+    error_type: str | None = None,
+    error_message: str | None = None,
+    progress: int | None = None,
+    total: int | None = None,
+) -> None:
+    if not sync_state or not sync_session:
+        return
+    now = datetime.now(timezone.utc)
+    sync_state.mailbox = mailbox or sync_state.mailbox
+    sync_state.uidvalidity = uidvalidity or sync_state.uidvalidity
+    sync_state.last_seen_uid = last_uid or sync_state.last_seen_uid
+    sync_state.last_checkpoint_uid = last_uid or sync_state.last_checkpoint_uid
+    sync_state.last_sync_at = now
+    sync_state.sync_status = status
+    sync_state.status = status
+    current_backfill_status = sync_state.backfill_status
+    if current_backfill_status in {"paused", "cancelled"} and status == "running":
+        sync_state.backfill_status = current_backfill_status
+    else:
+        sync_state.backfill_status = status
+    if status == "running" and not sync_state.backfill_started_at:
+        sync_state.backfill_started_at = now
+    if status == "completed" or status == "idle":
+        sync_state.last_success_at = now
+        sync_state.last_successful_sync_at = now
+        sync_state.last_error_at = None
+        sync_state.last_error_message = None
+        sync_state.last_error_type = None
+        sync_state.backfill_completed_at = now
+    if status == "paused":
+        sync_state.backfill_paused_at = now
+    if status == "cancelled":
+        sync_state.backfill_cancelled_at = now
+    if error_message:
+        sync_state.last_error_at = now
+        sync_state.last_error_message = error_message
+        sync_state.last_error_type = error_type
+        sync_state.status = "error"
+        sync_state.sync_status = "error"
+    if progress is not None:
+        sync_state.backfill_processed = progress
+    if total is not None:
+        sync_state.backfill_total = total
+    sync_state.backfill_created = max(sync_state.backfill_created or 0, saved)
+    sync_state.backfill_duplicates = max(sync_state.backfill_duplicates or 0, duplicates)
+    sync_state.backfill_errors = max(sync_state.backfill_errors or 0, 0)
+    sync_state.backfill_last_uid = last_uid or sync_state.backfill_last_uid
+    sync_state.backfill_last_checkpoint_at = now
+    sync_state.backfill_checkpoint_json = json.dumps(
+        {
+            "mailbox": mailbox,
+            "uidvalidity": uidvalidity,
+            "last_uid": last_uid,
+            "saved": saved,
+            "duplicates": duplicates,
+            "attachments_saved": attachments_saved,
+            "found": found,
+            "status": status,
+            "progress": progress,
+            "total": total,
+            "error_type": error_type,
+            "error_message": error_message,
+        },
+        ensure_ascii=False,
+    )
+    sync_session.commit()
+
+
 def _fetch_imap_emails(
     db: Session,
     settings: EmailSettings,
@@ -161,10 +301,15 @@ def _fetch_imap_emails(
     *,
     start_date: date | None = None,
     end_date: date | None = None,
+    start_uid: str | None = None,
+    end_uid: str | None = None,
     unread_only: bool = True,
     limit: int | None = None,
     auto_process: bool = False,
     label: str = "Lectura IMAP",
+    sync_state: EmailSyncState | None = None,
+    sync_session: Session | None = None,
+    batch_size: int | None = None,
 ) -> dict:
     password = decrypt_secret(settings.imap_password_encrypted)
     if not settings.imap_host or not settings.imap_username or not password:
@@ -174,6 +319,9 @@ def _fetch_imap_emails(
         return {"ok": False, "found": 0, "saved": 0, "message": "Ya hay una sincronizacion IMAP en curso."}
     found = saved = attachments_saved = 0
     duplicates = 0
+    errors = 0
+    mailbox = settings.mailbox or settings.inbox_folder or "INBOX"
+    last_processed_uid: str | None = None
     try:
         settings.last_sync_message = f"{label} en curso"
         settings.last_sync_error = None
@@ -184,8 +332,9 @@ def _fetch_imap_emails(
     try:
         client = _imap_client(settings)
         client.login(settings.imap_username, password)
-        client.select(settings.inbox_folder or "INBOX", readonly=not settings.mark_as_read_after_import)
-        status, data = client.search(None, *_imap_search_criteria(start_date=start_date, end_date=end_date, unread_only=unread_only))
+        client.select(mailbox, readonly=not settings.mark_as_read_after_import)
+        uidvalidity = _imap_uidvalidity(client, mailbox)
+        status, data = client.search(None, *_imap_search_criteria(start_date=start_date, end_date=end_date, unread_only=unread_only, start_uid=start_uid, end_uid=end_uid))
         if status != "OK":
             client.logout()
             return {"ok": False, "found": 0, "saved": 0, "message": "No se pudieron listar correos."}
@@ -197,75 +346,208 @@ def _fetch_imap_emails(
             limit = min(limit, IMAP_MAX_MESSAGES_PER_RUN)
             ids = ids[:limit] if (start_date or end_date) else ids[-limit:]
         found = len(ids)
+        batch_size = max(min(int(batch_size or settings.read_limit or 10), IMAP_MAX_MESSAGES_PER_RUN), 1)
         saved_email_ids: list[int] = []
-        for msg_id in ids:
-            status, msg_data = client.fetch(msg_id, "(UID RFC822)")
-            if status != "OK" or not msg_data or not msg_data[0]:
-                continue
-            raw = msg_data[0][1]
-            fetch_meta = msg_data[0][0].decode(errors="ignore") if isinstance(msg_data[0], tuple) else ""
-            uid_match = re.search(r"UID\s+(\d+)", fetch_meta)
-            uid = uid_match.group(1) if uid_match else msg_id.decode(errors="ignore")
-            msg = message_from_bytes(raw, policy=policy.default)
-            message_id = msg.get("Message-ID") or f"imap-{settings.connected_email or settings.imap_username}-{uid}"
-            exists = db.query(Email).filter(Email.company_id == company_id, Email.external_id == message_id).one_or_none()
-            if exists:
-                duplicates += 1
-                log_action(db, company_id=company_id, user=None, action="email.duplicate_ignored", entity_type="email", entity_id=exists.id, message=f"Duplicado ignorado: {message_id}")
-                continue
-            subject = _decode_mime_header(msg.get("Subject", ""))
-            sender = _decode_mime_header(msg.get("From", ""))
-            body = _extract_body(msg)
-            email = Email(company_id=company_id, external_id=message_id, sender=sender, subject=subject, body=body, extracted_text=body, status="pending", agent_status="not_processed", detected_type=None)
-            db.add(email)
-            db.flush()
-            inbound_message = _create_inbound_message(db, company_id, email, settings, msg, body)
-            attachment_count = _save_attachments(
-                db,
-                company_id,
-                email,
-                msg,
-                inbound_message=inbound_message,
-                max_attachments=IMAP_MAX_ATTACHMENTS_PER_EMAIL,
-                max_attachment_size_mb=IMAP_MAX_ATTACHMENT_SIZE_MB,
-            )
-            attachments_saved += attachment_count
-            email.has_attachments = attachment_count > 0
-            email.has_pdf = any(att.is_pdf for att in email.attachments)
-            pdf_texts = [att.extracted_text for att in email.attachments if att.is_pdf and att.extracted_text]
-            if pdf_texts:
-                email.extracted_text = "\n\n".join(pdf_texts)
-                inbound_message.normalized_text = email.extracted_text
-            inbound_message.has_attachments = email.has_attachments
-            inbound_message.has_pdf = email.has_pdf
-            inbound_message.original_content = body
-            saved += 1
-            saved_email_ids.append(email.id)
-            log_action(db, company_id=company_id, user=None, action="email.saved", entity_type="email", entity_id=email.id, message=f"Correo guardado: {subject[:120]}")
-            if settings.mark_as_read_after_import:
-                client.store(msg_id, "+FLAGS", "\\Seen")
-        db.commit()
-        if (auto_process or settings.auto_process_on_fetch) and saved_email_ids:
-            for email_id in saved_email_ids:
-                enqueue_job(
+        checkpoint_uid = sync_state.last_checkpoint_uid if sync_state and sync_state.backfill_status == "paused" else None
+        if sync_state and sync_state.backfill_status == "running" and sync_state.backfill_last_uid:
+            checkpoint_uid = sync_state.backfill_last_uid
+        processed_since_checkpoint = 0
+        last_processed_uid = checkpoint_uid
+        for offset in range(0, len(ids), batch_size):
+            batch = ids[offset : offset + batch_size]
+            for msg_id in batch:
+                status, msg_data = client.fetch(msg_id, "(UID RFC822)")
+                if status != "OK" or not msg_data or not msg_data[0]:
+                    errors += 1
+                    continue
+                raw = msg_data[0][1]
+                fetch_meta = msg_data[0][0].decode(errors="ignore") if isinstance(msg_data[0], tuple) else ""
+                uid = _imap_uid(fetch_meta, msg_id.decode(errors="ignore"))
+                if checkpoint_uid:
+                    try:
+                        if int(uid) <= int(checkpoint_uid):
+                            continue
+                    except ValueError:
+                        if uid <= checkpoint_uid:
+                            continue
+                msg = message_from_bytes(raw, policy=policy.default)
+                message_id = msg.get("Message-ID") or None
+                dedupe_external_id = _normalized_email_external_id(mailbox, uidvalidity, uid)
+                exists = _existing_email_for_imap(
                     db,
                     company_id=company_id,
-                    job_type="process_email",
-                    payload={"email_id": email_id},
-                    created_by_user_id=None,
+                    mailbox=mailbox,
+                    uidvalidity=uidvalidity,
+                    uid=uid,
+                    message_id=message_id,
+                    external_id=dedupe_external_id,
                 )
+                if exists:
+                    duplicates += 1
+                    processed_since_checkpoint += 1
+                    last_processed_uid = uid
+                    if sync_state:
+                        sync_state.backfill_last_uid = uid
+                    log_action(db, company_id=company_id, user=None, action="email.duplicate_ignored", entity_type="email", entity_id=exists.id, message=f"Duplicado ignorado: {message_id or dedupe_external_id}")
+                    continue
+                subject = _decode_mime_header(msg.get("Subject", ""))
+                sender = _decode_mime_header(msg.get("From", ""))
+                body = _extract_body(msg)
+                email = Email(
+                    company_id=company_id,
+                    external_id=dedupe_external_id,
+                    message_id=message_id,
+                    imap_mailbox=mailbox,
+                    imap_uidvalidity=uidvalidity,
+                    imap_uid=uid,
+                    sender=sender,
+                    subject=subject,
+                    body=body,
+                    extracted_text=body,
+                    status="pending",
+                    agent_status="not_processed",
+                    detected_type=None,
+                )
+                db.add(email)
+                db.flush()
+                inbound_message = _create_inbound_message(db, company_id, email, settings, msg, body)
+                inbound_message.source_message_id = message_id
+                inbound_message.source_mailbox = mailbox
+                inbound_message.source_uidvalidity = uidvalidity
+                inbound_message.source_uid = uid
+                attachment_count = _save_attachments(
+                    db,
+                    company_id,
+                    email,
+                    msg,
+                    inbound_message=inbound_message,
+                    max_attachments=IMAP_MAX_ATTACHMENTS_PER_EMAIL,
+                    max_attachment_size_mb=IMAP_MAX_ATTACHMENT_SIZE_MB,
+                )
+                attachments_saved += attachment_count
+                email.has_attachments = attachment_count > 0
+                email.has_pdf = any(att.is_pdf for att in email.attachments)
+                pdf_texts = [att.extracted_text for att in email.attachments if att.is_pdf and att.extracted_text]
+                if pdf_texts:
+                    email.extracted_text = "\n\n".join(pdf_texts)
+                    inbound_message.normalized_text = email.extracted_text
+                inbound_message.has_attachments = email.has_attachments
+                inbound_message.has_pdf = email.has_pdf
+                inbound_message.original_content = body
+                saved += 1
+                saved_email_ids.append(email.id)
+                processed_since_checkpoint += 1
+                last_processed_uid = uid
+                if sync_state:
+                    sync_state.backfill_last_uid = uid
+                log_action(db, company_id=company_id, user=None, action="email.saved", entity_type="email", entity_id=email.id, message=f"Correo guardado: {subject[:120]}")
+                if settings.mark_as_read_after_import:
+                    client.store(msg_id, "+FLAGS", "\\Seen")
             db.commit()
+            if (auto_process or settings.auto_process_on_fetch) and saved_email_ids:
+                for email_id in saved_email_ids:
+                    enqueue_job(
+                        db,
+                        company_id=company_id,
+                        job_type="process_email",
+                        payload={"email_id": email_id},
+                        created_by_user_id=None,
+                    )
+                db.commit()
+            if sync_state and sync_session:
+                sync_state.backfill_status = "running" if offset + batch_size < len(ids) else "idle"
+                _update_sync_checkpoint(
+                    sync_state,
+                    sync_session,
+                    mailbox=mailbox,
+                    uidvalidity=uidvalidity,
+                    last_uid=last_processed_uid,
+                    saved=saved,
+                    duplicates=duplicates,
+                    attachments_saved=attachments_saved,
+                    found=found,
+                    status="running",
+                    progress=processed_since_checkpoint,
+                    total=found,
+                )
+            if sync_state and sync_state.backfill_status in {"paused", "cancelled"}:
+                break
+            saved_email_ids.clear()
         client.logout()
+        final_status = sync_state.backfill_status if sync_state else "idle"
+        if sync_state and sync_session:
+            if final_status == "paused":
+                _update_sync_checkpoint(
+                    sync_state,
+                    sync_session,
+                    mailbox=mailbox,
+                    uidvalidity=uidvalidity,
+                    last_uid=last_processed_uid,
+                    saved=saved,
+                    duplicates=duplicates,
+                    attachments_saved=attachments_saved,
+                    found=found,
+                    status="paused",
+                    progress=processed_since_checkpoint,
+                    total=found,
+                )
+            elif final_status == "cancelled":
+                _update_sync_checkpoint(
+                    sync_state,
+                    sync_session,
+                    mailbox=mailbox,
+                    uidvalidity=uidvalidity,
+                    last_uid=last_processed_uid,
+                    saved=saved,
+                    duplicates=duplicates,
+                    attachments_saved=attachments_saved,
+                    found=found,
+                    status="cancelled",
+                    progress=processed_since_checkpoint,
+                    total=found,
+                )
+            else:
+                _update_sync_checkpoint(
+                    sync_state,
+                    sync_session,
+                    mailbox=mailbox,
+                    uidvalidity=uidvalidity,
+                    last_uid=last_processed_uid or sync_state.backfill_last_uid,
+                    saved=saved,
+                    duplicates=duplicates,
+                    attachments_saved=attachments_saved,
+                    found=found,
+                    status="idle",
+                    progress=processed_since_checkpoint,
+                    total=found,
+                )
         _update_sync_status(settings, True, saved, duplicates, f"{found} correos encontrados, {saved} nuevos guardados, {duplicates} duplicados ignorados, {attachments_saved} adjuntos guardados.")
         db.commit()
         log_action(db, company_id=company_id, user=None, action="email.fetch_completed", entity_type="email", message=settings.last_sync_message or "")
-        return {"ok": True, "found": found, "saved": saved, "duplicates": duplicates, "attachments": attachments_saved, "message": settings.last_sync_message}
+        return {"ok": True, "found": found, "saved": saved, "duplicates": duplicates, "attachments": attachments_saved, "errors": errors, "uidvalidity": uidvalidity, "message": settings.last_sync_message}
     except (imaplib.IMAP4.error, socket.timeout, OSError) as exc:
         message = f"Error IMAP: {exc}"
         _update_sync_status(settings, False, saved, duplicates, message, message)
         db.commit()
         log_action(db, company_id=company_id, user=None, action="email.fetch_error", entity_type="email", message=message)
-        return {"ok": False, "found": found, "saved": saved, "duplicates": duplicates, "attachments": attachments_saved, "message": message}
+        if sync_state and sync_session:
+            _update_sync_checkpoint(
+                sync_state,
+                sync_session,
+                mailbox=mailbox,
+                uidvalidity=None,
+                last_uid=last_processed_uid,
+                saved=saved,
+                duplicates=duplicates,
+                attachments_saved=attachments_saved,
+                found=found,
+                status="error",
+                error_type=classify_integration_error(exc),
+                error_message=message,
+                progress=processed_since_checkpoint if "processed_since_checkpoint" in locals() else 0,
+                total=found,
+            )
+        return {"ok": False, "found": found, "saved": saved, "duplicates": duplicates, "attachments": attachments_saved, "errors": errors, "message": message}
     finally:
         sync_lock.release()
 
@@ -278,6 +560,8 @@ def read_latest_imap_emails(
     auto_process: bool = False,
     unread_only: bool | None = None,
     limit: int | None = None,
+    sync_state: EmailSyncState | None = None,
+    sync_session: Session | None = None,
 ) -> dict:
     effective_limit = limit if limit is not None else IMAP_RECENT_MESSAGES_LIMIT
     return _fetch_imap_emails(
@@ -288,6 +572,8 @@ def read_latest_imap_emails(
         limit=min(max(int(effective_limit or IMAP_RECENT_MESSAGES_LIMIT), 1), IMAP_MAX_MESSAGES_PER_RUN),
         auto_process=auto_process,
         label="Lectura IMAP",
+        sync_state=sync_state,
+        sync_session=sync_session,
     )
 
 
@@ -298,6 +584,13 @@ def backfill_imap_emails(
     from_date: str | None = None,
     to_date: str | None = None,
     limit: int | None = None,
+    *,
+    from_uid: str | None = None,
+    to_uid: str | None = None,
+    batch_size: int | None = None,
+    resume: bool = False,
+    sync_state: EmailSyncState | None = None,
+    sync_session: Session | None = None,
 ) -> dict:
     start_date = _parse_imap_date(from_date or settings.read_from_date)
     if not start_date:
@@ -307,16 +600,23 @@ def backfill_imap_emails(
         return {"ok": False, "found": 0, "saved": 0, "message": "La fecha final no puede ser anterior a la inicial."}
     if not start_date:
         return {"ok": False, "found": 0, "saved": 0, "message": "Indica una fecha valida para el backfill (AAAA-MM-DD)."}
+    if resume and sync_state and sync_state.backfill_last_uid:
+        from_uid = sync_state.backfill_last_uid
     return _fetch_imap_emails(
         db,
         settings,
         company_id,
         start_date=start_date,
         end_date=end_date,
+        start_uid=from_uid,
+        end_uid=to_uid,
         unread_only=False,
         limit=limit,
         auto_process=False,
         label=f"Backfill IMAP desde {start_date.strftime('%d/%m/%Y')}{' hasta ' + end_date.strftime('%d/%m/%Y') if end_date else ''}",
+        sync_state=sync_state,
+        sync_session=sync_session,
+        batch_size=batch_size,
     )
 
 
@@ -393,11 +693,13 @@ def _create_inbound_message(db: Session, company_id: int, email: Email, settings
         external_thread_id=msg.get("In-Reply-To") or msg.get("References"),
         received_at=email.received_at,
         metadata={
-            "message_id": email.external_id,
+            "message_id": email.message_id or email.external_id,
             "from": email.sender,
             "subject": email.subject,
             "date": msg.get("Date"),
-            "imap_mailbox": settings.mailbox,
+            "imap_mailbox": email.imap_mailbox or settings.mailbox or settings.inbox_folder,
+            "imap_uidvalidity": email.imap_uidvalidity,
+            "imap_uid": email.imap_uid,
         },
         content_type="email",
         has_attachments=False,
@@ -409,11 +711,13 @@ def _create_inbound_message(db: Session, company_id: int, email: Email, settings
     inbound_message.provider = settings.provider or "imap"
     inbound_message.raw_payload_json = inbound_message.raw_payload_json or json.dumps(
         {
-            "message_id": email.external_id,
+            "message_id": email.message_id or email.external_id,
             "from": email.sender,
             "subject": email.subject,
             "date": msg.get("Date"),
-            "imap_mailbox": settings.mailbox,
+            "imap_mailbox": email.imap_mailbox or settings.mailbox or settings.inbox_folder,
+            "imap_uidvalidity": email.imap_uidvalidity,
+            "imap_uid": email.imap_uid,
         },
         ensure_ascii=False,
     )
@@ -622,7 +926,12 @@ def call_openai(settings: LLMSettings, messages: list[dict], model: str) -> dict
         try:
             with urllib.request.urlopen(request, timeout=settings.timeout_seconds) as response:
                 data = json.loads(response.read().decode())
-            return {"ok": True, "message": "Conexion OpenAI correcta.", "content": data["choices"][0]["message"]["content"]}
+            return {
+                "ok": True,
+                "message": "Conexion OpenAI correcta.",
+                "content": data["choices"][0]["message"]["content"],
+                "usage": data.get("usage") or {},
+            }
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode(errors="ignore")
             if exc.code in {401, 403}:
@@ -635,16 +944,39 @@ def call_openai(settings: LLMSettings, messages: list[dict], model: str) -> dict
     return {"ok": False, "error_type": classify_integration_error(last_error or "Error desconocido conectando con OpenAI."), "message": last_error or "Error desconocido conectando con OpenAI."}
 
 
-def classify_sample(settings: LLMSettings, prompt: str, text: str) -> dict:
-    return call_openai(settings, [{"role": "system", "content": prompt}, {"role": "user", "content": text}], settings.classification_model)
+def classify_sample(db: Session, settings: LLMSettings, company_id: int, text: str, prompt: str | None = None) -> dict:
+    result = run_prompt_execution(
+        db,
+        company_id,
+        "classification",
+        settings,
+        text,
+        provider_call=call_openai,
+        prompt_override=prompt,
+    )
+    if not result.get("ok"):
+        return result
+    if not result.get("validation_ok"):
+        result["ok"] = False
+        result["message"] = "La clasificacion no paso la validacion estructurada."
+        return result
+    return result
 
 
-def extract_sample(settings: LLMSettings, prompt: str, text: str) -> dict:
-    result = call_openai(settings, [{"role": "system", "content": prompt}, {"role": "user", "content": text}], settings.extraction_model)
-    if result.get("ok"):
-        try:
-            json.loads(result.get("content", ""))
-        except json.JSONDecodeError:
-            result["ok"] = False
-            result["message"] = "La extraccion respondio, pero no era JSON valido."
+def extract_sample(db: Session, settings: LLMSettings, company_id: int, text: str, prompt: str | None = None) -> dict:
+    result = run_prompt_execution(
+        db,
+        company_id,
+        "extraction",
+        settings,
+        text,
+        provider_call=call_openai,
+        prompt_override=prompt,
+    )
+    if not result.get("ok"):
+        return result
+    if not result.get("validation_ok"):
+        result["ok"] = False
+        result["message"] = "La extraccion no paso la validacion estructurada."
+        return result
     return result

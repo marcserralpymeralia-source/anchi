@@ -1,0 +1,64 @@
+{
+  "cases": [
+    {
+      "id": "classification-pedido",
+      "input": "Necesitamos 10 cajas del producto demo para entrega esta semana.",
+      "expected": {
+        "tipo_correo": "pedido",
+        "confianza": 0.96,
+        "motivo": "Solicitud de pedido clara."
+      },
+      "actual": {
+        "tipo_correo": "pedido",
+        "confianza": 0.96,
+        "motivo": "Solicitud de pedido clara."
+      }
+    },
+    {
+      "id": "classification-no-pedido",
+      "input": "Queria consultar el horario de entrega del pedido anterior.",
+      "expected": {
+        "tipo_correo": "consulta",
+        "confianza": 0.88,
+        "motivo": "Consulta informativa."
+      },
+      "actual": {
+        "tipo_correo": "consulta",
+        "confianza": 0.88,
+        "motivo": "Consulta informativa."
+      }
+    },
+    {
+      "id": "extraction-linea",
+      "input": "Pedido de 15 unidades de Producto Demo referencia PD-001.",
+      "expected": {
+        "pedido": {
+          "lineas": [
+            {
+              "texto_original": "Pedido de 15 unidades de Producto Demo referencia PD-001.",
+              "referencia_detectada": "PD-001",
+              "producto_detectado": "Producto Demo",
+              "cantidad": 15,
+              "unidad": "unidades",
+              "confianza_extraccion": 0.93
+            }
+          ]
+        }
+      },
+      "actual": {
+        "pedido": {
+          "lineas": [
+            {
+              "texto_original": "Pedido de 15 unidades de Producto Demo referencia PD-001.",
+              "referencia_detectada": "PD-001",
+              "producto_detectado": "Producto Demo",
+              "cantidad": 15,
+              "unidad": "unidades",
+              "confianza_extraccion": 0.93
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

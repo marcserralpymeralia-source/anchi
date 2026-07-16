@@ -1,5 +1,4 @@
 import json
-import re
 from datetime import date, datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -13,7 +12,7 @@ from app.db.models import Customer, CustomerAlias, CustomerContactPoint, Custome
 from app.messages.service import get_or_create_conversation
 from app.orders.state import ORDER_STATE
 from app.logs.service import log_action
-from app.settings.integrations import call_openai
+from app.settings.integrations import classify_sample, extract_sample
 from app.settings.service import get_or_create_settings
 
 
@@ -162,14 +161,6 @@ def _json_from_content(content: str) -> dict:
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", text, flags=re.S)
-        if match:
-            return json.loads(match.group(0))
-        lowered = text.lower()
-        if "pedido" in lowered and "no_pedido" not in lowered:
-            return {"tipo_correo": "pedido", "confianza": 0.7, "motivo": text[:300]}
-        if "no_pedido" in lowered or "no pedido" in lowered:
-            return {"tipo_correo": "no_pedido", "confianza": 0.7, "motivo": text[:300]}
         raise ValueError("OpenAI ha devuelto una respuesta no valida: no es JSON.")
 
 
@@ -293,7 +284,7 @@ class AgentProcessingService:
             "classification",
             "Clasifica el correo como pedido, no_pedido, consulta, incidencia o dudoso. Responde solo JSON con tipo_correo, confianza y motivo.",
         )
-        result = call_openai(settings, [{"role": "system", "content": prompt}, {"role": "user", "content": text[:12000]}], settings.classification_model)
+        result = classify_sample(db, settings, company_id, text[:12000], prompt)
         if not result.get("ok"):
             raise RuntimeError(result.get("message") or "Error llamando al proveedor IA.")
         return _json_from_content(result.get("content", ""))
@@ -305,7 +296,7 @@ class AgentProcessingService:
             "extraction",
             "Extrae un pedido en JSON valido con cliente y pedido.lineas. Cada linea debe incluir texto_original, referencia_detectada, producto_detectado, cantidad, unidad y confianza_extraccion.",
         )
-        result = call_openai(settings, [{"role": "system", "content": prompt}, {"role": "user", "content": text[:16000]}], settings.extraction_model)
+        result = extract_sample(db, settings, company_id, text[:16000], prompt)
         if not result.get("ok"):
             raise RuntimeError(result.get("message") or "Error llamando al proveedor IA.")
         data = _json_from_content(result.get("content", ""))

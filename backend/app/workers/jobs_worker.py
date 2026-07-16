@@ -25,7 +25,7 @@ from app.exports.service import ExportService, FTPService
 from app.logs.service import log_action
 from app.orders.state import ORDER_STATE
 from app.master.database import MasterSessionLocal
-from app.master.models import MasterTenantDatabase
+from app.master.models import EmailSyncState, MasterTenantDatabase
 from app.imports.service import confirm_import, guess_mapping, read_preview
 from app.orders.routes import _customer_label, _sync_customer_product_knowledge, validate_confirmation
 from app.settings.integrations import backfill_imap_emails, read_latest_imap_emails
@@ -96,28 +96,108 @@ def _process_job(db, job: BackgroundJob) -> dict:
         return _process_bulk_action(db, job, payload)
     if job.job_type == "email_sync":
         settings = get_or_create_settings(db, EmailSettings, job.company_id)
-        return read_latest_imap_emails(
-            db,
-            settings,
-            job.company_id,
-            auto_process=bool(payload.get("auto_process", False)),
-            unread_only=payload.get("unread_only"),
-            limit=payload.get("limit"),
-        )
+        master_db = MasterSessionLocal()
+        try:
+            sync_state = master_db.scalar(
+                select(EmailSyncState).where(
+                    EmailSyncState.company_id == job.company_id,
+                    EmailSyncState.channel_key == "email",
+                )
+            )
+            if not sync_state:
+                sync_state = EmailSyncState(
+                    company_id=job.company_id,
+                    channel_key="email",
+                    enabled=True,
+                    frequency_seconds=60,
+                    status="idle",
+                    next_run_at=_now(),
+                )
+                master_db.add(sync_state)
+                master_db.commit()
+            return read_latest_imap_emails(
+                db,
+                settings,
+                job.company_id,
+                auto_process=bool(payload.get("auto_process", False)),
+                unread_only=payload.get("unread_only"),
+                limit=payload.get("limit"),
+                sync_state=sync_state,
+                sync_session=master_db,
+            )
+        finally:
+            master_db.close()
     if job.job_type == "process_recent_emails":
         settings = get_or_create_settings(db, EmailSettings, job.company_id)
         limit = max(min(int(payload.get("limit", 3) or 3), 10), 1)
-        return read_latest_imap_emails(db, settings, job.company_id, auto_process=True, unread_only=False, limit=limit)
+        master_db = MasterSessionLocal()
+        try:
+            sync_state = master_db.scalar(
+                select(EmailSyncState).where(
+                    EmailSyncState.company_id == job.company_id,
+                    EmailSyncState.channel_key == "email",
+                )
+            )
+            if not sync_state:
+                sync_state = EmailSyncState(
+                    company_id=job.company_id,
+                    channel_key="email",
+                    enabled=True,
+                    frequency_seconds=60,
+                    status="idle",
+                    next_run_at=_now(),
+                )
+                master_db.add(sync_state)
+                master_db.commit()
+            return read_latest_imap_emails(
+                db,
+                settings,
+                job.company_id,
+                auto_process=True,
+                unread_only=False,
+                limit=limit,
+                sync_state=sync_state,
+                sync_session=master_db,
+            )
+        finally:
+            master_db.close()
     if job.job_type == "backfill_imap":
         settings = get_or_create_settings(db, EmailSettings, job.company_id)
-        return backfill_imap_emails(
-            db,
-            settings,
-            job.company_id,
-            payload.get("from_date"),
-            payload.get("to_date"),
-            payload.get("limit"),
-        )
+        master_db = MasterSessionLocal()
+        try:
+            sync_state = master_db.scalar(
+                select(EmailSyncState).where(
+                    EmailSyncState.company_id == job.company_id,
+                    EmailSyncState.channel_key == "email",
+                )
+            )
+            if not sync_state:
+                sync_state = EmailSyncState(
+                    company_id=job.company_id,
+                    channel_key="email",
+                    enabled=True,
+                    frequency_seconds=60,
+                    status="idle",
+                    next_run_at=_now(),
+                )
+                master_db.add(sync_state)
+                master_db.commit()
+            return backfill_imap_emails(
+                db,
+                settings,
+                job.company_id,
+                payload.get("from_date"),
+                payload.get("to_date"),
+                payload.get("limit"),
+                from_uid=payload.get("from_uid"),
+                to_uid=payload.get("to_uid"),
+                batch_size=payload.get("batch_size"),
+                resume=bool(payload.get("resume", False)),
+                sync_state=sync_state,
+                sync_session=master_db,
+            )
+        finally:
+            master_db.close()
     if job.job_type == "process_pending_emails":
         processor = AgentProcessingService()
         emails = db.scalars(

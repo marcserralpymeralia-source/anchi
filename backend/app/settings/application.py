@@ -305,7 +305,7 @@ def run_connection_test(section: str, db: Session, user: TenantUser) -> tuple[di
     if section == "llm":
         llm = get_or_create_settings(db, LLMSettings, user.company_id)
         start = perf_counter()
-        result = classify_sample(llm, "Clasifica el texto como pedido o no_pedido. Responde solo una palabra.", "Pedido de 10 unidades del articulo de prueba.")
+        result = classify_sample(db, llm, user.company_id, "Pedido de 10 unidades del articulo de prueba.", "Clasifica el texto como pedido o no_pedido. Responde solo una palabra.")
         elapsed_ms = int((perf_counter() - start) * 1000)
         llm.last_test_at = datetime.now(timezone.utc)
         llm.last_test_ok = result["ok"]
