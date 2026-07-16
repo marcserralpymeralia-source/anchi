@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% set title = "Tareas" %}
+{% block content %}
+<section class="tasks-shell">
+  <section class="panel">
+    <div class="workbench-header">
+      <div>
+        <h2>Tareas</h2>
+        <p>Vista operativa con agenda, tiempo imputado y acceso directo al detalle.</p>
+      </div>
+      <div class="actions">
+        <a class="button secondary compact-button" href="/agenda">Agenda</a>
+        <a class="button secondary compact-button" href="/projects">Proyectos</a>
+      </div>
+    </div>
+
+    <div class="compact-metrics task-summary-strip">
+      <article class="compact-card compact-card-muted"><span>Total</span><strong>{{ summary.total }}</strong></article>
+      <article class="compact-card compact-card-safe"><span>Asignadas a mí</span><strong>{{ summary.mine }}</strong></article>
+      <article class="compact-card compact-card-reviewable"><span>Horas previstas</span><strong>{{ summary.planned_hours }}</strong></article>
+      <article class="compact-card compact-card-error"><span>Horas reales</span><strong>{{ summary.recorded_hours }}</strong></article>
+    </div>
+
+    <details class="workbench-filters-panel" open>
+      <summary>Filtros y alta rápida</summary>
+      <form class="workbench-filters-form" method="get" action="/tasks">
+        <input type="hidden" name="page" value="1">
+        <div class="filter-grid">
+          <label>Vista
+            <select name="scope">
+              <option value="mine" {% if filters.scope == "mine" %}selected{% endif %}>Mis tareas</option>
+              <option value="all" {% if filters.scope == "all" %}selected{% endif %}>Todas</option>
+            </select>
+          </label>
+          <label>Estado
+            <select name="status">
+              <option value="">Todos</option>
+              {% for value, label in status_options %}
+                <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Proyecto
+            <select name="project_id">
+              <option value="0">Todos</option>
+              {% for project in projects %}
+                <option value="{{ project.id }}" {% if filters.project_id == project.id %}selected{% endif %}>{{ project.name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Buscar<input name="search" value="{{ filters.search }}" placeholder="Título o referencia"></label>
+          <label>Tamaño
+            <select name="page_size">
+              {% for size in pagination.allowed_page_sizes %}
+                <option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>&nbsp;<button class="secondary" data-loading-text="Filtrando...">Filtrar</button></label>
+        </div>
+      </form>
+
+      {% if can_manage_projects %}
+        <form class="stack" method="post" action="/tasks">
+          <div class="task-form-grid">
+            <label class="span-2">Título<input name="title" placeholder="Tarea nueva"></label>
+            <label>Proyecto
+              <select name="project_id">
+                <option value="0">Sin proyecto</option>
+                {% for project in projects %}
+                  <option value="{{ project.id }}">{{ project.name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>Asignado a
+              <select name="assigned_user_id">
+                <option value="0">Yo mismo</option>
+                {% for person in users %}
+                  <option value="{{ person.id }}" {% if person.id == user.id %}selected{% endif %}>{{ person.name }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>Estado
+              <select name="status">
+                {% for value, label in status_options %}
+                  <option value="{{ value }}" {% if value == "todo" %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>Prioridad
+              <select name="priority">
+                {% for value, label in priority_options %}
+                  <option value="{{ value }}" {% if value == "normal" %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>Plazo<input type="date" name="due_date"></label>
+            <label>Horas previstas<input type="number" min="0" step="15" name="estimated_minutes" value="0"></label>
+            <label class="span-2">Descripción<textarea name="description" rows="2"></textarea></label>
+          </div>
+          <button class="primary compact-button" data-loading-text="Creando...">Crear tarea</button>
+        </form>
+      {% endif %}
+    </details>
+
+    <div class="project-member-list">
+      {% for task in tasks %}
+        <article class="task-card" onclick="window.location.href='/tasks/{{ task.id }}'">
+          <div class="task-card-main">
+            <strong class="task-card-title">{{ task.title }}</strong>
+            <div class="task-card-tags">
+              <span class="badge">{{ task.project_name }}</span>
+              <span class="badge">{{ task.client_name }}</span>
+              <span class="badge {{ task.status|status_class }}">{{ task.status_label }}</span>
+              <span class="badge">{{ task.priority_label }}</span>
+            </div>
+            <div class="task-card-meta">
+              <span class="badge">Asignada a {{ task.assigned_user_name }}</span>
+              <span class="badge">Plazo {{ task.due_date }}</span>
+              <span class="badge">Plan {{ task.estimated_minutes }}m</span>
+              <span class="badge">Real {{ task.recorded_minutes }}m</span>
+            </div>
+            <small class="muted">{{ task.description or "Sin descripción" }}</small>
+          </div>
+          <div class="task-card-side">
+            <strong>{% if task.remaining_minutes is not none %}{{ task.remaining_minutes }}m{% else %}--{% endif %}</strong>
+            <span>Restantes</span>
+          </div>
+          <div class="task-card-actions">
+            <a class="button secondary compact-button" href="/tasks/{{ task.id }}" onclick="event.stopPropagation();">Abrir</a>
+            {% if active_timer and active_timer.task_id == task.id %}
+              <form class="js-loading-form" method="post" action="/tasks/{{ task.id }}/timer/stop" onclick="event.stopPropagation();">
+                <button class="secondary compact-button" data-loading-text="Deteniendo...">Detener</button>
+              </form>
+            {% else %}
+              <form class="js-loading-form" method="post" action="/tasks/{{ task.id }}/timer/start" onclick="event.stopPropagation();">
+                <input type="hidden" name="notes" value="">
+                <button class="secondary compact-button" data-loading-text="Iniciando...">Timer</button>
+              </form>
+            {% endif %}
+          </div>
+        </article>
+      {% else %}
+        <article class="task-empty-state">
+          <strong>No hay tareas para mostrar</strong>
+          <span>Prueba a cambiar el filtro de vista o crea una nueva tarea.</span>
+        </article>
+      {% endfor %}
+    </div>
+    {% include "components/pagination.html" %}
+  </section>
+</section>
+{% endblock %}

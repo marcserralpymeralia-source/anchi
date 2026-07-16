@@ -721,6 +721,30 @@ def _apply_tenant_ai_learning(engine, dry_run: bool) -> list[str]:  # noqa: ANN0
     return actions
 
 
+def _apply_tenant_projects_tasks_agenda(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    from app.db.models import ActiveTimer, Project, ProjectMember, Task, TaskSchedule, TimeEntry
+
+    actions: list[str] = []
+    table_order = [
+        ("projects", Project.__table__),
+        ("project_members", ProjectMember.__table__),
+        ("tasks", Task.__table__),
+        ("task_schedules", TaskSchedule.__table__),
+        ("time_entries", TimeEntry.__table__),
+        ("active_timers", ActiveTimer.__table__),
+    ]
+    with engine.connect() as conn:
+        existing = set(inspect(conn).get_table_names())
+        for table_name, table in table_order:
+            if table_name not in existing:
+                actions.append(f"CREATE TABLE {table_name} (...)")
+                if not dry_run:
+                    table.create(bind=engine, checkfirst=True)
+            elif not dry_run:
+                table.create(bind=engine, checkfirst=True)
+    return actions
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -751,6 +775,12 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant ai execution and learning control",
         checksum=checksum_text("tenant", "ai_execution_and_learning_control", "prompt_executions", "learning_proposals", "emails", "inbound_messages"),
         upgrade=_apply_tenant_ai_learning,
+    ),
+    MigrationSpec(
+        version="2026.07.16.2",
+        name="tenant projects tasks agenda and time tracking",
+        checksum=checksum_text("tenant", "projects_tasks_agenda_and_time_tracking", "projects", "project_members", "tasks", "task_schedules", "time_entries", "active_timers"),
+        upgrade=_apply_tenant_projects_tasks_agenda,
     ),
 ]
 

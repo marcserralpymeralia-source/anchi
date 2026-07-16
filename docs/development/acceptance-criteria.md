@@ -49,6 +49,10 @@
 - Eliminar solo redirecciones legacy y helpers huérfanos cuando exista sustituto probado y los tests cubran el flujo activo.
 - Cubrir el flujo email -> inbound message -> conversation -> processing -> order -> review -> approval -> simulated export -> audit.
 - Cubrir el flujo duplicate mail -> no duplicate message -> processing failure -> retry -> valid order -> export failure -> retry -> success.
+- Cubrir el MVP de proyectos -> tareas -> agenda -> horas con alta manual y alta desde entrada recibida.
+- Mantener las tareas visibles por defecto solo para el usuario asignado salvo que se seleccione otra vista.
+- Evitar tareas duplicadas cuando se crean desde el mismo correo o la misma entrada.
+- Separar horas estimadas, programadas e imputadas en las vistas de proyecto, tarea y agenda.
 - No filtrar secretos en logs estructurados ni en trazas persistidas.
 - Documentar cualquier fallo que no se corrija en ese momento.
 

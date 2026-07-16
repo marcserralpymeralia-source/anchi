@@ -1087,6 +1087,129 @@ class LearningProposal(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class Project(Base):
+    __tablename__ = "projects"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    client_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"), index=True)
+    name: Mapped[str] = mapped_column(String(255), index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(40), default="draft", index=True)
+    priority: Mapped[str] = mapped_column(String(30), default="normal", index=True)
+    start_date: Mapped[str | None] = mapped_column(String(30), index=True)
+    due_date: Mapped[str | None] = mapped_column(String(30), index=True)
+    budgeted_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    owner_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    members: Mapped[list["ProjectMember"]] = relationship(cascade="all, delete-orphan")
+    tasks: Mapped[list["Task"]] = relationship(cascade="all, delete-orphan")
+
+
+class ProjectMember(Base):
+    __tablename__ = "project_members"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    role: Mapped[str] = mapped_column(String(30), default="member")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (UniqueConstraint("company_id", "project_id", "user_id"),)
+
+
+class Task(Base):
+    __tablename__ = "tasks"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), index=True)
+    title: Mapped[str] = mapped_column(String(255), index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(40), default="todo", index=True)
+    priority: Mapped[str] = mapped_column(String(30), default="normal", index=True)
+    assigned_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    estimated_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    due_date: Mapped[str | None] = mapped_column(String(30), index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    source_type: Mapped[str | None] = mapped_column(String(80), index=True)
+    source_reference: Mapped[str | None] = mapped_column(String(255), index=True)
+    conversation_id: Mapped[int | None] = mapped_column(ForeignKey("conversations.id"), index=True)
+    inbound_message_id: Mapped[int | None] = mapped_column(ForeignKey("inbound_messages.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    schedules: Mapped[list["TaskSchedule"]] = relationship(cascade="all, delete-orphan")
+    time_entries: Mapped[list["TimeEntry"]] = relationship(cascade="all, delete-orphan")
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "inbound_message_id"),
+        UniqueConstraint("company_id", "source_type", "source_reference"),
+    )
+
+
+class TaskSchedule(Base):
+    __tablename__ = "task_schedules"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), index=True)
+    assigned_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    scheduled_date: Mapped[str] = mapped_column(String(30), index=True)
+    start_time: Mapped[str | None] = mapped_column(String(20))
+    planned_minutes: Mapped[int] = mapped_column(Integer, default=0)
+    position: Mapped[int] = mapped_column(Integer, default=0)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class TimeEntry(Base):
+    __tablename__ = "time_entries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), index=True)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    entry_date: Mapped[str] = mapped_column(String(30), index=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    minutes: Mapped[int] = mapped_column(Integer, default=0)
+    description: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(String(40), default="manual", index=True)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (UniqueConstraint("company_id", "task_id", "user_id", "entry_date", "started_at", "ended_at"),)
+
+
+class ActiveTimer(Base):
+    __tablename__ = "active_timers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("tasks.id"), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    last_heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (UniqueConstraint("company_id", "user_id"),)
+
+
 class TenantSchemaMigration(Base):
     __tablename__ = "schema_migrations"
 
