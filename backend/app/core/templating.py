@@ -36,15 +36,6 @@ def status_label(value: str | None) -> str:
         "dudoso": "Dudoso",
         "active": "Activo",
         "inactive": "Inactivo",
-        "draft": "Borrador",
-        "on_hold": "En pausa",
-        "completed": "Completado",
-        "cancelled": "Cancelado",
-        "archived": "Archivado",
-        "todo": "Por hacer",
-        "in_progress": "En curso",
-        "blocked": "Bloqueada",
-        "done": "Hecha",
     }
     return labels.get(value or "", value or "")
 
@@ -67,8 +58,6 @@ def status_class(value: str | None) -> str:
         return "status-doubtful"
     if value in {"descartado", "deleted", "archived_deleted"}:
         return "status-discarded"
-    if value in {"draft", "active", "on_hold", "completed", "cancelled", "archived", "todo", "in_progress", "blocked", "done"}:
-        return "status-confirmed" if value in {"completed", "done"} else "status-pending" if value in {"draft", "todo"} else "status-doubtful" if value in {"on_hold", "blocked"} else "status-confirmed"
     return ""
 
 

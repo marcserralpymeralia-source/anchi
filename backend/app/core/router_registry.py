@@ -14,7 +14,6 @@ from app.mail.routes import router as mail_router
 from app.learning.routes import router as learning_router
 from app.pages.routes import router as pages_router
 from app.orders.routes import router as orders_router
-from app.projects.routes import router as projects_router
 from app.products.routes import router as products_router
 from app.whatsapp.routes import router as whatsapp_router
 from app.settings.channels_routes import router as channels_settings_router
@@ -42,7 +41,6 @@ def get_registered_routers() -> list:
         learning_router,
         channels_settings_router,
         orders_router,
-        projects_router,
         databases_router,
         customers_router,
         products_router,
