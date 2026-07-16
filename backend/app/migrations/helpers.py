@@ -14,21 +14,24 @@ def checksum_text(*parts: str) -> str:
 
 
 def table_exists(engine, table_name: str) -> bool:  # noqa: ANN001
-    return table_name in inspect(engine).get_table_names()
+    with engine.connect() as conn:
+        return table_name in inspect(conn).get_table_names()
 
 
 def existing_columns(engine, table_name: str) -> set[str]:  # noqa: ANN001
-    inspector = inspect(engine)
-    if table_name not in inspector.get_table_names():
-        return set()
-    return {column["name"] for column in inspector.get_columns(table_name)}
+    with engine.connect() as conn:
+        inspector = inspect(conn)
+        if table_name not in inspector.get_table_names():
+            return set()
+        return {column["name"] for column in inspector.get_columns(table_name)}
 
 
 def ensure_columns(engine, table_name: str, columns: dict[str, str], *, dry_run: bool = False) -> list[str]:  # noqa: ANN001
-    inspector = inspect(engine)
-    if table_name not in inspector.get_table_names():
-        return []
-    current_columns = {column["name"] for column in inspector.get_columns(table_name)}
+    with engine.connect() as conn:
+        inspector = inspect(conn)
+        if table_name not in inspector.get_table_names():
+            return []
+        current_columns = {column["name"] for column in inspector.get_columns(table_name)}
     actions: list[str] = []
     with engine.begin() as conn:
         for column_name, column_sql in columns.items():
@@ -42,10 +45,11 @@ def ensure_columns(engine, table_name: str, columns: dict[str, str], *, dry_run:
 
 
 def ensure_unique_index(engine, table_name: str, index_name: str, columns: tuple[str, ...], *, dry_run: bool = False) -> list[str]:  # noqa: ANN001
-    inspector = inspect(engine)
-    if table_name not in inspector.get_table_names():
-        return []
-    existing_indexes = {index["name"] for index in inspector.get_indexes(table_name)}
+    with engine.connect() as conn:
+        inspector = inspect(conn)
+        if table_name not in inspector.get_table_names():
+            return []
+        existing_indexes = {index["name"] for index in inspector.get_indexes(table_name)}
     if index_name in existing_indexes:
         return []
     statement = f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {table_name} ({', '.join(columns)})"

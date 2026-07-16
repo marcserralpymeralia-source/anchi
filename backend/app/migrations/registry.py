@@ -416,12 +416,13 @@ def _apply_tenant_metadata(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     from app.db.models import TenantSchemaMigration
 
     actions: list[str] = []
-    if "schema_migrations" not in inspect(engine).get_table_names():
-        actions.append("CREATE TABLE schema_migrations (...)")
-        if not dry_run:
+    with engine.connect() as conn:
+        if "schema_migrations" not in inspect(conn).get_table_names():
+            actions.append("CREATE TABLE schema_migrations (...)")
+            if not dry_run:
+                TenantSchemaMigration.__table__.create(bind=engine, checkfirst=True)
+        elif not dry_run:
             TenantSchemaMigration.__table__.create(bind=engine, checkfirst=True)
-    elif not dry_run:
-        TenantSchemaMigration.__table__.create(bind=engine, checkfirst=True)
     actions.extend(ensure_columns(engine, "schema_migrations", TENANT_MIGRATION_COLUMNS, dry_run=dry_run))
     return actions
 
@@ -437,12 +438,13 @@ def _apply_tenant_job_reliability(engine, dry_run: bool) -> list[str]:  # noqa: 
     from app.db.models import JobAttempt
 
     actions: list[str] = []
-    if "job_attempts" not in inspect(engine).get_table_names():
-        actions.append("CREATE TABLE job_attempts (...)")
-        if not dry_run:
+    with engine.connect() as conn:
+        if "job_attempts" not in inspect(conn).get_table_names():
+            actions.append("CREATE TABLE job_attempts (...)")
+            if not dry_run:
+                JobAttempt.__table__.create(bind=engine, checkfirst=True)
+        elif not dry_run:
             JobAttempt.__table__.create(bind=engine, checkfirst=True)
-    elif not dry_run:
-        JobAttempt.__table__.create(bind=engine, checkfirst=True)
     actions.extend(ensure_columns(engine, "background_jobs", TENANT_JOB_COLUMNS, dry_run=dry_run))
     actions.extend(ensure_unique_index(engine, "background_jobs", "uq_background_jobs_dedupe", ("company_id", "job_type", "dedupe_key"), dry_run=dry_run))
     actions.extend(ensure_unique_index(engine, "job_attempts", "uq_job_attempts_number", ("job_id", "attempt_number"), dry_run=dry_run))
@@ -458,12 +460,13 @@ def _apply_tenant_messages(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     from app.migrations.runner import MigrationError
 
     actions: list[str] = []
-    if "conversations" not in inspect(engine).get_table_names():
-        actions.append("CREATE TABLE conversations (...)")
-        if not dry_run:
+    with engine.connect() as conn:
+        if "conversations" not in inspect(conn).get_table_names():
+            actions.append("CREATE TABLE conversations (...)")
+            if not dry_run:
+                Conversation.__table__.create(bind=engine, checkfirst=True)
+        elif not dry_run:
             Conversation.__table__.create(bind=engine, checkfirst=True)
-    elif not dry_run:
-        Conversation.__table__.create(bind=engine, checkfirst=True)
     actions.extend(ensure_columns(engine, "emails", {"conversation_id": "INTEGER"}, dry_run=dry_run))
     actions.extend(ensure_columns(engine, "inbound_messages", {"provider": "VARCHAR(50) DEFAULT 'imap'", "conversation_id": "INTEGER"}, dry_run=dry_run))
     actions.extend(ensure_columns(engine, "orders", {"conversation_id": "INTEGER"}, dry_run=dry_run))
@@ -619,26 +622,28 @@ def _apply_tenant_messages(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
 def _apply_master_metadata(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     from app.master.models import MasterSchemaMigration
 
-    if "schema_migrations" not in inspect(engine).get_table_names():
+    with engine.connect() as conn:
+        if "schema_migrations" not in inspect(conn).get_table_names():
+            if not dry_run:
+                MasterSchemaMigration.__table__.create(bind=engine, checkfirst=True)
+            return ["CREATE TABLE schema_migrations (...)"]
         if not dry_run:
             MasterSchemaMigration.__table__.create(bind=engine, checkfirst=True)
-        return ["CREATE TABLE schema_migrations (...)"]
-    if not dry_run:
-        MasterSchemaMigration.__table__.create(bind=engine, checkfirst=True)
-    return []
+        return []
 
 
 def _apply_master_email_sync_state(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     from app.master.models import EmailSyncState
 
     actions: list[str] = []
-    if "email_sync_state" not in inspect(engine).get_table_names():
-        actions.append("CREATE TABLE email_sync_state (...)")
+    with engine.connect() as conn:
+        if "email_sync_state" not in inspect(conn).get_table_names():
+            actions.append("CREATE TABLE email_sync_state (...)")
+            if not dry_run:
+                EmailSyncState.__table__.create(bind=engine, checkfirst=True)
+            return actions
         if not dry_run:
             EmailSyncState.__table__.create(bind=engine, checkfirst=True)
-        return actions
-    if not dry_run:
-        EmailSyncState.__table__.create(bind=engine, checkfirst=True)
     actions.extend(
         ensure_columns(
             engine,
@@ -674,18 +679,19 @@ def _apply_tenant_ai_learning(engine, dry_run: bool) -> list[str]:  # noqa: ANN0
     from app.db.models import LearningProposal, PromptExecution
 
     actions: list[str] = []
-    if "prompt_executions" not in inspect(engine).get_table_names():
-        actions.append("CREATE TABLE prompt_executions (...)")
-        if not dry_run:
+    with engine.connect() as conn:
+        if "prompt_executions" not in inspect(conn).get_table_names():
+            actions.append("CREATE TABLE prompt_executions (...)")
+            if not dry_run:
+                PromptExecution.__table__.create(bind=engine, checkfirst=True)
+        elif not dry_run:
             PromptExecution.__table__.create(bind=engine, checkfirst=True)
-    elif not dry_run:
-        PromptExecution.__table__.create(bind=engine, checkfirst=True)
-    if "learning_proposals" not in inspect(engine).get_table_names():
-        actions.append("CREATE TABLE learning_proposals (...)")
-        if not dry_run:
+        if "learning_proposals" not in inspect(conn).get_table_names():
+            actions.append("CREATE TABLE learning_proposals (...)")
+            if not dry_run:
+                LearningProposal.__table__.create(bind=engine, checkfirst=True)
+        elif not dry_run:
             LearningProposal.__table__.create(bind=engine, checkfirst=True)
-    elif not dry_run:
-        LearningProposal.__table__.create(bind=engine, checkfirst=True)
     actions.extend(
         ensure_columns(
             engine,

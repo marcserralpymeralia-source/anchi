@@ -28,10 +28,10 @@ def tenant_db_session(database_url: str):
 
 
 def _infer_company_id(engine) -> int | None:  # noqa: ANN001
-    inspector = inspect(engine)
-    if "companies" not in inspector.get_table_names():
-        return None
     with engine.connect() as conn:
+        inspector = inspect(conn)
+        if "companies" not in inspector.get_table_names():
+            return None
         value = conn.execute(text("SELECT id FROM companies ORDER BY id ASC LIMIT 1")).scalar()
     return int(value) if value is not None else None
 

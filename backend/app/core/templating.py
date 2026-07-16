@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import typing
-import warnings
 from time import perf_counter
 
 from fastapi import Request
@@ -117,12 +116,6 @@ class PerformanceAwareTemplates(Jinja2Templates):
 
         if args:
             if isinstance(args[0], str):
-                warnings.warn(
-                    "The `name` is not the first parameter anymore. "
-                    "The first parameter should be the `Request` instance.\n"
-                    'Replace `TemplateResponse(name, {"request": request})` by `TemplateResponse(request, name)`.',
-                    DeprecationWarning,
-                )
                 name = args[0]
                 context = args[1] if len(args) > 1 else kwargs.get("context", {})
                 status_code = args[2] if len(args) > 2 else kwargs.get("status_code", 200)
@@ -141,14 +134,8 @@ class PerformanceAwareTemplates(Jinja2Templates):
                 media_type = args[5] if len(args) > 5 else kwargs.get("media_type")
                 background = args[6] if len(args) > 6 else kwargs.get("background")
         else:
-            if "request" not in kwargs:
-                warnings.warn(
-                    "The `TemplateResponse` now requires the `request` argument.\n"
-                    'Replace `TemplateResponse(name, {"context": context})` by `TemplateResponse(request, name)`.',
-                    DeprecationWarning,
-                )
-                if "request" not in kwargs.get("context", {}):
-                    raise ValueError('context must include a "request" key')
+            if "request" not in kwargs and "request" not in kwargs.get("context", {}):
+                raise ValueError('context must include a "request" key')
             context = kwargs.get("context", {})
             request = kwargs.get("request", context.get("request"))
             name = typing.cast(str, kwargs["name"])

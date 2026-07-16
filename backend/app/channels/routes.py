@@ -804,10 +804,3 @@ def download_attachment(source_kind: str, source_id: int, attachment_id: int, db
     if not path.exists() or not path.is_file():
         return PlainTextResponse("Archivo no disponible", status_code=404)
     return FileResponse(path, media_type=attachment.content_type or "application/octet-stream", filename=attachment.filename)
-
-
-@router.get("/legacy")
-def legacy_mail_redirect(request: Request):
-    query = request.url.query
-    suffix = f"?{query}" if query else ""
-    return RedirectResponse(f"/channels{suffix}", status_code=307)

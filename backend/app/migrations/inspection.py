@@ -195,8 +195,10 @@ def _ledger_snapshot(db, ledger_model) -> dict[str, Any]:  # noqa: ANN001
 
 def _job_blockers(db) -> list[str]:  # noqa: ANN001
     blockers: list[str] = []
-    inspector = inspect(db.get_bind())
-    tables = set(inspector.get_table_names())
+    bind = db.get_bind()
+    with bind.connect() as conn:
+        inspector = inspect(conn)
+        tables = set(inspector.get_table_names())
     if "background_jobs" in tables:
         dupes = db.execute(
             text(
@@ -232,90 +234,91 @@ def _job_blockers(db) -> list[str]:  # noqa: ANN001
 def inspect_database_url(database_url: str, *, logical_name: str | None = None, kind_hint: str | None = None) -> dict[str, Any]:
     engine = _connect(database_url)
     try:
-        insp = inspect(engine)
-        tables = insp.get_table_names()
-        kind = kind_hint or _kind_from_tables(set(tables))
-        file_details = file_info(database_url)
-        ledger = None
-        if "schema_migrations" in tables:
-            session = None
-            try:
-                from sqlalchemy.orm import sessionmaker
+        with engine.connect() as conn:
+            insp = inspect(conn)
+            tables = insp.get_table_names()
+            kind = kind_hint or _kind_from_tables(set(tables))
+            file_details = file_info(database_url)
+            ledger = None
+            if "schema_migrations" in tables:
+                session = None
+                try:
+                    from sqlalchemy.orm import sessionmaker
 
-                session = sessionmaker(bind=engine, autoflush=False, autocommit=False)()
-                ledger_model = MasterSchemaMigration if kind == "master" else TenantSchemaMigration
-                ledger = _ledger_snapshot(session, ledger_model)
-            finally:
-                if session is not None:
-                    session.close()
-        schema_fingerprint = _schema_fingerprint(insp, tables)
-        current_version = CURRENT_MASTER_SCHEMA_VERSION if kind == "master" else CURRENT_TENANT_SCHEMA_VERSION
-        current_name = CURRENT_MASTER_SCHEMA_NAME if kind == "master" else CURRENT_TENANT_SCHEMA_NAME
-        current_checksum = CURRENT_MASTER_SCHEMA_CHECKSUM if kind == "master" else CURRENT_TENANT_SCHEMA_CHECKSUM
-        target_tables = _current_tables(kind if kind in {"master", "tenant"} else "tenant")
-        missing_tables = sorted(target_tables - set(tables)) if kind in {"master", "tenant"} else []
-        blockers: list[str] = []
-        if "background_jobs" in tables:
-            blockers.extend(_job_blockers_from_insp(engine, insp))
-        readiness = "ready"
-        if kind == "unknown":
-            readiness = "not ready"
-        if ledger and ledger["present"] and ledger["status"] == "current" and ledger["version"] == current_version and ledger["checksum"] == current_checksum:
-            classification = "versioned-current"
-        elif ledger and ledger["present"] and ledger["version"] == current_version and ledger["checksum"] not in {None, current_checksum}:
-            classification = "checksum-mismatch"
-            readiness = "not ready"
-        elif ledger and ledger["present"] and ledger["version"] and ledger["version"] != current_version:
-            classification = "versioned-outdated"
-            if ledger["version"] not in (SUPPORTED_MASTER_LEGACY_VERSIONS if kind == "master" else SUPPORTED_TENANT_LEGACY_VERSIONS) and kind in {"master", "tenant"}:
+                    session = sessionmaker(bind=engine, autoflush=False, autocommit=False)()
+                    ledger_model = MasterSchemaMigration if kind == "master" else TenantSchemaMigration
+                    ledger = _ledger_snapshot(session, ledger_model)
+                finally:
+                    if session is not None:
+                        session.close()
+            schema_fingerprint = _schema_fingerprint(insp, tables)
+            current_version = CURRENT_MASTER_SCHEMA_VERSION if kind == "master" else CURRENT_TENANT_SCHEMA_VERSION
+            current_name = CURRENT_MASTER_SCHEMA_NAME if kind == "master" else CURRENT_TENANT_SCHEMA_NAME
+            current_checksum = CURRENT_MASTER_SCHEMA_CHECKSUM if kind == "master" else CURRENT_TENANT_SCHEMA_CHECKSUM
+            target_tables = _current_tables(kind if kind in {"master", "tenant"} else "tenant")
+            missing_tables = sorted(target_tables - set(tables)) if kind in {"master", "tenant"} else []
+            blockers: list[str] = []
+            if "background_jobs" in tables:
+                blockers.extend(_job_blockers_from_insp(engine, insp))
+            readiness = "ready"
+            if kind == "unknown":
                 readiness = "not ready"
-        elif kind in {"master", "tenant"} and not missing_tables and not blockers:
-            classification = "current-without-ledger"
-        elif kind in {"master", "tenant"}:
-            classification = "legacy-recognized"
-        else:
-            classification = "unknown-schema"
-            readiness = "not ready"
-        if blockers:
-            classification = "blocked-by-data"
-            readiness = "not ready"
-        pending: list[str] = []
-        if kind == "master":
-            pending = ["master schema ledger"] if classification != "versioned-current" else []
-        elif kind == "tenant":
-            pending = ["tenant schema ledger", "tenant operational compatibility", "tenant job reliability"] if classification != "versioned-current" else []
-        baseline_safe = classification in {"current-without-ledger", "legacy-recognized", "versioned-outdated", "versioned-current"}
-        if classification == "unknown-schema":
-            baseline_safe = False
-        return {
-            "logical_name": logical_name or file_details.path,
-            "reference_type": kind_hint or kind,
-            "engine": "sqlite" if database_url.startswith("sqlite") else "postgresql",
-            "database_url": database_url,
-            "exists": file_details.exists if file_details.path else True,
-            "size_bytes": file_details.size_bytes,
-            "modified_at": file_details.modified_at,
-            "checksum": file_details.checksum,
-            "tables": tables,
-            "table_count": len(tables),
-            "kind": kind,
-            "classification": classification,
-            "readiness": readiness,
-            "version": ledger["version"] if ledger else None,
-            "name": ledger["name"] if ledger else None,
-            "ledger_checksum": ledger["checksum"] if ledger else None,
-            "ledger_complete": ledger["complete"] if ledger else False,
-            "current_version": current_version,
-            "current_name": current_name,
-            "current_checksum": current_checksum,
-            "schema_fingerprint": schema_fingerprint,
-            "missing_tables": missing_tables,
-            "pending": pending,
-            "pending_count": len(pending),
-            "blockers": blockers,
-            "baseline_safe": baseline_safe,
-            "baseline_proposal": current_version if classification == "current-without-ledger" else ledger["version"] if ledger and ledger["version"] else None,
-        }
+            if ledger and ledger["present"] and ledger["status"] == "current" and ledger["version"] == current_version and ledger["checksum"] == current_checksum:
+                classification = "versioned-current"
+            elif ledger and ledger["present"] and ledger["version"] == current_version and ledger["checksum"] not in {None, current_checksum}:
+                classification = "checksum-mismatch"
+                readiness = "not ready"
+            elif ledger and ledger["present"] and ledger["version"] and ledger["version"] != current_version:
+                classification = "versioned-outdated"
+                if ledger["version"] not in (SUPPORTED_MASTER_LEGACY_VERSIONS if kind == "master" else SUPPORTED_TENANT_LEGACY_VERSIONS) and kind in {"master", "tenant"}:
+                    readiness = "not ready"
+            elif kind in {"master", "tenant"} and not missing_tables and not blockers:
+                classification = "current-without-ledger"
+            elif kind in {"master", "tenant"}:
+                classification = "legacy-recognized"
+            else:
+                classification = "unknown-schema"
+                readiness = "not ready"
+            if blockers:
+                classification = "blocked-by-data"
+                readiness = "not ready"
+            pending: list[str] = []
+            if kind == "master":
+                pending = ["master schema ledger"] if classification != "versioned-current" else []
+            elif kind == "tenant":
+                pending = ["tenant schema ledger", "tenant operational compatibility", "tenant job reliability"] if classification != "versioned-current" else []
+            baseline_safe = classification in {"current-without-ledger", "legacy-recognized", "versioned-outdated", "versioned-current"}
+            if classification == "unknown-schema":
+                baseline_safe = False
+            return {
+                "logical_name": logical_name or file_details.path,
+                "reference_type": kind_hint or kind,
+                "engine": "sqlite" if database_url.startswith("sqlite") else "postgresql",
+                "database_url": database_url,
+                "exists": file_details.exists if file_details.path else True,
+                "size_bytes": file_details.size_bytes,
+                "modified_at": file_details.modified_at,
+                "checksum": file_details.checksum,
+                "tables": tables,
+                "table_count": len(tables),
+                "kind": kind,
+                "classification": classification,
+                "readiness": readiness,
+                "version": ledger["version"] if ledger else None,
+                "name": ledger["name"] if ledger else None,
+                "ledger_checksum": ledger["checksum"] if ledger else None,
+                "ledger_complete": ledger["complete"] if ledger else False,
+                "current_version": current_version,
+                "current_name": current_name,
+                "current_checksum": current_checksum,
+                "schema_fingerprint": schema_fingerprint,
+                "missing_tables": missing_tables,
+                "pending": pending,
+                "pending_count": len(pending),
+                "blockers": blockers,
+                "baseline_safe": baseline_safe,
+                "baseline_proposal": current_version if classification == "current-without-ledger" else ledger["version"] if ledger and ledger["version"] else None,
+            }
     except (SQLAlchemyError, sqlite3.Error, OSError) as exc:
         return {
             "logical_name": logical_name or Path(database_url.split("///")[-1]).name,
@@ -463,9 +466,9 @@ def copy_sqlite_database(source_path: Path, target_root: Path, *, label: str) ->
 def snapshot_counts(database_url: str) -> dict[str, int]:
     engine = _connect(database_url)
     try:
-        insp = inspect(engine)
         counts: dict[str, int] = {}
         with engine.connect() as conn:
+            insp = inspect(conn)
             for table in insp.get_table_names():
                 try:
                     counts[table] = int(conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar_one())

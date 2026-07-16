@@ -389,11 +389,6 @@ async def import_file(
     return RedirectResponse("/customers?view=list", status_code=303)
 
 
-@router.get("/import")
-def import_file_legacy() -> RedirectResponse:
-    return RedirectResponse("/customers?view=list", status_code=303)
-
-
 @router.post("/{customer_id}/delete")
 def delete_customer_post(customer_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     return delete_customer(customer_id, request, db, user)
