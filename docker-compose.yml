@@ -1,0 +1,51 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - backend/.env
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/anchi
+      MASTER_DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/anchi_master
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - backend/.env
+    environment:
+      APP_ENV: production
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/anchi
+      MASTER_DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/anchi_master
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python", "-m", "app.workers.jobs_worker"]
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: anchi_master
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d anchi_master"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:
+

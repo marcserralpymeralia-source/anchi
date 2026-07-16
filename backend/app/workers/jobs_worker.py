@@ -20,7 +20,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import record_job
 from app.core.observability import observability_scope
-from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, FTPSettings, ImportJob, Order, ScoringSettings
+from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, FTPSettings, ImportJob, InboundMessage, Order, ScoringSettings
 from app.exports.service import ExportService, FTPService
 from app.logs.service import log_action
 from app.orders.state import ORDER_STATE
@@ -45,6 +45,7 @@ JOB_TYPES = {
     "process_pending_emails",
     "process_email",
     "process_order",
+    "process_inbound_message",
     "import_confirm",
     "import_file",
     "export_order",
@@ -229,6 +230,13 @@ def _process_job(db, job: BackgroundJob) -> dict:
             result = AgentProcessingService().process_email(db, order.email)
             return {"ok": True, **result}
         return {"ok": False, "message": "El pedido no tiene correo asociado."}
+    if job.job_type == "process_inbound_message":
+        inbound_message_id = int(payload.get("inbound_message_id") or 0)
+        inbound_message = db.get(InboundMessage, inbound_message_id)
+        if not inbound_message or inbound_message.company_id != job.company_id:
+            raise RuntimeError("No se encontró el mensaje a procesar.")
+        result = AgentProcessingService().pipeline.process_inbound_message(db, inbound_message)
+        return {"ok": True, **result}
     raise RuntimeError(f"Tipo de job no soportado: {job.job_type}")
 
 
@@ -628,6 +636,10 @@ def start_job_worker() -> None:
         return
     _worker_started = True
     threading.Thread(target=_worker_loop, name="anchi-job-worker", daemon=True).start()
+
+
+def is_job_worker_started() -> bool:
+    return _worker_started
 
 
 def main() -> None:

@@ -143,3 +143,7 @@ def start_email_sync_worker() -> None:
         return
     _worker_started = True
     threading.Thread(target=_worker_loop, name="anchi-email-sync", daemon=True).start()
+
+
+def is_email_sync_worker_started() -> bool:
+    return _worker_started
