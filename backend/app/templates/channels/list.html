@@ -74,6 +74,7 @@
             <strong class="queue-item-name">{{ item.customer_name }}</strong>
             <div class="queue-item-tags">
               <a class="queue-item-tag queue-item-tag-channel" href="/channels?tab={{ item.channel_key }}&date_range={{ filters.date_range }}&customer_id={{ filters.customer_id }}&search={{ filters.search|urlencode }}&score_min={{ filters.score_min }}&score_max={{ filters.score_max }}" onclick="event.stopPropagation();">{{ item.channel_name }}</a>
+              {% if item.provider_label %}<span class="queue-item-tag queue-item-tag-status">{{ item.provider_label }}</span>{% endif %}
               <a class="queue-item-tag queue-item-tag-status" href="/channels?tab={% if item.status_key in ['doubtful','no_order'] %}review{% elif item.status_key in ['not_processed','queued','processing','pending_reprocess'] %}pending{% elif item.status_key == 'error' %}error{% else %}processed{% endif %}&date_range={{ filters.date_range }}&customer_id={{ filters.customer_id }}&search={{ filters.search|urlencode }}&score_min={{ filters.score_min }}&score_max={{ filters.score_max }}" onclick="event.stopPropagation();">{{ item.status_label }}</a>
               <span class="queue-item-tag queue-item-tag-confidence queue-item-confidence-{{ confidence_class }}">{{ item.confidence_label }}</span>
               {% if item.has_attachments %}<span class="queue-item-tag">Adjuntos</span>{% endif %}
@@ -103,6 +104,7 @@
 </section>
 
 {% for item in channels %}
+  {% set source_id = item.email_id if item.kind == "email" else item.message_id %}
   <dialog id="{{ item.entry_id }}-dialog" class="order-review-modal channel-review-modal" data-dirty="false">
     <div class="review-modal-header review-modal-header-v3">
       <div class="review-header-title">
@@ -110,15 +112,18 @@
         <div class="review-header-meta">
           <span class="badge {{ 'agent-' ~ item.status_key }}">{{ item.status_label }}</span>
           <span class="badge">{{ item.channel_name }}</span>
+          {% if item.provider_label %}<span class="badge">{{ item.provider_label }}</span>{% endif %}
           <span class="badge">{{ item.received_label }}</span>
         </div>
       </div>
       <div class="review-header-actions review-header-actions-tight">
-        {% if item.kind == "email" and item.status_key == "not_processed" %}
-          <form class="js-loading-form" method="post" action="/workbench/email/{{ item.email_id }}/process"><button class="primary compact-button" data-loading-text="Procesando...">Procesar</button></form>
-          <form class="js-loading-form" method="post" action="/workbench/email/{{ item.email_id }}/mark-no-order" data-confirm="Marcar como no pedido?"><button class="secondary compact-button" data-loading-text="Marcando...">Resolver</button></form>
-        {% elif item.order_id %}
+        {% if item.order_id %}
           <a class="button secondary compact-button" href="/orders/{{ item.order_id }}">Ver pedido</a>
+        {% elif item.status_key in ["not_processed", "queued", "processing", "pending_reprocess"] %}
+          <form class="js-loading-form review-channel-actions" method="post" action="/channels/{{ item.kind }}/{{ source_id }}/process">
+            <button class="primary compact-button" data-loading-text="Procesando...">Procesar</button>
+          </form>
+          <a class="button secondary compact-button" href="/channels/{{ item.kind }}/{{ source_id }}/resolve">Resolver</a>
         {% endif %}
         <button type="button" class="secondary compact-button" onclick="closeChannelModal('{{ item.entry_id }}')">Cerrar</button>
       </div>

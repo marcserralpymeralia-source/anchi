@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -51,6 +52,10 @@ async def app_lifespan(app: FastAPI):
             logger.info("Legacy sync enabled explicitly")
     finally:
         master_db.close()
-    start_email_sync_worker()
-    start_job_worker()
+    running_on_vercel = os.getenv("VERCEL") == "1" or bool(os.getenv("VERCEL_ENV"))
+    if running_on_vercel:
+        logger.info("Vercel runtime detected: workers disabled in this process")
+    else:
+        start_email_sync_worker()
+        start_job_worker()
     yield

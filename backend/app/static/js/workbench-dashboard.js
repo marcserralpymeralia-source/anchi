@@ -138,7 +138,25 @@ function openLineProductPicker(lineId) {
   }
 }
 
+function bindSourceTabs(root) {
+  root.querySelectorAll("[data-source-tabs]").forEach((tabs) => {
+    const container = tabs.closest(".review-pane") || root;
+    const panels = Array.from(container.querySelectorAll("[data-source-panel]"));
+    tabs.querySelectorAll("[data-source-tab]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const target = button.dataset.sourceTab;
+        tabs.querySelectorAll("[data-source-tab]").forEach((tab) => tab.classList.toggle("active", tab === button));
+        panels.forEach((panel) => {
+          const panelKey = panel.dataset.sourcePanel || "";
+          panel.hidden = !(panelKey === target || panelKey.startsWith(`${target}-`));
+        });
+      });
+    });
+  });
+}
+
 function bindWorkbenchDetailContent(root, dialog) {
+  bindSourceTabs(root);
   root.querySelectorAll("input, textarea, select").forEach((field) => {
     field.addEventListener("change", () => {
       if (dialog) dialog.dataset.dirty = "true";

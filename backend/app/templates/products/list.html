@@ -1,6 +1,18 @@
 {% extends "base.html" %}
 {% set title = "Productos" %}
 {% block content %}
+{% if request.query_params.get("imported") == "1" %}
+<section class="panel" style="margin-bottom:16px">
+  <strong>Importación completada</strong>
+  <span class="muted">Se han creado {{ request.query_params.get("created", "0") }} productos, actualizado {{ request.query_params.get("updated", "0") }} e ignorado {{ request.query_params.get("ignored", "0") }}.</span>
+</section>
+{% endif %}
+{% if request.query_params.get("queued") == "1" %}
+<section class="panel" style="margin-bottom:16px">
+  <strong>Importación en cola</strong>
+  <span class="muted">La importación de productos se ha enviado al procesador en segundo plano.</span>
+</section>
+{% endif %}
 <section class="panel stack" style="margin-bottom:16px">
   <div class="section-title-row">
     <div>
@@ -9,7 +21,7 @@
     </div>
     <a class="button secondary compact-button" href="/imports/history">Histórico</a>
   </div>
-  <form class="stack js-loading-form js-import-paste-form" method="post" action="/products/import" enctype="multipart/form-data">
+  <form class="stack js-loading-form js-import-paste-form" method="post" action="/imports/preview" enctype="multipart/form-data">
     <input type="hidden" name="entity_type" value="products">
     <div class="database-import-grid">
       <label>Archivo<input type="file" name="file" accept=".csv,.xlsx,.xls,.txt" data-import-file></label>
@@ -18,10 +30,11 @@
         <select name="encoding"><option value="utf-8">UTF-8</option><option value="latin-1">ISO-8859-1</option><option value="cp1252">Windows-1252</option></select>
       </label>
       <div class="actions database-actions">
-        <button data-loading-text="Preparando...">Importar con mapeo</button>
+        <button type="submit" data-loading-text="Cargando columnas...">Mapear columnas</button>
       </div>
     </div>
   </form>
+  <p class="muted" style="margin:0">Primero verás las columnas detectadas y podrás relacionarlas con los campos de la aplicación antes de confirmar.</p>
 </section>
 
 <section class="panel stack" style="margin-bottom:16px">

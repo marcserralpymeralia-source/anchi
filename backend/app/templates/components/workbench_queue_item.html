@@ -26,8 +26,8 @@
   </div>
   <div class="queue-item-actions">
     {% if item.kind == "email" and item.agent_status == "not_processed" %}
-      <form class="js-loading-form" method="post" action="/workbench/email/{{ item.email_id }}/process"><button class="primary compact-button" data-loading-text="Procesando..." onclick="event.stopPropagation();">Procesar</button></form>
-      <button class="secondary compact-button" type="button" onclick="event.stopPropagation(); openWorkbenchItemDetail('{{ item.detail_url }}')">Resolver</button>
+      <form class="js-loading-form" method="post" action="/channels/email/{{ item.email_id }}/process"><button class="primary compact-button" data-loading-text="Procesando..." onclick="event.stopPropagation();">Procesar</button></form>
+      <a class="button secondary compact-button" href="/channels/email/{{ item.email_id }}/resolve" onclick="event.stopPropagation();">Resolver</a>
     {% elif item.kind == "order" and item.order_status_label == "Listo para confirmar" %}
       <form class="js-loading-form" method="post" action="/orders/{{ item.order_id }}/confirm" data-confirm="Confirmar pedido?"><button class="primary compact-button" data-loading-text="Confirmando..." onclick="event.stopPropagation();">Procesar</button></form>
       <button class="secondary compact-button" type="button" onclick="event.stopPropagation(); openWorkbenchItemDetail('{{ item.detail_url }}')">Resolver</button>

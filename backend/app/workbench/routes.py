@@ -14,7 +14,7 @@ from app.agent.services import AgentProcessingService, ScoringService
 from app.auth.dependencies import current_user
 from app.core.templating import templates
 from app.dashboard.service import workbench_summary
-from app.db.models import Alert, Email, EmailAttachment, EmailSettings, ExportFile, FTPSettings, Order, ScoringSettings, utcnow
+from app.db.models import Alert, Conversation, Email, EmailAttachment, EmailSettings, ExportFile, FTPSettings, InboundMessage, Order, ScoringSettings, utcnow
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
 from app.master.service import TenantUser
@@ -38,6 +38,125 @@ def _parse_selected_items(payload: str) -> list[dict]:
     except json.JSONDecodeError:
         return []
     return [item for item in data if isinstance(item, dict)]
+
+
+def _conversation_preview(source) -> dict | None:
+    messages = source
+    if hasattr(source, "conversation"):
+        conversation = getattr(source, "conversation", None)
+        messages = conversation.messages if conversation and conversation.messages else []
+    ordered_messages = sorted(messages or [], key=lambda item: item.received_at or item.created_at)
+    rendered_messages: list[dict[str, object]] = []
+    use_transcript_payload = len(ordered_messages) <= 1
+    for message in ordered_messages:
+        parsed_payload = {}
+        if use_transcript_payload and getattr(message, "raw_payload_json", None):
+            try:
+                parsed_payload = json.loads(message.raw_payload_json)
+            except json.JSONDecodeError:
+                parsed_payload = {}
+        parsed_messages = []
+        if use_transcript_payload and parsed_payload.get("import_type") == "manual_whatsapp":
+            parsed = parsed_payload.get("parsed")
+            if isinstance(parsed, dict):
+                parsed_messages = parsed.get("messages", []) or []
+        if parsed_messages:
+            for parsed_message in parsed_messages:
+                rendered_messages.append(
+                    {
+                        "sender": parsed_message.get("sender") or message.sender or "Cliente",
+                        "direction": parsed_message.get("direction") or "inbound",
+                        "role_label": "Empresa" if (parsed_message.get("direction") or "inbound") == "outbound" else "Cliente",
+                        "text": parsed_message.get("text") or "",
+                        "timestamp_label": parsed_message.get("timestamp_label") or "",
+                    }
+                )
+        else:
+            rendered_messages.append(
+                {
+                    "sender": message.sender or ("Empresa" if getattr(message, "direction", "inbound") == "outbound" else "Cliente"),
+                    "direction": getattr(message, "direction", "inbound") or "inbound",
+                    "role_label": "Empresa" if (getattr(message, "direction", "inbound") or "inbound") == "outbound" else "Cliente",
+                    "text": message.original_content or message.normalized_text or "",
+                    "timestamp_label": message.received_at.strftime("%d/%m/%Y %H:%M") if message.received_at else "",
+                }
+            )
+    if not rendered_messages:
+        return None
+    source_message = ordered_messages[0]
+    provider = (getattr(source_message, "provider", "") or "").strip().lower()
+    if provider == "manual_import":
+        provider_label = "Importación manual"
+    elif provider == "whatsapp":
+        provider_label = "WhatsApp"
+    elif provider:
+        provider_label = provider.title()
+    else:
+        provider_label = "Conversación"
+    return {"provider_label": provider_label, "messages": rendered_messages}
+
+
+def _inbound_agent_status(message: InboundMessage) -> str:
+    status = (message.status or "").strip().lower()
+    if status in {"received", "queued", "processing"}:
+        return "processing" if status != "received" else "not_processed"
+    if status in {"matched", "order_detected"}:
+        return "order_detected"
+    if status in {"doubtful", "no_order"}:
+        return "doubtful" if status == "doubtful" else "no_order"
+    if status == "error":
+        return "error"
+    if message.order_id:
+        return "order_detected"
+    return "processed" if status == "processed" else "not_processed"
+
+
+def _inbound_item(message: InboundMessage, *, order: Order | None = None) -> dict:
+    status_key = _inbound_agent_status(message)
+    provider = (message.provider or "").strip().lower()
+    provider_label = "WhatsApp" if provider == "whatsapp" else "Entrada"
+    source_label = "Conversación" if provider == "whatsapp" else "Entrada"
+    customer_name = "Cliente no identificado"
+    if order and (order.validated_customer or order.customer):
+        customer_name = (order.validated_customer or order.customer).fiscal_name
+    elif order and order.customer_detected_name:
+        customer_name = order.customer_detected_name
+    elif message.customer_id:
+        customer_name = customer_name
+    return {
+        "id": f"inbound-{message.id}",
+        "kind": "inbound",
+        "message_id": message.id,
+        "order_id": order.id if order else message.order_id,
+        "customer_name": customer_name,
+        "provider_label": provider_label,
+        "source_label": source_label,
+        "agent_status": status_key,
+        "agent_status_label": {
+            "not_processed": "Pendiente de analizar",
+            "processing": "Procesando",
+            "order_detected": "Pedido detectado",
+            "doubtful": "Necesita revisión",
+            "no_order": "Sin pedido detectado",
+            "error": "Error",
+            "processed": "Analizado",
+        }.get(status_key, status_key),
+        "status_label": {
+            "received": "Recibido",
+            "queued": "En cola",
+            "processing": "Procesando",
+            "matched": "Coincidente",
+            "order_detected": "Pedido detectado",
+            "doubtful": "Necesita revisión",
+            "no_order": "Sin pedido",
+            "error": "Error",
+            "processed": "Procesado",
+        }.get((message.status or "").strip().lower(), message.status or "Recibido"),
+        "score": message.score,
+        "message_count": len(message.conversation.messages) if message.conversation and message.conversation.messages else 1,
+        "has_attachments": bool(message.attachments),
+        "origin": "WhatsApp" if provider == "whatsapp" else "Entrada",
+    }
 
 
 def _queued_job_response(request: Request, job_id: int, fallback: str = "/"):
@@ -70,12 +189,13 @@ def workbench_item_detail(kind: str, item_id: int, request: Request, db: Session
         )
         if not order:
             return PlainTextResponse("No encontrado", status_code=404)
+        conversation_preview = _conversation_preview(order)
         customers = db.scalars(select(Customer).where(Customer.company_id == user.company_id).order_by(Customer.fiscal_name)).all()
         products = db.scalars(select(Product).where(Product.company_id == user.company_id).order_by(Product.reference)).all()
         item = order_workbench_item(order, get_or_create_settings(db, ScoringSettings, user.company_id))
         return templates.TemplateResponse(
             "workbench/detail.html",
-            {"request": request, "user": user, "kind": "order", "order": order, "item": item, "customers": customers, "products": products},
+            {"request": request, "user": user, "kind": "order", "order": order, "item": item, "conversation_preview": conversation_preview, "customers": customers, "products": products},
         )
     if kind == "email":
         email = db.scalar(
@@ -89,6 +209,48 @@ def workbench_item_detail(kind: str, item_id: int, request: Request, db: Session
         return templates.TemplateResponse(
             "workbench/detail.html",
             {"request": request, "user": user, "kind": "email", "email": email, "item": item},
+        )
+    if kind == "inbound":
+        inbound = db.scalar(
+            select(InboundMessage)
+            .where(InboundMessage.id == item_id, InboundMessage.company_id == user.company_id)
+            .options(
+                selectinload(InboundMessage.attachments),
+                selectinload(InboundMessage.conversation).selectinload(Conversation.messages),
+            )
+        )
+        if not inbound:
+            return PlainTextResponse("No encontrado", status_code=404)
+        order = None
+        if inbound.order_id:
+            order = db.scalar(
+                select(Order)
+                .where(Order.id == inbound.order_id, Order.company_id == user.company_id)
+                .options(
+                    selectinload(Order.lines).selectinload(OrderLine.product),
+                    selectinload(Order.lines).selectinload(OrderLine.validated_product),
+                    selectinload(Order.customer),
+                    selectinload(Order.validated_customer),
+                    selectinload(Order.conversation).selectinload(Conversation.messages),
+                )
+            )
+        preview = _conversation_preview(inbound.conversation.messages if inbound.conversation else [inbound])
+        item = _inbound_item(inbound, order=order)
+        customers = db.scalars(select(Customer).where(Customer.company_id == user.company_id).order_by(Customer.fiscal_name)).all()
+        products = db.scalars(select(Product).where(Product.company_id == user.company_id).order_by(Product.reference)).all()
+        return templates.TemplateResponse(
+            "workbench/detail.html",
+            {
+                "request": request,
+                "user": user,
+                "kind": "inbound",
+                "inbound_message": inbound,
+                "order": order,
+                "conversation_preview": preview,
+                "item": item,
+                "customers": customers,
+                "products": products,
+            },
         )
     return PlainTextResponse("Tipo no soportado", status_code=400)
 

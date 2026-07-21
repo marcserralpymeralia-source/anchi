@@ -31,6 +31,8 @@ Resumen:
 
 Para migraciones de esquema y verificaciones formales consulta [docs/schema-migrations.md](docs/schema-migrations.md).
 
+Para preparar una demo estable en Vercel, consulta [docs/development/vercel-demo-deployment.md](docs/development/vercel-demo-deployment.md).
+
 ## Configuracion sensible
 
 En produccion define siempre una `SECRET_KEY` propia y una `ENCRYPTION_KEY` Fernet distinta:

@@ -27,7 +27,8 @@
         {% if user.role.name in ["Administrador", "Superadmin"] %}
           <a href="/customers" title="Clientes" class="{% if request.url.path.startswith('/customers') %}active{% endif %}"><span class="nav-icon">◫</span><span class="nav-label">Clientes</span></a>
           <a href="/products" title="Productos" class="{% if request.url.path.startswith('/products') %}active{% endif %}"><span class="nav-icon">▣</span><span class="nav-label">Productos</span></a>
-          <a href="/imports/quick" title="Importación rápida" class="{% if request.url.path.startswith('/imports/quick') %}active{% endif %}"><span class="nav-icon">◩</span><span class="nav-label">Importación</span></a>
+          <a href="/imports/quick" title="Importación rápida" class="{% if request.url.path.startswith('/imports/quick') %}active{% endif %}"><span class="nav-icon">◩</span><span class="nav-label">Importación rápida</span></a>
+          <a href="/imports/manual" title="Importación manual" class="{% if request.url.path.startswith('/imports/manual') or request.url.path.startswith('/imports/whatsapp') %}active{% endif %}"><span class="nav-icon">⬚</span><span class="nav-label">Importación manual</span></a>
           <a href="/settings" title="Configuracion" class="{% if request.url.path.startswith('/settings') %}active{% endif %}"><span class="nav-icon">⚙</span><span class="nav-label">Configuracion</span></a>
           <a href="/jobs/monitor" title="Jobs" class="{% if request.url.path.startswith('/jobs') %}active{% endif %}"><span class="nav-icon">⧗</span><span class="nav-label">Jobs</span></a>
         {% endif %}
@@ -44,6 +45,7 @@
             <span class="alerts-button-icon">🔔</span>
             <span class="alerts-button-badge {% if request.state.alert_center.has_critical %}alerts-badge-critical{% elif request.state.alert_center.high %}alerts-badge-high{% elif request.state.alert_center.medium %}alerts-badge-medium{% else %}alerts-badge-idle{% endif %}" id="alerts-badge">{{ request.state.alert_center.total }}</span>
           </button>
+          <a class="button secondary compact-button" href="/imports/manual">Importación manual</a>
           <span class="badge">{{ request.state.branding.company_name }}</span>
           {% if app_settings.environment != "production" %}<span class="badge">Demo</span>{% endif %}
           <span>{{ user.name }}</span>

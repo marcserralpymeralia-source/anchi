@@ -723,6 +723,7 @@ class LearningService:
         quantity: float | None,
         unit: str | None,
         order: Order | None = None,
+        order_at: datetime | None = None,
         source_context: str = "pedido_confirmado",
         customer_alias_used: str | None = None,
         comments: str | None = None,
@@ -767,7 +768,7 @@ class LearningService:
         if counts_as_order:
             row.times_ordered = (row.times_ordered or 0) + 1
             row.confirmed_count = (row.confirmed_count or 0) + 1
-            row.last_order_at = order.confirmed_at or order.exported_at or order.created_at if order else now
+            row.last_order_at = order_at or (order.confirmed_at or order.exported_at or order.created_at if order else now)
             if exported_at:
                 row.last_exported_at = exported_at
             if delivery_note_at:

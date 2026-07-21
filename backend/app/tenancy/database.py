@@ -55,9 +55,10 @@ def get_tenant_db(request: Request, master_db: Session = Depends(get_master_db))
     database_url = tenant.company.database_url if tenant else None
     if not database_url:
         session = request.scope.get("session") or {}
-        if not any(session.get(key) for key in ("membership_id", "user_id", "company_id", "company_slug")):
-            raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/login"})
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Tenant no disponible")
+        if any(session.get(key) for key in ("membership_id", "user_id", "company_id", "company_slug")):
+            if isinstance(session, dict):
+                session.clear()
+        raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/login"})
 
     SessionFactory = tenant_db_session(database_url)
     db = SessionFactory()

@@ -8,13 +8,15 @@ from difflib import SequenceMatcher
 
 import pandas as pd
 from fastapi import UploadFile
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 try:
     from docx import Document as DocxDocument
 except Exception:  # pragma: no cover - optional dependency fallback
     DocxDocument = None
 
-from app.db.models import Customer, CustomerAlias, CustomerContactPoint, CustomerDomain, ImportJob, ImportMappingTemplate, Product, ProductAlias, User
+from app.agent.platform import LearningService
+from app.db.models import Customer, CustomerAlias, CustomerContactPoint, CustomerDomain, CustomerProductKnowledge, ImportJob, ImportMappingTemplate, Product, ProductAlias, User
 from app.master_data.service import (
     find_customer_match,
     find_product_match,
@@ -91,6 +93,17 @@ PRODUCT_FIELDS = {
     "notes": "Observaciones",
 }
 
+CUSTOMER_KNOWLEDGE_ARTICLE_FIELDS = {
+    "exercise": "Ejercicio",
+    "series": "Serie",
+    "document_number": "Albarán",
+    "order_date": "Fecha",
+    "reference": "Artículo",
+    "name": "Descripción",
+    "quantity": "Unidades",
+    "sale_price": "Precio",
+}
+
 FIELD_ALIASES = {
     "customers": {
         "code": ["cód. cliente", "cod. cliente", "codigo cliente", "codcli", "codigo", "code"],
@@ -137,6 +150,16 @@ FIELD_ALIASES = {
         "article_type": ["tipo artículo", "tipo articulo"],
         "description_cont": ["descripción (cont.)", "descripcion (cont.)"],
         "replenishment_warehouse": ["alm. reposición", "alm. reposicion"],
+    },
+    "customer_knowledge_articles": {
+        "exercise": ["ejercicio", "año", "anio"],
+        "series": ["serie", "series"],
+        "document_number": ["albarán", "albaran", "nº albarán", "numero albaran", "número albarán", "documento", "albaran nº"],
+        "order_date": ["fecha", "fecha albarán", "fecha albaran", "fecha pedido", "date"],
+        "reference": ["artículo", "articulo", "referencia", "reference", "ref", "código artículo", "codigo articulo"],
+        "name": ["descripción", "descripcion", "producto", "artículo desc", "article", "name"],
+        "quantity": ["unidades", "cantidad", "qty", "uds", "ud"],
+        "sale_price": ["precio", "importe", "pvp", "precio unitario", "price"],
     },
 }
 
@@ -225,7 +248,26 @@ def _name_similarity(left: str, right: str) -> float:
 
 
 def fields_for(entity_type: str) -> dict[str, str]:
-    return CUSTOMER_FIELDS if entity_type == "customers" else PRODUCT_FIELDS
+    if entity_type == "customers":
+        return CUSTOMER_FIELDS
+    if entity_type == "products":
+        return PRODUCT_FIELDS
+    if entity_type == "customer_knowledge_articles":
+        return CUSTOMER_KNOWLEDGE_ARTICLE_FIELDS
+    return PRODUCT_FIELDS
+
+
+def _customer_name_is_mapped(mapping: dict[str, str]) -> bool:
+    return any(field in {"fiscal_name", "commercial_name"} for field in mapping.values())
+
+
+def _parse_date_value(value: str | None) -> pd.Timestamp | None:
+    if not value:
+        return None
+    parsed = pd.to_datetime(value, errors="coerce", dayfirst=True)
+    if pd.isna(parsed):
+        return None
+    return parsed
 
 
 def guess_mapping(entity_type: str, columns: list[str]) -> dict[str, str]:
@@ -243,7 +285,14 @@ def dataframe_to_preview(df: pd.DataFrame, limit: int = 5) -> list[dict[str, str
     return df.head(limit).astype(str).to_dict(orient="records")
 
 
-async def create_preview(file: UploadFile, entity_type: str, encoding: str = "utf-8") -> dict:
+async def create_preview(
+    file: UploadFile,
+    entity_type: str,
+    encoding: str = "utf-8",
+    *,
+    customer_id: int | None = None,
+    import_kind: str = "",
+) -> dict:
     content = await file.read()
     token = uuid.uuid4().hex
     suffix = Path(file.filename or "import.csv").suffix.lower() or ".csv"
@@ -259,6 +308,8 @@ async def create_preview(file: UploadFile, entity_type: str, encoding: str = "ut
         "preview_rows": dataframe_to_preview(df),
         "guessed_mapping": guess_mapping(entity_type, columns),
         "fields": fields_for(entity_type),
+        "customer_id": customer_id,
+        "import_kind": import_kind,
     }
 
 
@@ -356,19 +407,39 @@ def _customer_lookup(db: Session, company_id: int, data: dict[str, str]) -> tupl
     return None, ""
 
 
-def validate_import(db: Session, *, company_id: int, entity_type: str, df: pd.DataFrame, mapping: dict[str, str]) -> ImportValidation:
+def validate_import(
+    db: Session,
+    *,
+    company_id: int,
+    entity_type: str,
+    df: pd.DataFrame,
+    mapping: dict[str, str],
+    customer_id: int | None = None,
+    import_kind: str = "",
+) -> ImportValidation:
     rows_new = rows_update = duplicates = rows_error = invalid_emails = invalid_phones = 0
     errors: list[str] = []
     warnings: list[str] = []
     seen_keys: set[str] = set()
     seen_names: list[str] = []
+    if entity_type == "customers" and not _customer_name_is_mapped(mapping):
+        return ImportValidation(
+            rows_total=len(df),
+            rows_new=0,
+            rows_update=0,
+            duplicates=0,
+            rows_error=len(df) or 1,
+            errors=["Debes mapear 'Razon social' o 'Nombre comercial' antes de importar clientes."],
+            warnings=[],
+        )
     for index, row in df.iterrows():
         data = mapped_row(row, mapping)
         if entity_type == "customers":
-            key = data.get("code") or data.get("fiscal_name")
-            if not key:
+            name = data.get("fiscal_name") or data.get("commercial_name")
+            key = data.get("code") or name
+            if not name:
                 rows_error += 1
-                errors.append(f"Fila {index + 2}: falta codigo cliente o razon social.")
+                errors.append(f"Fila {index + 2}: falta razon social o nombre comercial.")
                 continue
             emails = [value for value in _split_multi_values(data.get("primary_email", "")) + _split_multi_values(data.get("associated_emails", "")) if value]
             phones = [value for value in _split_multi_values(data.get("phone", "")) + _split_multi_values(data.get("associated_phones", "")) if value]
@@ -379,6 +450,39 @@ def validate_import(db: Session, *, company_id: int, entity_type: str, df: pd.Da
                 invalid_phones += sum(1 for phone in phones if not _is_valid_phone(phone))
                 warnings.append(f"Fila {index + 2}: telefono con formato dudoso.")
             existing, match_reason = _customer_lookup(db, company_id, data)
+        elif entity_type == "customer_knowledge_articles":
+            key = " | ".join(
+                item
+                for item in [
+                    data.get("reference") or data.get("name") or "",
+                    data.get("document_number") or "",
+                    data.get("order_date") or "",
+                ]
+                if item
+            )
+            if not customer_id:
+                rows_error += 1
+                errors.append("Falta el cliente destino para importar el histórico de artículos.")
+                continue
+            if not (data.get("reference") or data.get("name")):
+                rows_error += 1
+                errors.append(f"Fila {index + 2}: falta articulo/referencia o descripcion.")
+                continue
+            product = db.query(Product).filter(Product.company_id == company_id, Product.reference == data.get("reference")).one_or_none() if data.get("reference") else None
+            if not product and data.get("name"):
+                product = db.query(Product).filter(Product.company_id == company_id, Product.name == data["name"]).one_or_none()
+            if not product:
+                rows_error += 1
+                errors.append(f"Fila {index + 2}: no se encontró producto para {data.get('reference') or data.get('name')}.")
+                continue
+            existing = db.scalar(
+                select(CustomerProductKnowledge).where(
+                    CustomerProductKnowledge.company_id == company_id,
+                    CustomerProductKnowledge.customer_id == customer_id,
+                    CustomerProductKnowledge.product_id == product.id,
+                )
+            )
+            match_reason = "knowledge" if existing else ""
         else:
             key = data.get("reference") or data.get("name")
             if not key:
@@ -402,6 +506,15 @@ def validate_import(db: Session, *, company_id: int, entity_type: str, df: pd.Da
                         warnings.append(f"Fila {index + 2}: posible duplicado por nombre similar ({name}).")
                         break
                 seen_names.append(name)
+        elif entity_type == "customer_knowledge_articles":
+            article_name = data.get("name") or data.get("reference") or ""
+            if article_name:
+                for prev_name in seen_names:
+                    if _name_similarity(prev_name, article_name) >= 0.96:
+                        duplicates += 1
+                        warnings.append(f"Fila {index + 2}: posible duplicado por artículo similar ({article_name}).")
+                        break
+                seen_names.append(article_name)
         if existing:
             rows_update += 1
             if entity_type == "customers" and match_reason in {"email", "domain", "phone", "name"}:
@@ -485,18 +598,30 @@ def confirm_import(
     df: pd.DataFrame,
     mapping: dict[str, str],
     mode: str,
+    customer_id: int | None = None,
+    import_kind: str = "",
     save_template: bool = False,
     template_name: str = "",
 ) -> ImportJob:
     created = updated = ignored = rows_error = 0
     errors: list[str] = []
     conflict_policy = normalize_conflict_policy(mode)
+    if entity_type == "customers" and not _customer_name_is_mapped(mapping):
+        raise ValueError("Debes mapear 'Razon social' o 'Nombre comercial' antes de importar clientes.")
+    knowledge_service = LearningService() if entity_type == "customer_knowledge_articles" else None
+    customer = db.get(Customer, customer_id) if customer_id else None
+    if entity_type == "customer_knowledge_articles" and not customer:
+        raise ValueError("Debes seleccionar un cliente antes de importar el histórico de artículos.")
     for row_index, row in df.iterrows():
         data = mapped_row(row, mapping)
         if entity_type == "customers":
-            key = data.get("code")
             name = data.get("fiscal_name") or data.get("commercial_name")
-            if not key and not name:
+            key = data.get("code") or name
+            if not name:
+                rows_error += 1
+                errors.append(f"Fila {row_index + 2}: falta razon social o nombre comercial")
+                continue
+            if not key:
                 ignored += 1
                 continue
             existing, match_reason = find_customer_match(db, company_id, data)
@@ -528,6 +653,68 @@ def confirm_import(
             else:
                 ignored += 1
                 continue
+        elif entity_type == "customer_knowledge_articles":
+            reference = data.get("reference") or ""
+            name = data.get("name") or ""
+            if not reference and not name:
+                rows_error += 1
+                errors.append(f"Fila {row_index + 2}: falta articulo/referencia o descripcion")
+                continue
+            product, match_reason = find_product_match(db, company_id, data)
+            if not product:
+                rows_error += 1
+                errors.append(f"Fila {row_index + 2}: no se encontró producto para {reference or name}")
+                continue
+            quantity = as_float(data.get("quantity") or "")
+            parsed_date = _parse_date_value(data.get("order_date") or "")
+            extra_bits = [
+                f"Ejercicio: {data.get('exercise')}" if data.get("exercise") else "",
+                f"Serie: {data.get('series')}" if data.get("series") else "",
+                f"Albarán: {data.get('document_number')}" if data.get("document_number") else "",
+                f"Fecha: {data.get('order_date')}" if data.get("order_date") else "",
+                f"Precio: {data.get('sale_price')}" if data.get("sale_price") else "",
+            ]
+            comments = " | ".join(bit for bit in extra_bits if bit)
+            existing = db.scalar(
+                select(CustomerProductKnowledge).where(
+                    CustomerProductKnowledge.company_id == company_id,
+                    CustomerProductKnowledge.customer_id == customer.id,
+                    CustomerProductKnowledge.product_id == product.id,
+                )
+            )
+            if existing and conflict_policy in {"skip_existing", "create_only"}:
+                ignored += 1
+                continue
+            if existing and conflict_policy == "error_on_conflict":
+                rows_error += 1
+                errors.append(f"Fila {row_index + 2}: conflicto existente para {match_reason or 'producto'}")
+                continue
+            try:
+                knowledge_service.update_customer_product_knowledge(
+                    db,
+                    company_id=company_id,
+                    customer=customer,
+                    product=product,
+                    quantity=quantity,
+                    unit=product.sale_unit or "",
+                    order=None,
+                    order_at=parsed_date.to_pydatetime() if parsed_date is not None else None,
+                    source_context="pedido_confirmado",
+                    customer_alias_used=None,
+                    comments=comments or None,
+                    is_manual=False,
+                    exported_at=None,
+                    delivery_note_at=None,
+                    force_habitual=False,
+                )
+            except ValueError as exc:
+                rows_error += 1
+                errors.append(f"Fila {row_index + 2}: {exc}")
+                continue
+            if existing:
+                updated += 1
+            else:
+                created += 1
         else:
             key = data.get("reference")
             name = data.get("name")

@@ -5,6 +5,18 @@
 {% set pdfs = order.email.attachments|selectattr("content_type", "equalto", "application/pdf")|list if order.email else [] %}
 {% set score_value = order.score if order.score is not none else 0 %}
 {% set customer_title = customer_context.customer.name if customer_context and customer_context.identified else order.customer_detected_name or "Cliente sin identificar" %}
+{% set incoming_title = "Pedido / correo / documento recibido" %}
+{% set has_email = order.email is not none %}
+{% set has_conversation = conversation_preview is not none %}
+{% set active_source = "conversation" if has_conversation else "email" %}
+{% if conversation_preview %}
+  {% set provider_label_lower = (conversation_preview.provider_label or "")|lower %}
+  {% if "whatsapp" in provider_label_lower %}
+    {% set incoming_title = "Conversación de WhatsApp recibida" %}
+  {% else %}
+    {% set incoming_title = "Conversación recibida" %}
+  {% endif %}
+{% endif %}
 {% if score_value >= 80 %}
   {% set score_class = "score-safe" %}
   {% set score_label = "Alta" %}
@@ -45,34 +57,81 @@
 <div class="review-grid review-grid-v3">
   <section class="review-pane review-entry-pane">
     <div class="pane-title-row">
-      <h3>Pedido / correo / documento recibido</h3>
-      <span class="badge">{{ attachments|length }} adjuntos</span>
+      <h3>{{ incoming_title }}</h3>
+      <span class="badge">{% if has_email %}{{ attachments|length }} adjuntos{% elif has_conversation %}{{ conversation_preview.messages|length }} mensajes{% else %}0 mensajes{% endif %}</span>
     </div>
 
-    <article class="subpanel">
-      <div class="section-title-row">
-        <div>
-          <h4>{{ order.email.subject if order.email else "Entrada recibida" }}</h4>
-          <p class="muted">{{ order.email.sender if order.email else "Sin remitente" }}</p>
+    {% if has_email and has_conversation %}
+      <div class="source-tabs" data-source-tabs>
+        <button type="button" class="source-tab {% if active_source == 'email' %}active{% endif %}" data-source-tab="email">Correo electrónico</button>
+        <button type="button" class="source-tab {% if active_source == 'conversation' %}active{% endif %}" data-source-tab="conversation">WhatsApp</button>
+      </div>
+    {% endif %}
+
+    {% if has_email %}
+      <article class="subpanel source-panel" data-source-panel="email" {% if has_email and has_conversation and active_source != 'email' %}hidden{% endif %}>
+        <div class="section-title-row">
+          <div>
+            <h4>{{ order.email.subject if order.email else "Entrada recibida" }}</h4>
+            <p class="muted">{{ order.email.sender if order.email else "Sin remitente" }}</p>
+          </div>
+          <span class="badge">{{ order.email.detected_type|status_label if order.email else "Pedido" }}</span>
         </div>
-        <span class="badge">{{ order.email.detected_type|status_label if order.email else "Pedido" }}</span>
+        <div class="review-inline-summary review-inline-summary-tight">
+          <span><strong>Fecha</strong>{{ order.email.received_at.strftime("%d/%m/%Y %H:%M") if order.email and order.email.received_at else "—" }}</span>
+          <span><strong>Dominio</strong>{{ order.email.sender.split('@')[-1] if order.email and order.email.sender and '@' in order.email.sender else "—" }}</span>
+          <span><strong>Estado</strong>{{ order.status|status_label }}</span>
+        </div>
+      </article>
+      <article class="subpanel source-panel" data-source-panel="email-body" {% if has_email and has_conversation and active_source != 'email' %}hidden{% endif %}>
+        <div class="section-title-row">
+          <h4>Correo recibido</h4>
+          <button type="button" class="secondary compact-button" onclick="copyText('order-email-body-{{ order.id }}')">Copiar</button>
+        </div>
+        <pre id="order-email-body-{{ order.id }}" class="doc-text">{{ order.email.body if order.email else "" }}</pre>
+      </article>
+      <div class="source-panel" data-source-panel="email-attachments" {% if has_email and has_conversation and active_source != 'email' %}hidden{% endif %}>
+        {% include "orders/_review_attachments_block.html" %}
       </div>
-      <div class="review-inline-summary review-inline-summary-tight">
-        <span><strong>Fecha</strong>{{ order.email.received_at.strftime("%d/%m/%Y %H:%M") if order.email and order.email.received_at else "—" }}</span>
-        <span><strong>Dominio</strong>{{ order.email.sender.split('@')[-1] if order.email and order.email.sender and '@' in order.email.sender else "—" }}</span>
-        <span><strong>Estado</strong>{{ order.status|status_label }}</span>
-      </div>
-    </article>
+    {% endif %}
 
-    <article class="subpanel">
-      <div class="section-title-row">
-        <h4>Correo recibido</h4>
-        <button type="button" class="secondary compact-button" onclick="copyText('order-email-body-{{ order.id }}')">Copiar</button>
-      </div>
-      <pre id="order-email-body-{{ order.id }}" class="doc-text">{{ order.email.body if order.email else "" }}</pre>
-    </article>
+    {% if has_conversation %}
+      <article class="subpanel stack source-panel" data-source-panel="conversation" {% if has_email and has_conversation and active_source != 'conversation' %}hidden{% endif %}>
+        <div class="section-title-row">
+          <div>
+            <h4>{{ incoming_title }}</h4>
+            <p class="muted">{{ conversation_preview.provider_label }}</p>
+          </div>
+          <span class="badge {% if 'whatsapp' in (conversation_preview.provider_label or '')|lower %}status-confirmed{% endif %}">{{ conversation_preview.provider_label if conversation_preview else "WhatsApp" }}</span>
+        </div>
+        <div class="review-inline-summary review-inline-summary-tight">
+          <span><strong>Fecha</strong>{{ order.conversation.last_activity_at.strftime("%d/%m/%Y %H:%M") if order.conversation and order.conversation.last_activity_at else "—" }}</span>
+          <span><strong>Participantes</strong>{{ conversation_preview.messages|length }}</span>
+          <span><strong>Estado</strong>{{ order.status|status_label }}</span>
+        </div>
+      </article>
 
-    {% include "orders/_review_attachments_block.html" %}
+      <article class="subpanel stack">
+        <div class="section-title-row">
+          <h4>{{ incoming_title }}</h4>
+          <button type="button" class="secondary compact-button" onclick="copyText('order-conversation-body-{{ order.id }}')">Copiar</button>
+        </div>
+        <div id="order-conversation-body-{{ order.id }}" class="whatsapp-chat-stack">
+          {% for message in conversation_preview.messages %}
+            <article class="whatsapp-chat-bubble {{ message.direction }}">
+              <div class="whatsapp-chat-bubble-head">
+                <div class="whatsapp-chat-bubble-speaker">
+                  <span class="badge {% if message.direction == 'outbound' %}status-confirmed{% else %}status-pending{% endif %}">{{ message.role_label or ("Empresa" if message.direction == "outbound" else "Cliente") }}</span>
+                  <strong>{{ message.sender }}</strong>
+                </div>
+                <span>{{ message.timestamp_label or "Sin fecha" }}</span>
+              </div>
+              <pre class="whatsapp-chat-text">{{ message.text }}</pre>
+            </article>
+          {% endfor %}
+        </div>
+      </article>
+    {% endif %}
   </section>
 
   <section class="review-pane review-proposal-pane">
@@ -144,6 +203,21 @@
 </div>
 
 <script>
+  (function() {
+    document.querySelectorAll("[data-source-tabs]").forEach((tabs) => {
+      const container = tabs.closest(".review-pane") || document;
+      const panels = Array.from(container.querySelectorAll("[data-source-panel]"));
+      tabs.querySelectorAll("[data-source-tab]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const target = button.dataset.sourceTab;
+          tabs.querySelectorAll("[data-source-tab]").forEach((tab) => tab.classList.toggle("active", tab === button));
+          panels.forEach((panel) => {
+            panel.hidden = panel.dataset.sourcePanel !== target && panel.dataset.sourcePanel !== `${target}-body`;
+          });
+        });
+      });
+    });
+  })();
   function copyText(id) {
     const node = document.getElementById(id);
     if (node) navigator.clipboard.writeText(node.textContent || "");

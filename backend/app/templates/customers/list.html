@@ -27,7 +27,7 @@
         <span class="database-section-summary"><span>Excel, CSV o texto pegado</span></span>
       </summary>
       <div class="database-section-body compact">
-        <form class="stack js-loading-form js-import-paste-form" method="post" action="/customers/import" enctype="multipart/form-data">
+        <form class="stack js-loading-form js-import-paste-form" method="post" action="/imports/preview" enctype="multipart/form-data">
           <input type="hidden" name="entity_type" value="customers">
           <div class="database-import-grid">
             <label>Archivo<input type="file" name="file" accept=".csv,.xlsx,.xls,.txt" data-import-file></label>
@@ -40,11 +40,12 @@
               </select>
             </label>
             <div class="actions database-actions">
-              <button data-loading-text="Preparando...">Preparar importación</button>
+              <button data-loading-text="Cargando columnas...">Mapear columnas</button>
               <a class="button secondary compact-button" href="/imports/history">Histórico</a>
             </div>
           </div>
         </form>
+        <p class="muted" style="margin:8px 0 0;">Primero verás las columnas detectadas y podrás relacionarlas con los campos de la aplicación antes de confirmar. El nombre del cliente debe quedar mapeado.</p>
       </div>
     </details>
 

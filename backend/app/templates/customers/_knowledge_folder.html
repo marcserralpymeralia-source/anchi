@@ -364,6 +364,7 @@
           </div>
           <form id="knowledge-upload-form" class="knowledge-import-upload stack js-loading-form" method="post" action="/imports/preview" enctype="multipart/form-data" target="import-review-frame">
             <input type="hidden" name="entity_type" value="customers">
+            <input type="hidden" name="customer_id" value="{{ customer.id }}">
             <label>Archivo
               <input type="file" name="file" accept=".xlsx,.xls,.csv,.pdf,.docx,.txt" required>
             </label>
@@ -380,6 +381,7 @@
                 <option value="documento_libre">Documento libre</option>
               </select>
             </label>
+            <p class="muted">Para históricos de artículos, el importador reconoce especialmente <strong>Artículo</strong>, <strong>Descripción</strong>, <strong>Unidades</strong> y <strong>Precio</strong>. <strong>Ejercicio</strong>, <strong>Serie</strong>, <strong>Albarán</strong> y <strong>Fecha</strong> se guardan como contexto del histórico.</p>
             <button data-loading-text="Analizando...">Analizar archivo</button>
           </form>
           <details class="knowledge-import-text-toggle">

@@ -12,7 +12,7 @@ from app.agent.services import MockAgentService, ScoringService
 from app.auth.dependencies import current_user
 from app.master.service import TenantUser
 from app.core.pagination import paginate
-from app.db.models import Customer, Email, EmailAttachment, ExportFile, FTPSettings, ManualCorrection, Order, OrderLine, Product, RagCase, ScoringSettings, User, utcnow
+from app.db.models import Conversation, Customer, Email, EmailAttachment, ExportFile, FTPSettings, InboundMessage, ManualCorrection, Order, OrderLine, Product, RagCase, ScoringSettings, User, utcnow
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
 from app.orders.service import (
@@ -34,6 +34,62 @@ from app.settings.service import get_or_create_settings
 from app.tenancy.database import get_tenant_db
 
 router = APIRouter(prefix="/orders", tags=["orders"])
+
+
+def _conversation_preview(order: Order | None) -> dict | None:
+    if not order or not order.conversation:
+        return None
+    ordered_messages = sorted(order.conversation.messages or [], key=lambda item: item.received_at or item.created_at)
+    messages: list[dict[str, object]] = []
+    use_transcript_payload = len(ordered_messages) <= 1
+    for message in ordered_messages:
+        parsed_payload = {}
+        if use_transcript_payload and message.raw_payload_json:
+            try:
+                parsed_payload = json.loads(message.raw_payload_json)
+            except json.JSONDecodeError:
+                parsed_payload = {}
+        parsed_messages = []
+        if use_transcript_payload and parsed_payload.get("import_type") == "manual_whatsapp":
+            parsed_messages = (parsed_payload.get("parsed") or {}).get("messages", []) if isinstance(parsed_payload.get("parsed"), dict) else []
+        if parsed_messages:
+            for parsed_message in parsed_messages:
+                messages.append(
+                    {
+                        "sender": parsed_message.get("sender") or message.sender or "Cliente",
+                        "direction": parsed_message.get("direction") or "inbound",
+                        "role_label": "Empresa" if (parsed_message.get("direction") or "inbound") == "outbound" else "Cliente",
+                        "text": parsed_message.get("text") or "",
+                        "timestamp_label": parsed_message.get("timestamp_label") or "",
+                    }
+                )
+        else:
+            messages.append(
+                {
+                    "sender": message.sender or ("Empresa" if message.direction == "outbound" else "Cliente"),
+                    "direction": message.direction or "inbound",
+                    "role_label": "Empresa" if (message.direction or "inbound") == "outbound" else "Cliente",
+                    "text": message.original_content or message.normalized_text or "",
+                    "timestamp_label": message.received_at.strftime("%d/%m/%Y %H:%M") if message.received_at else "",
+                }
+            )
+    if not messages:
+        return None
+    source_message = ordered_messages[0]
+    provider = (source_message.provider or "").strip().lower()
+    if provider == "manual_import":
+        provider_label = "Importación manual"
+    elif provider == "whatsapp":
+        provider_label = "WhatsApp"
+    elif provider:
+        provider_label = provider.title()
+    else:
+        provider_label = "Conversación"
+    return {
+        "provider_label": provider_label,
+        "messages": messages,
+        "conversation": order.conversation,
+    }
 
 
 @router.get("")
@@ -263,6 +319,32 @@ def order_detail(
                 EmailAttachment.extraction_error,
                 EmailAttachment.is_pdf,
             ),
+            selectinload(Order.conversation)
+            .load_only(
+                Conversation.id,
+                Conversation.company_id,
+                Conversation.channel_id,
+                Conversation.provider,
+                Conversation.external_thread_id,
+                Conversation.status,
+                Conversation.subject,
+                Conversation.last_activity_at,
+            )
+            .selectinload(Conversation.messages)
+            .load_only(
+                InboundMessage.id,
+                InboundMessage.company_id,
+                InboundMessage.conversation_id,
+                InboundMessage.provider,
+                InboundMessage.sender,
+                InboundMessage.recipient,
+                InboundMessage.original_content,
+                InboundMessage.normalized_text,
+                InboundMessage.raw_payload_json,
+                InboundMessage.direction,
+                InboundMessage.received_at,
+                InboundMessage.status,
+            ),
         )
     )
     products = _review_product_candidates(db, company_id=user.company_id, order=order, query=product_q) if order else []
@@ -291,6 +373,7 @@ def order_detail(
         )
     customer_context = _review_customer_snapshot(db, order, customer_source) if order else {"identified": False}
     line_suggestions = {line.id: _product_suggestions_for_line(products, line) for line in (order.lines or [])}
+    conversation_preview = _conversation_preview(order)
     return templates.TemplateResponse(
         "orders/detail.html",
         {
@@ -303,6 +386,7 @@ def order_detail(
             "line_suggestions": line_suggestions,
             "customer_q": customer_q,
             "product_q": product_q,
+            "conversation_preview": conversation_preview,
         },
     )
 

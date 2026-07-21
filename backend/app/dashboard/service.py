@@ -295,6 +295,7 @@ def order_workbench_item(order: Order, settings: ScoringSettings, *, include_lin
         "available_actions": [action_type, "review", "reply"],
         "action_label": action_label,
         "priority_rank": item["priority_rank"],
+        "detail_url": f"/workbench/item/order/{order.id}/detail",
         "modal_id": f"dashboard-order-modal-{order.id}",
     }
 

@@ -11,6 +11,7 @@
       <div class="actions">
         <span class="badge">{{ company.name }}</span>
         <span class="badge">{{ "IA lista" if llm.last_test_ok or llm.provider != "disabled" else "IA pendiente" }}</span>
+        <a class="button secondary compact-button" href="/imports/manual">Importación manual</a>
         <a class="button secondary compact-button" href="/imports/history">Histórico</a>
       </div>
     </div>
@@ -38,6 +39,7 @@
         <label>Guardar como caso<input type="checkbox" name="save_case"></label>
         <div class="actions">
           <button data-loading-text="Analizando...">Calcular scoring</button>
+          <a class="button secondary compact-button" href="/imports/manual">Importación manual</a>
           <a class="button secondary compact-button" href="/customers">Ver clientes</a>
           <a class="button secondary compact-button" href="/products">Ver productos</a>
         </div>

@@ -44,11 +44,15 @@
 - Mantener `/channels?tab=processed&date_range=30d` por debajo de 20 consultas SQL y 3 consultas duplicadas en los escenarios small, medium y large tras la fase 6E.
 - Mantener la bandeja de canales basada en pagina SQL visible, resumen agregado y adjuntos cargados solo para las filas visibles.
 - Mantener un contrato comun de mensaje y conversacion con email como adaptador inicial, deduplicacion por tenant/proveedor/external_id y relacion orden-conversacion compatible.
+- Mantener una ruta unificada de resolucion para email y WhatsApp/inbound que lleve el usuario al detalle operativo correcto o encole el trabajo necesario sin duplicar logica.
+- Mantener la importacion manual de WhatsApp con previsualizacion, proceso de scoring y confirmacion final en el mismo tenant.
+- Mantener el detalle de pedido capaz de mostrar correo o chat de conversación en una unica pantalla de revision.
 - Preservar la compatibilidad con mensajes y pedidos existentes durante la migracion del nuevo modelo comun.
 - Mantener `backend/app/db/models.py` monolitico solo si dividirlo introduce dependencias circulares o demasiado codigo puente; documentar la decision.
 - Eliminar solo redirecciones legacy y helpers huérfanos cuando exista sustituto probado y los tests cubran el flujo activo.
 - Cubrir el flujo email -> inbound message -> conversation -> processing -> order -> review -> approval -> simulated export -> audit.
 - Cubrir el flujo duplicate mail -> no duplicate message -> processing failure -> retry -> valid order -> export failure -> retry -> success.
+- Cubrir el flujo manual WhatsApp -> preview -> process -> confirm -> inbound message -> conversation -> processing -> order review.
 - No filtrar secretos en logs estructurados ni en trazas persistidas.
 - Documentar cualquier fallo que no se corrija en ese momento.
 

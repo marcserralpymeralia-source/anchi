@@ -24,7 +24,7 @@ from app.master.migrations import CURRENT_MASTER_SCHEMA_CHECKSUM, CURRENT_MASTER
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.migrations.inspection import discover_sqlite_files, inspect_database_url, inventory_records, simulate_sqlite_reference  # noqa: E402
 from app.migrations.helpers import table_exists  # noqa: E402
-from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION  # noqa: E402
+from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, TENANT_COMPAT_COLUMNS  # noqa: E402
 from app.tenancy.migrations import tenant_migration_report, upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import run_worker_cycle  # noqa: E402
 
@@ -251,6 +251,14 @@ class SchemaMigrationTests(unittest.TestCase):
         inspection = inspect_database_url(f"sqlite:///{self.master_path.as_posix()}", logical_name="master-copy")
         self.assertEqual(inspection["classification"], "versioned-current")
         self.assertTrue(inspection["baseline_safe"])
+
+    def test_tenant_compat_boolean_defaults_are_postgresql_safe(self):
+        unsafe = []
+        for table_name, columns in TENANT_COMPAT_COLUMNS.items():
+            for column_name, definition in columns.items():
+                if "BOOLEAN DEFAULT 0" in definition or "BOOLEAN DEFAULT 1" in definition:
+                    unsafe.append(f"{table_name}.{column_name}={definition}")
+        self.assertEqual(unsafe, [])
 
     def test_upgrade_messages_schema_creates_conversations_and_links_legacy_data(self):
         self._seed_legacy_messages_schema()

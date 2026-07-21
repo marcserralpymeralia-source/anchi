@@ -1,0 +1,13 @@
+docs
+scripts
+backend/scripts
+backend/tests
+backend/performance-results
+backend/storage/migration-simulations
+__pycache__
+backend/__pycache__
+backend/app/__pycache__
+*.pyc
+*.db
+*.sqlite
+*.sqlite3

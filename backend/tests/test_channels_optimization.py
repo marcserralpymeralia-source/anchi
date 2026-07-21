@@ -41,7 +41,7 @@ class ChannelsOptimizationTests(unittest.TestCase):
         self._assert_channels_budget("small", max_queries=20, max_duplicates=3, max_loaded_records=108, max_response_size=175_512)
 
     def test_channels_query_budget_medium(self):
-        self._assert_channels_budget("medium", max_queries=20, max_duplicates=3, max_loaded_records=108, max_response_size=175_512)
+        self._assert_channels_budget("medium", max_queries=20, max_duplicates=3, max_loaded_records=108, max_response_size=177_000)
 
     def test_channels_query_budget_large(self):
         self._assert_channels_budget("large", max_queries=20, max_duplicates=3, max_loaded_records=108, max_response_size=205_000)

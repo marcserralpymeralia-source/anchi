@@ -61,7 +61,7 @@ from app.settings.service import get_or_create_settings
 DEMO_COMPANY_NAME = "Anchi Demo"
 DEMO_COMPANY_CODE = "anchi-demo"
 DEMO_ADMIN_EMAIL = "admin@anchi.local"
-DEMO_ADMIN_PASSWORD = "admin123"
+DEMO_ADMIN_PASSWORD = "AnchiDemo2026!"
 
 
 def _now(days: int = 0) -> datetime:

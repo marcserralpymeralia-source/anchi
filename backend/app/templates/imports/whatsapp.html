@@ -1,0 +1,248 @@
+{% extends "base.html" %}
+{% set title = "Importación manual" %}
+{% block content %}
+<section class="stack">
+  <header class="panel">
+    <div class="section-title-row">
+      <div>
+        <h2>Importación manual</h2>
+        <p class="muted">Pega un correo o una conversación WhatsApp y comprueba la propuesta del agente antes de confirmarla.</p>
+      </div>
+      <div class="actions">
+        <span class="badge">{{ company.name }}</span>
+        <a class="button secondary compact-button" href="/imports/quick">Importación rápida</a>
+        <a class="button secondary compact-button" href="/imports/history">Histórico</a>
+        <a class="button secondary compact-button" href="/channels?tab=processed&date_range=30d">Ir a Channels</a>
+      </div>
+    </div>
+  </header>
+
+  {% if warning %}
+    <article class="panel" style="border-color:#f59e0b;background:#fffbeb;color:#92400e;">
+      <strong>{{ warning }}</strong>
+    </article>
+  {% endif %}
+
+  <section class="review-grid review-grid-v3" style="height:auto;min-height:calc(92vh - 180px);">
+    <section class="review-pane review-entry-pane">
+      <article class="subpanel stack">
+        <div class="section-title-row">
+          <div>
+            <h3>Entrada</h3>
+            <p class="muted">Selecciona el canal y pega el contenido. La previsualización no guarda nada todavía.</p>
+          </div>
+          <span class="badge">Canal: {{ channel_label }}</span>
+        </div>
+
+        <form class="stack js-loading-form" method="post" action="/imports/manual/preview" enctype="multipart/form-data" id="manual-import-form">
+          <input type="hidden" name="channel" id="manual-channel-input" value="{{ channel }}">
+          <div class="manual-channel-switch">
+            <label class="manual-channel-option">
+              <input type="radio" name="channel_switch" value="email" {% if channel_is_email %}checked{% endif %}>
+              <span>Email</span>
+            </label>
+            <label class="manual-channel-option">
+              <input type="radio" name="channel_switch" value="whatsapp" {% if channel_is_whatsapp %}checked{% endif %}>
+              <span>WhatsApp</span>
+            </label>
+          </div>
+
+          <div class="manual-channel-pane" data-channel-pane="email" {% if not channel_is_email %}hidden{% endif %}>
+            <div class="form-grid">
+              <label>Remitente<input name="sender" value="{{ sender }}" placeholder="cliente@empresa.com"></label>
+              <label>Asunto<input name="subject" value="{{ subject }}" placeholder="Pedido recibido"></label>
+              <label>Teléfono<input name="phone" value="{{ phone }}" placeholder="+34..."></label>
+              <label>Cliente esperado<input name="expected_customer" value="{{ expected_customer }}" placeholder="Opcional"></label>
+              <label>Scoring esperado<input name="expected_score" value="{{ expected_score }}" placeholder="Opcional"></label>
+              <label>Estado esperado<input name="expected_status" value="{{ expected_status }}" placeholder="Opcional"></label>
+            </div>
+          </div>
+
+          <div class="manual-channel-pane" data-channel-pane="whatsapp" {% if not channel_is_whatsapp %}hidden{% endif %}>
+            <div class="form-grid">
+              <label>Cliente participante<input name="client_participant" value="{{ client_participant }}" placeholder="Nombre del cliente"></label>
+              <label>Empresa participante<input name="company_participant" value="{{ company_participant }}" placeholder="Nombre de la empresa"></label>
+              <label>Remitente detectado<input name="sender_hint" value="{{ sender }}" placeholder="Opcional"></label>
+              <label>Teléfono<input name="phone" value="{{ phone }}" placeholder="+34..."></label>
+              <label>Cliente esperado<input name="expected_customer" value="{{ expected_customer }}" placeholder="Opcional"></label>
+              <label>Scoring esperado<input name="expected_score" value="{{ expected_score }}" placeholder="Opcional"></label>
+              <label>Estado esperado<input name="expected_status" value="{{ expected_status }}" placeholder="Opcional"></label>
+            </div>
+          </div>
+
+          <label>Contenido recibido<textarea name="raw_text" rows="14" placeholder="Pega aquí el correo o la conversación de WhatsApp">{{ raw_text }}</textarea></label>
+          <label>Archivo adjunto<input type="file" name="file" accept=".txt,.csv,.json,.pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.webp"></label>
+          <div class="actions">
+            <button data-loading-text="Previsualizando...">Previsualizar</button>
+            <a class="button secondary compact-button" href="/imports/quick">Importación rápida</a>
+          </div>
+        </form>
+      </article>
+
+      <article class="subpanel stack">
+        <div class="section-title-row">
+          <div>
+            <h3>Vista previa</h3>
+            <p class="muted">Email o chat según el canal seleccionado.</p>
+          </div>
+          <span class="badge">{{ preview_messages|length }} mensajes</span>
+        </div>
+
+        {% if channel_is_email %}
+          <div class="review-inline-summary review-inline-summary-tight">
+            <span><strong>Remitente</strong>{{ preview.sender if preview and preview.sender else sender or "Sin definir" }}</span>
+            <span><strong>Asunto</strong>{{ preview.subject if preview and preview.subject else subject or "Sin asunto" }}</span>
+          </div>
+          <details class="review-mail-card review-mail-toggle" open>
+            <summary>Correo recibido</summary>
+            <div class="review-mail-body-head">
+              <span class="muted review-mail-snippet">{{ (preview.body if preview and preview.body else raw_text)[:120] }}</span>
+              <button type="button" class="secondary compact-button" onclick="copyText('manual-email-body')">Copiar</button>
+            </div>
+            <pre id="manual-email-body" class="doc-text review-email-body">{{ preview.body if preview and preview.body else raw_text }}</pre>
+          </details>
+        {% else %}
+          {% if preview %}
+            <div class="review-inline-summary review-inline-summary-tight">
+              <span><strong>Cliente</strong>{{ preview.participants.client or "Sin definir" }}</span>
+              <span><strong>Empresa</strong>{{ preview.participants.company or "Sin definir" }}</span>
+              <span><strong>Hash</strong>{{ preview.dedupe_hash[:12] }}</span>
+            </div>
+            <div class="whatsapp-chat-stack">
+              {% for message in preview.messages %}
+                <article class="whatsapp-chat-bubble {{ message.direction }}">
+                  <div class="whatsapp-chat-bubble-head">
+                    <strong>{{ message.sender }}</strong>
+                    <span>{{ message.timestamp_label or "Sin fecha" }}</span>
+                  </div>
+                  <pre class="whatsapp-chat-text">{{ message.text }}</pre>
+                </article>
+              {% endfor %}
+            </div>
+            {% if preview.warnings %}
+              <details class="compact-export-preview">
+                <summary>Advertencias del parser</summary>
+                <ul class="compact-list">
+                  {% for note in preview.warnings %}
+                    <li>{{ note }}</li>
+                  {% endfor %}
+                </ul>
+              </details>
+            {% endif %}
+          {% else %}
+            <p class="muted">Todavía no has previsualizado ninguna conversación.</p>
+          {% endif %}
+        {% endif %}
+      </article>
+    </section>
+
+    <section class="review-pane review-proposal-pane">
+      <article class="subpanel stack">
+        <div class="section-title-row">
+          <div>
+            <h3>Propuesta del agente</h3>
+            <p class="muted">Calculamos cliente, líneas y scoring antes de persistir la importación.</p>
+          </div>
+          {% if result %}
+            <span class="badge">{{ result.category_label }}</span>
+          {% else %}
+            <span class="badge">Pendiente</span>
+          {% endif %}
+        </div>
+        {% if result %}
+          <div class="history-summary">
+            <article class="compact-card compact-card-safe"><span>Cliente</span><strong>{{ result.customer.score }}%</strong><small>{{ result.customer.name }}</small></article>
+            <article class="compact-card compact-card-reviewable"><span>Scoring</span><strong>{{ result.score }}%</strong><small>{{ result.suggested_action }}</small></article>
+            <article class="compact-card compact-card-error"><span>Líneas</span><strong>{{ result.lines|length }}</strong><small>{{ result.lines|selectattr("has_match")|list|length }} con match</small></article>
+            <article class="compact-card compact-card-muted"><span>Estado</span><strong>{{ result.status }}</strong><small>{{ result.source_label }}</small></article>
+          </div>
+          <div class="job-card-preview">
+            <strong>Comparación</strong>
+            <p>Cliente esperado: {{ result.expected.customer or "No indicado" }}</p>
+            <p>Score esperado: {{ result.expected.score if result.expected.score is not none else "No indicado" }}</p>
+            <p>Estado esperado: {{ result.expected.status or "No indicado" }}</p>
+            <p>{% if result.comparison.customer_match %}Cliente coincide{% else %}Cliente no coincide{% endif %}{% if result.comparison.score_delta is not none %} · Delta score {{ result.comparison.score_delta }}{% endif %}{% if result.comparison.status_match %} · Estado coincide{% else %} · Estado no coincide{% endif %}</p>
+          </div>
+          <div class="job-log-list">
+            {% for line in result.lines %}
+              <article class="job-log-row">
+                <strong>{{ line.original_text }}</strong>
+                <span>{{ line.reference or "Sin referencia" }} · {{ line.match_method }} · {{ line.confidence }}%</span>
+                <p>{{ line.matched_product }}{% if line.quantity is not none %} · {{ line.quantity }} {{ line.unit }}{% endif %}</p>
+              </article>
+            {% else %}
+              <p class="muted">Sin líneas detectadas.</p>
+            {% endfor %}
+          </div>
+        {% else %}
+          <p class="muted">Previsualiza la conversación para ver el scoring y la propuesta del agente aquí.</p>
+        {% endif %}
+      </article>
+
+      <article class="subpanel stack">
+        <div class="section-title-row">
+          <div>
+            <h3>Acciones</h3>
+            <p class="muted">Primero procesamos la entrada. Después la confirmamos en el tenant.</p>
+          </div>
+          <span class="badge">Operativo</span>
+        </div>
+        <form class="js-loading-form" method="post" action="/imports/manual/process">
+          <input type="hidden" name="channel" value="{{ channel }}">
+          <input type="hidden" name="raw_text" value="{{ raw_text }}">
+          <input type="hidden" name="sender" value="{{ sender }}">
+          <input type="hidden" name="sender_hint" value="{{ sender }}">
+          <input type="hidden" name="subject" value="{{ subject }}">
+          <input type="hidden" name="phone" value="{{ phone }}">
+          <input type="hidden" name="client_participant" value="{{ client_participant }}">
+          <input type="hidden" name="company_participant" value="{{ company_participant }}">
+          <input type="hidden" name="expected_customer" value="{{ expected_customer }}">
+          <input type="hidden" name="expected_score" value="{{ expected_score }}">
+          <input type="hidden" name="expected_status" value="{{ expected_status }}">
+          <button data-loading-text="Procesando...">Procesar</button>
+        </form>
+        <form class="js-loading-form" method="post" action="/imports/manual/confirm" data-confirm="¿Confirmar la importación y encolarla para procesamiento?">
+          <input type="hidden" name="channel" value="{{ channel }}">
+          <input type="hidden" name="raw_text" value="{{ raw_text }}">
+          <input type="hidden" name="sender" value="{{ sender }}">
+          <input type="hidden" name="sender_hint" value="{{ sender }}">
+          <input type="hidden" name="subject" value="{{ subject }}">
+          <input type="hidden" name="phone" value="{{ phone }}">
+          <input type="hidden" name="client_participant" value="{{ client_participant }}">
+          <input type="hidden" name="company_participant" value="{{ company_participant }}">
+          <input type="hidden" name="expected_customer" value="{{ expected_customer }}">
+          <input type="hidden" name="expected_score" value="{{ expected_score }}">
+          <input type="hidden" name="expected_status" value="{{ expected_status }}">
+          <button class="secondary" data-loading-text="Confirmando...">Confirmar e importar</button>
+        </form>
+        {% if duplicate_message %}
+          <article class="job-card-preview">
+            <strong>Importación existente detectada</strong>
+            <p>Entrada reutilizada: #{{ duplicate_message.id }}</p>
+            <p>La importación no se ha duplicado automáticamente.</p>
+          </article>
+        {% endif %}
+      </article>
+    </section>
+  </section>
+</section>
+
+<script>
+  (function() {
+    const form = document.getElementById("manual-import-form");
+    const channelInput = document.getElementById("manual-channel-input");
+    const radios = form ? form.querySelectorAll("input[name='channel_switch']") : [];
+    const panes = document.querySelectorAll("[data-channel-pane]");
+    function syncChannel(value) {
+      if (channelInput) channelInput.value = value;
+      panes.forEach((pane) => {
+        pane.hidden = pane.getAttribute("data-channel-pane") !== value;
+      });
+    }
+    radios.forEach((radio) => {
+      radio.addEventListener("change", () => syncChannel(radio.value));
+    });
+    syncChannel(channelInput ? channelInput.value || "email" : "email");
+  })();
+</script>
+{% endblock %}

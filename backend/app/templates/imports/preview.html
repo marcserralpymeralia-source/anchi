@@ -8,6 +8,8 @@
     <input type="hidden" name="filename" value="{{ preview.filename }}">
     <input type="hidden" name="entity_type" value="{{ preview.entity_type }}">
     <input type="hidden" name="encoding" value="{{ encoding }}">
+    <input type="hidden" name="customer_id" value="{{ preview.customer_id or '' }}">
+    <input type="hidden" name="import_kind" value="{{ preview.import_kind or '' }}">
     <table>
       <thead><tr><th>Columna detectada</th><th>Ejemplo</th><th>Campo destino</th></tr></thead>
       <tbody>
@@ -38,7 +40,7 @@
     </table>
     <div class="actions">
       <button data-loading-text="Validando...">Validar importacion</button>
-      <a class="button secondary" href="{{ '/customers' if preview.entity_type == 'customers' else '/products' }}">Cancelar</a>
+      <a class="button secondary" href="{{ '/customers/' ~ preview.customer_id ~ '/knowledge?section=import' if preview.entity_type == 'customer_knowledge_articles' and preview.customer_id else ('/customers' if preview.entity_type == 'customers' else '/products') }}">Cancelar</a>
     </div>
   </form>
 </section>

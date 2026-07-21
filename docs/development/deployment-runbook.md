@@ -11,6 +11,15 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
+## Demo funcional en Vercel
+
+Guia especifica para preparar la demo estable en Vercel:
+
+- [docs/development/vercel-demo-deployment.md](./vercel-demo-deployment.md)
+- [docs/development/demo-final-validation.md](./demo-final-validation.md)
+
+Nota: `seed-base` queda como flujo local/legacy. Para la demo pública usa `provision-demo`.
+
 ## Staging con Docker
 
 ```bash
@@ -53,4 +62,3 @@ No se usa downgrade ficticio. El rollback operativo consiste en:
 3. volver a arrancar,
 4. comprobar health/readiness,
 5. reabrir el servicio.
-

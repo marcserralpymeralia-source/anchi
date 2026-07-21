@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from io import BytesIO
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -10,10 +11,10 @@ from app.core.pagination import normalize_page
 from app.auth.dependencies import current_user
 from app.master.service import TenantUser
 from app.tenancy.database import get_tenant_db
-from app.db.models import Customer, CustomerContactPoint, User
+from app.db.models import Customer, CustomerContactPoint, ImportMappingTemplate, User
 from app.databases.service import build_customer_context, customer_knowledge_overview, build_databases_context
 from app.master_data.service import upsert_customer
-from app.imports.service import import_customers, read_table
+from app.imports.service import create_preview
 from app.logs.service import log_action
 
 router = APIRouter(prefix="/customers", tags=["customers"])
@@ -368,6 +369,7 @@ def save_customer(
 
 @router.post("/import")
 async def import_file(
+    request: Request,
     file: UploadFile | None = File(None),
     pasted_text: str = Form(""),
     encoding: str = Form("utf-8"),
@@ -375,18 +377,15 @@ async def import_file(
     user: TenantUser = Depends(current_user),
 ):
     if file and file.filename:
-        df = await read_table(file)
-        filename = file.filename
+        preview = await create_preview(file, "customers", encoding=encoding)
     elif pasted_text.strip():
-        from app.imports.service import read_table_from_bytes
-
         filename = "clientes.csv"
-        df = read_table_from_bytes(pasted_text.encode(encoding), filename, encoding=encoding)
+        pasted_file = UploadFile(filename=filename, file=BytesIO(pasted_text.encode(encoding)))
+        preview = await create_preview(pasted_file, "customers", encoding=encoding)
     else:
         raise HTTPException(status_code=400, detail="Debes adjuntar un archivo o pegar una tabla para importar clientes.")
-    job = import_customers(db, company_id=user.company_id, filename=filename or "clientes", df=df)
-    log_action(db, company_id=user.company_id, user=user, action="customers.import", entity_type="import", entity_id=job.id, message=f"Importados clientes: {job.rows_created} creados, {job.rows_updated} actualizados")
-    return RedirectResponse("/customers?view=list", status_code=303)
+    templates_ = db.scalars(select(ImportMappingTemplate).where(ImportMappingTemplate.company_id == user.company_id, ImportMappingTemplate.entity_type == "customers").order_by(ImportMappingTemplate.name)).all()
+    return templates.TemplateResponse("imports/preview.html", {"request": request, "user": user, "preview": preview, "templates": templates_, "encoding": encoding})
 
 
 @router.post("/{customer_id}/delete")

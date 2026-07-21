@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from html import escape
 from pathlib import Path
 
 import pandas as pd
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from sqlalchemy import and_, case, func, literal, or_, select, union_all
 from sqlalchemy.orm import Session, aliased
@@ -17,10 +18,26 @@ from app.core.pagination import normalize_page
 from app.core.templating import templates
 from app.dashboard.service import agent_status_label
 from app.db.models import Customer, Email, EmailAttachment, EmailSettings, InboundMessage, InputChannel, MessageAttachment, Order
+from app.jobs.service import enqueue_job
+from app.logs.service import log_action
 from app.settings.service import get_or_create_settings
 from app.tenancy.database import get_tenant_db
 
 router = APIRouter(prefix="/channels", tags=["channels"])
+
+
+@dataclass(slots=True)
+class ResolutionDestination:
+    state: str
+    source_kind: str
+    source_id: int
+    order_id: int | None
+    message_id: int | None
+    conversation_id: int | None
+    redirect_url: str
+    source_label: str
+
+
 CHANNEL_EMAIL_STATUS_MAP = {
     "processed_order_detected": "order_detected",
     "processed_no_order": "no_order",
@@ -46,6 +63,11 @@ CHANNEL_INBOUND_STATUS_MAP = {
 
 
 def _score_bucket(score: float | None) -> tuple[str, str]:
+    if score is not None and not isinstance(score, (int, float)):
+        try:
+            score = float(str(score).strip().replace(",", "."))
+        except ValueError:
+            return "critical", "Baja"
     if score is None:
         return "without", "Sin analizar"
     if score >= 90:
@@ -159,7 +181,10 @@ def _row_status_label(row: dict) -> str:
 def _row_score(row: dict) -> float | None:
     score = row.get("score")
     if score is not None:
-        return score
+        try:
+            return float(str(score).strip().replace(",", "."))
+        except ValueError:
+            return None
     if row.get("kind") == "email":
         status_key = row.get("status_key")
         if status_key == "order_detected":
@@ -188,6 +213,37 @@ def _row_origin(row: dict) -> str:
             return "Email"
         return "Sin adjunto"
     return row.get("channel_name") or "Entrada"
+
+
+def _resolution_destination_for_source(db: Session, user: TenantUser, source_kind: str, source_id: int) -> ResolutionDestination | None:
+    if source_kind == "email":
+        source = db.get(Email, source_id)
+        if not source or source.company_id != user.company_id:
+            return None
+        order = db.scalar(select(Order).where(Order.company_id == user.company_id, Order.email_id == source.id))
+        if order:
+            return ResolutionDestination("order", source_kind, source.id, order.id, None, None, f"/orders/{order.id}", "Pedido")
+        if source.agent_status == "processing_error" or (source.status or "").startswith("error"):
+            return ResolutionDestination("error", source_kind, source.id, None, None, None, f"/workbench/item/email/{source.id}/detail", "Error")
+        if source.agent_status in {"processed_order_detected", "processed_doubtful", "processed_no_order", "processed"}:
+            return ResolutionDestination("proposal", source_kind, source.id, None, None, source.conversation_id, f"/workbench/item/email/{source.id}/detail", "Propuesta")
+        if source.agent_status in {"processing", "pending_reprocess"} or source.status == "pending":
+            return ResolutionDestination("processing", source_kind, source.id, None, None, source.conversation_id, f"/workbench/item/email/{source.id}/detail", "En proceso")
+        return ResolutionDestination("unprocessed", source_kind, source.id, None, None, source.conversation_id, f"/workbench/item/email/{source.id}/detail", "Pendiente")
+
+    source = db.get(InboundMessage, source_id)
+    if not source or source.company_id != user.company_id:
+        return None
+    order = db.get(Order, source.order_id) if source.order_id else None
+    if order:
+        return ResolutionDestination("order", source_kind, source.id, order.id, source.id, source.conversation_id, f"/orders/{order.id}", "Pedido")
+    if source.status == "error":
+        return ResolutionDestination("error", source_kind, source.id, None, source.id, source.conversation_id, f"/workbench/item/inbound/{source.id}/detail", "Error")
+    if source.status in {"processing", "queued"}:
+        return ResolutionDestination("processing", source_kind, source.id, None, source.id, source.conversation_id, f"/workbench/item/inbound/{source.id}/detail", "En proceso")
+    if source.status in {"doubtful", "no_order", "processed", "matched", "order_detected"}:
+        return ResolutionDestination("proposal", source_kind, source.id, None, source.id, source.conversation_id, f"/workbench/item/inbound/{source.id}/detail", "Propuesta")
+    return ResolutionDestination("unprocessed", source_kind, source.id, None, source.id, source.conversation_id, f"/workbench/item/inbound/{source.id}/detail", "Pendiente")
 
 
 def _row_confidence(score: float | None) -> tuple[str, str]:
@@ -323,6 +379,7 @@ def _channel_union_subquery(company_id: int, *, email_channel_name: str) -> obje
         .outerjoin(email_validated_customer, Order.validated_customer_id == email_validated_customer.id)
         .outerjoin(email_customer, Order.customer_id == email_customer.id)
         .outerjoin(email_attachment_stats, email_attachment_stats.c.source_id == Email.id)
+        .add_columns(literal("imap").label("provider"))
         .where(Email.company_id == company_id)
     )
 
@@ -351,6 +408,7 @@ def _channel_union_subquery(company_id: int, *, email_channel_name: str) -> obje
                 inbound_message_customer.fiscal_name,
                 literal("Cliente no identificado"),
             ).label("customer_name"),
+            InboundMessage.provider.label("provider"),
             InboundMessage.score.label("score"),
             Order.status.label("order_status"),
             Order.customer_identification_method.label("customer_identification_method"),
@@ -563,7 +621,8 @@ def _channel_item_from_row(row: dict, attachments: list[dict], *, email_channel_
         "confidence_key": confidence_key,
         "confidence_label": confidence_label,
         "origin": _row_origin(row),
-        "source_label": "Correo" if row["kind"] == "email" else channel_name,
+        "source_label": "Correo" if row["kind"] == "email" else ("Importación manual" if row.get("provider") == "manual_import" else channel_name),
+        "provider_label": "Importación manual" if row.get("provider") == "manual_import" else "",
         "has_pdf": has_pdf,
         "has_attachments": has_attachments,
         "attachment_count": attachment_count,
@@ -574,6 +633,84 @@ def _channel_item_from_row(row: dict, attachments: list[dict], *, email_channel_
         "download_href": f"/channels/{row['kind']}/{source_id}/attachments/{attachments[0]['id']}" if attachments else "",
     }
     return item
+
+
+@router.get("/{source_kind}/{source_id}/resolve")
+def resolve_channel_entry(
+    source_kind: str,
+    source_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    destination = _resolution_destination_for_source(db, user, source_kind, source_id)
+    if not destination:
+        return PlainTextResponse("No encontrado", status_code=404)
+    log_action(
+        db,
+        company_id=user.company_id,
+        user=user,
+        action=f"channel.resolve.{destination.source_kind}",
+        entity_type="channel_entry",
+        entity_id=destination.source_id,
+        message=f"Abrir resolucion: {destination.state}",
+    )
+    db.commit()
+    return RedirectResponse(destination.redirect_url, status_code=303)
+
+
+@router.post("/{source_kind}/{source_id}/process")
+def process_channel_entry(
+    source_kind: str,
+    source_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    destination = _resolution_destination_for_source(db, user, source_kind, source_id)
+    if not destination:
+        return PlainTextResponse("No encontrado", status_code=404)
+    if source_kind == "email":
+        source = db.get(Email, source_id)
+        assert source is not None
+        order = db.scalar(select(Order).where(Order.company_id == user.company_id, Order.email_id == source.id))
+        if order:
+            return RedirectResponse(f"/orders/{order.id}", status_code=303)
+        job = enqueue_job(db, company_id=user.company_id, job_type="process_email", payload={"email_id": source.id}, created_by_user_id=user.id)
+        log_action(db, company_id=user.company_id, user=user, action="channel.process.email", entity_type="job", entity_id=job.id, message=f"Procesamiento encolado para email {source.id}")
+        db.commit()
+        return RedirectResponse(destination.redirect_url, status_code=303)
+
+    source = db.get(InboundMessage, source_id)
+    assert source is not None
+    order = db.get(Order, source.order_id) if source.order_id else None
+    if order:
+        return RedirectResponse(f"/orders/{order.id}", status_code=303)
+    if source.status in {"received", "queued", "processing", "doubtful", "error", "no_order"}:
+        job = enqueue_job(
+            db,
+            company_id=user.company_id,
+            job_type="process_inbound_message",
+            payload={"inbound_message_id": source.id, "channel": source_kind, "source": source.provider or "manual_import"},
+            created_by_user_id=user.id,
+        )
+        log_action(db, company_id=user.company_id, user=user, action="channel.process.inbound", entity_type="job", entity_id=job.id, message=f"Procesamiento encolado para entrada {source.id}")
+        db.commit()
+    return RedirectResponse(destination.redirect_url, status_code=303)
+
+
+@router.post("/{source_kind}/{source_id}/resolve")
+def legacy_resolve_channel_entry(
+    source_kind: str,
+    source_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    destination = _resolution_destination_for_source(db, user, source_kind, source_id)
+    if not destination:
+        return PlainTextResponse("No encontrado", status_code=404)
+    return RedirectResponse(destination.redirect_url, status_code=303)
 
 
 def _paginate(total_items: int, page: int, page_size: int) -> dict:

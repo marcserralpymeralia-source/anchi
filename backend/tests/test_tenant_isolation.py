@@ -177,6 +177,22 @@ class TenantIsolationTests(unittest.TestCase):
             tenant_b_db.close()
             db.close()
 
+    def test_get_tenant_db_redirects_to_login_when_tenant_is_missing(self):
+        db = self.MasterSession()
+        company = MasterCompany(id=1, name="Demo", slug="demo", active=True)
+        user = MasterUser(id=1, email="admin@example.com", full_name="Admin", password_hash=hash_password("admin123"), is_active=True)
+        membership = CompanyMembership(id=1, user_id=1, company_id=1, role_key="Administrador", is_active=True, is_owner=False)
+        db.add_all([company, user, membership])
+        db.commit()
+
+        request = FakeRequest(session={"membership_id": 1, "user_id": 1, "company_id": 1, "company_slug": "demo"})
+        with self.assertRaises(HTTPException) as ctx:
+            next(get_tenant_db(request, db))
+        self.assertEqual(ctx.exception.status_code, 303)
+        self.assertEqual(ctx.exception.headers.get("Location"), "/login")
+        self.assertEqual(request.scope["session"], {})
+        db.close()
+
     def test_tenant_admin_is_not_master_admin(self):
         tenant_admin = TenantUser(
             id=1,

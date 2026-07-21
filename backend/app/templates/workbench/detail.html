@@ -3,6 +3,10 @@
   {% set pdfs = email_attachments|selectattr("is_pdf")|list if order.email else [] %}
   {% set doubt_count = order.lines|selectattr("validation_status", "ne", "validated")|list|length %}
   {% set primary_action_label = "Confirmar pedido" if item.order_status_label == "Listo para confirmar" else "Resolver incidencia" if order.status in ["dudoso", "no_importable"] or item.scoring_category in ["doubtful", "blocked"] else "Guardar cambios" %}
+  {% set conversation_preview = conversation_preview if conversation_preview is defined else none %}
+  {% set has_email = order.email is not none %}
+  {% set has_conversation = conversation_preview is not none %}
+  {% set active_source = "conversation" if has_conversation else "email" %}
   <div class="review-modal-header review-modal-header-v3">
     <div class="review-header-title">
       <strong>{{ item.customer_name }} · {{ "%.0f"|format(order.score or 0) }}% · {{ item.order_status_label|status_label }}</strong>
@@ -16,7 +20,7 @@
       <details class="review-actions-menu">
         <summary class="secondary compact-button">Acciones</summary>
         <div class="review-actions-menu-panel">
-          {% if order.email_id %}<form class="js-loading-form" method="post" action="/workbench/email/{{ order.email_id }}/process"><button class="secondary compact-button" data-loading-text="Reprocesando...">Revisar de nuevo</button></form>{% endif %}
+          {% if order.email_id %}<form class="js-loading-form" method="post" action="/channels/email/{{ order.email_id }}/process"><button class="secondary compact-button" data-loading-text="Reprocesando...">Revisar de nuevo</button></form>{% endif %}
           <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/confirm" data-confirm="Confirmar pedido?"><button class="secondary compact-button" data-loading-text="Confirmando...">Confirmar pedido</button></form>
           <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/recalculate-score"><button class="secondary compact-button" data-loading-text="Recalculando...">Recalcular confianza</button></form>
           <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/export-ftp"><button class="secondary compact-button" data-loading-text="Exportando...">Enviar a gestión</button></form>
@@ -31,57 +35,92 @@
   <div class="review-grid review-grid-v3">
     <section class="review-pane review-entry-pane">
       <div class="review-inline-summary review-inline-summary-tight">
-        <span>{{ (order.email.sender if order.email else item.customer_name) }} · {{ item.origin }} · {{ item.order_status_label|status_label }}{% if order.email and order.email.attachments %} · {{ order.email.attachments|length }} adjuntos{% endif %}</span>
+        <span>{{ (order.email.sender if order.email else item.customer_name) }} · {{ item.origin }} · {{ item.order_status_label|status_label }}{% if has_email and order.email.attachments %} · {{ order.email.attachments|length }} adjuntos{% endif %}{% if has_conversation %} · {{ conversation_preview.messages|length }} mensajes{% endif %}</span>
       </div>
-      <details class="review-mail-card review-mail-toggle" open>
-        <summary>Correo recibido</summary>
-        <div class="review-mail-body-head">
-          <span class="muted review-mail-snippet">{{ (order.email.body if order.email else "")[:120] }}</span>
-          <button type="button" class="secondary compact-button" onclick="const box=this.closest('details'); const expanded=box.classList.toggle('is-expanded'); this.textContent=expanded ? 'Ocultar' : 'Ver completo';">Ver completo</button>
+      {% if has_email and has_conversation %}
+        <div class="source-tabs" data-source-tabs>
+          <button type="button" class="source-tab {% if active_source == 'email' %}active{% endif %}" data-source-tab="email">Correo electrónico</button>
+          <button type="button" class="source-tab {% if active_source == 'conversation' %}active{% endif %}" data-source-tab="conversation">WhatsApp</button>
         </div>
-        <pre id="dash-email-body-{{ order.id }}" class="doc-text review-email-body">{{ order.email.body if order.email else "" }}</pre>
-      </details>
-      {% if order.email and email_attachments %}
-        <details class="review-attachments-toggle" id="review-attachments-toggle-{{ order.id }}">
-          <summary>
-            <span>Adjuntos</span>
-            <strong>{{ email_attachments|length }}</strong>
-          </summary>
-          <div class="review-attachments-body">
-            <div class="review-attachment-list" role="list">
-              {% for attachment in email_attachments %}
-                {% set attachment_kind = "pdf" if attachment.is_pdf or attachment.content_type == "application/pdf" else "image" if attachment.content_type and attachment.content_type.startswith("image/") else "csv" if attachment.filename.lower().endswith(".csv") or attachment.content_type in ["text/csv", "application/csv"] else "text" if attachment.content_type and attachment.content_type.startswith("text/") or attachment.filename.lower().endswith((".txt", ".log", ".md", ".eml", ".json")) else "doc" if attachment.filename.lower().endswith((".doc", ".docx")) else "sheet" if attachment.filename.lower().endswith((".xls", ".xlsx", ".ods")) else "unsupported" %}
-                <button
-                  type="button"
-                  class="review-attachment-item"
-                  role="listitem"
-                  data-order-id="{{ order.id }}"
-                  data-attachment-id="{{ attachment.id }}"
-                  data-preview-kind="{{ attachment_kind }}"
-                  data-preview-url="/orders/{{ order.id }}/attachments/{{ attachment.id }}/preview"
-                  data-download-url="/orders/{{ order.id }}/attachments/{{ attachment.id }}"
-                  data-filename="{{ attachment.filename }}"
-                  data-content-type="{{ attachment.content_type or '' }}"
-                  data-size-bytes="{{ attachment.size_bytes or 0 }}"
-                  data-extracted-text="{{ attachment.extracted_text or '' }}"
-                  onclick="selectOrderAttachmentPreview(event, this)"
-                >
-                  <span class="review-attachment-item-main">
-                    <strong>{{ attachment.filename }}</strong>
-                    <span>
-                      {{ "PDF" if attachment_kind == "pdf" else "Imagen" if attachment_kind == "image" else "CSV" if attachment_kind == "csv" else "Texto" if attachment_kind == "text" else "DOC" if attachment_kind == "doc" else "Hoja" if attachment_kind == "sheet" else "Adjunto" }}
-                      {% if attachment.size_bytes %} · {{ attachment.size_bytes }} B{% endif %}
-                    </span>
-                  </span>
-                  <span class="review-attachment-item-action">Previsualizar</span>
-                </button>
-              {% endfor %}
-            </div>
-            <div class="review-attachment-preview" id="review-attachment-preview-{{ order.id }}">
-              <div class="review-attachment-preview-empty">Selecciona un adjunto para verlo aquí.</div>
-            </div>
+      {% endif %}
+      {% if has_email %}
+        <details class="review-mail-card review-mail-toggle source-panel" data-source-panel="email" {% if has_conversation and active_source != 'email' %}hidden{% endif %} open>
+          <summary>Correo recibido</summary>
+          <div class="review-mail-body-head">
+            <span class="muted review-mail-snippet">{{ (order.email.body if order.email else "")[:120] }}</span>
+            <button type="button" class="secondary compact-button" onclick="const box=this.closest('details'); const expanded=box.classList.toggle('is-expanded'); this.textContent=expanded ? 'Ocultar' : 'Ver completo';">Ver completo</button>
           </div>
+          <pre id="dash-email-body-{{ order.id }}" class="doc-text review-email-body">{{ order.email.body if order.email else "" }}</pre>
         </details>
+        {% if order.email and email_attachments %}
+          <details class="review-attachments-toggle source-panel" id="review-attachments-toggle-{{ order.id }}" data-source-panel="email-attachments" {% if has_conversation and active_source != 'email' %}hidden{% endif %}>
+            <summary>
+              <span>Adjuntos</span>
+              <strong>{{ email_attachments|length }}</strong>
+            </summary>
+            <div class="review-attachments-body">
+              <div class="review-attachment-list" role="list">
+                {% for attachment in email_attachments %}
+                  {% set attachment_kind = "pdf" if attachment.is_pdf or attachment.content_type == "application/pdf" else "image" if attachment.content_type and attachment.content_type.startswith("image/") else "csv" if attachment.filename.lower().endswith(".csv") or attachment.content_type in ["text/csv", "application/csv"] else "text" if attachment.content_type and attachment.content_type.startswith("text/") or attachment.filename.lower().endswith((".txt", ".log", ".md", ".eml", ".json")) else "doc" if attachment.filename.lower().endswith((".doc", ".docx")) else "sheet" if attachment.filename.lower().endswith((".xls", ".xlsx", ".ods")) else "unsupported" %}
+                  <button
+                    type="button"
+                    class="review-attachment-item"
+                    role="listitem"
+                    data-order-id="{{ order.id }}"
+                    data-attachment-id="{{ attachment.id }}"
+                    data-preview-kind="{{ attachment_kind }}"
+                    data-preview-url="/orders/{{ order.id }}/attachments/{{ attachment.id }}/preview"
+                    data-download-url="/orders/{{ order.id }}/attachments/{{ attachment.id }}"
+                    data-filename="{{ attachment.filename }}"
+                    data-content-type="{{ attachment.content_type or '' }}"
+                    data-size-bytes="{{ attachment.size_bytes or 0 }}"
+                    data-extracted-text="{{ attachment.extracted_text or '' }}"
+                    onclick="selectOrderAttachmentPreview(event, this)"
+                  >
+                    <span class="review-attachment-item-main">
+                      <strong>{{ attachment.filename }}</strong>
+                      <span>{{ "PDF" if attachment_kind == "pdf" else "Imagen" if attachment_kind == "image" else "CSV" if attachment_kind == "csv" else "Texto" if attachment_kind == "text" else "DOC" if attachment_kind == "doc" else "Hoja" if attachment_kind == "sheet" else "Adjunto" }}</span>
+                    </span>
+                    <span class="review-attachment-item-action">Previsualizar</span>
+                  </button>
+                {% endfor %}
+              </div>
+              <div class="review-attachment-preview" id="review-attachment-preview-{{ order.id }}">
+                <div class="review-attachment-preview-empty">Selecciona un adjunto para verlo aquí.</div>
+              </div>
+            </div>
+          </details>
+        {% endif %}
+      {% endif %}
+      {% if has_conversation %}
+        <article class="subpanel stack source-panel" data-source-panel="conversation" {% if has_conversation and active_source != 'conversation' %}hidden{% endif %}>
+          <div class="section-title-row">
+            <div>
+              <h4>{{ incoming_title }}</h4>
+              <p class="muted">{{ conversation_preview.provider_label }}</p>
+            </div>
+            <span class="badge {% if 'whatsapp' in (conversation_preview.provider_label or '')|lower %}status-confirmed{% endif %}">{{ conversation_preview.provider_label if conversation_preview else "WhatsApp" }}</span>
+          </div>
+          <div class="review-inline-summary review-inline-summary-tight">
+            <span><strong>Fecha</strong>{{ order.conversation.last_activity_at.strftime("%d/%m/%Y %H:%M") if order.conversation and order.conversation.last_activity_at else "—" }}</span>
+            <span><strong>Participantes</strong>{{ conversation_preview.messages|length }}</span>
+            <span><strong>Estado</strong>{{ order.status|status_label }}</span>
+          </div>
+          <div id="dash-conversation-body-{{ order.id }}" class="whatsapp-chat-stack">
+            {% for message in conversation_preview.messages %}
+              <article class="whatsapp-chat-bubble {{ message.direction }}">
+                <div class="whatsapp-chat-bubble-head">
+                  <div class="whatsapp-chat-bubble-speaker">
+                    <span class="badge {% if message.direction == 'outbound' %}status-confirmed{% else %}status-pending{% endif %}">{{ message.role_label or ("Empresa" if message.direction == "outbound" else "Cliente") }}</span>
+                    <strong>{{ message.sender }}</strong>
+                  </div>
+                  <span>{{ message.timestamp_label or "Sin fecha" }}</span>
+                </div>
+                <pre class="whatsapp-chat-text">{{ message.text }}</pre>
+              </article>
+            {% endfor %}
+          </div>
+        </article>
       {% endif %}
     </section>
 
@@ -230,10 +269,114 @@
       <article class="subpanel">
         <h4>Acciones disponibles</h4>
         <div class="actions">
-          <form class="js-loading-form" method="post" action="/workbench/email/{{ email.id }}/process"><button data-loading-text="Procesando...">Revisar</button></form>
+          <a class="button secondary" href="/channels/email/{{ email.id }}/resolve">Revisar</a>
           <form class="js-loading-form" method="post" action="/workbench/email/{{ email.id }}/mark-no-order" data-confirm="Marcar esta entrada como no pedido?"><button class="secondary">Marcar como no pedido</button></form>
           <form class="js-loading-form" method="post" action="/workbench/email/{{ email.id }}/discard" data-confirm="Descartar este correo?"><button class="secondary">Descartar</button></form>
           <form class="js-loading-form" method="post" action="/workbench/email/{{ email.id }}/close"><button class="secondary">Marcar cerrado</button></form>
+        </div>
+      </article>
+    </section>
+  </div>
+{% elif kind == "inbound" %}
+  {% set incoming_title = "Conversación de WhatsApp recibida" if "whatsapp" in (item.provider_label or "")|lower else "Entrada recibida" %}
+  <div class="review-modal-header review-modal-header-v3">
+    <div class="review-header-title">
+      <strong>{{ item.customer_name }} · {{ "%.0f"|format(item.score or 0) if item.score is not none else "Sin score" }} · {{ item.agent_status_label }}</strong>
+      <div class="review-header-meta">
+        <span class="badge agent-{{ item.agent_status }}">{{ item.agent_status_label }}</span>
+        <span class="badge">{{ item.provider_label }}</span>
+        <span class="badge">{{ item.origin }}</span>
+      </div>
+    </div>
+    <div class="review-header-actions review-header-actions-tight">
+      {% if order %}
+        <a class="button secondary compact-button" href="/orders/{{ order.id }}">Ver pedido</a>
+      {% endif %}
+      <button type="button" class="secondary compact-button" onclick="closeWorkbenchDetailModal()">Cerrar</button>
+    </div>
+  </div>
+  <div class="review-grid review-grid-v3">
+    <section class="review-pane review-entry-pane">
+      <div class="pane-title-row">
+        <h3>{{ incoming_title }}</h3>
+        <span class="badge">{{ item.message_count }} mensajes</span>
+      </div>
+      <article class="subpanel">
+        <div class="section-title-row">
+          <div>
+            <h4>{{ inbound_message.subject or "Sin asunto" }}</h4>
+            <p class="muted">{{ inbound_message.sender or "Sin remitente" }}</p>
+          </div>
+          <span class="badge">{{ inbound_message.received_at.strftime("%d/%m/%Y %H:%M") if inbound_message.received_at else "Sin fecha" }}</span>
+        </div>
+        <div class="review-inline-summary review-inline-summary-tight">
+          <span><strong>Canal</strong>{{ item.provider_label }}</span>
+          <span><strong>Estado</strong>{{ item.status_label }}</span>
+          <span><strong>Cliente</strong>{{ item.customer_name }}</span>
+        </div>
+      </article>
+
+      <article class="subpanel stack">
+        <div class="section-title-row">
+          <h4>{{ incoming_title }}</h4>
+          <button type="button" class="secondary compact-button" onclick="copyText('inbound-conversation-body-{{ inbound_message.id }}')">Copiar</button>
+        </div>
+        <div id="inbound-conversation-body-{{ inbound_message.id }}" class="whatsapp-chat-stack">
+          {% if conversation_preview %}
+            {% for message in conversation_preview.messages %}
+              <article class="whatsapp-chat-bubble {{ message.direction }}">
+                <div class="whatsapp-chat-bubble-head">
+                  <div class="whatsapp-chat-bubble-speaker">
+                    <span class="badge {% if message.direction == 'outbound' %}status-confirmed{% else %}status-pending{% endif %}">{{ message.role_label or ("Empresa" if message.direction == "outbound" else "Cliente") }}</span>
+                    <strong>{{ message.sender }}</strong>
+                  </div>
+                  <span>{{ message.timestamp_label or "Sin fecha" }}</span>
+                </div>
+                <pre class="whatsapp-chat-text">{{ message.text }}</pre>
+              </article>
+            {% endfor %}
+          {% else %}
+            <article class="whatsapp-chat-bubble inbound">
+              <div class="whatsapp-chat-bubble-head">
+                <strong>{{ inbound_message.sender or "Cliente" }}</strong>
+                <span>{{ inbound_message.received_at.strftime("%d/%m/%Y %H:%M") if inbound_message.received_at else "Sin fecha" }}</span>
+              </div>
+              <pre class="whatsapp-chat-text">{{ inbound_message.original_content or inbound_message.normalized_text or "" }}</pre>
+            </article>
+          {% endif %}
+        </div>
+      </article>
+    </section>
+
+    <section class="review-pane review-proposal-pane">
+      <div class="pane-title-row">
+        <h3>Propuesta del agente</h3>
+        <span class="badge">{{ item.agent_status_label }}</span>
+      </div>
+      <article class="subpanel">
+        <div class="settings-kpis channel-kpis">
+          <div><span>Confianza</span><strong>{% if item.score is not none %}{{ "%.0f"|format(item.score) }}%{% else %}--{% endif %}</strong></div>
+          <div><span>Canal</span><strong>{{ item.provider_label }}</strong></div>
+          <div><span>Pedido</span><strong>{% if order %}Sí{% else %}No{% endif %}</strong></div>
+        </div>
+      </article>
+      <article class="subpanel">
+        <h4>Resumen operativo</h4>
+        <p><strong>Cliente:</strong> {{ item.customer_name }}</p>
+        <p><strong>Estado:</strong> {{ item.status_label }}</p>
+        <p><strong>Origen:</strong> {{ item.origin }}</p>
+        {% if order %}
+          <p><strong>Pedido:</strong> <a href="/orders/{{ order.id }}">#{{ order.id }}</a></p>
+          {% if order.review_reasons %}<p><strong>Motivos:</strong> {{ order.review_reasons }}</p>{% endif %}
+        {% endif %}
+      </article>
+      <article class="subpanel stack">
+        <h4>Acciones rápidas</h4>
+        <div class="actions">
+          {% if order %}
+            <a class="button secondary compact-button" href="/orders/{{ order.id }}">Abrir pedido</a>
+          {% endif %}
+          <button type="button" class="secondary compact-button" onclick="closeWorkbenchDetailModal()">Cerrar detalle</button>
         </div>
       </article>
     </section>

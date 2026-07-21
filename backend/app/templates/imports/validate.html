@@ -24,6 +24,8 @@
     <input type="hidden" name="filename" value="{{ filename }}">
     <input type="hidden" name="entity_type" value="{{ entity_type }}">
     <input type="hidden" name="encoding" value="{{ encoding }}">
+    <input type="hidden" name="customer_id" value="{{ customer_id or '' }}">
+    <input type="hidden" name="import_kind" value="{{ import_kind or '' }}">
     <input type="hidden" name="mapping_json" value='{{ mapping_json }}'>
     <label>Modo
       <select name="mode">
@@ -37,7 +39,7 @@
     <label>Nombre plantilla<input name="template_name" placeholder="Plantilla habitual"></label>
     <div class="actions">
       <button data-loading-text="Importando...">Confirmar importacion</button>
-      <a class="button secondary" href="{{ '/customers' if entity_type == 'customers' else '/products' }}">Cancelar</a>
+      <a class="button secondary" href="{{ '/customers/' ~ customer_id ~ '/knowledge?section=import' if entity_type == 'customer_knowledge_articles' and customer_id else ('/customers' if entity_type == 'customers' else '/products') }}">Cancelar</a>
     </div>
   </form>
 </section>

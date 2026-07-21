@@ -249,26 +249,6 @@ def _process_import_job(db, job: BackgroundJob, payload: dict) -> dict:
     mode = str(payload.get("mode") or "create_update")
     save_template = bool(payload.get("save_template"))
     template_name = str(payload.get("template_name") or "")
-    existing_import = db.scalar(
-        select(ImportJob)
-        .where(
-            ImportJob.company_id == job.company_id,
-            ImportJob.entity_type == entity_type,
-            ImportJob.filename == filename,
-            ImportJob.status == "completed",
-        )
-        .order_by(ImportJob.created_at.desc())
-    )
-    if existing_import:
-        return {
-            "ok": True,
-            "message": f"Importacion {entity_type} ya procesada",
-            "import_job_id": existing_import.id,
-            "rows_total": existing_import.rows_total,
-            "rows_created": existing_import.rows_created,
-            "rows_updated": existing_import.rows_updated,
-            "rows_ignored": existing_import.rows_ignored,
-        }
     df = read_preview(token, filename, encoding=encoding)
     if not mapping:
         mapping = guess_mapping(entity_type, [str(column) for column in df.columns])

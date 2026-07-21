@@ -557,6 +557,24 @@ pre { white-space: pre-wrap; background: #f0f4f5; padding: 12px; border-radius: 
 .review-attachment-table { width: 100%; border-collapse: collapse; font-size: 11px; }
 .review-attachment-table th, .review-attachment-table td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
 .review-attachment-table th { position: sticky; top: 0; background: #f8fafb; z-index: 1; font-weight: 800; }
+.manual-channel-switch { display: flex; gap: 8px; flex-wrap: wrap; }
+.manual-channel-option { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: #fff; font-size: 13px; font-weight: 600; }
+.manual-channel-pane[hidden] { display: none !important; }
+.whatsapp-chat-stack { display: grid; gap: 8px; max-height: clamp(280px, calc(93vh - 380px), 520px); overflow: auto; padding-right: 2px; }
+.whatsapp-chat-bubble { display: grid; gap: 4px; max-width: 92%; padding: 9px 10px; border: 1px solid var(--line); border-radius: 10px; background: #f8fafb; }
+.whatsapp-chat-bubble.inbound { justify-self: start; background: #ffffff; }
+.whatsapp-chat-bubble.outbound { justify-self: end; background: #effaf6; border-color: color-mix(in srgb, var(--accent) 24%, var(--line)); }
+.whatsapp-chat-bubble-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; font-size: 11px; color: var(--muted); }
+.whatsapp-chat-bubble-speaker { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0; }
+.whatsapp-chat-bubble-speaker .badge { flex: 0 0 auto; }
+.whatsapp-chat-bubble-head strong { color: var(--text); font-size: 12px; }
+.whatsapp-chat-text { margin: 0; white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.4; color: var(--text); background: transparent; border: 0; padding: 0; }
+.source-tabs { display: inline-flex; gap: 6px; padding: 4px; background: #edf3f1; border: 1px solid var(--line); border-radius: 999px; margin-bottom: 6px; }
+.source-tab { border: 0; border-radius: 999px; padding: 6px 10px; min-height: 28px; background: transparent; color: var(--muted); font-weight: 750; font-size: 12px; cursor: pointer; }
+.source-tab.active { background: white; color: var(--accent-dark); box-shadow: 0 1px 2px rgba(15, 23, 42, .06); }
+.source-panel[hidden] { display: none !important; }
+.review-channel-actions { display: flex; gap: 8px; align-items: center; }
+.compact-list { margin: 0; padding-left: 16px; display: grid; gap: 4px; font-size: 12px; }
 .review-proposal-head { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
 .review-proposal-head-compact { padding-top: 2px; }
 .review-proposal-caption { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .02em; color: var(--muted); }

@@ -54,7 +54,7 @@ La vista usa este flujo:
 | Escenario | Endpoint | Tiempo mediano | Queries | Duplicadas | Bytes | Registros cargados | Items mostrados |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Small | `/channels?tab=processed&date_range=30d` | 3.23 ms | 10 | 0 | 125802 | 20 | 20 |
-| Medium | `/channels?tab=processed&date_range=30d` | 8.82 ms | 10 | 0 | 175472 | 25 | 25 |
+| Medium | `/channels?tab=processed&date_range=30d` | 8.82 ms | 10 | 0 | 176229 | 25 | 25 |
 | Large | `/channels?tab=processed&date_range=30d` | 28.22 ms | 10 | 0 | 199708 | 25 | 25 |
 
 ## Lectura rapida

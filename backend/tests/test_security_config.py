@@ -39,6 +39,15 @@ def _load_settings(env: dict[str, str]) -> object:
     if "ENVIRONMENT" not in env and "APP_ENV" in env:
         baseline["ENVIRONMENT"] = env["APP_ENV"]
     runtime_env = baseline.get("APP_ENV", "development")
+    if runtime_env == "demo":
+        if "TENANT_DB_MODE" not in env:
+            baseline["TENANT_DB_MODE"] = "external"
+        if "DATABASE_URL" not in env:
+            baseline["DATABASE_URL"] = "postgresql+psycopg://user:password@db.example.com:5432/anchi_demo"
+        if "TENANT_DATABASE_URL" not in env:
+            baseline["TENANT_DATABASE_URL"] = baseline["DATABASE_URL"]
+        if "MASTER_DATABASE_URL" not in env:
+            baseline["MASTER_DATABASE_URL"] = "postgresql+psycopg://user:password@db.example.com:5432/anchi_master"
     if "ENABLE_DEMO_BOOTSTRAP" not in env and "SEED_DEMO_DATA" not in env:
         baseline["ENABLE_DEMO_BOOTSTRAP"] = "true" if runtime_env == "development" else "false"
     if runtime_env == "production":
@@ -66,14 +75,14 @@ class SecurityConfigurationTests(unittest.TestCase):
         get_settings.cache_clear()
 
     def test_environment_accepts_allowed_values(self):
-        for value in ["development", "test", "production"]:
+        for value in ["development", "demo", "test", "production"]:
             settings = _load_settings({"APP_ENV": value})
             self.assertEqual(settings.environment, value)
 
     def test_environment_rejects_unknown_value(self):
         with patch.dict(os.environ, {"APP_ENV": "staging"}, clear=True):
             get_settings.cache_clear()
-            with self.assertRaisesRegex(ValueError, "APP_ENV must be development, test or production"):
+            with self.assertRaisesRegex(ValueError, "APP_ENV must be development, demo, test or production"):
                 get_settings()
 
     def test_development_keeps_local_defaults(self):
@@ -84,6 +93,31 @@ class SecurityConfigurationTests(unittest.TestCase):
         self.assertIn("localhost", settings.allowed_hosts)
         self.assertTrue(settings.cors_allowed_origins)
         self.assertTrue(settings.seed_demo_data)
+
+    def test_demo_environment_keeps_demo_bootstrap(self):
+        settings = _load_settings({"APP_ENV": "demo"})
+        self.assertEqual(settings.environment, "demo")
+        self.assertFalse(settings.session_cookie_secure)
+        self.assertTrue(settings.seed_demo_data)
+        self.assertEqual(settings.tenant_db_mode, "external")
+
+    def test_demo_environment_rejects_sqlite_without_external_db(self):
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "demo",
+                "ENVIRONMENT": "demo",
+                "SECRET_KEY": "a-very-strong-secret-key-for-development-123456",
+                "ENCRYPTION_KEY": VALID_FERNET_KEY,
+                "DATABASE_URL": "sqlite:///./anchi_demo.db",
+                "MASTER_DATABASE_URL": "sqlite:///./master.db",
+                "TENANT_DB_MODE": "external",
+            },
+            clear=True,
+        ):
+            get_settings.cache_clear()
+            with self.assertRaisesRegex(ValueError, "MASTER_DATABASE_URL must point to an external database in demo or Vercel"):
+                get_settings()
 
     def test_test_environment_uses_isolated_defaults(self):
         settings = _load_settings({"APP_ENV": "test"})

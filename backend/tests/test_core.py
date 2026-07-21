@@ -101,7 +101,8 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         request_missing = FakeRequest(session={"company_id": 1})
         with self.assertRaises(HTTPException) as ctx:
             next(get_tenant_db(request_missing, db))
-        self.assertEqual(ctx.exception.status_code, 503)
+        self.assertEqual(ctx.exception.status_code, 303)
+        self.assertEqual(ctx.exception.headers.get("Location"), "/login")
         db.close()
 
     def test_get_tenant_db_redirects_to_login_without_session(self):

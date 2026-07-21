@@ -14,7 +14,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 logger = logging.getLogger(__name__)
 
 DEV_SECRET_KEY = base64.urlsafe_b64encode(hashlib.sha256(b"order-agent-dev-secret-key").digest()).decode()
-ALLOWED_ENVIRONMENTS = {"development", "test", "production"}
+ALLOWED_ENVIRONMENTS = {"development", "demo", "test", "production"}
 LOCAL_ALLOWED_HOSTS = ["localhost", "127.0.0.1", "testserver"]
 LOCAL_CORS_ORIGINS = [
     "http://localhost:8000",
@@ -101,6 +101,8 @@ class Settings(BaseSettings):
     app_slug: str = "anchi"
     database_url: str = "sqlite:///./anchi_demo.db"
     master_database_url: str = "sqlite:///./master.db"
+    tenant_db_mode: str = Field(default="sqlite", validation_alias=AliasChoices("TENANT_DB_MODE"))
+    tenant_database_url: str | None = Field(default=None, validation_alias=AliasChoices("TENANT_DATABASE_URL"))
     app_secret_key: str = Field(default=DEV_SECRET_KEY, validation_alias=AliasChoices("SECRET_KEY", "APP_SECRET_KEY"))
     tenant_db_encryption_key: str | None = Field(
         default=None,
@@ -129,7 +131,7 @@ class Settings(BaseSettings):
     debug: bool | None = Field(default=None, validation_alias="DEBUG")
     default_company_name: str = "Anchi Demo"
     default_admin_email: str = "admin@anchi.local"
-    default_admin_password: str = "admin123"
+    default_admin_password: str = "AnchiDemo2026!"
     seed_demo_data: bool | None = Field(default=None, validation_alias=AliasChoices("ENABLE_DEMO_BOOTSTRAP", "SEED_DEMO_DATA"))
     branding_app_name: str = "Anchi"
     branding_primary_claim: str = "Gestion inteligente de pedidos"
@@ -151,12 +153,23 @@ class Settings(BaseSettings):
     def validate_runtime_configuration(self):
         self.environment = (self.environment or "development").strip().lower()
         if self.environment not in ALLOWED_ENVIRONMENTS:
-            raise ValueError("APP_ENV must be development, test or production")
+            raise ValueError("APP_ENV must be development, demo, test or production")
+        self.tenant_db_mode = (self.tenant_db_mode or "sqlite").strip().lower()
+        if self.tenant_db_mode not in {"sqlite", "external"}:
+            raise ValueError("TENANT_DB_MODE must be sqlite or external")
+        if self.tenant_database_url is not None:
+            self.tenant_database_url = self.tenant_database_url.strip() or None
+        if self.tenant_database_url:
+            self.database_url = self.tenant_database_url
+        running_on_vercel = os.getenv("VERCEL") == "1" or bool(os.getenv("VERCEL_ENV"))
+        demo_runtime = self.environment == "demo" or running_on_vercel
 
         if self.debug is None:
             self.debug = False
         if self.seed_demo_data is None:
-            self.seed_demo_data = self.environment == "development"
+            self.seed_demo_data = self.environment in {"development", "demo"}
+        elif self.environment == "demo":
+            self.seed_demo_data = True
         if self.session_cookie_secure is None:
             self.session_cookie_secure = self.environment == "production"
         if self.session_cookie_samesite is None:
@@ -192,6 +205,18 @@ class Settings(BaseSettings):
             raise ValueError("ENCRYPTION_KEY must be a valid Fernet key")
         if not self.tenant_db_encryption_key and self.environment == "production":
             raise ValueError("ENCRYPTION_KEY is required in production")
+        if demo_runtime:
+            if not self.master_database_url:
+                raise ValueError("MASTER_DATABASE_URL is required in demo or Vercel")
+            if self.master_database_url.startswith("sqlite"):
+                raise ValueError("MASTER_DATABASE_URL must point to an external database in demo or Vercel")
+            if self.tenant_db_mode == "external":
+                if not self.tenant_database_url:
+                    raise ValueError("TENANT_DATABASE_URL is required when TENANT_DB_MODE=external")
+                if self.database_url.startswith("sqlite"):
+                    raise ValueError("TENANT_DATABASE_URL cannot use sqlite in demo or Vercel")
+            elif self.database_url.startswith("sqlite"):
+                raise ValueError("DATABASE_URL must point to an external database in demo or Vercel")
 
         if self.environment == "production":
             if not _looks_safe_secret_key(self.app_secret_key):
@@ -256,6 +281,8 @@ class Settings(BaseSettings):
             "session_max_age": self.session_max_age,
             "debug": self.debug,
             "seed_demo_data": self.seed_demo_data,
+            "tenant_db_mode": self.tenant_db_mode,
+            "tenant_database_url": _sanitize_database_url(self.tenant_database_url),
             "allowed_hosts": self.allowed_hosts,
             "cors_allowed_origins": self.cors_allowed_origins,
             "app_secret_key": "[redacted]",

@@ -205,7 +205,10 @@ async def import_file(
         raise HTTPException(status_code=400, detail="Debes adjuntar un archivo o pegar una tabla para importar productos.")
     job = import_products(db, company_id=user.company_id, filename=filename, df=df)
     log_action(db, company_id=user.company_id, user=user, action="products.import", entity_type="import", entity_id=job.id, message=f"Importados productos: {job.rows_created} creados, {job.rows_updated} actualizados")
-    return RedirectResponse("/products", status_code=303)
+    return RedirectResponse(
+        f"/products?imported=1&page=1&page_size=100&created={job.rows_created}&updated={job.rows_updated}&ignored={job.rows_ignored}",
+        status_code=303,
+    )
 
 
 @router.post("/{product_id}/delete")
