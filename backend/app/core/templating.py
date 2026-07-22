@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import typing
 from time import perf_counter
+from pathlib import Path
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
@@ -10,6 +11,10 @@ from starlette.responses import HTMLResponse
 from starlette.templating import _TemplateResponse
 
 from app.core.performance import performance_profiling_enabled, record_template_render
+
+
+APP_DIR = Path(__file__).resolve().parents[1]
+TEMPLATES_DIR = APP_DIR / "templates"
 
 
 def status_label(value: str | None) -> str:
@@ -160,7 +165,7 @@ class PerformanceAwareTemplates(Jinja2Templates):
         )
 
 
-templates = PerformanceAwareTemplates(directory="app/templates")
+templates = PerformanceAwareTemplates(directory=str(TEMPLATES_DIR))
 templates.env.filters["status_label"] = status_label
 templates.env.filters["status_class"] = status_class
 templates.env.globals["page_url"] = page_url
