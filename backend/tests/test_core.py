@@ -20,6 +20,7 @@ os.environ.setdefault("APP_ENV", "development")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.security import hash_password  # noqa: E402
+from app.core.config import get_settings  # noqa: E402
 from app.db.database import Base  # noqa: E402
 from app.db.models import BackgroundJob, Customer, CustomerAlias, EmailSettings, LLMSettings, Order, OrderLine, Product, ProductAlias  # noqa: E402
 from app.jobs.service import cancel_job, claim_next_job, retry_job  # noqa: E402
@@ -86,6 +87,50 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.assertEqual(user.role.name, "Administrador")
         self.assertIsNone(authenticate_master_user(db, "admin@anchi.local", "wrong"))
         self.assertIsNone(authenticate_master_user(db, "missing@example.com", "admin123"))
+        db.close()
+
+    def test_authenticate_master_user_prefers_membership_matching_email_domain(self):
+        db = self.MasterSession()
+        company_a = MasterCompany(id=1, name="Anchi", slug="anchi", active=True)
+        company_b = MasterCompany(id=2, name="Mulet Hidalgo", slug="mulet-hidalgo", active=True)
+        user = MasterUser(id=1, email="admin@mulet-hidalgo.local", full_name="Admin", password_hash=hash_password("admin123"), is_active=True)
+        membership_a = CompanyMembership(id=1, user_id=1, company_id=1, role_key="Administrador", is_active=True, is_owner=False)
+        membership_b = CompanyMembership(id=2, user_id=1, company_id=2, role_key="Administrador", is_active=True, is_owner=True)
+        tenant_a = MasterTenantDatabase(company_id=1, database_key="anchi", database_url=f"sqlite:///{self.tenant_path.as_posix()}", is_active=True, health_status="ok")
+        tenant_b = MasterTenantDatabase(company_id=2, database_key="mulet-hidalgo", database_url=f"sqlite:///{self.tenant_path.as_posix()}", is_active=True, health_status="ok")
+        db.add_all([company_a, company_b, user, membership_a, membership_b, tenant_a, tenant_b])
+        db.commit()
+
+        resolved = authenticate_master_user(db, "admin@mulet-hidalgo.local", "admin123")
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.company_slug, "mulet-hidalgo")
+        self.assertEqual(resolved.company_id, 2)
+        db.close()
+
+    def test_authenticate_master_user_accepts_demo_password_fallback(self):
+        db = self.MasterSession()
+        company = MasterCompany(id=1, name="Demo", slug="demo", active=True)
+        user = MasterUser(id=1, email="admin@anchi.local", full_name="Admin", password_hash=hash_password("old-password"), is_active=True)
+        membership = CompanyMembership(id=1, user_id=1, company_id=1, role_key="Administrador", is_active=True, is_owner=True)
+        tenant = MasterTenantDatabase(company_id=1, database_key="demo", database_url=f"sqlite:///{self.tenant_path.as_posix()}", is_active=True, health_status="ok")
+        db.add_all([company, user, membership, tenant])
+        db.commit()
+
+        get_settings.cache_clear()
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "demo",
+                "MASTER_DATABASE_URL": "postgresql://user:pass@localhost/demo_master",
+                "TENANT_DB_MODE": "external",
+                "TENANT_DATABASE_URL": "postgresql://user:pass@localhost/demo_tenant",
+            },
+            clear=False,
+        ):
+            resolved = authenticate_master_user(db, "admin@anchi.local", "AnchiDemo2026!")
+        get_settings.cache_clear()
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.company_slug, "demo")
         db.close()
 
     def test_load_tenant_context_and_missing_tenant_db(self):

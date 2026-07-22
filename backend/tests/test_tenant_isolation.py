@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 os.environ.setdefault("APP_ENV", "development")
 
@@ -19,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.auth.dependencies import require_master_admin  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import Company, Customer  # noqa: E402
+from app.db.models import Company, Customer, ScoringSettings  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.master.service import TenantRole, TenantUser, load_tenant_context  # noqa: E402
@@ -129,6 +130,17 @@ class TenantIsolationTests(unittest.TestCase):
         self.assertIsNone(load_tenant_context(FakeRequest(session={"membership_id": 1, "user_id": 1, "company_id": 1, "company_slug": "wrong-slug"}), master_db))
         master_db.close()
 
+    def test_load_tenant_context_skips_host_match_on_vercel(self):
+        self._seed_master_company(company_id=1, slug="demo-a", name="Demo A", user_id=1, email="a@example.com", role_key="Administrador", membership_id=1)
+
+        request = FakeRequest(session={"membership_id": 1, "user_id": 1, "company_id": 1, "company_slug": "demo-a"}, host="demo-a.vercel.app")
+        master_db = self.MasterSession()
+        with patch.dict(os.environ, {"VERCEL": "1"}, clear=False):
+            context = load_tenant_context(request, master_db)
+        self.assertIsNotNone(context)
+        self.assertEqual(context.company.slug, "demo-a")
+        master_db.close()
+
     def test_load_tenant_context_rejects_cross_user_or_inactive_membership(self):
         db = self.MasterSession()
         company = MasterCompany(id=1, name="Demo", slug="demo", active=True)
@@ -192,6 +204,24 @@ class TenantIsolationTests(unittest.TestCase):
         self.assertEqual(ctx.exception.headers.get("Location"), "/login")
         self.assertEqual(request.scope["session"], {})
         db.close()
+
+    def test_get_tenant_db_bootstraps_missing_schema_before_yielding(self):
+        db = self.MasterSession()
+        company = MasterCompany(id=1, name="Demo", slug="demo", active=True)
+        user = MasterUser(id=1, email="admin@example.com", full_name="Admin", password_hash=hash_password("admin123"), is_active=True)
+        membership = CompanyMembership(id=1, user_id=1, company_id=1, role_key="Administrador", is_active=True, is_owner=False)
+        tenant_db = MasterTenantDatabase(company_id=1, database_key="demo", database_url=f"sqlite:///{self.tenant_a_path.as_posix()}", is_active=True, health_status="ok")
+        db.add_all([company, user, membership, tenant_db])
+        db.commit()
+
+        request = FakeRequest(session={"membership_id": 1, "user_id": 1, "company_id": 1, "company_slug": "demo"})
+        tenant_session = next(get_tenant_db(request, db))
+        try:
+            self.assertIsNotNone(tenant_session.get_bind())
+            self.assertTrue(tenant_session.query(ScoringSettings).filter(ScoringSettings.company_id == 1).count() >= 0)
+        finally:
+            tenant_session.close()
+            db.close()
 
     def test_tenant_admin_is_not_master_admin(self):
         tenant_admin = TenantUser(

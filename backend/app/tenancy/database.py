@@ -60,6 +60,7 @@ def get_tenant_db(request: Request, master_db: Session = Depends(get_master_db))
                 session.clear()
         raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/login"})
 
+    ensure_tenant_schema(database_url, company_id=tenant.company.id)
     SessionFactory = tenant_db_session(database_url)
     db = SessionFactory()
     try:
