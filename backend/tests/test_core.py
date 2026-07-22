@@ -107,6 +107,35 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.assertEqual(resolved.company_id, 2)
         db.close()
 
+    def test_authenticate_master_user_repairs_missing_demo_account(self):
+        db = self.MasterSession()
+        company = MasterCompany(id=2, name="Mulet Hidalgo", slug="mulet-hidalgo", active=True)
+        tenant = MasterTenantDatabase(company_id=2, database_key="mulet-hidalgo", database_url=f"sqlite:///{self.tenant_path.as_posix()}", is_active=True, health_status="ok")
+        db.add_all([company, tenant])
+        db.commit()
+
+        get_settings.cache_clear()
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "demo",
+                "MASTER_DATABASE_URL": "postgresql://user:pass@localhost/demo_master",
+                "TENANT_DB_MODE": "external",
+                "TENANT_DATABASE_URL": "postgresql://user:pass@localhost/demo_tenant",
+            },
+            clear=False,
+        ):
+            resolved = authenticate_master_user(db, "admin@mulet-hidalgo.local", "AnchiDemo2026!")
+        get_settings.cache_clear()
+
+        self.assertIsNotNone(resolved)
+        self.assertEqual(resolved.company_slug, "mulet-hidalgo")
+        repaired_user = db.scalar(select(MasterUser).where(MasterUser.email == "admin@mulet-hidalgo.local"))
+        self.assertIsNotNone(repaired_user)
+        repaired_membership = db.scalar(select(CompanyMembership).where(CompanyMembership.user_id == repaired_user.id, CompanyMembership.company_id == 2))
+        self.assertIsNotNone(repaired_membership)
+        db.close()
+
     def test_authenticate_master_user_accepts_demo_password_fallback(self):
         db = self.MasterSession()
         company = MasterCompany(id=1, name="Demo", slug="demo", active=True)

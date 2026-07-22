@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import get_settings
+from app.core.security import hash_password
 from app.core.security import verify_password
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser
 
@@ -53,6 +54,13 @@ def slugify(text: str) -> str:
     return normalized.strip("-") or "tenant"
 
 
+def _email_slug(email: str) -> str:
+    if "@" not in email:
+        return ""
+    domain = email.split("@", 1)[1].split(".", 1)[0]
+    return domain.replace("_", "-").strip().lower()
+
+
 def _company_to_context(company: MasterCompany, tenant_db: MasterTenantDatabase | None = None) -> TenantCompany:
     return TenantCompany(
         id=company.id,
@@ -79,6 +87,56 @@ def _membership_to_user(membership: CompanyMembership, tenant_db: MasterTenantDa
     )
 
 
+def _repair_demo_master_access(master_db: Session, email: str, password: str, settings) -> bool:
+    if password != settings.default_admin_password:
+        return False
+    company_slug = _email_slug(email)
+    if not company_slug:
+        return False
+    company = master_db.scalar(select(MasterCompany).where(MasterCompany.slug == company_slug))
+    if not company:
+        return False
+
+    user = master_db.scalar(select(MasterUser).where(MasterUser.email == email))
+    if not user:
+        user = MasterUser(
+            email=email,
+            full_name=f"Administrador {company.name}",
+            password_hash=hash_password(settings.default_admin_password),
+            is_active=True,
+        )
+        master_db.add(user)
+        master_db.flush()
+    else:
+        user.full_name = user.full_name or f"Administrador {company.name}"
+        user.is_active = True
+        if not verify_password(settings.default_admin_password, user.password_hash):
+            user.password_hash = hash_password(settings.default_admin_password)
+        master_db.flush()
+
+    membership = master_db.scalar(
+        select(CompanyMembership).where(
+            CompanyMembership.user_id == user.id,
+            CompanyMembership.company_id == company.id,
+        )
+    )
+    if not membership:
+        membership = CompanyMembership(
+            user_id=user.id,
+            company_id=company.id,
+            role_key="Administrador",
+            is_active=True,
+            is_owner=True,
+        )
+        master_db.add(membership)
+    else:
+        membership.role_key = "Administrador"
+        membership.is_active = True
+        membership.is_owner = True
+    master_db.flush()
+    return True
+
+
 def authenticate_master_user(master_db: Session, email: str, password: str) -> TenantUser | None:
     settings = get_settings()
     demo_runtime = settings.environment == "demo" or os.getenv("VERCEL") == "1" or bool(os.getenv("VERCEL_ENV"))
@@ -89,6 +147,16 @@ def authenticate_master_user(master_db: Session, email: str, password: str) -> T
         .where(MasterUser.email == email, MasterUser.is_active.is_(True), CompanyMembership.is_active.is_(True))
         .order_by(CompanyMembership.is_owner.desc(), CompanyMembership.id.asc())
     ).all()
+    if demo_runtime and password == settings.default_admin_password and not memberships:
+        if _repair_demo_master_access(master_db, email, password, settings):
+            master_db.commit()
+            memberships = master_db.scalars(
+                select(CompanyMembership)
+                .join(CompanyMembership.user)
+                .options(selectinload(CompanyMembership.user), selectinload(CompanyMembership.company))
+                .where(MasterUser.email == email, MasterUser.is_active.is_(True), CompanyMembership.is_active.is_(True))
+                .order_by(CompanyMembership.is_owner.desc(), CompanyMembership.id.asc())
+            ).all()
     if not memberships:
         return None
     password_ok = verify_password(password, memberships[0].user.password_hash)
