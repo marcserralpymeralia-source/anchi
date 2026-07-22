@@ -15,26 +15,9 @@ try:
 except Exception:  # pragma: no cover - optional dependency fallback
     DocxDocument = None
 
-from app.agent.platform import LearningService
-from app.db.models import Customer, CustomerAlias, CustomerContactPoint, CustomerDomain, CustomerProductKnowledge, ImportJob, ImportMappingTemplate, Product, ProductAlias, User
-from app.master_data.service import (
-    find_customer_match,
-    find_product_match,
-    is_valid_email,
-    is_valid_phone,
-    normalize_conflict_policy,
-    normalize_email,
-    normalize_phone,
-    replace_customer_aliases,
-    replace_customer_contact_points,
-    replace_customer_domains,
-    replace_product_aliases,
-    upsert_customer,
-    upsert_product,
-)
+from app.core.storage import ensure_directory, resolve_temp_storage_dir
 
-PREVIEW_DIR = Path(__file__).resolve().parents[1] / "storage" / "import_previews"
-PREVIEW_DIR.mkdir(parents=True, exist_ok=True)
+PREVIEW_DIR = resolve_temp_storage_dir("import_previews")
 
 CUSTOMER_FIELDS = {
     "code": "Codigo cliente",
@@ -296,6 +279,7 @@ async def create_preview(
     content = await file.read()
     token = uuid.uuid4().hex
     suffix = Path(file.filename or "import.csv").suffix.lower() or ".csv"
+    ensure_directory(PREVIEW_DIR)
     (PREVIEW_DIR / f"{token}{suffix}").write_bytes(content)
     df = read_table_from_bytes(content, file.filename or "import.csv", encoding=encoding)
     columns = [str(column) for column in df.columns]
@@ -347,7 +331,9 @@ def mapped_row(row, mapping: dict[str, str]) -> dict[str, str]:
     return result
 
 
-def _customer_lookup(db: Session, company_id: int, data: dict[str, str]) -> tuple[Customer | None, str]:
+def _customer_lookup(db: Session, company_id: int, data: dict[str, str]) -> tuple[object | None, str]:
+    from app.db.models import Customer, CustomerContactPoint, CustomerDomain
+
     code = (data.get("code") or "").strip()
     tax_id = (data.get("tax_id") or "").strip()
     primary_email = _normalize_email(data.get("primary_email") or "") if data.get("primary_email") else ""
@@ -417,6 +403,8 @@ def validate_import(
     customer_id: int | None = None,
     import_kind: str = "",
 ) -> ImportValidation:
+    from app.db.models import Customer, CustomerProductKnowledge, Product
+
     rows_new = rows_update = duplicates = rows_error = invalid_emails = invalid_phones = 0
     errors: list[str] = []
     warnings: list[str] = []
@@ -524,7 +512,7 @@ def validate_import(
     return ImportValidation(len(df), rows_new, rows_update, duplicates, rows_error, errors[:50], warnings[:50], invalid_emails, invalid_phones)
 
 
-def apply_customer_data(customer: Customer, data: dict[str, str]) -> None:
+def apply_customer_data(customer, data: dict[str, str]) -> None:
     for field in [
         "code",
         "fiscal_name",
@@ -570,7 +558,7 @@ def apply_customer_data(customer: Customer, data: dict[str, str]) -> None:
         customer.notes = f"{current_notes} | {extra}".strip(" |") if current_notes else extra
 
 
-def apply_product_data(product: Product, data: dict[str, str]) -> None:
+def apply_product_data(product, data: dict[str, str]) -> None:
     for field in ["reference", "alternative_code", "name", "description_cont", "brand", "usual_supplier", "family", "subfamily", "sale_unit", "size_group", "colors", "entry_date", "article_type", "replenishment_warehouse", "notes"]:
         if data.get(field):
             setattr(product, field, data[field])
@@ -592,7 +580,7 @@ def confirm_import(
     db: Session,
     *,
     company_id: int,
-    user: User,
+    user,
     entity_type: str,
     filename: str,
     df: pd.DataFrame,
@@ -602,7 +590,17 @@ def confirm_import(
     import_kind: str = "",
     save_template: bool = False,
     template_name: str = "",
-) -> ImportJob:
+):
+    from app.agent.platform import LearningService
+    from app.db.models import Customer, CustomerProductKnowledge, ImportJob, ImportMappingTemplate, Product, User
+    from app.master_data.service import (
+        find_customer_match,
+        find_product_match,
+        normalize_conflict_policy,
+        upsert_customer,
+        upsert_product,
+    )
+
     created = updated = ignored = rows_error = 0
     errors: list[str] = []
     conflict_policy = normalize_conflict_policy(mode)
@@ -776,13 +774,17 @@ def confirm_import(
     return job
 
 
-def import_customers(db: Session, *, company_id: int, filename: str, df: pd.DataFrame) -> ImportJob:
+def import_customers(db: Session, *, company_id: int, filename: str, df: pd.DataFrame):
+    from app.db.models import User
+
     mapping = guess_mapping("customers", [str(column) for column in df.columns])
     validation_user = User(id=0, company_id=company_id, role_id=0, email="system", name="system", password_hash="")
     return confirm_import(db, company_id=company_id, user=validation_user, entity_type="customers", filename=filename, df=df, mapping=mapping, mode="update_existing")
 
 
-def import_products(db: Session, *, company_id: int, filename: str, df: pd.DataFrame) -> ImportJob:
+def import_products(db: Session, *, company_id: int, filename: str, df: pd.DataFrame):
+    from app.db.models import User
+
     mapping = guess_mapping("products", [str(column) for column in df.columns])
     validation_user = User(id=0, company_id=company_id, role_id=0, email="system", name="system", password_hash="")
     return confirm_import(db, company_id=company_id, user=validation_user, entity_type="products", filename=filename, df=df, mapping=mapping, mode="update_existing")
