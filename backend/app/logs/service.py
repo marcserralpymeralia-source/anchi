@@ -8,6 +8,20 @@ from app.db.models import AuditLog, User
 from app.core.observability import encode_structured_message
 
 
+def _audit_user_id(db: Session, user: User | None) -> int | None:
+    if not user:
+        return None
+    user_id = getattr(user, "id", None)
+    if user_id is None:
+        return None
+    try:
+        if db.get(User, user_id) is None:
+            return None
+    except Exception:
+        return None
+    return user_id
+
+
 def log_action(
     db: Session,
     *,
@@ -22,7 +36,7 @@ def log_action(
     db.add(
         AuditLog(
             company_id=company_id,
-            user_id=user.id if user else None,
+            user_id=_audit_user_id(db, user),
             action=action,
             entity_type=entity_type,
             entity_id=entity_id,

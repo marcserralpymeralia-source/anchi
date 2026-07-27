@@ -636,6 +636,10 @@ def test_email_imap(request: Request, db: Session = Depends(get_tenant_db), user
         return RedirectResponse("/settings#email-diagnostics", status_code=303)
     settings = get_or_create_settings(db, EmailSettings, user.company_id)
     request_id = getattr(request.state, "request_id", None)
+    provider_name = (settings.provider or "imap").strip().lower()
+    host_name = (settings.imap_host or "").strip()
+    port_number = settings.imap_port
+    security_name = (settings.imap_security or "").strip().lower()
     try:
         result = test_imap_connection(settings, request_id=request_id)
         settings.last_imap_test_at = datetime.now(timezone.utc)
@@ -644,15 +648,16 @@ def test_email_imap(request: Request, db: Session = Depends(get_tenant_db), user
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="email.imap.test", entity_type="settings", entity_id=settings.id, message=result["message"])
     except Exception as exc:  # noqa: BLE001
+        db.rollback()
         logger.exception(
             "imap.test.route_failed",
             extra={
                 "event": "imap.test.route_failed",
                 "request_id": request_id,
-                "provider": (settings.provider or "imap").strip().lower(),
-                "host": (settings.imap_host or "").strip(),
-                "port": settings.imap_port,
-                "security": (settings.imap_security or "").strip().lower(),
+                "provider": provider_name,
+                "host": host_name,
+                "port": port_number,
+                "security": security_name,
                 "error_type": exc.__class__.__name__,
             },
         )

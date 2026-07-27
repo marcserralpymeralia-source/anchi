@@ -92,6 +92,23 @@ class ObservabilityTests(unittest.TestCase):
         self.assertEqual(parsed["metadata"]["channel"], "email")
         db.close()
 
+    def test_log_action_ignores_missing_user_row_in_target_database(self):
+        db = self.TenantSession()
+        log_action(
+            db,
+            company_id=1,
+            user=SimpleNamespace(id=99),
+            action="email.imap.test",
+            message="No se ha podido conectar con imap.demo.local:993.",
+            entity_type="settings",
+            entity_id=11,
+        )
+        log = db.scalar(select(AuditLog).where(AuditLog.company_id == 1))
+        self.assertIsNotNone(log)
+        self.assertIsNone(log.user_id)
+        self.assertIn("imap.demo.local", decode_structured_message(log.message)["message"])
+        db.close()
+
     def test_enqueue_job_embeds_trace_without_polluting_payload(self):
         db = self.TenantSession()
         with observability_scope(request_id="req-2", correlation_id="corr-2", tenant_id=1, user_id=8, membership_id=10, route="/orders", method="POST"):
