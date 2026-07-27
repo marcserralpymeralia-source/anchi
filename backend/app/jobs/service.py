@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import and_, or_, select, update
@@ -11,6 +12,9 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.observability import encode_trace_payload, split_trace_payload
 from app.db.models import BackgroundJob, JobAttempt, User
+
+
+logger = logging.getLogger(__name__)
 
 ACTIVE_JOB_STATUSES = {"queued", "running", "retrying"}
 TERMINAL_JOB_STATUSES = {"success", "failed", "cancelled"}
@@ -400,7 +404,15 @@ def finish_job(db: Session, job: BackgroundJob, result: dict | None = None) -> B
     return job
 
 
-def fail_job(db: Session, job: BackgroundJob, error_message: str, *, retry: bool = False, error_type: str | None = None) -> BackgroundJob:
+def fail_job(
+    db: Session,
+    job: BackgroundJob,
+    error_message: str,
+    *,
+    retry: bool = False,
+    error_type: str | None = None,
+    result: dict | None = None,
+) -> BackgroundJob:
     now = _now()
     settings = _settings()
     backoff_seconds = min(settings.job_retry_max_seconds, settings.job_retry_base_seconds * (2 ** max(job.retry_count, 0)))
@@ -418,6 +430,8 @@ def fail_job(db: Session, job: BackgroundJob, error_message: str, *, retry: bool
         job.lock_until = None
         job.next_retry_at = None
     job.error_message = error_message[:2000]
+    if result is not None:
+        job.result_json = _dumps(result)
     job.last_error_at = now
     job.last_error_type = error_type or ("retryable" if retry else "fatal")
     job.last_heartbeat_at = now
@@ -433,6 +447,35 @@ def fail_job(db: Session, job: BackgroundJob, error_message: str, *, retry: bool
     db.commit()
     db.refresh(job)
     return job
+
+
+def execute_job_inline(db: Session, job: BackgroundJob) -> dict:
+    from app.workers.jobs_worker import _process_job
+
+    try:
+        result = _process_job(db, job)
+        if not isinstance(result, dict):
+            result = {"ok": True, "message": str(result) if result is not None else "Trabajo completado"}
+        if result.get("ok") is False:
+            message = str(result.get("message") or "El job devolvió ok=false.")
+            fail_job(db, job, message, retry=False, error_type=str(result.get("error_type") or "job_failed"), result=result)
+        else:
+            finish_job(db, job, result)
+        return result
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "job.inline.failed",
+            extra={
+                "event": "job.inline.failed",
+                "job_id": job.id,
+                "job_type": job.job_type,
+                "company_id": job.company_id,
+                "error_type": exc.__class__.__name__,
+            },
+        )
+        failure = {"ok": False, "message": str(exc), "error_type": exc.__class__.__name__}
+        fail_job(db, job, str(exc), retry=False, error_type=exc.__class__.__name__, result=failure)
+        return failure
 
 
 def retry_job(db: Session, company_id: int, job_id: int) -> BackgroundJob | None:

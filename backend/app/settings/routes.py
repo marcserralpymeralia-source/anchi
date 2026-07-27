@@ -1,4 +1,5 @@
 import logging
+import os
 from datetime import datetime, timezone
 from datetime import date
 from urllib.parse import urlsplit, urlunsplit
@@ -26,19 +27,57 @@ from app.settings.integrations import classify_sample, extract_sample, preview_i
 from app.settings.application import run_connection_test, update_settings_section_async
 from app.settings.service import get_or_create_settings, resolve_updated_by_id, update_with_form
 from app.dashboard.service import recent_processed_emails_overview
-from app.jobs.service import enqueue_job
+from app.jobs.service import enqueue_job, execute_job_inline
 from app.tenancy.database import get_tenant_db
 from app.tenancy.migrations import tenant_migration_report
+from app.workers.jobs_worker import is_job_worker_started
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 
-def _queued_job_response(request: Request, job_id: int, fallback: str = "/settings"):
+def _queued_job_response(request: Request, job_id: int, fallback: str = "/settings", result: dict | None = None):
     if "application/json" in (request.headers.get("accept") or ""):
-        return JSONResponse({"ok": True, "job_id": job_id, "status": "queued", "message": "Trabajo encolado correctamente"})
+        payload = {"ok": True, "job_id": job_id, "status": "queued", "message": "Trabajo encolado correctamente"}
+        if result is not None:
+            payload["status"] = "success" if result.get("ok") else "failed"
+            payload["result"] = result
+            payload["message"] = result.get("message") or payload["message"]
+        return JSONResponse(payload)
     return RedirectResponse(request.headers.get("referer") or fallback, status_code=303)
+
+
+def _should_run_job_inline() -> bool:
+    return os.getenv("VERCEL") == "1" or not is_job_worker_started()
+
+
+def _run_email_sync_job_if_needed(request: Request, db: Session, user: TenantUser, job) -> dict | None:  # noqa: ANN001
+    if not _should_run_job_inline():
+        return None
+    request_id = getattr(request.state, "request_id", None)
+    logger.info(
+        "settings.email.read.inline.start",
+        extra={"event": "settings.email.read.inline.start", "request_id": request_id, "company_id": user.company_id, "user_id": user.id, "job_id": job.id, "job_type": job.job_type},
+    )
+    result = execute_job_inline(db, job)
+    logger.info(
+        "settings.email.read.inline.end",
+        extra={
+            "event": "settings.email.read.inline.end",
+            "request_id": request_id,
+            "company_id": user.company_id,
+            "user_id": user.id,
+            "job_id": job.id,
+            "job_type": job.job_type,
+            "ok": bool(result.get("ok")),
+            "found": result.get("found"),
+            "saved": result.get("saved"),
+            "duplicates": result.get("duplicates"),
+            "errors": result.get("errors"),
+        },
+    )
+    return result
 
 
 def _parse_date_input(raw_value: str | None) -> date | None:
@@ -763,6 +802,18 @@ def read_email(request: Request, db: Session = Depends(get_tenant_db), user: Ten
         "settings.email.read.queued",
         extra={"event": "settings.email.read.queued", "request_id": request_id, "company_id": user.company_id, "job_id": job.id, "job_type": job.job_type},
     )
+    result = _run_email_sync_job_if_needed(request, db, user, job)
+    if result is not None:
+        log_action(
+            db,
+            company_id=user.company_id,
+            user=user,
+            action="email.read.inline",
+            entity_type="job",
+            entity_id=job.id,
+            message=result.get("message") or "Lectura IMAP completada",
+        )
+        return _queued_job_response(request, job.id, result=result)
     log_action(db, company_id=user.company_id, user=user, action="email.read", entity_type="job", entity_id=job.id, message="Lectura IMAP encolada")
     return _queued_job_response(request, job.id)
 
@@ -779,6 +830,18 @@ def read_unprocessed_email(request: Request, db: Session = Depends(get_tenant_db
         "settings.email.read_unprocessed.queued",
         extra={"event": "settings.email.read_unprocessed.queued", "request_id": request_id, "company_id": user.company_id, "job_id": job.id, "job_type": job.job_type},
     )
+    result = _run_email_sync_job_if_needed(request, db, user, job)
+    if result is not None:
+        log_action(
+            db,
+            company_id=user.company_id,
+            user=user,
+            action="email.read_unprocessed.inline",
+            entity_type="job",
+            entity_id=job.id,
+            message=result.get("message") or "Lectura de correos recientes completada",
+        )
+        return _queued_job_response(request, job.id, "/settings#email-diagnostics", result=result)
     log_action(db, company_id=user.company_id, user=user, action="email.read_unprocessed", entity_type="job", entity_id=job.id, message="Lectura de correos recientes encolada")
     return _queued_job_response(request, job.id, "/settings#email-diagnostics")
 

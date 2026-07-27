@@ -24,7 +24,7 @@ from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, FTPSe
 from app.exports.service import ExportService, FTPService
 from app.logs.service import log_action
 from app.orders.state import ORDER_STATE
-from app.master.database import MasterSessionLocal
+import app.master.database as master_database
 from app.master.models import EmailSyncState, MasterTenantDatabase
 from app.imports.service import confirm_import, guess_mapping, read_preview
 from app.orders.routes import _customer_label, _sync_customer_product_knowledge, validate_confirmation
@@ -97,7 +97,7 @@ def _process_job(db, job: BackgroundJob) -> dict:
         return _process_bulk_action(db, job, payload)
     if job.job_type == "email_sync":
         settings = get_or_create_settings(db, EmailSettings, job.company_id)
-        master_db = MasterSessionLocal()
+        master_db = master_database.MasterSessionLocal()
         try:
             sync_state = master_db.scalar(
                 select(EmailSyncState).where(
@@ -131,7 +131,7 @@ def _process_job(db, job: BackgroundJob) -> dict:
     if job.job_type == "process_recent_emails":
         settings = get_or_create_settings(db, EmailSettings, job.company_id)
         limit = max(min(int(payload.get("limit", 3) or 3), 10), 1)
-        master_db = MasterSessionLocal()
+        master_db = master_database.MasterSessionLocal()
         try:
             sync_state = master_db.scalar(
                 select(EmailSyncState).where(
@@ -164,7 +164,7 @@ def _process_job(db, job: BackgroundJob) -> dict:
             master_db.close()
     if job.job_type == "backfill_imap":
         settings = get_or_create_settings(db, EmailSettings, job.company_id)
-        master_db = MasterSessionLocal()
+        master_db = master_database.MasterSessionLocal()
         try:
             sync_state = master_db.scalar(
                 select(EmailSyncState).where(
@@ -572,7 +572,7 @@ def _handle_tenant_jobs(tenant: MasterTenantDatabase, owner: str) -> dict[str, i
 def run_worker_cycle() -> dict[str, int]:
     configure_logging()
     summary = {"tenants": 0, "recovered": 0, "processed": 0, "blocked": 0}
-    master_db = MasterSessionLocal()
+    master_db = master_database.MasterSessionLocal()
     try:
         tenants = master_db.scalars(
             select(MasterTenantDatabase).where(

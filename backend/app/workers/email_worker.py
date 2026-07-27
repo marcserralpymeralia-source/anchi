@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.models import EmailSettings
-from app.master.database import MasterSessionLocal
+import app.master.database as master_database
 from app.master.models import EmailSyncState, MasterTenantDatabase
 from app.settings.integrations import read_latest_imap_emails
 from app.settings.service import get_or_create_settings
@@ -110,7 +110,7 @@ def _worker_loop() -> None:
     settings = get_settings()
     poll_seconds = max(int(getattr(settings, "email_worker_poll_seconds", 15)), 5)
     while True:
-        master_db = MasterSessionLocal()
+        master_db = master_database.MasterSessionLocal()
         try:
             now = datetime.now(timezone.utc)
             due_states = master_db.scalars(
