@@ -14,6 +14,7 @@ from app.migrations.registry import (
     CURRENT_TENANT_SCHEMA_VERSION,
     SUPPORTED_TENANT_LEGACY_VERSIONS,
     TENANT_MIGRATION_COLUMNS,
+    TENANT_COMPAT_COLUMNS,
     TENANT_SCHEMA_MIGRATIONS,
 )
 from app.migrations.runner import migration_summary, run_migration_plan
@@ -108,6 +109,16 @@ def upgrade_tenant_schema(
             baseline=baseline,
             dry_run=dry_run,
         )
+        repair_actions: list[str] = []
+        if not dry_run:
+            for table_name, columns in TENANT_COMPAT_COLUMNS.items():
+                repair_actions.extend(ensure_columns(engine, table_name, columns, dry_run=False))
+        elif dry_run:
+            for table_name, columns in TENANT_COMPAT_COLUMNS.items():
+                repair_actions.extend(ensure_columns(engine, table_name, columns, dry_run=True))
+        if repair_actions:
+            summary.setdefault("planned_actions", []).extend(repair_actions)
+            summary["repair_actions"] = repair_actions
         if company_id is not None and not dry_run and table_exists(db.get_bind(), "schema_migrations"):
             state = db.scalar(
                 select(TenantSchemaMigration)

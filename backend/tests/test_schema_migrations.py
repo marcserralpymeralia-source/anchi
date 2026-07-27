@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from sqlalchemy import create_engine, func, select, text
+from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("APP_ENV", "development")
@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.security import hash_password  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import BackgroundJob, Conversation, Customer, Email, JobAttempt, Order, OrderLine, TenantSchemaMigration  # noqa: E402
+from app.db.models import BackgroundJob, Conversation, Customer, Email, EmailSettings, JobAttempt, Order, OrderLine, TenantSchemaMigration  # noqa: E402
 from app.jobs.service import enqueue_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.migrations import CURRENT_MASTER_SCHEMA_CHECKSUM, CURRENT_MASTER_SCHEMA_NAME, CURRENT_MASTER_SCHEMA_VERSION, master_migration_report, upgrade_master_schema  # noqa: E402
@@ -259,6 +259,152 @@ class SchemaMigrationTests(unittest.TestCase):
                 if "BOOLEAN DEFAULT 0" in definition or "BOOLEAN DEFAULT 1" in definition:
                     unsafe.append(f"{table_name}.{column_name}={definition}")
         self.assertEqual(unsafe, [])
+
+    def test_email_settings_registry_columns_are_present_in_model(self):
+        model_columns = set(EmailSettings.__table__.columns.keys())
+        registry_columns = set(TENANT_COMPAT_COLUMNS["email_settings"].keys())
+        self.assertIn("smtp_enabled", registry_columns)
+        self.assertTrue(registry_columns.issubset(model_columns))
+
+    def test_upgrade_tenant_repairs_missing_email_settings_columns_on_current_schema(self):
+        with self.tenant_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE email_settings (
+                        id INTEGER PRIMARY KEY,
+                        company_id INTEGER UNIQUE,
+                        provider VARCHAR(50) DEFAULT 'imap',
+                        connection_method VARCHAR(50) DEFAULT 'password',
+                        imap_host VARCHAR(255),
+                        imap_port INTEGER DEFAULT 993,
+                        imap_use_ssl BOOLEAN DEFAULT true,
+                        imap_security VARCHAR(30) DEFAULT 'ssl_tls',
+                        imap_username VARCHAR(255),
+                        imap_password_encrypted TEXT,
+                        test_read_limit INTEGER DEFAULT 10,
+                        oauth_scopes TEXT,
+                        mailbox VARCHAR(255),
+                        inbox_folder VARCHAR(100) DEFAULT 'INBOX',
+                        processed_folder VARCHAR(100),
+                        error_folder VARCHAR(100),
+                        no_order_folder VARCHAR(100),
+                        doubtful_folder VARCHAR(100),
+                        read_limit INTEGER DEFAULT 25,
+                        auto_sync_enabled BOOLEAN DEFAULT false,
+                        read_unread_only BOOLEAN DEFAULT true,
+                        read_from_date VARCHAR(50),
+                        mark_as_read_after_import BOOLEAN DEFAULT false,
+                        move_after_processing BOOLEAN DEFAULT false,
+                        post_process_action VARCHAR(50) DEFAULT 'mark_read',
+                        polling_frequency_minutes INTEGER DEFAULT 1,
+                        smtp_provider VARCHAR(50) DEFAULT 'smtp',
+                        smtp_host VARCHAR(255),
+                        smtp_port INTEGER DEFAULT 587,
+                        smtp_security VARCHAR(30) DEFAULT 'starttls',
+                        smtp_username VARCHAR(255),
+                        smtp_password_encrypted TEXT,
+                        from_email VARCHAR(255),
+                        from_name VARCHAR(255),
+                        reply_to VARCHAR(255),
+                        default_cc TEXT,
+                        default_bcc TEXT,
+                        save_internal_copy BOOLEAN DEFAULT true,
+                        preserve_thread_headers BOOLEAN DEFAULT true,
+                        auto_process_on_fetch BOOLEAN DEFAULT false,
+                        process_only_with_attachments BOOLEAN DEFAULT false,
+                        process_only_with_pdf BOOLEAN DEFAULT false,
+                        process_without_attachments BOOLEAN DEFAULT true,
+                        process_read_emails BOOLEAN DEFAULT false,
+                        avoid_duplicates_by_message_id BOOLEAN DEFAULT true,
+                        allow_reprocess BOOLEAN DEFAULT false,
+                        auto_create_order_if_detected BOOLEAN DEFAULT true,
+                        always_human_review BOOLEAN DEFAULT true,
+                        mark_doubtful_below_threshold BOOLEAN DEFAULT true,
+                        mark_no_order_if_detected BOOLEAN DEFAULT true,
+                        action_order_detected VARCHAR(80) DEFAULT 'move_processed',
+                        action_no_order VARCHAR(80) DEFAULT 'move_no_order',
+                        action_doubtful VARCHAR(80) DEFAULT 'move_doubtful',
+                        action_error VARCHAR(80) DEFAULT 'move_error',
+                        minimum_score_auto_order INTEGER DEFAULT 90,
+                        visible_states TEXT DEFAULT 'pending,processing,pedido,no_pedido,dudoso,error_processing,pending_reprocess,responded,closed',
+                        default_filter VARCHAR(80) DEFAULT 'all',
+                        default_date_range VARCHAR(80) DEFAULT 'today',
+                        default_page_size INTEGER DEFAULT 25,
+                        default_sort VARCHAR(80) DEFAULT 'date_desc',
+                        show_summary_cards BOOLEAN DEFAULT true,
+                        show_score_column BOOLEAN DEFAULT true,
+                        show_customer_column BOOLEAN DEFAULT true,
+                        show_attachments_column BOOLEAN DEFAULT true,
+                        show_order_column BOOLEAN DEFAULT true,
+                        show_reply_button BOOLEAN DEFAULT true,
+                        show_process_button BOOLEAN DEFAULT true,
+                        signature_text TEXT DEFAULT 'Equipo de pedidos',
+                        signature_html TEXT,
+                        use_signature BOOLEAN DEFAULT true,
+                        include_logo_in_signature BOOLEAN DEFAULT false,
+                        legal_footer TEXT,
+                        last_imap_test_at DATETIME,
+                        last_imap_test_ok BOOLEAN,
+                        last_imap_test_message TEXT,
+                        last_sync_at DATETIME,
+                        last_sync_ok BOOLEAN,
+                        last_sync_message TEXT,
+                        last_sync_error TEXT,
+                        last_sync_new INTEGER DEFAULT 0,
+                        last_sync_duplicates INTEGER DEFAULT 0,
+                        last_smtp_test_at DATETIME,
+                        last_smtp_test_ok BOOLEAN,
+                        last_smtp_test_message TEXT,
+                        updated_by INTEGER,
+                        created_at DATETIME,
+                        updated_at DATETIME
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE schema_migrations (
+                        id INTEGER PRIMARY KEY,
+                        company_id INTEGER UNIQUE,
+                        version VARCHAR(80),
+                        name VARCHAR(180),
+                        checksum VARCHAR(120),
+                        execution_ms INTEGER DEFAULT 0,
+                        application_version VARCHAR(80),
+                        status VARCHAR(30),
+                        applied_at DATETIME,
+                        last_checked_at DATETIME,
+                        last_error TEXT,
+                        notes TEXT,
+                        created_at DATETIME,
+                        updated_at DATETIME
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO schema_migrations
+                        (id, company_id, version, name, checksum, execution_ms, application_version, status, applied_at, last_checked_at, last_error, notes, created_at, updated_at)
+                    VALUES
+                        (1, 3, :version, :name, :checksum, 0, '1.2.3', 'current', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """
+                ),
+                {
+                    "version": CURRENT_TENANT_SCHEMA_VERSION,
+                    "name": CURRENT_TENANT_SCHEMA_NAME,
+                    "checksum": CURRENT_TENANT_SCHEMA_CHECKSUM,
+                },
+            )
+
+        result = upgrade_tenant_schema(self.tenant_engine, company_id=3, application_version="1.2.3")
+        self.assertTrue(result["is_current"])
+        columns = {column["name"] for column in inspect(self.tenant_engine).get_columns("email_settings")}
+        self.assertIn("smtp_enabled", columns)
 
     def test_upgrade_messages_schema_creates_conversations_and_links_legacy_data(self):
         self._seed_legacy_messages_schema()
