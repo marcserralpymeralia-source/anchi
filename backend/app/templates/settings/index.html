@@ -661,6 +661,9 @@
         {% if can_test_email %}<form class="js-loading-form" method="post" action="/settings/email/smtp/test"><button class="secondary compact-button" data-loading-text="Probando...">Probar SMTP</button></form>{% endif %}
         <form class="js-loading-form" method="post" action="/settings/email/read-unprocessed"><button class="secondary compact-button" data-loading-text="Sincronizando...">Sincronizar ahora</button></form>
       </div>
+      {% if email_status.last_imap_test.message %}
+        <p class="muted settings-status-note">Última prueba IMAP: {{ email_status.last_imap_test.message }}</p>
+      {% endif %}
       {% if email_status.last_sync.message or email_status.last_sync.error %}
         <p class="muted settings-status-note">{{ email_status.last_sync.error or email_status.last_sync.message }}</p>
       {% endif %}

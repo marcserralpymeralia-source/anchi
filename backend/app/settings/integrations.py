@@ -1,7 +1,9 @@
+import logging
 import imaplib
 import json
 import re
 import socket
+import ssl
 import smtplib
 import threading
 import urllib.error
@@ -26,6 +28,7 @@ from app.jobs.service import enqueue_job
 from app.logs.service import log_action
 
 
+logger = logging.getLogger(__name__)
 ATTACHMENTS_DIR = Path(__file__).resolve().parents[1] / "storage" / "attachments"
 IMAP_RECENT_MESSAGES_LIMIT = 3
 IMAP_DEFAULT_INITIAL_LIMIT = 20
@@ -36,6 +39,75 @@ IMAP_MAX_ATTACHMENT_SIZE_MB = 10
 IMAP_TIMEOUT_SECONDS = 20
 SYNC_LOCKS: dict[int, threading.Lock] = {}
 INITIAL_HISTORY_MODES = {"new", "7d", "30d", "100", "custom"}
+
+
+def _imap_test_context(settings: EmailSettings, request_id: str | None = None) -> dict:
+    return {
+        "request_id": request_id,
+        "provider": (settings.provider or "imap").strip().lower(),
+        "host": (settings.imap_host or "").strip(),
+        "port": settings.imap_port,
+        "security": (settings.imap_security or "").strip().lower(),
+        "mailbox": (settings.inbox_folder or settings.mailbox or "INBOX").strip() or "INBOX",
+    }
+
+
+def _imap_password_status(settings: EmailSettings) -> tuple[str | None, str | None]:
+    raw_password = settings.imap_password_encrypted
+    if raw_password and decrypt_secret(raw_password) is None:
+        return None, "La contraseña guardada no se ha podido descifrar."
+    password = (decrypt_secret(raw_password) or "").strip() if raw_password else ""
+    if not password:
+        return None, "La configuración IMAP está incompleta."
+    return password, None
+
+
+def _imap_connection_message(settings: EmailSettings, exc: Exception | None = None) -> tuple[str, str | None]:
+    if exc is None:
+        return "Conexion correcta.", None
+    message = str(exc).strip()
+    normalized = message.lower()
+    provider = (settings.provider or "").strip().lower()
+    host = (settings.imap_host or "").strip() or "imap.gmail.com"
+    port = settings.imap_port or 993
+    if isinstance(exc, ssl.SSLError) or any(marker in normalized for marker in ("ssl", "tls", "certificate")):
+        return "La configuración SSL/TLS no es válida.", "ssl_error"
+    if any(marker in normalized for marker in ("authentication failed", "invalid credentials", "login failed", "auth failed", "bad credentials", "[authentificationfailed]", "[authenticationfailed]")):
+        if provider == "gmail" or "gmail" in host:
+            return "Google ha rechazado la autenticación. Comprueba que utilizas una contraseña de aplicación.", "authentication_failed"
+        return "Usuario o contraseña incorrectos.", "authentication_failed"
+    if any(marker in normalized for marker in ("user unknown", "permission denied", "forbidden")):
+        return "Usuario o contraseña incorrectos.", "authentication_failed"
+    if any(marker in normalized for marker in ("no such mailbox", "mailbox not found", "unknown mailbox", "folder not found", "selected mailbox")):
+        return f"La carpeta {settings.inbox_folder or settings.mailbox or 'INBOX'} no está disponible.", "mailbox_not_found"
+    if isinstance(exc, (TimeoutError, socket.timeout)) or "timed out" in normalized or "timeout" in normalized:
+        return f"No se ha podido conectar con {host}:{port}.", "timeout"
+    if isinstance(exc, ConnectionRefusedError) or "refused" in normalized or "unreachable" in normalized or "connection" in normalized or "network" in normalized or "socket" in normalized or isinstance(exc, socket.gaierror):
+        return f"No se ha podido conectar con {host}:{port}.", "connection_failed"
+    if isinstance(exc, imaplib.IMAP4.error):
+        return "Usuario o contraseña incorrectos.", "authentication_failed"
+    return f"No se ha podido conectar con {host}:{port}.", "unexpected_error"
+
+
+def _log_imap_test_failure(settings: EmailSettings, exc: Exception | None, request_id: str | None = None) -> None:
+    context = _imap_test_context(settings, request_id)
+    message, error_type = _imap_connection_message(settings, exc)
+    payload = {
+        "event": "imap.test_connection_failed",
+        "provider": context["provider"],
+        "host": context["host"],
+        "port": context["port"],
+        "security": context["security"],
+        "request_id": context["request_id"],
+        "error_type": error_type,
+    }
+    if exc is None:
+        logger.warning(message, extra=payload)
+    else:
+        if error_type == "unexpected_error":
+            logger.exception(message, extra=payload)
+        else:
+            logger.warning(message, extra=payload)
 
 
 def classify_integration_error(error: Exception | str) -> str:
@@ -64,9 +136,13 @@ def classify_integration_error(error: Exception | str) -> str:
 
 
 def validate_imap_config(settings: EmailSettings) -> dict:
-    password = decrypt_secret(settings.imap_password_encrypted)
+    password, error_message = _imap_password_status(settings)
+    if error_message:
+        return {"ok": False, "error_type": "invalid_configuration", "message": error_message}
     if not settings.imap_host or not settings.imap_username or not password:
-        return {"ok": False, "error_type": "invalid_configuration", "message": "Faltan host, usuario o password IMAP."}
+        return {"ok": False, "error_type": "invalid_configuration", "message": "La configuración IMAP está incompleta."}
+    if (settings.imap_security or "").strip().lower() not in {"ssl_tls", "starttls", "none"}:
+        return {"ok": False, "error_type": "invalid_configuration", "message": "La configuración SSL/TLS no es válida."}
     return {"ok": True, "error_type": None, "message": "Configuracion IMAP valida."}
 
 
@@ -191,15 +267,25 @@ def _imap_search_criteria(
     return criteria or ["ALL"]
 
 
-def test_imap_connection(settings: EmailSettings) -> dict:
+def test_imap_connection(settings: EmailSettings, *, request_id: str | None = None) -> dict:
     validation = validate_imap_config(settings)
     if not validation["ok"]:
         return {"ok": False, "error_type": validation["error_type"], "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": validation["message"]}
-    password = decrypt_secret(settings.imap_password_encrypted)
+    password, error_message = _imap_password_status(settings)
+    if error_message:
+        return {"ok": False, "error_type": "invalid_configuration", "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": error_message}
+    if not password:
+        return {"ok": False, "error_type": "invalid_configuration", "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": "La configuración IMAP está incompleta."}
+    context = _imap_test_context(settings, request_id)
+    client = None
     try:
+        if context["security"] not in {"ssl_tls", "starttls", "none"}:
+            return {"ok": False, "error_type": "invalid_configuration", "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": "La configuración SSL/TLS no es válida."}
         client = _imap_client(settings)
-        client.login(settings.imap_username, password)
-        status, data = client.select(settings.inbox_folder or "INBOX", readonly=True)
+        client.login((settings.imap_username or "").strip(), password)
+        status, data = client.select(context["mailbox"], readonly=True)
+        if status != "OK":
+            return {"ok": False, "error_type": "mailbox_not_found", "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": f"La carpeta {context['mailbox']} no está disponible."}
         search_status, search_data = client.search(None, "UNSEEN" if settings.read_unread_only else "ALL")
         ids = (search_data[0] or b"").split() if search_status == "OK" else []
         last_email = ""
@@ -207,13 +293,21 @@ def test_imap_connection(settings: EmailSettings) -> dict:
             fetch_status, msg_data = client.fetch(ids[-1], "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)])")
             if fetch_status == "OK" and msg_data and msg_data[0]:
                 last_email = msg_data[0][1].decode(errors="ignore").replace("\r", " ").replace("\n", " ")[:300]
-        client.logout()
-        if status != "OK":
-            return {"ok": False, "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": "No se pudo abrir la carpeta IMAP."}
-        found = int((data[0] or b"0").decode(errors="ignore") or 0)
-        return {"ok": True, "found": found, "new": len(ids), "duplicates": 0, "last_email": last_email, "message": f"Conexion correcta. Correos en carpeta: {found}. Coinciden con el filtro: {len(ids)}."}
-    except (imaplib.IMAP4.error, socket.timeout, OSError) as exc:
-        return {"ok": False, "error_type": classify_integration_error(exc), "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": f"Error IMAP: {exc}"}
+        return {"ok": True, "found": int((data[0] or b"0").decode(errors="ignore") or 0), "new": len(ids), "duplicates": 0, "last_email": last_email, "message": f"Conexion correcta. Correos en carpeta: {int((data[0] or b'0').decode(errors='ignore') or 0)}. Coinciden con el filtro: {len(ids)}."}
+    except (imaplib.IMAP4.error, socket.timeout, socket.gaierror, ssl.SSLError, ConnectionRefusedError, TimeoutError, OSError) as exc:
+        message, error_type = _imap_connection_message(settings, exc)
+        _log_imap_test_failure(settings, exc, request_id)
+        return {"ok": False, "error_type": error_type or classify_integration_error(exc), "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": message}
+    except Exception as exc:  # noqa: BLE001
+        message, error_type = _imap_connection_message(settings, exc)
+        _log_imap_test_failure(settings, exc, request_id)
+        return {"ok": False, "error_type": error_type or "unexpected_error", "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": message}
+    finally:
+        if client is not None:
+            try:
+                client.logout()
+            except Exception:  # noqa: BLE001
+                logger.debug("IMAP logout ignored", extra=_imap_test_context(settings, request_id))
 
 
 def preview_initial_imap_sync(settings: EmailSettings) -> dict:

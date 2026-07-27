@@ -219,6 +219,15 @@ class SecurityConfigurationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "ENCRYPTION_KEY must be a valid Fernet key"):
                 get_settings()
 
+    def test_update_with_form_preserves_secret_when_field_is_missing(self):
+        settings = EmailSettings(company_id=1, imap_password_encrypted=encrypt_secret("demo-password"))
+        previous = settings.imap_password_encrypted
+
+        update_with_form(settings, {"imap_username": "demo@example.com"}, {"imap_password_encrypted"})
+
+        self.assertEqual(settings.imap_password_encrypted, previous)
+        self.assertEqual(mask_secret(settings.imap_password_encrypted), "••••••••")
+
     def test_production_rejects_demo_bootstrap(self):
         with patch.dict(
             os.environ,

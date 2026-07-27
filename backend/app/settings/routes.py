@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone
 from datetime import date
 from urllib.parse import urlsplit, urlunsplit
@@ -28,6 +29,8 @@ from app.dashboard.service import recent_processed_emails_overview
 from app.jobs.service import enqueue_job
 from app.tenancy.database import get_tenant_db
 from app.tenancy.migrations import tenant_migration_report
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -628,16 +631,42 @@ def test_connection(section: str, db: Session = Depends(get_tenant_db), user: Te
 
 
 @router.post("/email/imap/test")
-def test_email_imap(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def test_email_imap(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not can_test_email_settings(user):
         return RedirectResponse("/settings#email-diagnostics", status_code=303)
     settings = get_or_create_settings(db, EmailSettings, user.company_id)
-    result = test_imap_connection(settings)
-    settings.last_imap_test_at = datetime.now(timezone.utc)
-    settings.last_imap_test_ok = result["ok"]
-    settings.last_imap_test_message = result["message"]
-    db.commit()
-    log_action(db, company_id=user.company_id, user=user, action="email.imap.test", entity_type="settings", entity_id=settings.id, message=result["message"])
+    request_id = getattr(request.state, "request_id", None)
+    try:
+        result = test_imap_connection(settings, request_id=request_id)
+        settings.last_imap_test_at = datetime.now(timezone.utc)
+        settings.last_imap_test_ok = result["ok"]
+        settings.last_imap_test_message = result["message"]
+        db.commit()
+        log_action(db, company_id=user.company_id, user=user, action="email.imap.test", entity_type="settings", entity_id=settings.id, message=result["message"])
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "imap.test.route_failed",
+            extra={
+                "event": "imap.test.route_failed",
+                "request_id": request_id,
+                "provider": (settings.provider or "imap").strip().lower(),
+                "host": (settings.imap_host or "").strip(),
+                "port": settings.imap_port,
+                "security": (settings.imap_security or "").strip().lower(),
+                "error_type": exc.__class__.__name__,
+            },
+        )
+        settings.last_imap_test_at = datetime.now(timezone.utc)
+        settings.last_imap_test_ok = False
+        settings.last_imap_test_message = "No se ha podido comprobar la conexión IMAP en este momento."
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+        try:
+            log_action(db, company_id=user.company_id, user=user, action="email.imap.test", entity_type="settings", entity_id=settings.id, message=settings.last_imap_test_message)
+        except Exception:
+            db.rollback()
     return RedirectResponse("/settings#email-diagnostics", status_code=303)
 
 

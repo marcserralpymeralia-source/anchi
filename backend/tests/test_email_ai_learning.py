@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+import imaplib
+import socket
+import ssl
 from pathlib import Path
 from unittest.mock import patch
 
@@ -21,21 +24,36 @@ from app.db.models import Email, EmailSettings, LLMSettings, PromptExecution, Pr
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import EmailSyncState, MasterCompany  # noqa: E402
 from app.agent.prompt_runtime import run_prompt_execution, validate_prompt_output  # noqa: E402
+import app.settings.integrations as integrations  # noqa: E402
 from app.settings.integrations import backfill_imap_emails, preview_initial_imap_sync, read_latest_imap_emails, run_initial_imap_sync  # noqa: E402
 from scripts.evaluate_agent import run_evaluation  # noqa: E402
 
 
 class FakeImapClient:
-    def __init__(self, messages: dict[str, bytes], search_result: bytes | None = None) -> None:
-        self.messages = messages
+    def __init__(
+        self,
+        messages: dict[str, bytes] | None = None,
+        search_result: bytes | None = None,
+        login_exc: Exception | None = None,
+        select_status: str = "OK",
+        select_payload: bytes = b"2",
+    ) -> None:
+        self.messages = messages or {}
         self.search_result = search_result
+        self.login_exc = login_exc
+        self.select_status = select_status
+        self.select_payload = select_payload
         self.search_calls: list[tuple] = []
+        self.login_calls: list[tuple] = []
 
     def login(self, *_args, **_kwargs):
+        self.login_calls.append(_args)
+        if self.login_exc is not None:
+            raise self.login_exc
         return "OK", [b"logged in"]
 
     def select(self, *_args, **_kwargs):
-        return "OK", [b"2"]
+        return self.select_status, [self.select_payload]
 
     def status(self, mailbox: str, *_args, **_kwargs):
         return "OK", [f"{mailbox} (UIDVALIDITY 777)".encode()]
@@ -206,6 +224,79 @@ class EmailAiLearningTests(unittest.TestCase):
         self.assertEqual(tenant_db.scalar(select(func.count()).select_from(Email)) or 0, 2)
         tenant_db.close()
         master_db.close()
+
+    def test_imap_connection_gmail_success_uses_ssl_and_inbox(self):
+        self._seed_imap()
+        tenant_db = self.TenantSession()
+        settings = tenant_db.scalar(select(EmailSettings).where(EmailSettings.company_id == 1))
+        settings.provider = "gmail"
+        settings.imap_host = "imap.gmail.com"
+        settings.imap_port = 993
+        settings.imap_use_ssl = True
+        settings.imap_security = "ssl_tls"
+        settings.read_unread_only = False
+        client = FakeImapClient(
+            {
+                "1": b"From: compras@example.com\r\nSubject: Pedido 1\r\nMessage-ID: <pedido-1@example.com>\r\n\r\nPedido 1",
+            },
+            search_result=b"1",
+        )
+        with patch("app.settings.integrations.imaplib.IMAP4_SSL", return_value=client) as ssl_mock:
+            result = integrations.test_imap_connection(settings)
+
+        self.assertTrue(result["ok"])
+        ssl_mock.assert_called_once()
+        self.assertEqual(client.login_calls[0][0], "demo@example.com")
+        tenant_db.close()
+
+    def test_imap_connection_rejects_invalid_encrypted_password(self):
+        self._seed_imap()
+        tenant_db = self.TenantSession()
+        settings = tenant_db.scalar(select(EmailSettings).where(EmailSettings.company_id == 1))
+        settings.imap_password_encrypted = "not-a-fernet-token"
+
+        result = integrations.test_imap_connection(settings)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["message"], "La contraseña guardada no se ha podido descifrar.")
+        tenant_db.close()
+
+    def test_imap_connection_handles_timeout_and_ssl_errors(self):
+        self._seed_imap()
+        tenant_db = self.TenantSession()
+        settings = tenant_db.scalar(select(EmailSettings).where(EmailSettings.company_id == 1))
+        settings.provider = "gmail"
+        settings.imap_host = "imap.gmail.com"
+        settings.imap_port = 993
+        settings.imap_use_ssl = True
+        settings.imap_security = "ssl_tls"
+
+        with patch("app.settings.integrations.imaplib.IMAP4_SSL", side_effect=TimeoutError("timed out")):
+            timeout_result = integrations.test_imap_connection(settings)
+        with patch("app.settings.integrations.imaplib.IMAP4_SSL", side_effect=ssl.SSLError("bad handshake")):
+            ssl_result = integrations.test_imap_connection(settings)
+        with patch("app.settings.integrations.imaplib.IMAP4_SSL", side_effect=imaplib.IMAP4.error("authentication failed")):
+            auth_result = integrations.test_imap_connection(settings)
+
+        self.assertFalse(timeout_result["ok"])
+        self.assertEqual(timeout_result["message"], "No se ha podido conectar con imap.gmail.com:993.")
+        self.assertFalse(ssl_result["ok"])
+        self.assertEqual(ssl_result["message"], "La configuración SSL/TLS no es válida.")
+        self.assertFalse(auth_result["ok"])
+        self.assertIn("Google ha rechazado la autenticación", auth_result["message"])
+        tenant_db.close()
+
+    def test_imap_connection_detects_incomplete_configuration(self):
+        self._seed_imap()
+        tenant_db = self.TenantSession()
+        settings = tenant_db.scalar(select(EmailSettings).where(EmailSettings.company_id == 1))
+        settings.imap_username = ""
+
+        result = integrations.test_imap_connection(settings)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["message"], "La configuración IMAP está incompleta.")
+        tenant_db.close()
 
     def test_initial_imap_preview_and_sync_seed_last_seen_uid_without_history(self):
         self._seed_imap()
