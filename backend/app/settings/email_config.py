@@ -151,6 +151,8 @@ def serialize_email_settings(db: Session, company_id: int) -> dict:
             "auto_sync_enabled": settings.auto_sync_enabled,
             "read_unread_only": settings.read_unread_only,
             "read_from_date": settings.read_from_date,
+            "initial_history_mode": settings.initial_history_mode,
+            "initial_history_limit": settings.initial_history_limit,
             "mark_as_read_after_import": settings.mark_as_read_after_import,
             "move_after_processing": settings.move_after_processing,
             "post_process_action": settings.post_process_action,

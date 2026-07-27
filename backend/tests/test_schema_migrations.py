@@ -264,6 +264,8 @@ class SchemaMigrationTests(unittest.TestCase):
         model_columns = set(EmailSettings.__table__.columns.keys())
         registry_columns = set(TENANT_COMPAT_COLUMNS["email_settings"].keys())
         self.assertIn("smtp_enabled", registry_columns)
+        self.assertIn("initial_history_mode", registry_columns)
+        self.assertIn("initial_history_limit", registry_columns)
         self.assertTrue(registry_columns.issubset(model_columns))
 
     def test_upgrade_tenant_repairs_missing_email_settings_columns_on_current_schema(self):
@@ -294,6 +296,8 @@ class SchemaMigrationTests(unittest.TestCase):
                         auto_sync_enabled BOOLEAN DEFAULT false,
                         read_unread_only BOOLEAN DEFAULT true,
                         read_from_date VARCHAR(50),
+                        initial_history_mode VARCHAR(30) DEFAULT 'new',
+                        initial_history_limit INTEGER DEFAULT 50,
                         mark_as_read_after_import BOOLEAN DEFAULT false,
                         move_after_processing BOOLEAN DEFAULT false,
                         post_process_action VARCHAR(50) DEFAULT 'mark_read',
@@ -405,6 +409,8 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertTrue(result["is_current"])
         columns = {column["name"] for column in inspect(self.tenant_engine).get_columns("email_settings")}
         self.assertIn("smtp_enabled", columns)
+        self.assertIn("initial_history_mode", columns)
+        self.assertIn("initial_history_limit", columns)
 
     def test_upgrade_messages_schema_creates_conversations_and_links_legacy_data(self):
         self._seed_legacy_messages_schema()

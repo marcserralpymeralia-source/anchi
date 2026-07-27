@@ -130,6 +130,8 @@ class EmailSettings(Base):
     auto_sync_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     read_unread_only: Mapped[bool] = mapped_column(Boolean, default=True)
     read_from_date: Mapped[str | None] = mapped_column(String(50))
+    initial_history_mode: Mapped[str] = mapped_column(String(30), default="new")
+    initial_history_limit: Mapped[int] = mapped_column(Integer, default=50)
     mark_as_read_after_import: Mapped[bool] = mapped_column(Boolean, default=False)
     move_after_processing: Mapped[bool] = mapped_column(Boolean, default=False)
     post_process_action: Mapped[str] = mapped_column(String(50), default="mark_read")

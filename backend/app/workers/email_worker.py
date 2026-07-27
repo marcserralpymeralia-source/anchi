@@ -90,7 +90,14 @@ def _run_due_tenant(master_db: Session, tenant: MasterTenantDatabase, state: Ema
             state.enabled = False
             master_db.commit()
             return
-        read_latest_imap_emails(db, email_settings, tenant.company_id, auto_process=True, sync_state=state, sync_session=master_db)
+        read_latest_imap_emails(
+            db,
+            email_settings,
+            tenant.company_id,
+            auto_process=email_settings.auto_process_on_fetch,
+            sync_state=state,
+            sync_session=master_db,
+        )
         _release_lock(master_db, state, success=True)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Error sincronizando tenant %s: %s", tenant.company_id, exc)

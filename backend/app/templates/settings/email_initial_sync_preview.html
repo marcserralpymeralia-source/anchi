@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% set title = "Previsualizar importación inicial" %}
+{% block content %}
+<section class="panel stack" style="max-width: 960px; margin: 0 auto;">
+  <div class="section-title-row">
+    <div>
+      <h2>Previsualizar importación inicial</h2>
+      <p class="muted">Revisamos cuántos correos se traerán antes de ejecutar la primera sincronización IMAP.</p>
+    </div>
+    <span class="badge {% if preview.ok %}status-confirmed{% else %}status-doubtful{% endif %}">{{ preview.title or "Histórico inicial" }}</span>
+  </div>
+
+  <div class="history-summary">
+    <article class="compact-card compact-card-safe">
+      <span>Estimados</span>
+      <strong>{{ preview.estimated if preview.ok else 0 }}</strong>
+      <small>Correos a importar</small>
+    </article>
+    <article class="compact-card compact-card-reviewable">
+      <span>Encontrados</span>
+      <strong>{{ preview.found if preview.ok else 0 }}</strong>
+      <small>Coinciden con el criterio elegido</small>
+    </article>
+    <article class="compact-card compact-card-muted">
+      <span>Límite</span>
+      <strong>{{ preview.limit if preview.ok else 0 }}</strong>
+      <small>Máximo inicial controlado</small>
+    </article>
+  </div>
+
+  <div class="panel" style="padding: 16px;">
+    <p><strong>{{ preview.message if preview.message else "No se pudo calcular la importación inicial." }}</strong></p>
+    {% if preview.date_label %}
+      <p class="muted">Fecha de referencia: {{ preview.date_label }}</p>
+    {% endif %}
+    {% if preview.warning %}
+      <p style="padding: 10px 12px; border-radius: 8px; margin-top: 12px; background: #fff4d6; color: #8a5b00;">{{ preview.warning }}</p>
+    {% endif %}
+    {% if not preview.ok %}
+      <p class="muted">Corrige la configuración IMAP antes de continuar.</p>
+    {% endif %}
+  </div>
+
+  <form class="stack js-loading-form" method="post" action="/settings/email/initial-sync">
+    {% for key, value in form_data.items() %}
+      <input type="hidden" name="{{ key }}" value="{{ value }}">
+    {% endfor %}
+    <div class="actions">
+      <a class="button secondary compact-button" href="/settings#email-receive">Volver</a>
+      {% if preview.ok %}
+        <button class="compact-button" data-loading-text="Importando..." {% if not preview.ok %}disabled{% endif %}>Importar ahora</button>
+      {% endif %}
+    </div>
+  </form>
+</section>
+{% endblock %}

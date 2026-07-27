@@ -515,7 +515,6 @@
         <div class="form-grid">
           <label>Sincronización automática<input name="auto_sync_enabled" type="checkbox" {% if email.auto_sync_enabled %}checked{% endif %}></label>
           <label>Leer solo correos no leídos<input name="read_unread_only" type="checkbox" {% if email.read_unread_only %}checked{% endif %}></label>
-          <label>Fecha inicial<input name="read_from_date" type="date" value="{{ email.read_from_date or '' }}"></label>
           <label>Máximo por sincronización<input name="read_limit" type="number" min="1" max="250" value="{{ email.read_limit }}"></label>
           <label>Frecuencia de sincronización
             <select name="polling_frequency_minutes">
@@ -527,9 +526,32 @@
           </label>
           <label>Límite de prueba<input name="test_read_limit" type="number" min="1" max="50" value="{{ email.test_read_limit }}"></label>
         </div>
+        <details class="drawer-subsection" open>
+          <summary>Histórico inicial</summary>
+          <div class="form-grid">
+            <label>Modo inicial
+              <select name="initial_history_mode">
+                {% set initial_mode = email.initial_history_mode or 'new' %}
+                {% for value, label in [
+                  ("new", "Solo correos nuevos desde ahora"),
+                  ("7d", "Últimos 7 días"),
+                  ("30d", "Últimos 30 días"),
+                  ("100", "Últimos 100 correos"),
+                  ("custom", "Desde una fecha personalizada")
+                ] %}
+                  <option value="{{ value }}" {% if initial_mode == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>Límite inicial<input name="initial_history_limit" type="number" min="1" max="100" value="{{ email.initial_history_limit or 50 }}"></label>
+            <label>Fecha personalizada<input name="read_from_date" type="date" value="{{ email.read_from_date or '' }}"></label>
+          </div>
+          <p class="muted">Por defecto solo se importarán correos nuevos desde ahora. La primera sincronización se confirma antes de importar y nunca trae histórico ilimitado.</p>
+        </details>
         <p class="muted">En Vercel la sincronización automática queda guardada, pero la ejecución debe venir de un cron o servicio externo.</p>
         <div class="drawer-actions">
           <button data-loading-text="Guardando...">Guardar configuración</button>
+          <button class="secondary js-loading-form" formaction="/settings/email/initial-sync/preview" formmethod="post" data-loading-text="Preparando..." data-confirm="Previsualizar la sincronización inicial con el historial elegido?">Previsualizar importación inicial</button>
           <button class="secondary js-loading-form" formaction="/settings/email/read-unprocessed" formmethod="post" data-loading-text="Buscando...">Buscar correos nuevos ahora</button>
           <button class="secondary js-loading-form" formaction="/settings/email/backfill" formmethod="post" data-loading-text="Recuperando..." data-confirm="Recuperar histórico IMAP con el rango configurado?">Traer rango</button>
         </div>

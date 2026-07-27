@@ -11,7 +11,9 @@ from sqlalchemy.orm import Session
 from app.core.templating import templates
 from app.core.config import get_settings
 from app.auth.dependencies import current_user
+from app.master.database import get_master_db
 from app.master.service import TenantUser
+from app.master.models import EmailSyncState
 from app.core.encryption import mask_secret
 from app.db.models import AuditLog, BrandingSettings, Company, Customer, DecisionSettings, Email, EmailSettings, EmailTemplate, ExportSettings, FTPSettings, InputChannel, InboundMessage, LLMSettings, Order, Product, PromptTemplate, PromptVersion, ScoringSettings
 from app.db.models import BackgroundJob
@@ -19,7 +21,7 @@ from app.logs.service import log_action
 from app.settings.agent_config import agent_metrics, agent_status, apply_safety_level, improvement_suggestions
 from app.settings.branding import branding_to_dict, delete_brand_asset, get_or_create_branding, reset_branding, store_brand_asset, update_branding_from_form
 from app.settings.email_config import TEMPLATE_VARIABLES, email_config_status, email_templates, ensure_default_email_templates, serialize_email_settings
-from app.settings.integrations import classify_sample, extract_sample, send_test_email, test_imap_connection, test_smtp_connection
+from app.settings.integrations import classify_sample, extract_sample, preview_initial_imap_sync, run_initial_imap_sync, send_test_email, test_imap_connection, test_smtp_connection
 from app.settings.application import run_connection_test, update_settings_section_async
 from app.settings.service import get_or_create_settings, update_with_form
 from app.dashboard.service import recent_processed_emails_overview
@@ -43,6 +45,31 @@ def _parse_date_input(raw_value: str | None) -> date | None:
         return date.fromisoformat(raw_value)
     except ValueError:
         return None
+
+
+def _normalize_receive_form(data: dict) -> dict:
+    for field in ["auto_sync_enabled", "read_unread_only", "mark_as_read_after_import", "move_after_processing", "imap_use_ssl"]:
+        data.setdefault(field, "off")
+    data.setdefault("initial_history_mode", "new")
+    data.setdefault("initial_history_limit", "50")
+    return data
+
+
+def _clone_email_settings_for_preview(db: Session, company_id: int, data: dict) -> EmailSettings:
+    current = get_or_create_settings(db, EmailSettings, company_id)
+    preview = EmailSettings(company_id=company_id)
+    for column in EmailSettings.__table__.columns:
+        if column.name in {"id", "company_id"}:
+            continue
+        if hasattr(current, column.name):
+            setattr(preview, column.name, getattr(current, column.name))
+    update_with_form(preview, data, {"imap_password_encrypted", "client_secret_encrypted", "access_token_encrypted", "refresh_token_encrypted"})
+    try:
+        preview.initial_history_limit = max(min(int(preview.initial_history_limit or 50), 100), 1)
+    except (TypeError, ValueError):
+        preview.initial_history_limit = 50
+    preview.initial_history_mode = preview.initial_history_mode if preview.initial_history_mode in {"new", "7d", "30d", "100", "custom"} else "new"
+    return preview
 
 
 @router.get("")
@@ -291,25 +318,21 @@ def get_email_settings(db: Session = Depends(get_tenant_db), user: TenantUser = 
 async def update_email_receive(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not can_edit_email_settings(user):
         return JSONResponse({"error": "Solo Administrador puede modificar la configuracion de correo."}, status_code=403)
-    data = await request_data(request)
+    data = _normalize_receive_form(await request_data(request))
     settings = get_or_create_settings(db, EmailSettings, user.company_id)
-    for field in ["auto_sync_enabled", "read_unread_only", "mark_as_read_after_import", "move_after_processing", "imap_use_ssl"]:
-        data.setdefault(field, "off")
-    fields = ["provider", "imap_host", "imap_port", "imap_security", "imap_use_ssl", "imap_username", "imap_password_encrypted", "inbox_folder", "processed_folder", "error_folder", "no_order_folder", "doubtful_folder", "read_limit", "test_read_limit", "auto_sync_enabled", "read_unread_only", "read_from_date", "mark_as_read_after_import", "move_after_processing", "post_process_action", "polling_frequency_minutes", "client_id", "client_secret_encrypted", "tenant_id", "redirect_uri", "oauth_scopes", "mailbox", "access_token_encrypted", "refresh_token_encrypted", "connected_email"]
+    fields = ["provider", "imap_host", "imap_port", "imap_security", "imap_use_ssl", "imap_username", "imap_password_encrypted", "inbox_folder", "processed_folder", "error_folder", "no_order_folder", "doubtful_folder", "read_limit", "test_read_limit", "auto_sync_enabled", "read_unread_only", "read_from_date", "initial_history_mode", "initial_history_limit", "mark_as_read_after_import", "move_after_processing", "post_process_action", "polling_frequency_minutes", "client_id", "client_secret_encrypted", "tenant_id", "redirect_uri", "oauth_scopes", "mailbox", "access_token_encrypted", "refresh_token_encrypted", "connected_email"]
     save_email_section(db, settings, data, user, fields, {"imap_password_encrypted", "client_secret_encrypted", "access_token_encrypted", "refresh_token_encrypted"})
-    if settings.auto_sync_enabled:
-        settings.auto_process_on_fetch = True
-        allowed_frequencies = {5, 10, 15, 30, 60}
-        try:
-            frequency = int(settings.polling_frequency_minutes or 1)
-        except (TypeError, ValueError):
-            frequency = 5
-        settings.polling_frequency_minutes = frequency if frequency in allowed_frequencies else 5
-    if settings.imap_host and settings.imap_username and settings.imap_password_encrypted and not settings.read_from_date:
-        settings.last_sync_message = "La sincronizacion IMAP leerá solo los 3 correos más recientes."
-        settings.last_sync_error = None
-        settings.updated_at = datetime.now(timezone.utc)
-        db.commit()
+    allowed_frequencies = {5, 10, 15, 30, 60}
+    try:
+        frequency = int(settings.polling_frequency_minutes or 1)
+    except (TypeError, ValueError):
+        frequency = 5
+    settings.polling_frequency_minutes = frequency if frequency in allowed_frequencies else 5
+    try:
+        settings.initial_history_limit = max(min(int(settings.initial_history_limit or 50), 100), 1)
+    except (TypeError, ValueError):
+        settings.initial_history_limit = 50
+    settings.initial_history_mode = settings.initial_history_mode if settings.initial_history_mode in {"new", "7d", "30d", "100", "custom"} else "new"
     log_action(db, company_id=user.company_id, user=user, action="settings.email.receive.update", entity_type="settings", entity_id=settings.id, message="Configuracion de recepcion actualizada")
     return redirect_or_json(request, {"ok": True, "receive": serialize_email_settings(db, user.company_id)["receive"]}, "email-receive")
 
@@ -678,7 +701,7 @@ def backfill_email_history(
     to_date_value = _parse_date_input(to_date)
     if from_date_value and to_date_value and to_date_value < from_date_value:
         return JSONResponse({"ok": False, "message": "La fecha final no puede ser anterior a la inicial."}, status_code=400)
-    safe_limit = max(min(int(limit or 100), 250), 1)
+    safe_limit = max(min(int(limit or 100), 100), 1)
     job = enqueue_job(
         db,
         company_id=user.company_id,
@@ -692,6 +715,52 @@ def backfill_email_history(
         date_label = f"{date_label} a {to_date}"
     log_action(db, company_id=user.company_id, user=user, action="email.backfill", entity_type="job", entity_id=job.id, message=f"Backfill IMAP encolado desde {date_label} (límite {safe_limit})")
     return _queued_job_response(request, job.id, "/settings#email-diagnostics")
+
+
+@router.post("/email/initial-sync/preview")
+async def preview_email_initial_sync(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if not can_edit_email_settings(user):
+        return RedirectResponse("/settings#email-receive", status_code=303)
+    data = _normalize_receive_form(await request_data(request))
+    preview_settings = _clone_email_settings_for_preview(db, user.company_id, data)
+    preview = preview_initial_imap_sync(preview_settings)
+    return templates.TemplateResponse(
+        "settings/email_initial_sync_preview.html",
+        {
+            "request": request,
+            "user": user,
+            "company": db.get(Company, user.company_id),
+            "preview": preview,
+            "form_data": data,
+            "can_edit_email": can_edit_email_settings(user),
+        },
+    )
+
+
+@router.post("/email/initial-sync")
+async def confirm_email_initial_sync(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
+    if not can_edit_email_settings(user):
+        return RedirectResponse("/settings#email-receive", status_code=303)
+    data = _normalize_receive_form(await request_data(request))
+    settings = get_or_create_settings(db, EmailSettings, user.company_id)
+    save_email_section(db, settings, data, user, ["provider", "imap_host", "imap_port", "imap_security", "imap_use_ssl", "imap_username", "imap_password_encrypted", "inbox_folder", "processed_folder", "error_folder", "no_order_folder", "doubtful_folder", "read_limit", "test_read_limit", "auto_sync_enabled", "read_unread_only", "read_from_date", "initial_history_mode", "initial_history_limit", "mark_as_read_after_import", "move_after_processing", "post_process_action", "polling_frequency_minutes", "client_id", "client_secret_encrypted", "tenant_id", "redirect_uri", "oauth_scopes", "mailbox", "access_token_encrypted", "refresh_token_encrypted", "connected_email"], {"imap_password_encrypted", "client_secret_encrypted", "access_token_encrypted", "refresh_token_encrypted"})
+    try:
+        settings.initial_history_limit = max(min(int(settings.initial_history_limit or 50), 100), 1)
+    except (TypeError, ValueError):
+        settings.initial_history_limit = 50
+    settings.initial_history_mode = settings.initial_history_mode if settings.initial_history_mode in {"new", "7d", "30d", "100", "custom"} else "new"
+    db.commit()
+    sync_state = master_db.scalar(select(EmailSyncState).where(EmailSyncState.company_id == user.company_id, EmailSyncState.channel_key == "email"))
+    if not sync_state:
+        sync_state = EmailSyncState(company_id=user.company_id, channel_key="email", enabled=True, frequency_seconds=60, status="idle", next_run_at=datetime.now(timezone.utc))
+        master_db.add(sync_state)
+        master_db.commit()
+    try:
+        result = run_initial_imap_sync(db, settings, user.company_id, sync_state=sync_state, sync_session=master_db)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+    log_action(db, company_id=user.company_id, user=user, action="email.initial_sync", entity_type="settings", entity_id=settings.id, message=result.get("message") or "Sincronizacion inicial ejecutada")
+    return redirect_or_json(request, {"ok": result.get("ok", False), "message": result.get("message"), "preview": result}, "email-receive")
 
 
 @router.get("/agent")

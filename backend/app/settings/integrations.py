@@ -30,10 +30,12 @@ ATTACHMENTS_DIR = Path(__file__).resolve().parents[1] / "storage" / "attachments
 IMAP_RECENT_MESSAGES_LIMIT = 3
 IMAP_DEFAULT_INITIAL_LIMIT = 20
 IMAP_MAX_MESSAGES_PER_RUN = 50
+IMAP_INITIAL_HISTORY_MAX = 100
 IMAP_MAX_ATTACHMENTS_PER_EMAIL = 10
 IMAP_MAX_ATTACHMENT_SIZE_MB = 10
 IMAP_TIMEOUT_SECONDS = 20
 SYNC_LOCKS: dict[int, threading.Lock] = {}
+INITIAL_HISTORY_MODES = {"new", "7d", "30d", "100", "custom"}
 
 
 def classify_integration_error(error: Exception | str) -> str:
@@ -119,6 +121,55 @@ def _parse_imap_date(value: str | None) -> date | None:
         return None
 
 
+def _clamp_initial_history_limit(value: int | str | None) -> int:
+    try:
+        parsed = int(value or 50)
+    except (TypeError, ValueError):
+        parsed = 50
+    return max(1, min(parsed, IMAP_INITIAL_HISTORY_MAX))
+
+
+def _normalize_initial_history_mode(value: str | None) -> str:
+    normalized = (value or "new").strip().lower()
+    return normalized if normalized in INITIAL_HISTORY_MODES else "new"
+
+
+def _advance_uid(uid: str | None) -> str | None:
+    if not uid:
+        return None
+    try:
+        return str(int(uid) + 1)
+    except ValueError:
+        return uid
+
+
+def _initial_history_plan(settings: EmailSettings) -> dict:
+    mode = _normalize_initial_history_mode(getattr(settings, "initial_history_mode", None))
+    limit = _clamp_initial_history_limit(getattr(settings, "initial_history_limit", None))
+    from_date = _parse_imap_date(settings.read_from_date)
+    if mode == "7d":
+        from_date = datetime.now(timezone.utc).date() - timedelta(days=7)
+    elif mode == "30d":
+        from_date = datetime.now(timezone.utc).date() - timedelta(days=30)
+    elif mode == "100":
+        limit = IMAP_INITIAL_HISTORY_MAX
+    elif mode == "custom" and not from_date:
+        raise ValueError("Indica una fecha valida para el historial inicial (AAAA-MM-DD).")
+    return {
+        "mode": mode,
+        "limit": limit,
+        "from_date": from_date,
+        "date_label": from_date.strftime("%d/%m/%Y") if from_date else None,
+        "title": {
+            "new": "Solo correos nuevos desde ahora",
+            "7d": "Últimos 7 días",
+            "30d": "Últimos 30 días",
+            "100": "Últimos 100 correos",
+            "custom": "Desde fecha personalizada",
+        }[mode],
+    }
+
+
 def _imap_search_criteria(
     *,
     start_date: date | None = None,
@@ -163,6 +214,133 @@ def test_imap_connection(settings: EmailSettings) -> dict:
         return {"ok": True, "found": found, "new": len(ids), "duplicates": 0, "last_email": last_email, "message": f"Conexion correcta. Correos en carpeta: {found}. Coinciden con el filtro: {len(ids)}."}
     except (imaplib.IMAP4.error, socket.timeout, OSError) as exc:
         return {"ok": False, "error_type": classify_integration_error(exc), "found": 0, "new": 0, "duplicates": 0, "last_email": "", "message": f"Error IMAP: {exc}"}
+
+
+def preview_initial_imap_sync(settings: EmailSettings) -> dict:
+    validation = validate_imap_config(settings)
+    if not validation["ok"]:
+        return {"ok": False, "message": validation["message"]}
+    plan = _initial_history_plan(settings)
+    password = decrypt_secret(settings.imap_password_encrypted)
+    mailbox = settings.mailbox or settings.inbox_folder or "INBOX"
+    try:
+        client = _imap_client(settings)
+        client.login(settings.imap_username, password)
+        status, _ = client.select(mailbox, readonly=True)
+        if status != "OK":
+            client.logout()
+            return {"ok": False, "message": "No se pudo abrir la carpeta IMAP."}
+        if plan["mode"] == "new":
+            search_status, search_data = client.search(None, "ALL")
+            ids = (search_data[0] or b"").split() if search_status == "OK" else []
+            highest_uid = ids[-1].decode(errors="ignore") if ids else None
+            client.logout()
+            return {
+                "ok": True,
+                "mode": plan["mode"],
+                "title": plan["title"],
+                "limit": 0,
+                "found": 0,
+                "estimated": 0,
+                "date_label": "desde ahora",
+                "checkpoint_uid": highest_uid,
+                "message": "Se guardará el punto de partida actual y no se importará histórico.",
+                "warning": None,
+            }
+        if plan["mode"] == "100":
+            search_status, search_data = client.search(None, "ALL")
+            ids = (search_data[0] or b"").split() if search_status == "OK" else []
+            total = len(ids)
+            planned = min(total, plan["limit"])
+            client.logout()
+            warning = "Se importarán solo los 100 correos más recientes." if total > IMAP_INITIAL_HISTORY_MAX else None
+            return {
+                "ok": True,
+                "mode": plan["mode"],
+                "title": plan["title"],
+                "limit": plan["limit"],
+                "found": total,
+                "estimated": planned,
+                "date_label": None,
+                "checkpoint_uid": None,
+                "message": f"Se importarán aproximadamente {planned} correos.",
+                "warning": warning,
+            }
+        criteria = _imap_search_criteria(start_date=plan["from_date"], unread_only=False)
+        search_status, search_data = client.search(None, *criteria)
+        ids = (search_data[0] or b"").split() if search_status == "OK" else []
+        total = len(ids)
+        planned = min(total, plan["limit"])
+        client.logout()
+        warning = "La interfaz limita la importación inicial a 100 correos." if total > IMAP_INITIAL_HISTORY_MAX else None
+        return {
+            "ok": True,
+            "mode": plan["mode"],
+            "title": plan["title"],
+            "limit": plan["limit"],
+            "found": total,
+            "estimated": planned,
+            "date_label": plan["date_label"],
+            "checkpoint_uid": None,
+            "message": f"Se importarán aproximadamente {planned} correos desde {plan['date_label']}.",
+            "warning": warning,
+        }
+    except (imaplib.IMAP4.error, socket.timeout, OSError) as exc:
+        return {"ok": False, "message": f"Error IMAP: {exc}"}
+
+
+def run_initial_imap_sync(
+    db: Session,
+    settings: EmailSettings,
+    company_id: int,
+    *,
+    sync_state: EmailSyncState | None = None,
+    sync_session: Session | None = None,
+) -> dict:
+    plan = _initial_history_plan(settings)
+    if plan["mode"] == "new":
+        preview = preview_initial_imap_sync(settings)
+        if not preview.get("ok"):
+            return preview
+        checkpoint_uid = preview.get("checkpoint_uid")
+        if sync_state and sync_session:
+            _update_sync_checkpoint(
+                sync_state,
+                sync_session,
+                mailbox=settings.mailbox or settings.inbox_folder or "INBOX",
+                uidvalidity=None,
+                last_uid=checkpoint_uid,
+                saved=0,
+                duplicates=0,
+                attachments_saved=0,
+                found=0,
+                status="idle",
+                progress=0,
+                total=0,
+            )
+        _update_sync_status(settings, True, 0, 0, "Punto de partida guardado. No se importó histórico.")
+        db.commit()
+        return {"ok": True, "found": 0, "saved": 0, "duplicates": 0, "message": "Punto de partida guardado. No se importó histórico.", "checkpoint_uid": checkpoint_uid}
+    if plan["mode"] == "100":
+        return read_latest_imap_emails(
+            db,
+            settings,
+            company_id,
+            auto_process=False,
+            unread_only=False,
+            limit=plan["limit"],
+            sync_state=sync_state,
+            sync_session=sync_session,
+        )
+    return backfill_imap_emails(
+        db,
+        settings,
+        company_id,
+        from_date=plan["from_date"].isoformat() if plan["from_date"] else None,
+        limit=plan["limit"],
+        sync_state=sync_state,
+        sync_session=sync_session,
+    )
 
 
 def _imap_client(settings: EmailSettings):
@@ -305,7 +483,7 @@ def _fetch_imap_emails(
     end_uid: str | None = None,
     unread_only: bool = True,
     limit: int | None = None,
-    auto_process: bool = False,
+    auto_process: bool | None = None,
     label: str = "Lectura IMAP",
     sync_state: EmailSyncState | None = None,
     sync_session: Session | None = None,
@@ -322,6 +500,7 @@ def _fetch_imap_emails(
     errors = 0
     mailbox = settings.mailbox or settings.inbox_folder or "INBOX"
     last_processed_uid: str | None = None
+    should_auto_process = settings.auto_process_on_fetch if auto_process is None else auto_process
     try:
         settings.last_sync_message = f"{label} en curso"
         settings.last_sync_error = None
@@ -334,7 +513,10 @@ def _fetch_imap_emails(
         client.login(settings.imap_username, password)
         client.select(mailbox, readonly=not settings.mark_as_read_after_import)
         uidvalidity = _imap_uidvalidity(client, mailbox)
-        status, data = client.search(None, *_imap_search_criteria(start_date=start_date, end_date=end_date, unread_only=unread_only, start_uid=start_uid, end_uid=end_uid))
+        effective_start_uid = start_uid
+        if not effective_start_uid and not end_uid and not start_date and not end_date and sync_state and sync_state.last_seen_uid and sync_state.backfill_status not in {"running", "paused"}:
+            effective_start_uid = _advance_uid(sync_state.last_seen_uid)
+        status, data = client.search(None, *_imap_search_criteria(start_date=start_date, end_date=end_date, unread_only=unread_only, start_uid=effective_start_uid, end_uid=end_uid))
         if status != "OK":
             client.logout()
             return {"ok": False, "found": 0, "saved": 0, "message": "No se pudieron listar correos."}
@@ -351,6 +533,8 @@ def _fetch_imap_emails(
         checkpoint_uid = sync_state.last_checkpoint_uid if sync_state and sync_state.backfill_status == "paused" else None
         if sync_state and sync_state.backfill_status == "running" and sync_state.backfill_last_uid:
             checkpoint_uid = sync_state.backfill_last_uid
+        if not checkpoint_uid and not start_uid and not end_uid and not start_date and not end_date and sync_state and sync_state.last_seen_uid:
+            checkpoint_uid = sync_state.last_seen_uid
         processed_since_checkpoint = 0
         last_processed_uid = checkpoint_uid
         for offset in range(0, len(ids), batch_size):
@@ -446,7 +630,7 @@ def _fetch_imap_emails(
                 if settings.mark_as_read_after_import:
                     client.store(msg_id, "+FLAGS", "\\Seen")
             db.commit()
-            if (auto_process or settings.auto_process_on_fetch) and saved_email_ids:
+            if should_auto_process and saved_email_ids:
                 for email_id in saved_email_ids:
                     enqueue_job(
                         db,
@@ -559,7 +743,7 @@ def read_latest_imap_emails(
     settings: EmailSettings,
     company_id: int,
     *,
-    auto_process: bool = False,
+    auto_process: bool | None = None,
     unread_only: bool | None = None,
     limit: int | None = None,
     sync_state: EmailSyncState | None = None,
