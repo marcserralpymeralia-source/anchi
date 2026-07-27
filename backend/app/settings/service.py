@@ -1,7 +1,7 @@
 from sqlalchemy.orm import Session
 
-from app.core.encryption import encrypt_secret
-from app.db.models import DecisionSettings, EmailSettings, ExportSettings, FTPSettings, LLMSettings, ScoringSettings
+from app.core.encryption import decrypt_secret, encrypt_secret
+from app.db.models import DecisionSettings, EmailSettings, ExportSettings, FTPSettings, LLMSettings, ScoringSettings, User
 
 
 MODEL_MAP = {
@@ -46,8 +46,13 @@ def update_with_form(instance, data: dict[str, str], secret_fields: set[str] | N
         if not hasattr(instance, key):
             continue
         if key in secret_fields:
-            if value:
-                setattr(instance, key, encrypt_secret(value))
+            normalized = (value or "").strip()
+            if not normalized or normalized in {"********", "••••••••"}:
+                continue
+            if decrypt_secret(normalized) is not None:
+                setattr(instance, key, normalized)
+                continue
+            setattr(instance, key, encrypt_secret(normalized))
             continue
         current = getattr(instance, key)
         if key in bool_fields:
@@ -58,3 +63,15 @@ def update_with_form(instance, data: dict[str, str], secret_fields: set[str] | N
             setattr(instance, key, float(value or 0))
         else:
             setattr(instance, key, value)
+
+
+def resolve_updated_by_id(db: Session, user) -> int | None:
+    if not user:
+        return None
+    user_id = getattr(user, "id", None)
+    if user_id is None:
+        return None
+    try:
+        return user_id if db.get(User, user_id) is not None else None
+    except Exception:
+        return None

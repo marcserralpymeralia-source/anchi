@@ -19,7 +19,7 @@ from app.settings.agent_config import agent_metrics, agent_status, improvement_s
 from app.settings.branding import branding_to_dict, delete_brand_asset, get_or_create_branding, reset_branding, store_brand_asset, update_branding_from_form
 from app.settings.email_config import TEMPLATE_VARIABLES, email_config_status, email_templates, ensure_default_email_templates, serialize_email_settings
 from app.settings.integrations import classify_sample, extract_sample, send_test_email, test_imap_connection, test_smtp_connection
-from app.settings.service import get_or_create_settings, update_with_form
+from app.settings.service import get_or_create_settings, resolve_updated_by_id, update_with_form
 from app.tenancy.migrations import tenant_migration_report
 
 
@@ -47,7 +47,7 @@ async def request_data(request: Request) -> dict:
 def save_email_section(db: Session, settings: EmailSettings, data: dict, user: TenantUser, fields: list[str], secret_fields: set[str] | None = None) -> None:
     payload = {key: data[key] for key in fields if key in data}
     update_with_form(settings, payload, secret_fields)
-    settings.updated_by = user.id
+    settings.updated_by = resolve_updated_by_id(db, user)
     settings.updated_at = datetime.now(timezone.utc)
     db.commit()
 

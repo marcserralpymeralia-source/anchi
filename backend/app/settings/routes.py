@@ -24,7 +24,7 @@ from app.settings.branding import branding_to_dict, delete_brand_asset, get_or_c
 from app.settings.email_config import TEMPLATE_VARIABLES, email_config_status, email_templates, ensure_default_email_templates, serialize_email_settings
 from app.settings.integrations import classify_sample, extract_sample, preview_initial_imap_sync, run_initial_imap_sync, send_test_email, test_imap_connection, test_smtp_connection
 from app.settings.application import run_connection_test, update_settings_section_async
-from app.settings.service import get_or_create_settings, update_with_form
+from app.settings.service import get_or_create_settings, resolve_updated_by_id, update_with_form
 from app.dashboard.service import recent_processed_emails_overview
 from app.jobs.service import enqueue_job
 from app.tenancy.database import get_tenant_db
@@ -301,7 +301,7 @@ async def request_data(request: Request) -> dict:
 
 def save_email_section(db: Session, settings: EmailSettings, data: dict, user: TenantUser, fields: list[str], secret_fields: set[str] | None = None) -> None:
     update_with_form(settings, {field: data.get(field, "") for field in fields if field in data or field in (secret_fields or set())}, secret_fields)
-    settings.updated_by = user.id
+    settings.updated_by = resolve_updated_by_id(db, user)
     settings.updated_at = datetime.now(timezone.utc)
     db.commit()
 
@@ -321,10 +321,58 @@ def get_email_settings(db: Session = Depends(get_tenant_db), user: TenantUser = 
 async def update_email_receive(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not can_edit_email_settings(user):
         return JSONResponse({"error": "Solo Administrador puede modificar la configuracion de correo."}, status_code=403)
+    request_id = getattr(request.state, "request_id", None)
+    logger.info(
+        "settings.email.receive.start",
+        extra={
+            "event": "settings.email.receive.start",
+            "request_id": request_id,
+            "company_id": user.company_id,
+            "user_id": user.id,
+        },
+    )
     data = _normalize_receive_form(await request_data(request))
+    logger.info(
+        "settings.email.receive.form_parsed",
+        extra={
+            "event": "settings.email.receive.form_parsed",
+            "request_id": request_id,
+            "company_id": user.company_id,
+            "provider": (data.get("provider") or "").strip().lower(),
+            "host": (data.get("imap_host") or "").strip(),
+            "port": data.get("imap_port"),
+            "security": (data.get("imap_security") or "").strip().lower(),
+            "has_password": bool((data.get("imap_password_encrypted") or "").strip()),
+            "history_mode": (data.get("initial_history_mode") or "").strip().lower(),
+            "history_limit": data.get("initial_history_limit"),
+        },
+    )
     settings = get_or_create_settings(db, EmailSettings, user.company_id)
+    logger.info(
+        "settings.email.receive.settings_loaded",
+        extra={
+            "event": "settings.email.receive.settings_loaded",
+            "request_id": request_id,
+            "company_id": user.company_id,
+            "settings_id": settings.id,
+        },
+    )
     fields = ["provider", "imap_host", "imap_port", "imap_security", "imap_use_ssl", "imap_username", "imap_password_encrypted", "inbox_folder", "processed_folder", "error_folder", "no_order_folder", "doubtful_folder", "read_limit", "test_read_limit", "auto_sync_enabled", "read_unread_only", "read_from_date", "initial_history_mode", "initial_history_limit", "mark_as_read_after_import", "move_after_processing", "post_process_action", "polling_frequency_minutes", "client_id", "client_secret_encrypted", "tenant_id", "redirect_uri", "oauth_scopes", "mailbox", "access_token_encrypted", "refresh_token_encrypted", "connected_email"]
     save_email_section(db, settings, data, user, fields, {"imap_password_encrypted", "client_secret_encrypted", "access_token_encrypted", "refresh_token_encrypted"})
+    logger.info(
+        "settings.email.receive.saved",
+        extra={
+            "event": "settings.email.receive.saved",
+            "request_id": request_id,
+            "company_id": user.company_id,
+            "settings_id": settings.id,
+            "provider": (settings.provider or "").strip().lower(),
+            "host": (settings.imap_host or "").strip(),
+            "port": settings.imap_port,
+            "security": (settings.imap_security or "").strip().lower(),
+            "has_password": bool(settings.imap_password_encrypted),
+        },
+    )
     allowed_frequencies = {5, 10, 15, 30, 60}
     try:
         frequency = int(settings.polling_frequency_minutes or 1)

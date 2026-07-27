@@ -358,6 +358,12 @@ class SecurityConfigurationTests(unittest.TestCase):
         update_with_form(settings, {"imap_password_encrypted": ""}, {"imap_password_encrypted"})
         self.assertEqual(settings.imap_password_encrypted, original)
 
+    def test_secret_update_flow_preserves_masked_value(self):
+        settings = EmailSettings(company_id=1, imap_password_encrypted=encrypt_secret("old-value"))
+        original = settings.imap_password_encrypted
+        update_with_form(settings, {"imap_password_encrypted": "********"}, {"imap_password_encrypted"})
+        self.assertEqual(settings.imap_password_encrypted, original)
+
     def test_login_template_no_longer_prefills_demo_credentials(self):
         login_template = Path(__file__).resolve().parents[1] / "app" / "templates" / "login.html"
         source = login_template.read_text(encoding="utf-8")
