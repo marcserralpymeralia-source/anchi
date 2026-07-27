@@ -44,6 +44,7 @@ class FakeImapClient:
         self.select_status = select_status
         self.select_payload = select_payload
         self.search_calls: list[tuple] = []
+        self.uid_calls: list[tuple] = []
         self.login_calls: list[tuple] = []
 
     def login(self, *_args, **_kwargs):
@@ -63,6 +64,21 @@ class FakeImapClient:
         if self.search_result is not None:
             return "OK", [self.search_result]
         return "OK", [b"1 2"]
+
+    def uid(self, command, *_args, **_kwargs):
+        self.uid_calls.append((command, *_args))
+        if command == "search":
+            if self.search_result is not None:
+                return "OK", [self.search_result]
+            return "OK", [b"1 2"]
+        if command == "fetch":
+            uid = _args[0].decode() if isinstance(_args[0], bytes) else str(_args[0])
+            raw = self.messages[uid]
+            meta = f"{uid} (UID {uid} RFC822 {{123}})".encode()
+            return "OK", [(meta, raw)]
+        if command == "store":
+            return "OK", [b"stored"]
+        return "OK", [b""]
 
     def fetch(self, msg_id, *_args, **_kwargs):
         uid = msg_id.decode()
@@ -311,7 +327,8 @@ class EmailAiLearningTests(unittest.TestCase):
         }
         settings.initial_history_mode = "new"
         settings.initial_history_limit = 50
-        with patch("app.settings.integrations._imap_client", return_value=FakeImapClient(messages, search_result=b"1 2 3")):
+        client = FakeImapClient(messages, search_result=b"1 2 3")
+        with patch("app.settings.integrations._imap_client", return_value=client):
             preview = preview_initial_imap_sync(settings)
             result = run_initial_imap_sync(tenant_db, settings, 1, sync_state=state, sync_session=master_db)
 
@@ -319,6 +336,9 @@ class EmailAiLearningTests(unittest.TestCase):
         self.assertTrue(preview["ok"])
         self.assertEqual(preview["estimated"], 0)
         self.assertEqual(preview["checkpoint_uid"], "3")
+        self.assertEqual(preview["message"], "Se guardará el punto de partida actual y no se importará histórico.")
+        self.assertTrue(client.uid_calls)
+        self.assertEqual(client.uid_calls[0][0], "search")
         self.assertTrue(result["ok"])
         self.assertEqual(result["saved"], 0)
         self.assertEqual(master_db.get(EmailSyncState, state.id).last_seen_uid, "3")
@@ -370,9 +390,48 @@ class EmailAiLearningTests(unittest.TestCase):
             result = read_latest_imap_emails(tenant_db, settings, 1, auto_process=False, unread_only=False, sync_state=state, sync_session=master_db)
 
         self.assertTrue(result["ok"])
-        self.assertTrue(client.search_calls)
-        self.assertIn("UID", client.search_calls[0])
-        self.assertIn("3:*", client.search_calls[0])
+        self.assertFalse(client.search_calls)
+        self.assertTrue(client.uid_calls)
+        self.assertEqual(client.uid_calls[0][0], "search")
+        self.assertIn("3:*", client.uid_calls[0])
+        self.assertEqual(result["found"], 1)
+        self.assertEqual(result["downloaded"], 1)
+        self.assertEqual(result["saved"], 1)
+        tenant_db.close()
+        master_db.close()
+
+    def test_incremental_sync_skips_one_bad_message_and_imports_the_rest(self):
+        self._seed_imap()
+        tenant_db = self.TenantSession()
+        master_db = self.MasterSession()
+        settings = tenant_db.scalar(select(EmailSettings).where(EmailSettings.company_id == 1))
+        state = master_db.scalar(select(EmailSyncState).where(EmailSyncState.company_id == 1, EmailSyncState.channel_key == "email"))
+        state.last_seen_uid = "1"
+        master_db.commit()
+        messages = {
+            "2": b"From: compras@example.com\r\nSubject: Pedido malo\r\nMessage-ID: <pedido-malo@example.com>\r\n\r\nPedido malo",
+            "3": b"From: compras@example.com\r\nSubject: Pedido bueno\r\nMessage-ID: <pedido-bueno@example.com>\r\n\r\nPedido bueno",
+        }
+        client = FakeImapClient(messages, search_result=b"2 3")
+
+        original_extract_body = integrations._extract_body
+
+        def fake_extract_body(msg):  # noqa: ANN001
+            subject = msg.get("Subject", "")
+            if "malo" in subject:
+                raise ValueError("bad body")
+            return original_extract_body(msg)
+
+        with patch("app.settings.integrations._imap_client", return_value=client), patch("app.settings.integrations._extract_body", side_effect=fake_extract_body):
+            result = read_latest_imap_emails(tenant_db, settings, 1, auto_process=False, unread_only=False, sync_state=state, sync_session=master_db)
+
+        master_db.refresh(state)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["found"], 2)
+        self.assertEqual(result["saved"], 1)
+        self.assertEqual(result["errors"], 1)
+        self.assertEqual(master_db.get(EmailSyncState, state.id).last_seen_uid, "3")
+        self.assertEqual(tenant_db.scalar(select(func.count()).select_from(Email)) or 0, 1)
         tenant_db.close()
         master_db.close()
 
