@@ -134,7 +134,7 @@ def channel_status_payload(db: Session, company_id: int, channel: InputChannel) 
                 else:
                     activity_label = "Última lectura"
                     activity_value = "Sin lectura reciente"
-                details = "Correo listo para recibir pedidos."
+                details = "Correo listo para recibir pedidos. El envío SMTP es opcional."
             else:
                 state = "pending"
                 status_label = "Activo · pendiente de configurar"

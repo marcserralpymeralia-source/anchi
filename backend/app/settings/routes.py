@@ -120,7 +120,13 @@ def build_settings_dashboard(db: Session, user: TenantUser, metrics: dict, llm: 
         ),
         state("identity", "Identidad", "ready" if branding.app_name and (branding.logo_url or branding.dark_logo_url) else "warning" if branding.app_name else "pending", f"{branding.app_name} · {branding.secondary_claim or 'sin claim secundario'}", "Editar"),
         state("channels", "Canales", "ready" if active_channels_count else "pending", f"{active_channels_count} canal activo" if active_channels_count == 1 else f"{active_channels_count} canales activos", "Abrir"),
-        state("email", "Correo", "ready" if email_status["imap_ready"] and email_status["smtp_ready"] else "warning" if email_status["imap_ready"] or email_status["smtp_ready"] else "pending", f"IMAP {'activo' if email_status['imap_ready'] else 'pendiente'} · SMTP {'activo' if email_status['smtp_ready'] else 'pendiente'}", "Revisar"),
+        state(
+            "email",
+            "Correo",
+            "ready" if email_status["imap_ready"] and (not email_status["smtp_enabled"] or email_status["smtp_ready"]) else "warning" if email_status["imap_ready"] or email_status["smtp_ready"] else "pending",
+            f"IMAP {'activo' if email_status['imap_ready'] else 'pendiente'} · SMTP {'activado' if email_status['smtp_enabled'] else 'opcional'}",
+            "Revisar",
+        ),
         state("ai", "Agente IA", "ready" if llm.provider != "disabled" and llm.api_key_encrypted and llm.last_test_ok is not False else "warning" if llm.api_key_encrypted else "pending", f"{llm.provider or 'sin proveedor'} · {llm.classification_model} · {llm.last_test_message or 'sin prueba reciente'}", "Editar"),
         state("customers-products", "Clientes y productos", "ready" if customer_count and product_count else "warning" if customer_count or product_count else "pending", f"{customer_count} clientes · {product_count} productos", "Abrir"),
         state("scoring", "Confianza y automatización", "ready", f"Alta confianza desde {scoring.safe_threshold}% · auto-confirmar {'sí' if llm.allow_auto_confirm else 'no'}", "Editar"),
@@ -293,12 +299,12 @@ async def update_email_receive(request: Request, db: Session = Depends(get_tenan
     save_email_section(db, settings, data, user, fields, {"imap_password_encrypted", "client_secret_encrypted", "access_token_encrypted", "refresh_token_encrypted"})
     if settings.auto_sync_enabled:
         settings.auto_process_on_fetch = True
-        allowed_frequencies = {1, 2, 5, 10}
+        allowed_frequencies = {5, 10, 15, 30, 60}
         try:
             frequency = int(settings.polling_frequency_minutes or 1)
         except (TypeError, ValueError):
-            frequency = 1
-        settings.polling_frequency_minutes = frequency if frequency in allowed_frequencies else 1
+            frequency = 5
+        settings.polling_frequency_minutes = frequency if frequency in allowed_frequencies else 5
     if settings.imap_host and settings.imap_username and settings.imap_password_encrypted and not settings.read_from_date:
         settings.last_sync_message = "La sincronizacion IMAP leerá solo los 3 correos más recientes."
         settings.last_sync_error = None
@@ -308,15 +314,56 @@ async def update_email_receive(request: Request, db: Session = Depends(get_tenan
     return redirect_or_json(request, {"ok": True, "receive": serialize_email_settings(db, user.company_id)["receive"]}, "email-receive")
 
 
+@router.post("/email/disconnect")
+def disconnect_email_account(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if not can_edit_email_settings(user):
+        return RedirectResponse("/settings#email-account", status_code=303)
+    settings = get_or_create_settings(db, EmailSettings, user.company_id)
+    for field in [
+        "provider",
+        "imap_host",
+        "imap_username",
+        "imap_password_encrypted",
+        "client_id",
+        "client_secret_encrypted",
+        "tenant_id",
+        "redirect_uri",
+        "oauth_scopes",
+        "mailbox",
+        "access_token_encrypted",
+        "refresh_token_encrypted",
+        "connected_email",
+        "processed_folder",
+        "error_folder",
+        "no_order_folder",
+        "doubtful_folder",
+        "read_from_date",
+    ]:
+        setattr(settings, field, None)
+    settings.imap_port = 993
+    settings.imap_security = "ssl_tls"
+    settings.imap_use_ssl = True
+    settings.inbox_folder = "INBOX"
+    settings.auto_sync_enabled = False
+    settings.read_unread_only = True
+    settings.mark_as_read_after_import = False
+    settings.move_after_processing = False
+    settings.updated_by = user.id
+    settings.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    log_action(db, company_id=user.company_id, user=user, action="settings.email.disconnect", entity_type="settings", entity_id=settings.id, message="Cuenta de correo desconectada")
+    return RedirectResponse("/settings#email-account", status_code=303)
+
+
 @router.api_route("/email/send", methods=["PUT", "POST"])
 async def update_email_send(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not can_edit_email_settings(user):
         return JSONResponse({"error": "Solo Administrador puede modificar la configuracion de correo."}, status_code=403)
     data = await request_data(request)
     settings = get_or_create_settings(db, EmailSettings, user.company_id)
-    for field in ["save_internal_copy", "preserve_thread_headers"]:
+    for field in ["smtp_enabled", "save_internal_copy", "preserve_thread_headers"]:
         data.setdefault(field, "off")
-    fields = ["smtp_provider", "smtp_host", "smtp_port", "smtp_security", "smtp_username", "smtp_password_encrypted", "from_email", "from_name", "reply_to", "default_cc", "default_bcc", "save_internal_copy", "preserve_thread_headers"]
+    fields = ["smtp_enabled", "smtp_provider", "smtp_host", "smtp_port", "smtp_security", "smtp_username", "smtp_password_encrypted", "from_email", "from_name", "reply_to", "default_cc", "default_bcc", "save_internal_copy", "preserve_thread_headers"]
     save_email_section(db, settings, data, user, fields, {"smtp_password_encrypted"})
     log_action(db, company_id=user.company_id, user=user, action="settings.email.send.update", entity_type="settings", entity_id=settings.id, message="Configuracion de envio actualizada")
     return redirect_or_json(request, {"ok": True, "send": serialize_email_settings(db, user.company_id)["send"]}, "email-send")

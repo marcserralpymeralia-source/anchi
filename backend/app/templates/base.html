@@ -24,6 +24,7 @@
       <nav class="nav">
         <a href="/" title="Gestión de pedidos" class="{% if request.url.path == '/' %}active{% endif %}"><span class="nav-icon">▦</span><span class="nav-label">Gestión de pedidos</span></a>
         <a href="/pedidos" title="Histórico" class="{% if request.url.path.startswith('/pedidos') or request.url.path.startswith('/history') %}active{% endif %}"><span class="nav-icon">◷</span><span class="nav-label">Histórico</span></a>
+        <a href="/mail" title="Bandeja de entrada" class="{% if request.url.path.startswith('/mail') %}active{% endif %}"><span class="nav-icon">✉</span><span class="nav-label">Bandeja de entrada</span></a>
         {% if user.role.name in ["Administrador", "Superadmin"] %}
           <a href="/customers" title="Clientes" class="{% if request.url.path.startswith('/customers') %}active{% endif %}"><span class="nav-icon">◫</span><span class="nav-label">Clientes</span></a>
           <a href="/products" title="Productos" class="{% if request.url.path.startswith('/products') %}active{% endif %}"><span class="nav-icon">▣</span><span class="nav-label">Productos</span></a>

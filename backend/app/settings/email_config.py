@@ -100,14 +100,15 @@ def email_config_status(settings: EmailSettings) -> dict:
     imap_ready = bool(settings.imap_host and settings.imap_username and settings.imap_password_encrypted)
     smtp_ready = bool(settings.smtp_host and settings.smtp_username and settings.smtp_password_encrypted and (settings.from_email or settings.smtp_username))
     provider_status = {
-        "imap": "Configurado correctamente" if imap_ready else "Configuracion incompleta",
-        "gmail": "Pendiente de implementacion OAuth",
-        "microsoft365": "Pendiente de implementacion Microsoft Graph",
-        "smtp": "Configurado correctamente" if smtp_ready else "Configuracion incompleta",
+        "imap": "Conectada" if imap_ready else "Pendiente de conexión",
+        "gmail": "Preparado para Gmail" if settings.provider == "gmail" else "IMAP tradicional",
+        "microsoft365": "Preparado para Microsoft 365" if settings.provider == "microsoft365" else "IMAP tradicional",
+        "smtp": "Activado" if settings.smtp_enabled else "Desactivado",
     }
     return {
         "imap_ready": imap_ready,
         "smtp_ready": smtp_ready,
+        "smtp_enabled": settings.smtp_enabled,
         "provider_status": provider_status,
         "last_imap_test": {
             "ok": settings.last_imap_test_ok,
@@ -156,6 +157,7 @@ def serialize_email_settings(db: Session, company_id: int) -> dict:
             "polling_frequency_minutes": settings.polling_frequency_minutes,
         },
         "send": {
+            "smtp_enabled": settings.smtp_enabled,
             "provider": settings.smtp_provider,
             "smtp_host": settings.smtp_host,
             "smtp_port": settings.smtp_port,

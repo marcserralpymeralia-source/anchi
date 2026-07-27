@@ -1,0 +1,129 @@
+{% extends "base.html" %}
+{% set title = "Detalle de correo" %}
+{% block content %}
+<section class="review-modal-header review-modal-header-v3">
+  <div class="review-header-title">
+    <strong>{{ email.sender }} · {{ email.subject }}</strong>
+    <div class="review-header-meta">
+      <span class="badge">{{ "Archivado" if email.archived else "No leído" if not email.is_read else "Leído" }}</span>
+      <span class="badge">{{ email.received_at.strftime("%d/%m/%Y %H:%M") }}</span>
+      {% if order %}<span class="badge status-confirmed">Vinculado a pedido #{{ order.id }}</span>{% endif %}
+    </div>
+  </div>
+  <div class="review-header-actions review-header-actions-tight">
+    <a class="button secondary compact-button" href="/mail">Volver a bandeja</a>
+  </div>
+</section>
+
+<section class="review-grid review-grid-v3">
+  <article class="review-pane review-entry-pane">
+    <div class="pane-title-row">
+      <h3>Correo recibido</h3>
+      <span class="badge">{{ email.attachments|length }} adjuntos</span>
+    </div>
+    <section class="subpanel stack">
+      <div class="settings-kpis channel-kpis">
+        <div><span>Remitente</span><strong>{{ email.sender }}</strong></div>
+        <div><span>Asunto</span><strong>{{ email.subject }}</strong></div>
+        <div><span>Fecha</span><strong>{{ email.received_at.strftime("%d/%m/%Y %H:%M") }}</strong></div>
+      </div>
+      <article class="subpanel">
+        <div class="section-title-row">
+          <h4>Texto recibido</h4>
+          <button type="button" class="secondary compact-button" onclick="copyText('mail-body-{{ email.id }}')">Copiar</button>
+        </div>
+        <pre id="mail-body-{{ email.id }}" class="doc-text review-email-body">{{ email.body or email.extracted_text or "" }}</pre>
+      </article>
+      {% if email.attachments %}
+        <details class="review-attachments-toggle" open>
+          <summary>
+            <span>Adjuntos</span>
+            <strong>{{ email.attachments|length }}</strong>
+          </summary>
+          <div class="review-attachments-body">
+            <div class="review-attachment-list" role="list">
+              {% for attachment in email.attachments %}
+                {% set attachment_kind = "pdf" if attachment.is_pdf or attachment.content_type == "application/pdf" else "image" if attachment.content_type and attachment.content_type.startswith("image/") else "csv" if attachment.filename.lower().endswith(".csv") or attachment.content_type in ["text/csv", "application/csv"] else "text" if attachment.content_type and attachment.content_type.startswith("text/") or attachment.filename.lower().endswith((".txt", ".log", ".md", ".eml", ".json")) else "doc" if attachment.filename.lower().endswith((".doc", ".docx")) else "sheet" if attachment.filename.lower().endswith((".xls", ".xlsx", ".ods")) else "unsupported" %}
+                <a class="review-attachment-item" role="listitem" target="_blank" href="/channels/email/{{ email.id }}/attachments/{{ attachment.id }}/preview">
+                  <span class="review-attachment-item-main">
+                    <strong>{{ attachment.filename }}</strong>
+                    <span>{{ "PDF" if attachment_kind == "pdf" else "Imagen" if attachment_kind == "image" else "CSV" if attachment_kind == "csv" else "Texto" if attachment_kind == "text" else "DOC" if attachment_kind == "doc" else "Hoja" if attachment_kind == "sheet" else "Adjunto" }}</span>
+                  </span>
+                  <span class="review-attachment-item-action">Previsualizar</span>
+                </a>
+              {% endfor %}
+            </div>
+          </div>
+        </details>
+      {% endif %}
+    </section>
+  </article>
+
+  <article class="review-pane review-proposal-pane">
+    <div class="pane-title-row">
+      <h3>Propuesta del agente</h3>
+      <span class="badge">{{ item.agent_status_label }}</span>
+    </div>
+    <section class="subpanel stack">
+      <div class="settings-kpis channel-kpis">
+        <div><span>Estado</span><strong>{{ item.order_status_label|status_label }}</strong></div>
+        <div><span>Confianza</span><strong>{% if item.score is not none %}{{ "%.0f"|format(item.score) }}%{% else %}--{% endif %}</strong></div>
+        <div><span>Origen</span><strong>{{ item.origin }}</strong></div>
+      </div>
+      <article class="subpanel">
+        <h4>Acción principal</h4>
+        <p class="muted">{{ "El correo ya está vinculado a un pedido." if order else "Puedes procesarlo como pedido o vincularlo a uno existente." }}</p>
+        <div class="actions">
+          <form class="js-loading-form" method="post" action="/mail/{{ email.id }}/process"><button class="primary compact-button" data-loading-text="Procesando...">Procesar como pedido</button></form>
+          <form class="js-loading-form" method="post" action="/mail/{{ email.id }}/reprocess"><button class="secondary compact-button" data-loading-text="Reprocesando...">Reprocesar</button></form>
+          <form class="js-loading-form" method="post" action="/mail/{{ email.id }}/mark-read"><button class="secondary compact-button" data-loading-text="Marcando...">Marcar leído</button></form>
+          <form class="js-loading-form" method="post" action="/mail/{{ email.id }}/archive"><button class="secondary compact-button" data-loading-text="Archivando...">Archivar</button></form>
+          <form class="js-loading-form" method="post" action="/mail/{{ email.id }}/mark-no-order"><button class="secondary compact-button" data-loading-text="Marcando...">Sin pedido</button></form>
+        </div>
+      </article>
+      {% if order %}
+        <article class="subpanel">
+          <h4>Pedido vinculado</h4>
+          <div class="settings-kpis channel-kpis">
+            <div><span>Pedido</span><strong>#{{ order.id }}</strong></div>
+            <div><span>Cliente</span><strong>{{ (order.validated_customer or order.customer).fiscal_name if (order.validated_customer or order.customer) else order.customer_detected_name or "Sin cliente" }}</strong></div>
+            <div><span>Importe/confianza</span><strong>{{ "%.0f"|format(order.score or 0) }}%</strong></div>
+          </div>
+          {% if order.lines %}
+            <div class="recent-email-list">
+              {% for line in order.lines[:5] %}
+                <article class="recent-email-row">
+                  <div>
+                    <strong>{{ line.detected_product or line.original_text or "Línea" }}</strong>
+                    <p class="muted">{{ line.detected_reference or "Sin referencia" }}</p>
+                  </div>
+                  <div class="recent-email-meta">
+                    <span>{{ line.quantity or 0 }} {{ line.unit or "" }}</span>
+                    <span class="badge">{{ line.validation_status }}</span>
+                  </div>
+                </article>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </article>
+      {% else %}
+        <article class="subpanel">
+          <h4>Vincular a pedido</h4>
+          <form class="js-loading-form stack" method="post" action="/mail/{{ email.id }}/link-order">
+            <label>Pedido existente
+              <select name="order_id" required>
+              <option value="">Seleccionar pedido</option>
+              {% for candidate in candidate_orders %}
+                  {% set candidate_customer = candidate.validated_customer or candidate.customer %}
+                  <option value="{{ candidate.id }}">#{{ candidate.id }} · {{ candidate.customer_detected_name or (candidate_customer.fiscal_name if candidate_customer else "Sin cliente") }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <button class="secondary compact-button" data-loading-text="Vinculando...">Vincular a pedido</button>
+          </form>
+        </article>
+      {% endif %}
+    </section>
+  </article>
+</section>
+{% endblock %}

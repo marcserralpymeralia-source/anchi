@@ -410,7 +410,7 @@
           <h4>Estado</h4>
           <p class="muted">{{ email_status.provider_status.imap }} · {{ email_status.provider_status.smtp }}</p>
         </div>
-        <span class="badge {% if email_status.imap_ready and email_status.smtp_ready %}status-confirmed{% else %}status-doubtful{% endif %}">{% if email_status.imap_ready and email_status.smtp_ready %}Configurado{% else %}Con avisos{% endif %}</span>
+        <span class="badge {% if email_status.imap_ready %}status-confirmed{% else %}status-doubtful{% endif %}">{% if email_status.imap_ready %}Configurado{% else %}Con avisos{% endif %}</span>
       </div>
       <div class="settings-kpis">
         <div><span>Última lectura</span><strong>{{ email_status.last_sync.at.strftime("%d/%m %H:%M") if email_status.last_sync.at else "Sin registro" }}</strong></div>
@@ -446,62 +446,164 @@
         </div>
       </section>
     {% endif %}
-    <section class="drawer-card">
+    <section class="drawer-card" id="email-account">
       <div class="section-title-row">
-        <h4>Recepción</h4>
-        {% if can_test_email %}<form class="js-loading-form" method="post" action="/settings/email/imap/test"><button class="secondary compact-button" data-loading-text="Probando...">Probar IMAP</button></form>{% endif %}
+        <div>
+          <h4>Cuenta</h4>
+          <p class="muted">Conecta una cuenta de correo y comprueba que Anchi puede entrar en la bandeja.</p>
+        </div>
+        <div class="actions">
+          <form class="js-loading-form" method="post" action="/settings/email/imap/test">
+            <button class="secondary compact-button" data-loading-text="Probando...">Probar conexión</button>
+          </form>
+        </div>
       </div>
       <form class="stack js-loading-form" method="post" action="/settings/email/receive">
         {% if not can_edit_email %}<fieldset disabled>{% endif %}
         <div class="form-grid">
-          <label>Proveedor<select name="provider"><option value="imap" {% if email.provider == "imap" %}selected{% endif %}>IMAP</option><option value="gmail" {% if email.provider == "gmail" %}selected{% endif %}>Gmail</option><option value="microsoft365" {% if email.provider == "microsoft365" %}selected{% endif %}>Microsoft 365</option></select></label>
-          <label>Host IMAP<input name="imap_host" value="{{ email.imap_host or '' }}"></label>
-          <label>Puerto IMAP<input name="imap_port" type="number" value="{{ email.imap_port }}"></label>
-          <label>Usuario<input name="imap_username" value="{{ email.imap_username or '' }}"></label>
-          <label>Password<input name="imap_password_encrypted" type="password" placeholder="{{ mask_secret(email.imap_password_encrypted) }}"></label>
-          <label>Carpeta entrada<input name="inbox_folder" value="{{ email.inbox_folder }}"></label>
-          <label>Auto sync<input name="auto_sync_enabled" type="checkbox" {% if email.auto_sync_enabled %}checked{% endif %}></label>
-          <label>Solo no leídos<input name="read_unread_only" type="checkbox" {% if email.read_unread_only %}checked{% endif %}></label>
-          <label>Leer desde fecha<input name="read_from_date" type="date" value="{{ email.read_from_date or '' }}"></label>
-          <label>Backfill hasta<input name="to_date" type="date" value=""></label>
-          <label>Límite backfill<input name="limit" type="number" min="1" max="250" value="100"></label>
-          <label>Frecuencia automática
+          <label>Proveedor de correo
+            <select name="provider">
+              <option value="imap" {% if email.provider == "imap" %}selected{% endif %}>Otro proveedor</option>
+              <option value="gmail" {% if email.provider == "gmail" %}selected{% endif %}>Gmail</option>
+              <option value="microsoft365" {% if email.provider == "microsoft365" %}selected{% endif %}>Microsoft 365</option>
+            </select>
+          </label>
+          <label>Dirección de correo<input name="connected_email" value="{{ email.connected_email or email.imap_username or '' }}" placeholder="cliente@empresa.com"></label>
+          <label>Nombre de usuario<input name="imap_username" value="{{ email.imap_username or '' }}" placeholder="cliente@empresa.com"></label>
+          <label>Contraseña<input name="imap_password_encrypted" type="password" placeholder="{{ 'Contraseña configurada' if email.imap_password_encrypted else 'Añadir contraseña' }}"></label>
+          <label>Servidor IMAP<input name="imap_host" value="{{ email.imap_host or '' }}" placeholder="imap.ejemplo.com"></label>
+          <label>Puerto<input name="imap_port" type="number" value="{{ email.imap_port }}"></label>
+          <label>Seguridad
+            <select name="imap_security">
+              {% for value, label in [("ssl_tls", "SSL/TLS"), ("starttls", "STARTTLS"), ("none", "Sin cifrado")] %}
+                <option value="{{ value }}" {% if email.imap_security == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Carpeta de entrada<input name="inbox_folder" value="{{ email.inbox_folder or 'INBOX' }}"></label>
+        </div>
+        <details class="drawer-subsection">
+          <summary>Opciones avanzadas</summary>
+          <div class="form-grid">
+            <label>Identificador cliente<input name="client_id" value="{{ email.client_id or '' }}" placeholder="Opcional"></label>
+            <label>Secreto cliente<input name="client_secret_encrypted" type="password" placeholder="{{ 'Configurado' if email.client_secret_encrypted else 'Opcional' }}"></label>
+            <label>Tenant<input name="tenant_id" value="{{ email.tenant_id or '' }}" placeholder="Opcional"></label>
+            <label>Redirección<input name="redirect_uri" value="{{ email.redirect_uri or '' }}" placeholder="Opcional"></label>
+            <label>Ámbitos OAuth<textarea name="oauth_scopes" rows="2" placeholder="Opcional">{{ email.oauth_scopes or '' }}</textarea></label>
+            <label>Buzón<input name="mailbox" value="{{ email.mailbox or '' }}" placeholder="Opcional"></label>
+            <label>Token acceso<input name="access_token_encrypted" type="password" placeholder="{{ 'Configurado' if email.access_token_encrypted else 'Opcional' }}"></label>
+            <label>Token refresco<input name="refresh_token_encrypted" type="password" placeholder="{{ 'Configurado' if email.refresh_token_encrypted else 'Opcional' }}"></label>
+          </div>
+        </details>
+        <div class="drawer-actions">
+          <button data-loading-text="Guardando...">Guardar cuenta</button>
+          <button class="secondary js-loading-form" formaction="/settings/email/disconnect" formmethod="post" data-loading-text="Desconectando..." data-confirm="Desconectar esta cuenta de correo?">Desconectar cuenta</button>
+        </div>
+        {% if not can_edit_email %}</fieldset>{% endif %}
+      </form>
+    </section>
+    <section class="drawer-card" id="email-receive">
+      <div class="section-title-row">
+        <div>
+          <h4>Recepción</h4>
+          <p class="muted">Define cuándo buscar correos y cuántos traer en cada sincronización.</p>
+        </div>
+        <span class="badge {% if email.auto_sync_enabled %}status-confirmed{% else %}status-doubtful{% endif %}">{{ "Automática" if email.auto_sync_enabled else "Manual" }}</span>
+      </div>
+      <form class="stack js-loading-form" method="post" action="/settings/email/receive">
+        {% if not can_edit_email %}<fieldset disabled>{% endif %}
+        <div class="form-grid">
+          <label>Sincronización automática<input name="auto_sync_enabled" type="checkbox" {% if email.auto_sync_enabled %}checked{% endif %}></label>
+          <label>Leer solo correos no leídos<input name="read_unread_only" type="checkbox" {% if email.read_unread_only %}checked{% endif %}></label>
+          <label>Fecha inicial<input name="read_from_date" type="date" value="{{ email.read_from_date or '' }}"></label>
+          <label>Máximo por sincronización<input name="read_limit" type="number" min="1" max="250" value="{{ email.read_limit }}"></label>
+          <label>Frecuencia de sincronización
             <select name="polling_frequency_minutes">
-              {% set polling_value = email.polling_frequency_minutes if email.polling_frequency_minutes in [1, 2, 5, 10] else 1 %}
-              {% for value in [1, 2, 5, 10] %}
+              {% set polling_value = email.polling_frequency_minutes if email.polling_frequency_minutes in [5, 10, 15, 30, 60] else 5 %}
+              {% for value in [5, 10, 15, 30, 60] %}
                 <option value="{{ value }}" {% if polling_value == value %}selected{% endif %}>Cada {{ value }} minuto{% if value > 1 %}s{% endif %}</option>
               {% endfor %}
             </select>
           </label>
-          <label>Límite lectura<input name="read_limit" type="number" value="{{ email.read_limit }}"></label>
+          <label>Límite de prueba<input name="test_read_limit" type="number" min="1" max="50" value="{{ email.test_read_limit }}"></label>
         </div>
-        <p class="muted">Cuando la recepción automática está activa, los nuevos correos se guardan y se procesan en segundo plano sin bloquear la app.</p>
+        <p class="muted">En Vercel la sincronización automática queda guardada, pero la ejecución debe venir de un cron o servicio externo.</p>
         <div class="drawer-actions">
-          <button data-loading-text="Guardando...">Guardar recepción</button>
-          <button class="secondary js-loading-form" formaction="/settings/email/read" formmethod="post" data-loading-text="Leyendo...">Leer correos</button>
+          <button data-loading-text="Guardando...">Guardar configuración</button>
+          <button class="secondary js-loading-form" formaction="/settings/email/read-unprocessed" formmethod="post" data-loading-text="Buscando...">Buscar correos nuevos ahora</button>
           <button class="secondary js-loading-form" formaction="/settings/email/backfill" formmethod="post" data-loading-text="Recuperando..." data-confirm="Recuperar histórico IMAP con el rango configurado?">Traer rango</button>
         </div>
         {% if not can_edit_email %}</fieldset>{% endif %}
       </form>
     </section>
-    <section class="drawer-card">
+    <section class="drawer-card" id="email-processing">
       <div class="section-title-row">
-        <h4>Envío</h4>
-        {% if can_test_email %}<form class="js-loading-form" method="post" action="/settings/email/smtp/test"><button class="secondary compact-button" data-loading-text="Probando...">Probar SMTP</button></form>{% endif %}
+        <div>
+          <h4>Procesamiento</h4>
+          <p class="muted">Cómo tratar el correo después de importarlo.</p>
+        </div>
+        <span class="badge">{{ "Revisión humana" if email.always_human_review else "Automático" }}</span>
+      </div>
+      <form class="stack js-loading-form" method="post" action="/settings/email/processing">
+        {% if not can_edit_email %}<fieldset disabled>{% endif %}
+        <div class="form-grid">
+          {% for field, label in [
+            ("auto_process_on_fetch","Auto procesar"),
+            ("process_only_with_attachments","Solo con adjuntos"),
+            ("process_only_with_pdf","Solo con PDF"),
+            ("process_without_attachments","Sin adjuntos"),
+            ("allow_reprocess","Permitir reproceso"),
+            ("always_human_review","Revisión humana"),
+            ("mark_doubtful_below_threshold","Marcar dudoso"),
+            ("mark_no_order_if_detected","Marcar sin pedido")
+          ] %}
+            <label>{{ label }}<input name="{{ field }}" type="checkbox" {% if email|attr(field) %}checked{% endif %}></label>
+          {% endfor %}
+          <label>Carpeta procesados<input name="processed_folder" value="{{ email.processed_folder or '' }}" placeholder="Procesados"></label>
+          <label>Carpeta errores<input name="error_folder" value="{{ email.error_folder or '' }}" placeholder="Errores"></label>
+          <label>Carpeta sin pedido<input name="no_order_folder" value="{{ email.no_order_folder or '' }}" placeholder="Sin pedido"></label>
+          <label>Carpeta revisión<input name="doubtful_folder" value="{{ email.doubtful_folder or '' }}" placeholder="Dudosos"></label>
+          <label>Acción pedido<select name="action_order_detected"><option value="move_processed" {% if email.action_order_detected == "move_processed" %}selected{% endif %}>Mover procesados</option><option value="move_by_result" {% if email.action_order_detected == "move_by_result" %}selected{% endif %}>Mover por resultado</option></select></label>
+          <label>Acción sin pedido<select name="action_no_order"><option value="move_no_order" {% if email.action_no_order == "move_no_order" %}selected{% endif %}>Mover sin pedido</option><option value="mark_read" {% if email.action_no_order == "mark_read" %}selected{% endif %}>Marcar leído</option></select></label>
+          <label>Score auto pedido<input name="minimum_score_auto_order" type="number" value="{{ email.minimum_score_auto_order }}"></label>
+        </div>
+        <div class="drawer-actions">
+          <button data-loading-text="Guardando...">Guardar reglas</button>
+        </div>
+        {% if not can_edit_email %}</fieldset>{% endif %}
+      </form>
+    </section>
+    <section class="drawer-card" id="email-send">
+      <div class="section-title-row">
+        <div>
+          <h4>Envío</h4>
+          <p class="muted">Opcional. Actívalo solo si esta cuenta va a enviar correos desde Anchi.</p>
+        </div>
+        <span class="badge {% if email.smtp_enabled and email_status.smtp_ready %}status-confirmed{% else %}status-doubtful{% endif %}">{{ "Activado" if email.smtp_enabled else "Desactivado" }}</span>
       </div>
       <form class="stack js-loading-form" method="post" action="/settings/email/send">
         {% if not can_edit_email %}<fieldset disabled>{% endif %}
         <div class="form-grid">
+          <label>Activar envío de correos<input name="smtp_enabled" type="checkbox" {% if email.smtp_enabled %}checked{% endif %}></label>
           <label>Proveedor<select name="smtp_provider"><option value="smtp" {% if email.smtp_provider == "smtp" %}selected{% endif %}>SMTP</option><option value="gmail_api" {% if email.smtp_provider == "gmail_api" %}selected{% endif %}>Gmail API</option><option value="microsoft_graph" {% if email.smtp_provider == "microsoft_graph" %}selected{% endif %}>Microsoft Graph</option></select></label>
-          <label>Host SMTP<input name="smtp_host" value="{{ email.smtp_host or '' }}"></label>
+          <label>Servidor SMTP<input name="smtp_host" value="{{ email.smtp_host or '' }}" placeholder="smtp.ejemplo.com"></label>
           <label>Puerto SMTP<input name="smtp_port" type="number" value="{{ email.smtp_port }}"></label>
+          <label>Seguridad
+            <select name="smtp_security">
+              {% for value, label in [("starttls", "STARTTLS"), ("ssl_tls", "SSL/TLS"), ("none", "Sin cifrado")] %}
+                <option value="{{ value }}" {% if email.smtp_security == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
           <label>Usuario SMTP<input name="smtp_username" value="{{ email.smtp_username or '' }}"></label>
-          <label>Password SMTP<input name="smtp_password_encrypted" type="password" placeholder="{{ mask_secret(email.smtp_password_encrypted) }}"></label>
-          <label>Remitente<input name="from_email" value="{{ email.from_email or '' }}"></label>
-          <label>Nombre remitente<input name="from_name" value="{{ email.from_name or '' }}"></label>
-          <label>Reply-To<input name="reply_to" value="{{ email.reply_to or '' }}"></label>
-          <label>Guardar copia<input name="save_internal_copy" type="checkbox" {% if email.save_internal_copy %}checked{% endif %}></label>
-          <label>Mantener hilo<input name="preserve_thread_headers" type="checkbox" {% if email.preserve_thread_headers %}checked{% endif %}></label>
+          <label>Contraseña SMTP<input name="smtp_password_encrypted" type="password" placeholder="{{ 'Contraseña configurada' if email.smtp_password_encrypted else 'Añadir contraseña' }}"></label>
+          <label>Correo remitente<input name="from_email" value="{{ email.from_email or '' }}"></label>
+          <label>Nombre del remitente<input name="from_name" value="{{ email.from_name or '' }}"></label>
+          <label>Responder a<input name="reply_to" value="{{ email.reply_to or '' }}"></label>
+          <label>CC por defecto<textarea name="default_cc" rows="2">{{ email.default_cc or '' }}</textarea></label>
+          <label>BCC por defecto<textarea name="default_bcc" rows="2">{{ email.default_bcc or '' }}</textarea></label>
+          <label>Guardar copia interna<input name="save_internal_copy" type="checkbox" {% if email.save_internal_copy %}checked{% endif %}></label>
+          <label>Mantener encabezados de conversación<input name="preserve_thread_headers" type="checkbox" {% if email.preserve_thread_headers %}checked{% endif %}></label>
         </div>
         <div class="drawer-actions">
           <button data-loading-text="Guardando...">Guardar envío</button>
@@ -513,26 +615,33 @@
         {% if not can_edit_email %}</fieldset>{% endif %}
       </form>
     </section>
-    <section class="drawer-card">
+    <section class="drawer-card" id="email-status">
       <div class="section-title-row">
-        <h4>Reglas</h4>
-        <p class="muted">Revisión humana por defecto.</p>
+        <div>
+          <h4>Estado</h4>
+          <p class="muted">{{ email_status.provider_status.imap }} · {{ email_status.provider_status.smtp }}</p>
+        </div>
+        <span class="badge {% if email_status.imap_ready and (not email.smtp_enabled or email_status.smtp_ready) %}status-confirmed{% else %}status-doubtful{% endif %}">{% if email_status.imap_ready %}Conectada{% else %}Desconectada{% endif %}</span>
       </div>
-      <form class="stack js-loading-form" method="post" action="/settings/email/processing">
-        {% if not can_edit_email %}<fieldset disabled>{% endif %}
-        <div class="form-grid">
-          {% for field, label in [("auto_process_on_fetch","Auto procesar"),("process_only_with_attachments","Solo con adjuntos"),("process_only_with_pdf","Solo con PDF"),("process_without_attachments","Sin adjuntos"),("allow_reprocess","Permitir reproceso"),("always_human_review","Revisión humana"),("mark_doubtful_below_threshold","Marcar dudoso"),("mark_no_order_if_detected","Marcar sin pedido")] %}
-            <label>{{ label }}<input name="{{ field }}" type="checkbox" {% if email|attr(field) %}checked{% endif %}></label>
-          {% endfor %}
-          <label>Acción pedido<select name="action_order_detected"><option value="move_processed" {% if email.action_order_detected == "move_processed" %}selected{% endif %}>Mover procesados</option><option value="move_by_result" {% if email.action_order_detected == "move_by_result" %}selected{% endif %}>Mover por resultado</option></select></label>
-          <label>Acción sin pedido<select name="action_no_order"><option value="move_no_order" {% if email.action_no_order == "move_no_order" %}selected{% endif %}>Mover sin pedido</option><option value="mark_read" {% if email.action_no_order == "mark_read" %}selected{% endif %}>Marcar leído</option></select></label>
-          <label>Score auto pedido<input name="minimum_score_auto_order" type="number" value="{{ email.minimum_score_auto_order }}"></label>
-        </div>
-        <div class="drawer-actions">
-          <button data-loading-text="Guardando...">Guardar reglas</button>
-        </div>
-        {% if not can_edit_email %}</fieldset>{% endif %}
-      </form>
+      <div class="settings-kpis">
+        <div><span>Cuenta</span><strong>{% if email_status.imap_ready %}Conectada{% else %}Desconectada{% endif %}</strong></div>
+        <div><span>Dirección</span><strong>{{ email.connected_email or email.imap_username or "Sin definir" }}</strong></div>
+        <div><span>Proveedor</span><strong>{{ email.provider|upper if email.provider else "IMAP" }}</strong></div>
+        <div><span>Última sincronización</span><strong>{{ email_status.last_sync.at.strftime("%d/%m %H:%M") if email_status.last_sync.at else "Sin registro" }}</strong></div>
+        <div><span>Próxima sincronización</span><strong>{% if email.auto_sync_enabled and email.polling_frequency_minutes %}Cada {{ email.polling_frequency_minutes }} min{% else %}Manual{% endif %}</strong></div>
+        <div><span>Último correo</span><strong>{{ email_status.last_sync.message or email_status.last_sync.error or "Sin registro" }}</strong></div>
+        <div><span>Correos pendientes</span><strong>{{ recent_processed_emails|length if recent_processed_emails else 0 }}</strong></div>
+        <div><span>Errores recientes</span><strong>{% if email_status.last_sync.error %}1{% else %}0{% endif %}</strong></div>
+      </div>
+      <div class="drawer-actions">
+        <a class="button secondary compact-button" href="/mail">Ver bandeja de entrada</a>
+        {% if can_test_email %}<form class="js-loading-form" method="post" action="/settings/email/imap/test"><button class="secondary compact-button" data-loading-text="Probando...">Probar IMAP</button></form>{% endif %}
+        {% if can_test_email %}<form class="js-loading-form" method="post" action="/settings/email/smtp/test"><button class="secondary compact-button" data-loading-text="Probando...">Probar SMTP</button></form>{% endif %}
+        <form class="js-loading-form" method="post" action="/settings/email/read-unprocessed"><button class="secondary compact-button" data-loading-text="Sincronizando...">Sincronizar ahora</button></form>
+      </div>
+      {% if email_status.last_sync.message or email_status.last_sync.error %}
+        <p class="muted settings-status-note">{{ email_status.last_sync.error or email_status.last_sync.message }}</p>
+      {% endif %}
     </section>
   </div>
 </dialog>

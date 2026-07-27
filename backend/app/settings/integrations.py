@@ -406,6 +406,8 @@ def _fetch_imap_emails(
                     extracted_text=body,
                     status="pending",
                     agent_status="not_processed",
+                    is_read=False,
+                    archived=False,
                     detected_type=None,
                 )
                 db.add(email)

@@ -115,8 +115,8 @@
               <h4>Correo</h4>
               <p class="muted">La configuración completa vive en el apartado de Correo.</p>
             </div>
-            <span class="badge {% if item.email_status.imap_ready and item.email_status.smtp_ready %}status-confirmed{% else %}status-doubtful{% endif %}">
-              {% if item.email_status.imap_ready and item.email_status.smtp_ready %}Configurado{% else %}Pendiente{% endif %}
+            <span class="badge {% if item.email_status.imap_ready %}status-confirmed{% else %}status-doubtful{% endif %}">
+              {% if item.email_status.imap_ready %}Configurado{% else %}Pendiente{% endif %}
             </span>
           </div>
           <div class="settings-kpis">
