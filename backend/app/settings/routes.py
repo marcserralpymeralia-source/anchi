@@ -753,14 +753,32 @@ def send_email_test(to_email: str = Form(...), subject: str = Form("Prueba SMTP"
 
 @router.post("/email/read")
 def read_email(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    request_id = getattr(request.state, "request_id", None)
+    logger.info(
+        "settings.email.read.start",
+        extra={"event": "settings.email.read.start", "request_id": request_id, "company_id": user.company_id, "user_id": user.id},
+    )
     job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": False}, created_by_user_id=user.id)
+    logger.info(
+        "settings.email.read.queued",
+        extra={"event": "settings.email.read.queued", "request_id": request_id, "company_id": user.company_id, "job_id": job.id, "job_type": job.job_type},
+    )
     log_action(db, company_id=user.company_id, user=user, action="email.read", entity_type="job", entity_id=job.id, message="Lectura IMAP encolada")
     return _queued_job_response(request, job.id)
 
 
 @router.post("/email/read-unprocessed")
 def read_unprocessed_email(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    request_id = getattr(request.state, "request_id", None)
+    logger.info(
+        "settings.email.read_unprocessed.start",
+        extra={"event": "settings.email.read_unprocessed.start", "request_id": request_id, "company_id": user.company_id, "user_id": user.id},
+    )
     job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": True, "limit": 3}, created_by_user_id=user.id)
+    logger.info(
+        "settings.email.read_unprocessed.queued",
+        extra={"event": "settings.email.read_unprocessed.queued", "request_id": request_id, "company_id": user.company_id, "job_id": job.id, "job_type": job.job_type},
+    )
     log_action(db, company_id=user.company_id, user=user, action="email.read_unprocessed", entity_type="job", entity_id=job.id, message="Lectura de correos recientes encolada")
     return _queued_job_response(request, job.id, "/settings#email-diagnostics")
 

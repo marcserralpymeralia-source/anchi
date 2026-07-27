@@ -257,7 +257,16 @@ def workbench_item_detail(kind: str, item_id: int, request: Request, db: Session
 
 @router.post("/workbench/read-email")
 def workbench_read_email(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    request_id = getattr(request.state, "request_id", None)
+    logger.info(
+        "workbench.email.read.start",
+        extra={"event": "workbench.email.read.start", "request_id": request_id, "company_id": user.company_id, "user_id": user.id},
+    )
     job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": False}, created_by_user_id=user.id)
+    logger.info(
+        "workbench.email.read.queued",
+        extra={"event": "workbench.email.read.queued", "request_id": request_id, "company_id": user.company_id, "job_id": job.id, "job_type": job.job_type},
+    )
     log_action(db, company_id=user.company_id, user=user, action="workbench.email.read", entity_type="job", entity_id=job.id, message="Lectura IMAP encolada")
     return _queued_job_response(request, job.id)
 
@@ -272,7 +281,16 @@ def workbench_process_pending(request: Request, db: Session = Depends(get_tenant
 @router.post("/workbench/process-recent")
 def workbench_process_recent(request: Request, limit: int = Form(3), db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     safe_limit = max(min(int(limit or 3), 10), 1)
+    request_id = getattr(request.state, "request_id", None)
+    logger.info(
+        "workbench.process_recent.start",
+        extra={"event": "workbench.process_recent.start", "request_id": request_id, "company_id": user.company_id, "user_id": user.id, "limit": safe_limit},
+    )
     job = enqueue_job(db, company_id=user.company_id, job_type="process_recent_emails", payload={"limit": safe_limit}, created_by_user_id=user.id)
+    logger.info(
+        "workbench.process_recent.queued",
+        extra={"event": "workbench.process_recent.queued", "request_id": request_id, "company_id": user.company_id, "job_id": job.id, "job_type": job.job_type, "limit": safe_limit},
+    )
     log_action(db, company_id=user.company_id, user=user, action="workbench.process_recent", entity_type="job", entity_id=job.id, message=f"Procesamiento de emergencia IMAP encolado: {safe_limit} correos")
     return _queued_job_response(request, job.id)
 

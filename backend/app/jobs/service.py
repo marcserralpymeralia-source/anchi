@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.observability import encode_trace_payload, split_trace_payload
-from app.db.models import BackgroundJob, JobAttempt
+from app.db.models import BackgroundJob, JobAttempt, User
 
 ACTIVE_JOB_STATUSES = {"queued", "running", "retrying"}
 TERMINAL_JOB_STATUSES = {"success", "failed", "cancelled"}
@@ -94,6 +94,17 @@ def _settings():
     return get_settings()
 
 
+def _safe_created_by_user_id(db: Session, created_by_user_id: int | None) -> int | None:
+    if created_by_user_id is None:
+        return None
+    try:
+        if db.get(User, created_by_user_id) is None:
+            return None
+    except Exception:
+        return None
+    return created_by_user_id
+
+
 def _retry_budget(job: BackgroundJob) -> int:
     return max(0, int(job.max_retries or 0))
 
@@ -171,13 +182,14 @@ def enqueue_job(
     configured_max_retries = max(0, int((max_retries if max_retries is not None else DEFAULT_MAX_RETRIES.get(job_type, 3))))
     max_retries_final = min(configured_max_retries, max(0, settings.job_max_attempts - 1))
     stored_payload = encode_trace_payload(normalized_payload)
+    safe_created_by_user_id = _safe_created_by_user_id(db, created_by_user_id)
     job = BackgroundJob(
         company_id=company_id,
         job_type=job_type,
         dedupe_key=key,
         status="queued",
         payload_json=_dumps(stored_payload),
-        created_by_user_id=created_by_user_id,
+        created_by_user_id=safe_created_by_user_id,
         max_retries=max_retries_final,
         queued_at=_now(),
         attempt_count=0,
