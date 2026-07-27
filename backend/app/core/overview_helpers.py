@@ -7,6 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.agent.platform import LearningService
+from app.core.timezones import format_local_datetime
 from app.db.models import (
     Alert,
     AuditLog,
@@ -62,7 +63,7 @@ def seed_input_channels(db: Session, company_id: int) -> None:
 def _format_agent_time(value: datetime | None) -> str:
     if not value:
         return "Sin lectura registrada"
-    return value.strftime("%H:%M")
+    return format_local_datetime(value, fmt="%H:%M", default="Sin lectura registrada")
 
 
 def active_channels_for_company(db: Session, company_id: int) -> list[dict]:
@@ -85,6 +86,8 @@ def active_channels_for_company(db: Session, company_id: int) -> list[dict]:
 
 
 def agent_operational_context(db: Session, company_id: int, workbench: dict) -> dict:
+    company = db.get(Company, company_id)
+    timezone_name = company.timezone if company else None
     email_settings = get_or_create_settings(db, EmailSettings, company_id)
     llm_settings = get_or_create_settings(db, LLMSettings, company_id)
     items = workbench.get("all_items", [])
@@ -113,7 +116,7 @@ def agent_operational_context(db: Session, company_id: int, workbench: dict) -> 
         "level": level,
         "label": label,
         "detail": detail,
-        "last_sync": _format_agent_time(email_settings.last_sync_at),
+        "last_sync": format_local_datetime(email_settings.last_sync_at, timezone_name, "%H:%M", "Sin lectura registrada"),
         "last_sync_message": "El agente esta atento a nuevas entradas y preparando propuestas.",
         "new_emails": email_settings.last_sync_new or 0,
         "pending_analysis": tabs.get("not_processed", 0),
@@ -126,6 +129,8 @@ def agent_operational_context(db: Session, company_id: int, workbench: dict) -> 
 
 
 def agent_activity_items(db: Session, company_id: int) -> list[dict]:
+    company = db.get(Company, company_id)
+    timezone_name = company.timezone if company else None
     logs = db.scalars(
         select(AuditLog)
         .where(
@@ -169,7 +174,7 @@ def agent_activity_items(db: Session, company_id: int) -> list[dict]:
         if message in seen_messages and message == "He actualizado la cola de trabajo.":
             continue
         seen_messages.add(message)
-        items.append({"time": log.created_at.strftime("%H:%M"), "message": message})
+        items.append({"time": format_local_datetime(log.created_at, timezone_name, "%H:%M", "--:--"), "message": message})
         if len(items) >= 5:
             break
     if not items:
@@ -254,6 +259,8 @@ def channel_status_payload(db: Session, company_id: int, channel: InputChannel) 
     spec = CHANNEL_CONFIG_SPECS.get(channel.key, {})
     settings_map = channel_settings_map(db, company_id, channel.id)
     email_status = email_config_status(get_or_create_settings(db, EmailSettings, company_id)) if channel.key == "email" else None
+    company = db.get(Company, company_id)
+    timezone_name = company.timezone if company else None
     last_message = (
         db.scalar(
             select(InboundMessage)
@@ -283,7 +290,7 @@ def channel_status_payload(db: Session, company_id: int, channel: InputChannel) 
                 last_sync = email_status["last_sync"]
                 if last_sync["at"]:
                     activity_label = "Última lectura"
-                    activity_value = f"{last_sync['at'].strftime('%d/%m %H:%M')} · {last_sync['new']} nuevos"
+                    activity_value = f"{format_local_datetime(last_sync['at'], timezone_name, '%d/%m %H:%M', 'Sin lectura reciente')} · {last_sync['new']} nuevos"
                 else:
                     activity_label = "Última lectura"
                     activity_value = "Sin lectura reciente"
@@ -315,7 +322,7 @@ def channel_status_payload(db: Session, company_id: int, channel: InputChannel) 
                 if last_message:
                     stamp = last_message.last_processed_at or last_message.created_at
                     activity_label = "Última actividad"
-                    activity_value = f"{stamp.strftime('%d/%m %H:%M')} · {last_message.status}"
+                    activity_value = f"{format_local_datetime(stamp, timezone_name, '%d/%m %H:%M', 'Sin actividad')} · {last_message.status}"
                 else:
                     activity_label = "Última actividad"
                     activity_value = "Sin actividad todavía"
@@ -393,7 +400,7 @@ def serialize_alert(alert: Alert) -> dict:
         "entity_type": related_entity_type,
         "entity_id": related_entity_id,
         "created_at": alert.created_at,
-        "created_label": alert.created_at.strftime("%d/%m %H:%M") if alert.created_at else "",
+        "created_label": format_local_datetime(alert.created_at, fmt="%d/%m %H:%M", default=""),
         "action_label": action_label,
         "action_href": action_href,
         "secondary_label": "Marcar vista" if alert.status == "open" else "Reabrir" if alert.status in {"resolved", "ignored"} else "Resolver",

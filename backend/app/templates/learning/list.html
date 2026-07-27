@@ -101,8 +101,8 @@
           <div><span>Modo del agente</span><strong>{{ learning.summary.agent_mode }}</strong></div>
           <div><span>Perfil de seguridad</span><strong>{{ learning.summary.safety_level }}</strong></div>
           <div><span>Revisión humana</span><strong>{{ "Obligatoria" if learning.summary.human_review_required else "Opcional" }}</strong></div>
-          <div><span>Último indexado</span><strong>{{ learning.summary.last_indexing_at.strftime("%d/%m %H:%M") if learning.summary.last_indexing_at else "Sin registro" }}</strong></div>
-          <div><span>Último histórico</span><strong>{{ learning.summary.last_import_at.strftime("%d/%m %H:%M") if learning.summary.last_import_at else "Sin registro" }}</strong></div>
+          <div><span>Último indexado</span><strong>{{ learning.summary.last_indexing_at | local_dt(tenant_timezone, "%d/%m %H:%M") }}</strong></div>
+          <div><span>Último histórico</span><strong>{{ learning.summary.last_import_at | local_dt(tenant_timezone, "%d/%m %H:%M") }}</strong></div>
           <div><span>Casos RAG</span><strong>{{ learning.summary.rag_cases_total }}</strong></div>
         </div>
       </article>
@@ -209,7 +209,7 @@
         <tbody>
           {% for item in learning.corrections %}
             <tr>
-              <td>{{ item.created_at.strftime("%d/%m %H:%M") if item.created_at else "--" }}</td>
+              <td>{{ item.created_at | local_dt(tenant_timezone, "%d/%m %H:%M", "--") }}</td>
               <td>{{ item.type_label }} · {{ item.field_name }}</td>
               <td class="wide-cell">{{ item.before }}</td>
               <td class="wide-cell">{{ item.after }}</td>
@@ -319,7 +319,7 @@
         <tbody>
           {% for item in learning.histories %}
             <tr>
-              <td>{{ item.created_at.strftime("%d/%m %H:%M") if item.created_at else "--" }}</td>
+              <td>{{ item.created_at | local_dt(tenant_timezone, "%d/%m %H:%M", "--") }}</td>
               <td>{{ item.entity_type }}</td>
               <td class="wide-cell">{{ item.filename }}</td>
               <td>{{ item.rows_created }} creados · {{ item.rows_updated }} actualizados · {{ item.rows_ignored }} ignorados</td>

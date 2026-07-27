@@ -11,6 +11,7 @@ from starlette.responses import HTMLResponse
 from starlette.templating import _TemplateResponse
 
 from app.core.performance import performance_profiling_enabled, record_template_render
+from app.core.timezones import DEFAULT_TIMEZONE, format_local_datetime, resolve_timezone_name
 
 
 APP_DIR = Path(__file__).resolve().parents[1]
@@ -166,6 +167,17 @@ class PerformanceAwareTemplates(Jinja2Templates):
 
 
 templates = PerformanceAwareTemplates(directory=str(TEMPLATES_DIR))
+
+
+def tenant_timezone_context_processor(request):  # noqa: ANN001
+    tenant = getattr(getattr(request, "state", None), "tenant", None)
+    company = getattr(tenant, "company", None)
+    timezone_name = resolve_timezone_name(getattr(company, "timezone", None) if company else None)
+    return {"tenant_timezone": timezone_name, "default_timezone": DEFAULT_TIMEZONE}
+
+
+templates.context_processors.append(tenant_timezone_context_processor)
+templates.env.filters["local_dt"] = format_local_datetime
 templates.env.filters["status_label"] = status_label
 templates.env.filters["status_class"] = status_class
 templates.env.globals["page_url"] = page_url

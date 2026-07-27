@@ -4,8 +4,9 @@ from math import ceil
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.timezones import format_local_datetime
 from app.core.pagination import normalize_page
-from app.db.models import Customer, CustomerContactPoint, CustomerDomain, Email, FTPSettings, LLMSettings, Order, OrderLine, ScoringSettings
+from app.db.models import Company, Customer, CustomerContactPoint, CustomerDomain, Email, FTPSettings, LLMSettings, Order, OrderLine, ScoringSettings
 from app.orders.state import CONFIRMED_ORDER_STATUSES, ERROR_ORDER_STATUSES, ORDER_STATE, PENDING_ORDER_STATUSES
 from app.settings.service import get_or_create_settings
 
@@ -112,6 +113,8 @@ def order_issue_summary(order: Order, settings: ScoringSettings, *, line_metrics
 
 
 def recent_processed_emails_overview(db: Session, company_id: int, *, days: int = 7, limit: int = 8) -> list[dict]:
+    company = db.get(Company, company_id)
+    timezone_name = company.timezone if company else None
     cutoff = datetime.now(timezone.utc) - timedelta(days=max(days, 1))
     emails = db.scalars(
         select(Email)
@@ -129,7 +132,7 @@ def recent_processed_emails_overview(db: Session, company_id: int, *, days: int 
             "sender": email.sender,
             "subject": email.subject,
             "received_at": email.received_at,
-            "received_label": email.received_at.strftime("%d/%m %H:%M") if email.received_at else "--:--",
+            "received_label": format_local_datetime(email.received_at, timezone_name, "%d/%m %H:%M", "--:--"),
             "agent_status": email.agent_status,
             "status_label": {
                 "processed_order_detected": "Pedido detectado",

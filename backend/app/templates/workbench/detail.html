@@ -102,7 +102,7 @@
             <span class="badge {% if 'whatsapp' in (conversation_preview.provider_label or '')|lower %}status-confirmed{% endif %}">{{ conversation_preview.provider_label if conversation_preview else "WhatsApp" }}</span>
           </div>
           <div class="review-inline-summary review-inline-summary-tight">
-            <span><strong>Fecha</strong>{{ order.conversation.last_activity_at.strftime("%d/%m/%Y %H:%M") if order.conversation and order.conversation.last_activity_at else "—" }}</span>
+          <span><strong>Fecha</strong>{{ order.conversation.last_activity_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M", "—") if order.conversation else "—" }}</span>
             <span><strong>Participantes</strong>{{ conversation_preview.messages|length }}</span>
             <span><strong>Estado</strong>{{ order.status|status_label }}</span>
           </div>
@@ -207,7 +207,7 @@
   <div class="review-grid review-grid-v3">
     <section class="review-pane review-entry-pane">
       <div class="review-inline-summary review-inline-summary-tight">
-        <span>{{ email.sender }} · {{ email.received_at.strftime("%Y-%m-%d %H:%M") }} · {{ item.agent_status_label }}</span>
+        <span>{{ email.sender }} · {{ email.received_at | local_dt(tenant_timezone, "%Y-%m-%d %H:%M") }} · {{ item.agent_status_label }}</span>
       </div>
       <article class="subpanel">
         <p><strong>Asunto:</strong> {{ email.subject }}</p>
@@ -307,7 +307,7 @@
             <h4>{{ inbound_message.subject or "Sin asunto" }}</h4>
             <p class="muted">{{ inbound_message.sender or "Sin remitente" }}</p>
           </div>
-          <span class="badge">{{ inbound_message.received_at.strftime("%d/%m/%Y %H:%M") if inbound_message.received_at else "Sin fecha" }}</span>
+          <span class="badge">{{ inbound_message.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") }}</span>
         </div>
         <div class="review-inline-summary review-inline-summary-tight">
           <span><strong>Canal</strong>{{ item.provider_label }}</span>
@@ -339,7 +339,7 @@
             <article class="whatsapp-chat-bubble inbound">
               <div class="whatsapp-chat-bubble-head">
                 <strong>{{ inbound_message.sender or "Cliente" }}</strong>
-                <span>{{ inbound_message.received_at.strftime("%d/%m/%Y %H:%M") if inbound_message.received_at else "Sin fecha" }}</span>
+                <span>{{ inbound_message.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") }}</span>
               </div>
               <pre class="whatsapp-chat-text">{{ inbound_message.original_content or inbound_message.normalized_text or "" }}</pre>
             </article>

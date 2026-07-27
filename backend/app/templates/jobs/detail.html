@@ -5,7 +5,7 @@
   <div class="section-title-row">
     <div>
       <h2>{{ job.job_type.replace('_', ' ') | title }}</h2>
-      <p class="muted">Job #{{ job.id }} · {{ job.created_at.strftime("%d/%m/%Y %H:%M") if job.created_at else "Sin fecha" }}</p>
+      <p class="muted">Job #{{ job.id }} · {{ job.created_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") }}</p>
     </div>
     <div class="actions">
       <a class="button secondary" href="/jobs/monitor">Volver</a>
@@ -40,16 +40,16 @@
         <div><dt>Intentos</dt><dd>{{ job.attempt_count }}</dd></div>
         <div><dt>Máx. reintentos</dt><dd>{{ job.max_retries }}</dd></div>
         <div><dt>Máx. intentos</dt><dd>{{ job.max_attempts }}</dd></div>
-        <div><dt>Encolado</dt><dd>{{ job.queued_at.strftime("%d/%m/%Y %H:%M:%S") if job.queued_at else "Sin dato" }}</dd></div>
-        <div><dt>Inicio</dt><dd>{{ job.started_at.strftime("%d/%m/%Y %H:%M:%S") if job.started_at else "Pendiente" }}</dd></div>
-        <div><dt>Fin</dt><dd>{{ job.finished_at.strftime("%d/%m/%Y %H:%M:%S") if job.finished_at else "Pendiente" }}</dd></div>
-        <div><dt>Siguiente reintento</dt><dd>{{ job.next_retry_at.strftime("%d/%m/%Y %H:%M:%S") if job.next_retry_at else "Sin programar" }}</dd></div>
-        <div><dt>Último error</dt><dd>{{ job.last_error_at.strftime("%d/%m/%Y %H:%M:%S") if job.last_error_at else "Sin error" }}</dd></div>
+        <div><dt>Encolado</dt><dd>{{ job.queued_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M:%S") }}</dd></div>
+        <div><dt>Inicio</dt><dd>{{ job.started_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M:%S", "Pendiente") }}</dd></div>
+        <div><dt>Fin</dt><dd>{{ job.finished_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M:%S", "Pendiente") }}</dd></div>
+        <div><dt>Siguiente reintento</dt><dd>{{ job.next_retry_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M:%S", "Sin programar") }}</dd></div>
+        <div><dt>Último error</dt><dd>{{ job.last_error_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M:%S", "Sin error") }}</dd></div>
         <div><dt>Tipo error</dt><dd>{{ job.last_error_type or "Sin dato" }}</dd></div>
-        <div><dt>Último pulso</dt><dd>{{ job.last_heartbeat_at.strftime("%d/%m/%Y %H:%M:%S") if job.last_heartbeat_at else "Sin pulso" }}</dd></div>
+        <div><dt>Último pulso</dt><dd>{{ job.last_heartbeat_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M:%S", "Sin pulso") }}</dd></div>
         <div><dt>Edad del pulso</dt><dd>{{ job.heartbeat_age_seconds if job.heartbeat_age_seconds is not none else "Sin dato" }} s</dd></div>
         <div><dt>Lock owner</dt><dd>{{ job.lock_owner or "Sin lock" }}</dd></div>
-        <div><dt>Lock until</dt><dd>{{ job.lock_until.strftime("%d/%m/%Y %H:%M:%S") if job.lock_until else "Sin lock" }}</dd></div>
+        <div><dt>Lock until</dt><dd>{{ job.lock_until | local_dt(tenant_timezone, "%d/%m/%Y %H:%M:%S", "Sin lock") }}</dd></div>
         <div><dt>Lock restante</dt><dd>{{ job.lock_remaining_seconds }} s</dd></div>
         <div><dt>Edad</dt><dd>{{ (job.age_seconds // 60) if job.age_seconds else 0 }} min</dd></div>
         <div><dt>Duración</dt><dd>{{ (job.runtime_seconds // 60) if job.runtime_seconds else 0 }} min</dd></div>
@@ -133,8 +133,8 @@
             <span>{{ attempt.status.replace('_', ' ') | title }}</span>
             <p>
               Worker {{ attempt.worker_id or "sin worker" }}
-              · Inicio {{ attempt.started_at.strftime("%d/%m %H:%M:%S") if attempt.started_at else "Sin dato" }}
-              · Fin {{ attempt.finished_at.strftime("%d/%m %H:%M:%S") if attempt.finished_at else "Sin dato" }}
+              · Inicio {{ attempt.started_at | local_dt(tenant_timezone, "%d/%m %H:%M:%S", "Sin dato") }}
+              · Fin {{ attempt.finished_at | local_dt(tenant_timezone, "%d/%m %H:%M:%S", "Sin dato") }}
               · {{ attempt.duration_seconds }}s
             </p>
             {% if attempt.error_message %}

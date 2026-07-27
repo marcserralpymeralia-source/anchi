@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import current_user
 from app.core.templating import templates
-from app.db.models import ChannelSetting, EmailSettings, InputChannel
+from app.core.timezones import format_local_datetime
+from app.db.models import ChannelSetting, Company, EmailSettings, InputChannel
 from app.dashboard.service import recent_processed_emails_overview
 from app.logs.service import log_action
 from app.master.service import TenantUser
@@ -110,6 +111,8 @@ def channel_status_payload(db: Session, company_id: int, channel: InputChannel) 
     spec = CHANNEL_CONFIG_SPECS.get(channel.key, {})
     settings_map = channel_settings_map(db, company_id, channel.id)
     email_status = email_config_status(get_or_create_settings(db, EmailSettings, company_id)) if channel.key == "email" else None
+    company = db.get(Company, company_id)
+    timezone_name = company.timezone if company else None
     state = "inactive"
     status_label = "Inactivo"
     details = spec.get("summary", "Canal preparado para activarse por cliente.")
@@ -130,7 +133,7 @@ def channel_status_payload(db: Session, company_id: int, channel: InputChannel) 
                 last_sync = email_status["last_sync"]
                 if last_sync["at"]:
                     activity_label = "Última lectura"
-                    activity_value = f"{last_sync['at'].strftime('%d/%m %H:%M')} · {last_sync['new']} nuevos"
+                    activity_value = f"{format_local_datetime(last_sync['at'], timezone_name, '%d/%m %H:%M', 'Sin lectura reciente')} · {last_sync['new']} nuevos"
                 else:
                     activity_label = "Última lectura"
                     activity_value = "Sin lectura reciente"

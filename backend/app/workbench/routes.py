@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,9 +15,10 @@ from sqlalchemy.orm import Session, selectinload
 from app.agent.services import AgentProcessingService, ScoringService
 from app.auth.dependencies import current_user
 from app.core.templating import templates
+from app.core.timezones import format_local_datetime
 from app.dashboard.service import workbench_summary
 from app.db.models import Alert, Conversation, Email, EmailAttachment, EmailSettings, ExportFile, FTPSettings, InboundMessage, Order, ScoringSettings, utcnow
-from app.jobs.service import enqueue_job
+from app.jobs.service import enqueue_job, execute_job_inline
 from app.logs.service import log_action
 from app.master.service import TenantUser
 from app.orders.routes import _customer_label, _sync_customer_product_knowledge, validate_confirmation
@@ -24,12 +27,43 @@ from app.tenancy.database import get_tenant_db
 from app.agent.platform import LearningService
 from app.db.models import Customer, Product, OrderLine
 from app.dashboard.service import email_workbench_item, order_workbench_item
+from app.workers.jobs_worker import is_job_worker_started
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 def _redirect_back(request: Request, fallback: str = "/"):
     return RedirectResponse(request.headers.get("referer") or fallback, status_code=303)
+
+
+def _run_job_inline_if_needed(request: Request, db: Session, user: TenantUser, job, *, action: str, message: str, fallback: str = "/") -> dict | None:  # noqa: ANN001
+    if os.getenv("VERCEL") != "1" and is_job_worker_started():
+        return None
+    request_id = getattr(request.state, "request_id", None)
+    logger.info(
+        "workbench.job.inline.start",
+        extra={"event": "workbench.job.inline.start", "request_id": request_id, "company_id": user.company_id, "user_id": user.id, "job_id": job.id, "job_type": job.job_type},
+    )
+    result = execute_job_inline(db, job)
+    log_action(db, company_id=user.company_id, user=user, action=action, entity_type="job", entity_id=job.id, message=result.get("message") or message)
+    logger.info(
+        "workbench.job.inline.end",
+        extra={
+            "event": "workbench.job.inline.end",
+            "request_id": request_id,
+            "company_id": user.company_id,
+            "user_id": user.id,
+            "job_id": job.id,
+            "job_type": job.job_type,
+            "ok": bool(result.get("ok")),
+            "found": result.get("found"),
+            "saved": result.get("saved"),
+            "duplicates": result.get("duplicates"),
+            "errors": result.get("errors"),
+        },
+    )
+    return result
 
 
 def _parse_selected_items(payload: str) -> list[dict]:
@@ -78,7 +112,7 @@ def _conversation_preview(source) -> dict | None:
                     "direction": getattr(message, "direction", "inbound") or "inbound",
                     "role_label": "Empresa" if (getattr(message, "direction", "inbound") or "inbound") == "outbound" else "Cliente",
                     "text": message.original_content or message.normalized_text or "",
-                    "timestamp_label": message.received_at.strftime("%d/%m/%Y %H:%M") if message.received_at else "",
+                    "timestamp_label": format_local_datetime(message.received_at, fmt="%d/%m/%Y %H:%M", default=""),
                 }
             )
     if not rendered_messages:
@@ -159,9 +193,14 @@ def _inbound_item(message: InboundMessage, *, order: Order | None = None) -> dic
     }
 
 
-def _queued_job_response(request: Request, job_id: int, fallback: str = "/"):
+def _queued_job_response(request: Request, job_id: int, fallback: str = "/", result: dict | None = None):
     if "application/json" in (request.headers.get("accept") or ""):
-        return JSONResponse({"ok": True, "job_id": job_id, "status": "queued", "message": "Trabajo encolado correctamente"})
+        payload = {"ok": True, "job_id": job_id, "status": "queued", "message": "Trabajo encolado correctamente"}
+        if result is not None:
+            payload["status"] = "success" if result.get("ok") else "failed"
+            payload["result"] = result
+            payload["message"] = result.get("message") or payload["message"]
+        return JSONResponse(payload)
     return RedirectResponse(request.headers.get("referer") or fallback, status_code=303)
 
 
@@ -267,6 +306,9 @@ def workbench_read_email(request: Request, db: Session = Depends(get_tenant_db),
         "workbench.email.read.queued",
         extra={"event": "workbench.email.read.queued", "request_id": request_id, "company_id": user.company_id, "job_id": job.id, "job_type": job.job_type},
     )
+    result = _run_job_inline_if_needed(request, db, user, job, action="workbench.email.read.inline", message="Lectura IMAP completada")
+    if result is not None:
+        return _queued_job_response(request, job.id, result=result)
     log_action(db, company_id=user.company_id, user=user, action="workbench.email.read", entity_type="job", entity_id=job.id, message="Lectura IMAP encolada")
     return _queued_job_response(request, job.id)
 
@@ -274,6 +316,9 @@ def workbench_read_email(request: Request, db: Session = Depends(get_tenant_db),
 @router.post("/workbench/process-pending")
 def workbench_process_pending(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     job = enqueue_job(db, company_id=user.company_id, job_type="process_pending_emails", payload={}, created_by_user_id=user.id)
+    result = _run_job_inline_if_needed(request, db, user, job, action="workbench.process_pending.inline", message="Procesamiento de pendientes completado")
+    if result is not None:
+        return _queued_job_response(request, job.id, result=result)
     log_action(db, company_id=user.company_id, user=user, action="workbench.process_pending", entity_type="job", entity_id=job.id, message="Procesamiento de pendientes encolado")
     return _queued_job_response(request, job.id)
 
@@ -291,6 +336,9 @@ def workbench_process_recent(request: Request, limit: int = Form(3), db: Session
         "workbench.process_recent.queued",
         extra={"event": "workbench.process_recent.queued", "request_id": request_id, "company_id": user.company_id, "job_id": job.id, "job_type": job.job_type, "limit": safe_limit},
     )
+    result = _run_job_inline_if_needed(request, db, user, job, action="workbench.process_recent.inline", message=f"Procesamiento IMAP completado: {safe_limit} correos")
+    if result is not None:
+        return _queued_job_response(request, job.id, result=result)
     log_action(db, company_id=user.company_id, user=user, action="workbench.process_recent", entity_type="job", entity_id=job.id, message=f"Procesamiento de emergencia IMAP encolado: {safe_limit} correos")
     return _queued_job_response(request, job.id)
 

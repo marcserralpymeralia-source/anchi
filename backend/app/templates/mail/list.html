@@ -33,7 +33,7 @@
     <div class="settings-kpis">
       <div><span>Dirección</span><strong>{{ mail_settings.connected_email or mail_settings.imap_username or "Sin definir" }}</strong></div>
       <div><span>Servidor</span><strong>{{ mail_settings.imap_host or "Sin servidor" }}</strong></div>
-      <div><span>Última sincronización</span><strong>{{ email_status.last_sync.at.strftime("%d/%m %H:%M") if email_status.last_sync.at else "Sin registro" }}</strong></div>
+      <div><span>Última sincronización</span><strong>{{ email_status.last_sync.at | local_dt(tenant_timezone, "%d/%m %H:%M") }}</strong></div>
       <div><span>Duplicados</span><strong>{{ email_status.last_sync.duplicates }}</strong></div>
     </div>
   </section>
@@ -99,7 +99,7 @@
             <strong>{{ email.subject }}</strong>
           </td>
           <td class="wide-cell muted">{{ (email.body or email.extracted_text or "")[:160] or "Sin contenido visible" }}</td>
-          <td>{{ email.received_at.strftime("%d/%m/%Y %H:%M") }}</td>
+          <td>{{ email.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") }}</td>
           <td>{{ email.attachments|length }}</td>
           <td>
             {% set row_status = "Archivado" if email.archived else "Con error" if email.status.startswith("error") or email.agent_status == "error" else "Sin pedido" if email.status == "no_pedido" or email.agent_status == "processed_no_order" else "Revisión" if email.status == "dudoso" or email.agent_status in ["processed_doubtful", "pending_reprocess"] else "Procesado" if email.agent_status in ["processed", "processed_order_detected"] else "Pendiente" if email.is_read else "No leído" %}

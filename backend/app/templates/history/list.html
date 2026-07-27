@@ -106,7 +106,7 @@
               <span class="badge {{ item.agent_status|status_class }}">{{ item.agent_status_label }}</span>
             {% endif %}
           </td>
-          <td>{{ item.date.strftime("%Y-%m-%d %H:%M") if item.date else "--" }}</td>
+          <td>{{ item.date | local_dt(tenant_timezone, "%Y-%m-%d %H:%M", "--") }}</td>
           <td>{{ item.customer_name or "Sin identificar" }}</td>
           <td>
             <div class="history-origin">

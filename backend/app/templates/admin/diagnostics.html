@@ -61,7 +61,7 @@
             <div class="job-card-preview">
               <div>
                 <span class="job-preview-label">Última sincronización</span>
-                <p>{% if company.last_sync_at %}{{ company.last_sync_at.strftime("%d/%m/%Y %H:%M") }}{% else %}Sin sincronización{% endif %}</p>
+                <p>{{ company.last_sync_at | local_dt(default_timezone, "%d/%m/%Y %H:%M", "Sin sincronización") }}</p>
               </div>
               <div>
                 <span class="job-preview-label">Mensajes</span>

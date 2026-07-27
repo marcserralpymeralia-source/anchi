@@ -78,7 +78,7 @@
           <span class="badge">{{ order.email.detected_type|status_label if order.email else "Pedido" }}</span>
         </div>
         <div class="review-inline-summary review-inline-summary-tight">
-          <span><strong>Fecha</strong>{{ order.email.received_at.strftime("%d/%m/%Y %H:%M") if order.email and order.email.received_at else "—" }}</span>
+          <span><strong>Fecha</strong>{{ order.email.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M", "—") if order.email else "—" }}</span>
           <span><strong>Dominio</strong>{{ order.email.sender.split('@')[-1] if order.email and order.email.sender and '@' in order.email.sender else "—" }}</span>
           <span><strong>Estado</strong>{{ order.status|status_label }}</span>
         </div>
@@ -105,7 +105,7 @@
           <span class="badge {% if 'whatsapp' in (conversation_preview.provider_label or '')|lower %}status-confirmed{% endif %}">{{ conversation_preview.provider_label if conversation_preview else "WhatsApp" }}</span>
         </div>
         <div class="review-inline-summary review-inline-summary-tight">
-          <span><strong>Fecha</strong>{{ order.conversation.last_activity_at.strftime("%d/%m/%Y %H:%M") if order.conversation and order.conversation.last_activity_at else "—" }}</span>
+          <span><strong>Fecha</strong>{{ order.conversation.last_activity_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M", "—") if order.conversation else "—" }}</span>
           <span><strong>Participantes</strong>{{ conversation_preview.messages|length }}</span>
           <span><strong>Estado</strong>{{ order.status|status_label }}</span>
         </div>

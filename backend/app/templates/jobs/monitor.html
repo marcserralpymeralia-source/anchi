@@ -78,14 +78,14 @@
           <div class="job-card-title-row">
             <div class="job-card-title-wrap">
               <strong class="job-card-title">{{ job.job_type.replace('_', ' ') | title }}</strong>
-              <small class="muted">Job #{{ job.id }} · {{ job.created_at.strftime("%d/%m %H:%M") if job.created_at else "Sin fecha" }}</small>
+              <small class="muted">Job #{{ job.id }} · {{ job.created_at | local_dt(tenant_timezone, "%d/%m %H:%M") }}</small>
             </div>
             <span class="job-status-pill job-status-{{ status_class(job.status) }}">{{ job.status.replace('_', ' ') | title }}</span>
           </div>
           <div class="job-card-meta">
-            <span class="job-pill">Encolado {{ job.queued_at.strftime("%d/%m %H:%M") if job.queued_at else "Sin fecha" }}</span>
-            <span class="job-pill">Inicio {{ job.started_at.strftime("%d/%m %H:%M") if job.started_at else "Pendiente" }}</span>
-            <span class="job-pill">Fin {{ job.finished_at.strftime("%d/%m %H:%M") if job.finished_at else "Pendiente" }}</span>
+            <span class="job-pill">Encolado {{ job.queued_at | local_dt(tenant_timezone, "%d/%m %H:%M") }}</span>
+            <span class="job-pill">Inicio {{ job.started_at | local_dt(tenant_timezone, "%d/%m %H:%M", "Pendiente") }}</span>
+            <span class="job-pill">Fin {{ job.finished_at | local_dt(tenant_timezone, "%d/%m %H:%M", "Pendiente") }}</span>
             <span class="job-pill">Intentos {{ job.attempt_count }}</span>
             <span class="job-pill">Reintentos {{ job.retry_count }}</span>
             <span class="job-pill">Máx. {{ job.max_attempts }}</span>
@@ -94,7 +94,7 @@
             <span class="job-pill">Pulso {{ (job.heartbeat_age_seconds // 60) if job.heartbeat_age_seconds else 0 }}m</span>
             <span class="job-pill">Lock {{ job.lock_remaining_seconds }}s</span>
             {% if job.next_retry_at %}
-              <span class="job-pill">Siguiente {{ job.next_retry_at.strftime("%d/%m %H:%M") }}</span>
+              <span class="job-pill">Siguiente {{ job.next_retry_at | local_dt(tenant_timezone, "%d/%m %H:%M") }}</span>
             {% endif %}
             {% if job.dedupe_key %}
               <span class="job-pill">Clave {{ job.dedupe_key[:10] }}</span>

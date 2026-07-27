@@ -92,7 +92,7 @@
     {% set category_label = categories[order.id][1] %}
     {% set order_alerts = alerts[order.id] %}
     <tr class="clickable-row row-{{ category }}" onclick="window.location.href='/orders/{{ order.id }}'">
-      <td>{{ order.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+      <td>{{ order.created_at | local_dt(tenant_timezone, "%Y-%m-%d %H:%M") }}</td>
       <td>{{ order.email.sender if order.email else "" }}</td>
       <td class="wide-cell" title="{{ order.email.subject if order.email else '' }}">{{ order.email.subject if order.email else "" }}</td>
       <td>{{ order.validated_customer.fiscal_name if order.validated_customer else order.customer.fiscal_name if order.customer else order.customer_detected_name or "Sin identificar" }}</td>

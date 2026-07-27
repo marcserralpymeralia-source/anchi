@@ -120,7 +120,7 @@
       <td data-column="price">{{ "%.2f"|format(product.sale_price) if product.sale_price is not none else "—" }}</td>
       <td data-column="description_cont" class="cell-ellipsis" title="{{ product.description_cont or product.description or '—' }}">{{ (product.description_cont or product.description or "—")[:140] }}</td>
       <td data-column="supplier" class="cell-ellipsis" title="{{ product.usual_supplier or '—' }}">{{ product.usual_supplier or "—" }}</td>
-      <td data-column="last_import">{{ stats.last_import or product.created_at.strftime("%d/%m/%Y %H:%M") }}</td>
+      <td data-column="last_import">{{ stats.last_import or (product.created_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M")) }}</td>
       <td data-column="notes" class="cell-ellipsis" title="{{ product.notes or '—' }}">{{ (product.notes or "—")[:120] }}</td>
     </tr>
   {% else %}

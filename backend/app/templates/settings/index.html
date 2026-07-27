@@ -375,7 +375,7 @@
         <div><span>Tiempo migración</span><strong>{{ diagnostics.tenant_schema_execution_ms ~ " ms" if diagnostics.tenant_schema_execution_ms is not none else "Sin registro" }}</strong></div>
         <div><span>Estado esquema</span><strong>{{ diagnostics.tenant_schema_status | replace('_', ' ') | title }}</strong></div>
         <div><span>Esquema actual</span><strong>{{ "Sí" if diagnostics.tenant_schema_is_current else "No" }}</strong></div>
-        <div><span>Última comprobación</span><strong>{{ diagnostics.tenant_schema_last_checked_at.strftime("%d/%m/%Y %H:%M") if diagnostics.tenant_schema_last_checked_at else "Sin registro" }}</strong></div>
+        <div><span>Última comprobación</span><strong>{{ diagnostics.tenant_schema_last_checked_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") }}</strong></div>
         <div><span>IMAP</span><strong>{{ "Configurado" if diagnostics.imap_ready else "Pendiente" }}</strong></div>
         <div><span>OpenAI / LLM</span><strong>{{ "Configurado" if diagnostics.llm_ready else "Pendiente" }}</strong></div>
         <div><span>Clientes</span><strong>{{ diagnostics.customers_total }}</strong></div>
@@ -390,7 +390,7 @@
         <div><span>Jobs reintentando</span><strong>{{ diagnostics.jobs_retrying }}</strong></div>
         <div><span>Jobs fallidos</span><strong>{{ diagnostics.jobs_failed }}</strong></div>
         <div><span>Jobs cancelados</span><strong>{{ diagnostics.jobs_cancelled }}</strong></div>
-        <div><span>Último seed demo</span><strong>{{ diagnostics.last_seed_at.strftime("%d/%m/%Y %H:%M") if diagnostics.last_seed_at else "Sin ejecutar" }}</strong></div>
+        <div><span>Último seed demo</span><strong>{{ diagnostics.last_seed_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M", "Sin ejecutar") }}</strong></div>
       </div>
       {% if is_superadmin %}
         <div class="drawer-actions" style="margin-top:12px">
@@ -413,7 +413,7 @@
         <span class="badge {% if email_status.imap_ready %}status-confirmed{% else %}status-doubtful{% endif %}">{% if email_status.imap_ready %}Configurado{% else %}Con avisos{% endif %}</span>
       </div>
       <div class="settings-kpis">
-        <div><span>Última lectura</span><strong>{{ email_status.last_sync.at.strftime("%d/%m %H:%M") if email_status.last_sync.at else "Sin registro" }}</strong></div>
+        <div><span>Última lectura</span><strong>{{ email_status.last_sync.at | local_dt(tenant_timezone, "%d/%m %H:%M") }}</strong></div>
         <div><span>Nuevos</span><strong>{{ email_status.last_sync.new }}</strong></div>
         <div><span>Duplicados</span><strong>{{ email_status.last_sync.duplicates }}</strong></div>
       </div>
@@ -649,7 +649,7 @@
         <div><span>Cuenta</span><strong>{% if email_status.imap_ready %}Conectada{% else %}Desconectada{% endif %}</strong></div>
         <div><span>Dirección</span><strong>{{ email.connected_email or email.imap_username or "Sin definir" }}</strong></div>
         <div><span>Proveedor</span><strong>{{ email.provider|upper if email.provider else "IMAP" }}</strong></div>
-        <div><span>Última sincronización</span><strong>{{ email_status.last_sync.at.strftime("%d/%m %H:%M") if email_status.last_sync.at else "Sin registro" }}</strong></div>
+        <div><span>Última sincronización</span><strong>{{ email_status.last_sync.at | local_dt(tenant_timezone, "%d/%m %H:%M") }}</strong></div>
         <div><span>Próxima sincronización</span><strong>{% if email.auto_sync_enabled and email.polling_frequency_minutes %}Cada {{ email.polling_frequency_minutes }} min{% else %}Manual{% endif %}</strong></div>
         <div><span>Último correo</span><strong>{{ email_status.last_sync.message or email_status.last_sync.error or "Sin registro" }}</strong></div>
         <div><span>Correos pendientes</span><strong>{{ recent_processed_emails|length if recent_processed_emails else 0 }}</strong></div>
@@ -699,7 +699,7 @@
         </div>
         <div>
           <span>Última prueba</span>
-          <strong>{{ llm.last_test_at.strftime("%d/%m %H:%M") if llm.last_test_at else "Sin prueba" }}</strong>
+          <strong>{{ llm.last_test_at | local_dt(tenant_timezone, "%d/%m %H:%M", "Sin prueba") }}</strong>
         </div>
       </div>
       <div class="drawer-actions">

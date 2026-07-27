@@ -6,7 +6,7 @@
     <strong>{{ email.sender }} · {{ email.subject }}</strong>
     <div class="review-header-meta">
       <span class="badge">{{ "Archivado" if email.archived else "No leído" if not email.is_read else "Leído" }}</span>
-      <span class="badge">{{ email.received_at.strftime("%d/%m/%Y %H:%M") }}</span>
+      <span class="badge">{{ email.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") }}</span>
       {% if order %}<span class="badge status-confirmed">Vinculado a pedido #{{ order.id }}</span>{% endif %}
     </div>
   </div>
@@ -25,7 +25,7 @@
       <div class="settings-kpis channel-kpis">
         <div><span>Remitente</span><strong>{{ email.sender }}</strong></div>
         <div><span>Asunto</span><strong>{{ email.subject }}</strong></div>
-        <div><span>Fecha</span><strong>{{ email.received_at.strftime("%d/%m/%Y %H:%M") }}</strong></div>
+        <div><span>Fecha</span><strong>{{ email.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") }}</strong></div>
       </div>
       <article class="subpanel">
         <div class="section-title-row">

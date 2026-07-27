@@ -5,7 +5,7 @@
   <thead><tr><th>Fecha</th><th>Tipo</th><th>Archivo</th><th>Creados</th><th>Actualizados</th><th>Ignorados</th><th>Estado</th></tr></thead>
   <tbody>
   {% for job in jobs %}
-    <tr><td>{{ job.created_at.strftime("%Y-%m-%d %H:%M") }}</td><td>{{ job.entity_type }}</td><td>{{ job.filename }}</td><td>{{ job.rows_created }}</td><td>{{ job.rows_updated }}</td><td>{{ job.rows_ignored }}</td><td>{{ job.status }}</td></tr>
+    <tr><td>{{ job.created_at | local_dt(tenant_timezone, "%Y-%m-%d %H:%M") }}</td><td>{{ job.entity_type }}</td><td>{{ job.filename }}</td><td>{{ job.rows_created }}</td><td>{{ job.rows_updated }}</td><td>{{ job.rows_ignored }}</td><td>{{ job.status }}</td></tr>
   {% else %}
     <tr><td colspan="7" class="muted">Sin importaciones.</td></tr>
   {% endfor %}

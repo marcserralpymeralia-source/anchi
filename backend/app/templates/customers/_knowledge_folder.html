@@ -141,7 +141,7 @@
                       <td class="wide-cell">{{ row.product_name }}</td>
                       <td>{{ row.reference }}</td>
                       <td>{{ row.times_ordered }}</td>
-                      <td>{{ row.last_order_at.strftime("%d/%m/%Y") if row.last_order_at else "—" }}</td>
+                      <td>{{ row.last_order_at | local_dt(tenant_timezone, "%d/%m/%Y", "—") }}</td>
                       <td>{{ "%.2f"|format(row.average_quantity or 0) }} {{ row.usual_unit or "" }}</td>
                       <td class="wide-cell">{{ row.comments or "—" }}</td>
                     </tr>
@@ -253,7 +253,7 @@
                     <td class="wide-cell">{{ row.product_name }}</td>
                     <td>{{ row.reference }}</td>
                     <td>{{ row.times_ordered }}</td>
-                    <td>{{ row.last_order_at.strftime("%d/%m/%Y") if row.last_order_at else "—" }}</td>
+                    <td>{{ row.last_order_at | local_dt(tenant_timezone, "%d/%m/%Y", "—") }}</td>
                     <td>{{ "%.2f"|format(row.average_quantity or 0) }} {{ row.usual_unit or "" }}</td>
                     <td class="wide-cell">{{ row.comments or "—" }}</td>
                     <td class="actions">

@@ -5,7 +5,7 @@
   </div>
   <article class="featured-process-card queue-item queue-item-confidence-amber">
     <div class="queue-item-main">
-      <strong class="queue-item-name">{{ featured_process_item.date.strftime("%Y-%m-%d %H:%M") if featured_process_item.date else "Sin fecha" }} · {{ featured_process_item.customer_name }}</strong>
+      <strong class="queue-item-name">{{ featured_process_item.date | local_dt(tenant_timezone, "%Y-%m-%d %H:%M", "Sin fecha") }} · {{ featured_process_item.customer_name }}</strong>
       <div class="queue-item-tags">
         <span class="queue-item-tag queue-item-tag-channel">{{ featured_process_item.origin or "PDF" }}</span>
         <span class="queue-item-tag queue-item-tag-confidence queue-item-confidence-amber">{{ "%.0f"|format(featured_process_item.score or 0) }}%</span>

@@ -130,7 +130,7 @@
             </div>
             <div>
               <span>Última lectura</span>
-              <strong>{{ item.email_status.last_sync.at.strftime("%d/%m %H:%M") if item.email_status.last_sync.at else "Sin registro" }}</strong>
+              <strong>{{ item.email_status.last_sync.at | local_dt(tenant_timezone, "%d/%m %H:%M") }}</strong>
             </div>
           </div>
           <div class="drawer-actions">
