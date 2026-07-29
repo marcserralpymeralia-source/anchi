@@ -256,7 +256,7 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.assertEqual(response.context["workbench"]["items"], [])
         self.assertEqual(response.context["pagination"]["total_items"], 0)
 
-    def test_dashboard_normalizes_featured_item_date_from_received_at(self):
+    def test_dashboard_normalizes_featured_item_legacy_fields(self):
         self.seed_master(with_tenant_db=True)
         request = FakeRequest(session={"membership_id": 1, "user_id": 1, "company_id": 1, "company_slug": "demo"})
         request.state.branding = branding_to_dict(default_branding_payload())
@@ -266,11 +266,9 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         fake_item = {
             "kind": "email",
             "received_at": datetime(2026, 7, 29, 12, 0, 0, tzinfo=timezone.utc),
-            "customer_name": "Cliente Demo",
-            "origin": "Email",
-            "score": 80,
-            "category_label": "Confianza alta",
-            "subject": "Pedido demo",
+            "customer": "Cliente Demo",
+            "channel": "Email",
+            "score": None,
         }
         fake_workbench = {
             "items": [fake_item],
@@ -284,7 +282,14 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
                 user=fake_user,
             )
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(fake_workbench["items"][0]["received_at"], datetime(2026, 7, 29, 12, 0, 0, tzinfo=timezone.utc))
+        featured = response.context["featured_process_item"]
+        self.assertEqual(featured["date"], datetime(2026, 7, 29, 12, 0, 0, tzinfo=timezone.utc))
+        self.assertEqual(featured["customer_name"], "Cliente Demo")
+        self.assertEqual(featured["origin"], "Email")
+        self.assertEqual(featured["score"], 0)
+        self.assertEqual(featured["category_label"], "Sin analizar")
+        self.assertEqual(featured["subject"], "Pedido compra")
+        self.assertEqual(featured["detail_url"], "/")
 
     def test_safe_sort_timestamp_handles_missing_and_naive_datetimes(self):
         self.assertEqual(_safe_sort_timestamp(None), 0.0)

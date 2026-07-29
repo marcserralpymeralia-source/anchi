@@ -41,6 +41,26 @@ def _empty_workbench_summary(filters: dict) -> dict:
     }
 
 
+def _normalize_featured_process_item(item: dict) -> dict:
+    normalized = dict(item)
+    normalized["date"] = normalized.get("date") or normalized.get("received_at")
+    normalized["customer_name"] = (
+        normalized.get("customer_name")
+        or normalized.get("customer")
+        or normalized.get("from_email")
+        or normalized.get("sender")
+        or "Cliente no identificado"
+    )
+    normalized["origin"] = normalized.get("origin") or normalized.get("channel") or "PDF"
+    normalized["score"] = normalized.get("score") if normalized.get("score") is not None else 0
+    normalized["category_label"] = normalized.get("category_label") or normalized.get("category") or "Sin analizar"
+    normalized["subject"] = normalized.get("subject") or "Pedido compra"
+    normalized["detail_url"] = normalized.get("detail_url") or (
+        f"/orders/{normalized['order_id']}" if normalized.get("order_id") else f"/channels?focus=email-{normalized['email_id']}" if normalized.get("email_id") else "/"
+    )
+    return normalized
+
+
 def _history_bounds(date_range: str, date_from: str, date_to: str) -> tuple[datetime | None, datetime | None]:
     now = datetime.now(timezone.utc)
     if date_from or date_to:
@@ -303,8 +323,7 @@ def dashboard(
         workbench = _empty_workbench_summary(filters)
     featured_process_item = None
     if workbench["items"]:
-        featured_process_item = dict(workbench["items"][0])
-        featured_process_item["date"] = featured_process_item.get("date") or featured_process_item.get("received_at")
+        featured_process_item = _normalize_featured_process_item(workbench["items"][0])
     return templates.TemplateResponse("dashboard.html", {"request": request, "user": user, "workbench": workbench, "featured_process_item": featured_process_item, "filters": filters, "pagination": workbench["pagination"]})
 
 
