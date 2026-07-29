@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 import asyncio
@@ -42,6 +43,7 @@ from app.core.app_factory import sqlalchemy_error_response  # noqa: E402
 from app.core.encryption import encrypt_secret  # noqa: E402
 from app.pages.routes import dashboard  # noqa: E402
 from app.settings.branding import branding_to_dict, default_branding_payload  # noqa: E402
+from app.dashboard.service import _safe_sort_timestamp  # noqa: E402
 from app.master_data.service import normalize_conflict_policy, upsert_customer, upsert_product  # noqa: E402
 from app.settings.integrations import classify_integration_error, redact_email_config, validate_imap_config, validate_openai_config, validate_smtp_config  # noqa: E402
 
@@ -253,6 +255,13 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["workbench"]["items"], [])
         self.assertEqual(response.context["pagination"]["total_items"], 0)
+
+    def test_safe_sort_timestamp_handles_missing_and_naive_datetimes(self):
+        self.assertEqual(_safe_sort_timestamp(None), 0.0)
+        self.assertEqual(_safe_sort_timestamp("not-a-datetime"), 0.0)
+        naive_value = datetime(2026, 7, 29, 12, 0, 0)
+        aware_value = datetime(2026, 7, 29, 12, 0, 0, tzinfo=timezone.utc)
+        self.assertEqual(_safe_sort_timestamp(naive_value), aware_value.timestamp())
 
     def test_sqlalchemy_error_response_redirects_html_requests_to_login(self):
         request = FakeRequest(session={})

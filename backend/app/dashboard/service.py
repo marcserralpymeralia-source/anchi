@@ -11,6 +11,13 @@ from app.orders.state import CONFIRMED_ORDER_STATUSES, ERROR_ORDER_STATUSES, ORD
 from app.settings.service import get_or_create_settings
 
 
+def _safe_sort_timestamp(value) -> float:  # noqa: ANN001
+    if isinstance(value, datetime):
+        aware_value = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return aware_value.timestamp()
+    return 0.0
+
+
 def scoring_category(score: float | None, settings: ScoringSettings) -> str:
     return ORDER_STATE.scoring_category(score, settings)
 
@@ -488,7 +495,7 @@ def operational_summary(db: Session, company_id: int, filters: dict) -> dict:
         orders = [order for order in orders if scoring_category(order.score, settings) == filters["scoring_category"]]
     orders = filter_orders_for_operation(orders, settings, filters, line_metrics_by_order)
     items = [build_order_item(order, settings, include_line_metrics=True, line_metrics_by_order=line_metrics_by_order) for order in orders]
-    items.sort(key=lambda item: (item["priority_rank"], -item["date"].timestamp()))
+    items.sort(key=lambda item: (item["priority_rank"], -_safe_sort_timestamp(item.get("date"))))
     page, page_size = normalize_page(int(filters.get("page") or 1), int(filters.get("page_size") or 25))
     total_items = len(items)
     total_pages = ceil(total_items / page_size) if total_items else 0
@@ -725,7 +732,7 @@ def workbench_summary(db: Session, company_id: int, filters: dict, *, include_me
             or reason in (item.get("order_status_label") or "").lower()
         ]
 
-    items.sort(key=lambda item: (item["priority_rank"], -item["received_at"].timestamp()))
+    items.sort(key=lambda item: (item["priority_rank"], -_safe_sort_timestamp(item.get("received_at"))))
     page, page_size = normalize_page(int(filters.get("page") or 1), int(filters.get("page_size") or 25))
     total_items = len(items)
     total_pages = ceil(total_items / page_size) if total_items else 0
@@ -876,7 +883,7 @@ def dashboard_summary(db: Session, company_id: int, filters: dict) -> dict:
             "status": email.status,
             "url": "/orders",
         })
-    latest_items.sort(key=lambda item: item["date"], reverse=True)
+    latest_items.sort(key=lambda item: _safe_sort_timestamp(item.get("date")), reverse=True)
     page, page_size = normalize_page(int(filters.get("page") or 1), int(filters.get("page_size") or 25))
     total_items = len(latest_items)
     total_pages = ceil(total_items / page_size) if total_items else 0
