@@ -29,6 +29,7 @@ from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.master.service import authenticate_master_user, load_tenant_context  # noqa: E402
 from app.auth.dependencies import current_user  # noqa: E402
+from app.auth.routes import login  # noqa: E402
 from app.tenancy.database import get_tenant_db  # noqa: E402
 from app.customers.routes import _soft_delete_customer  # noqa: E402
 from app.products.routes import _soft_delete_product  # noqa: E402
@@ -496,6 +497,16 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("internal_error", response.text.lower())
+
+    def test_login_redirects_to_mail_after_success(self):
+        request = FakeRequest(session={})
+        fake_user = SimpleNamespace(id=7, company_id=1, membership_id=9, company_slug="demo", email="admin@anchi.local")
+        fake_db = SimpleNamespace(get=lambda _model, _id: SimpleNamespace(name="Demo"))
+        with patch("app.auth.routes.authenticate_user", return_value=fake_user):
+            response = login(request, email="admin@anchi.local", password="demo", master_db=fake_db)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers.get("location"), "/mail")
+        self.assertEqual(request.session["company_slug"], "demo")
 
 
 if __name__ == "__main__":

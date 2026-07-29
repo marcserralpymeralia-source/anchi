@@ -59,7 +59,7 @@ def login(
         company.name if company else "",
         settings.environment,
     )
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/mail", status_code=303)
 
 
 @router.post("/logout")
