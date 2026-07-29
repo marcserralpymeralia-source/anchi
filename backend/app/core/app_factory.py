@@ -5,7 +5,9 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -29,6 +31,33 @@ def internal_server_error_response(request) -> JSONResponse:  # noqa: ANN001
         "correlation_id": correlation_id,
     }
     response = JSONResponse(status_code=500, content=payload)
+    if request_id:
+        response.headers["X-Request-ID"] = request_id
+    if correlation_id:
+        response.headers["X-Correlation-ID"] = correlation_id
+    return response
+
+
+def sqlalchemy_error_response(request, exc: Exception):  # noqa: ANN001
+    accept = (request.headers.get("accept") or "").lower()
+    if request.method in {"GET", "HEAD"} or "text/html" in accept:
+        response = RedirectResponse("/login", status_code=303)
+        request_id = getattr(request.state, "request_id", None)
+        correlation_id = getattr(request.state, "correlation_id", None) or request_id
+        if request_id:
+            response.headers["X-Request-ID"] = request_id
+        if correlation_id:
+            response.headers["X-Correlation-ID"] = correlation_id
+        return response
+    payload = {
+        "error": "database_unavailable",
+        "message": "La base de datos no está disponible temporalmente.",
+        "request_id": getattr(request.state, "request_id", None),
+        "correlation_id": getattr(request.state, "correlation_id", None) or getattr(request.state, "request_id", None),
+    }
+    response = JSONResponse(status_code=503, content=payload)
+    request_id = payload["request_id"]
+    correlation_id = payload["correlation_id"]
     if request_id:
         response.headers["X-Request-ID"] = request_id
     if correlation_id:
@@ -73,5 +102,9 @@ def create_app() -> FastAPI:
     @app.exception_handler(Exception)
     async def _fallback_exception_handler(request, exc):  # noqa: ANN001
         return internal_server_error_response(request)
+
+    @app.exception_handler(SQLAlchemyError)
+    async def _sqlalchemy_exception_handler(request, exc):  # noqa: ANN001
+        return sqlalchemy_error_response(request, exc)
 
     return app

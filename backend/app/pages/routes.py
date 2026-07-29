@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Request
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import and_, case, exists, func, literal, or_, select, union_all
 from sqlalchemy.orm import Session, selectinload
 
@@ -19,6 +20,25 @@ from app.settings.service import get_or_create_settings
 from app.tenancy.database import get_tenant_db
 
 router = APIRouter(tags=["pages"])
+
+
+def _empty_workbench_summary(filters: dict) -> dict:
+    return {
+        "tab_counts": {"all": 0, "not_processed": 0, "attention": 0, "processed": 0, "errors": 0, "no_order": 0},
+        "items": [],
+        "pagination": {
+            "page": int(filters.get("page") or 1),
+            "page_size": int(filters.get("page_size") or 25),
+            "total_items": 0,
+            "total_pages": 0,
+            "has_next": False,
+            "has_previous": False,
+            "start_item": 0,
+            "end_item": 0,
+            "allowed_page_sizes": (10, 25, 50, 100),
+        },
+        "filters_applied": filters,
+    }
 
 
 def _history_bounds(date_range: str, date_from: str, date_to: str) -> tuple[datetime | None, datetime | None]:
@@ -272,7 +292,10 @@ def dashboard(
 ):
     active_mode = mode or tab or "all"
     filters = {"date_from": date_from, "date_to": date_to, "customer_id": customer_id, "status": status, "email_type": email_type, "score_min": score_min, "score_max": score_max, "scoring_category": scoring_category, "agent_status": agent_status, "date_range": date_range or quick_range or "7d", "customer_or_sender": customer_or_sender, "has_attachments": has_attachments, "order_status": order_status, "mode": active_mode, "tab": active_mode, "work_status": work_status, "quick_range": date_range or quick_range or "7d", "has_pdf": has_pdf, "requires_review": requires_review, "issue_type": issue_type, "origin": origin, "sender": sender, "search": search, "reason": reason, "page": page, "page_size": page_size}
-    workbench = workbench_summary(db, user.company_id, filters, include_metrics=False)
+    try:
+        workbench = workbench_summary(db, user.company_id, filters, include_metrics=False)
+    except SQLAlchemyError:
+        workbench = _empty_workbench_summary(filters)
     featured_process_item = workbench["items"][0] if workbench["items"] else None
     return templates.TemplateResponse("dashboard.html", {"request": request, "user": user, "workbench": workbench, "featured_process_item": featured_process_item, "filters": filters, "pagination": workbench["pagination"]})
 

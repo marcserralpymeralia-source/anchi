@@ -37,7 +37,10 @@ from app.admin.diagnostics import company_diagnostics  # noqa: E402
 from app.core.middleware import branding_middleware  # noqa: E402
 from app.core.app_factory import create_app  # noqa: E402
 from app.core.app_factory import internal_server_error_response  # noqa: E402
+from app.core.app_factory import sqlalchemy_error_response  # noqa: E402
 from app.core.encryption import encrypt_secret  # noqa: E402
+from app.pages.routes import dashboard  # noqa: E402
+from app.settings.branding import branding_to_dict, default_branding_payload  # noqa: E402
 from app.master_data.service import normalize_conflict_policy, upsert_customer, upsert_product  # noqa: E402
 from app.settings.integrations import classify_integration_error, redact_email_config, validate_imap_config, validate_openai_config, validate_smtp_config  # noqa: E402
 
@@ -47,6 +50,7 @@ class FakeRequest:
         self.scope = {"session": session or {}}
         self.session = self.scope["session"]
         self.headers = {"host": host}
+        self.query_params = {}
         self.state = SimpleNamespace()
         self.url = SimpleNamespace(path="/demo")
         self.method = "GET"
@@ -231,6 +235,34 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.assertEqual(ctx.exception.headers.get("Location"), "/login")
         self.assertEqual(request.scope["session"], {})
         db.close()
+
+    def test_dashboard_falls_back_when_workbench_summary_fails(self):
+        self.seed_master(with_tenant_db=True)
+        request = FakeRequest(session={"membership_id": 1, "user_id": 1, "company_id": 1, "company_slug": "demo"})
+        request.state.branding = branding_to_dict(default_branding_payload())
+        request.state.alert_center = SimpleNamespace(total=0, has_critical=False, high=0, medium=0, low=0, info=0)
+        fake_user = SimpleNamespace(company_id=1, role=SimpleNamespace(name="Administrador"))
+        fake_db = SimpleNamespace()
+        with patch("app.pages.routes.workbench_summary", side_effect=OperationalError("select 1", {}, Exception("boom"))):
+            response = dashboard(
+                request,
+                db=fake_db,
+                user=fake_user,
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["workbench"]["items"], [])
+        self.assertEqual(response.context["pagination"]["total_items"], 0)
+
+    def test_sqlalchemy_error_response_redirects_html_requests_to_login(self):
+        request = FakeRequest(session={})
+        request.headers["accept"] = "text/html"
+        request.state.request_id = "req-1"
+        request.state.correlation_id = "corr-1"
+        response = sqlalchemy_error_response(request, OperationalError("select 1", {}, Exception("boom")))
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers.get("location"), "/login")
+        self.assertEqual(response.headers.get("x-request-id"), "req-1")
+        self.assertEqual(response.headers.get("x-correlation-id"), "corr-1")
 
     def test_load_tenant_context_rejects_cross_company_session(self):
         db = self.MasterSession()
