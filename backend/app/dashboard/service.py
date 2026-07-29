@@ -388,10 +388,11 @@ def _customer_suggestion_maps(db: Session, company_id: int) -> dict[str, dict[st
 
 
 def suggest_customer_for_email(db: Session, company_id: int, email: Email, *, suggestion_maps: dict[str, dict[str, str]] | None = None) -> str:
-    if "@" not in email.sender:
+    sender_value = (email.sender or "").strip().lower()
+    if "@" not in sender_value:
         return ""
-    sender = email.sender.strip().lower()
-    domain = sender.split("@")[-1]
+    sender = sender_value
+    domain = sender.split("@", 1)[-1]
     lookup = suggestion_maps or _customer_suggestion_maps(db, company_id)
     if sender in lookup["email"]:
         return lookup["email"][sender]

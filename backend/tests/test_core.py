@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core.security import hash_password  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import BackgroundJob, Customer, CustomerAlias, EmailSettings, LLMSettings, Order, OrderLine, Product, ProductAlias  # noqa: E402
+from app.db.models import BackgroundJob, Customer, CustomerAlias, Email, EmailSettings, LLMSettings, Order, OrderLine, Product, ProductAlias  # noqa: E402
 from app.jobs.service import cancel_job, claim_next_job, retry_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
@@ -43,7 +43,7 @@ from app.core.app_factory import sqlalchemy_error_response  # noqa: E402
 from app.core.encryption import encrypt_secret  # noqa: E402
 from app.pages.routes import dashboard  # noqa: E402
 from app.settings.branding import branding_to_dict, default_branding_payload  # noqa: E402
-from app.dashboard.service import _safe_sender_domain, _safe_sort_timestamp, email_workbench_item  # noqa: E402
+from app.dashboard.service import _safe_sender_domain, _safe_sort_timestamp, email_workbench_item, suggest_customer_for_email, workbench_summary  # noqa: E402
 from app.master_data.service import normalize_conflict_policy, upsert_customer, upsert_product  # noqa: E402
 from app.settings.integrations import classify_integration_error, redact_email_config, validate_imap_config, validate_openai_config, validate_smtp_config  # noqa: E402
 
@@ -281,6 +281,12 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.assertEqual(item["sender_domain"], "")
         self.assertEqual(_safe_sender_domain(None), "")
         self.assertEqual(item["from_email"], None)
+
+    def test_suggest_customer_for_email_handles_missing_sender(self):
+        db = self.TenantSession()
+        self.assertEqual(suggest_customer_for_email(db, 1, SimpleNamespace(sender=None)), "")
+        self.assertEqual(suggest_customer_for_email(db, 1, SimpleNamespace(sender="")), "")
+        db.close()
 
     def test_sqlalchemy_error_response_redirects_html_requests_to_login(self):
         request = FakeRequest(session={})
