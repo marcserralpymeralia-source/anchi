@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 
 from app.core.config import get_settings
 from app.master.database import MasterSessionLocal, init_master_db
@@ -20,9 +21,11 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def app_lifespan(app: FastAPI):
     settings = get_settings()
-    init_master_db()
-    master_db = MasterSessionLocal()
+    master_db = None
+    master_db_ready = True
     try:
+        init_master_db()
+        master_db = MasterSessionLocal()
         tenants = master_db.scalars(
             select(MasterTenantDatabase).where(
                 MasterTenantDatabase.is_active.is_(True),
@@ -50,10 +53,14 @@ async def app_lifespan(app: FastAPI):
                 master_db.commit()
         if settings.enable_legacy_sync:
             logger.info("Legacy sync enabled explicitly")
+    except OperationalError:
+        master_db_ready = False
+        logger.exception("No se pudo inicializar la base master en el arranque; la app arrancará en modo degradado")
     finally:
-        master_db.close()
+        if master_db is not None:
+            master_db.close()
     running_on_vercel = os.getenv("VERCEL") == "1" or bool(os.getenv("VERCEL_ENV"))
-    if running_on_vercel:
+    if running_on_vercel or not master_db_ready:
         logger.info("Vercel runtime detected: workers disabled in this process")
     else:
         start_email_sync_worker()

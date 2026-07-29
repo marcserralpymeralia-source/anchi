@@ -6,6 +6,7 @@ import time
 from collections.abc import Awaitable, Callable
 
 from fastapi import Request
+from sqlalchemy.exc import OperationalError
 
 from app.core.config import get_settings
 from app.core.performance import performance_profiling_enabled, performance_scope, start_performance
@@ -69,13 +70,27 @@ async def branding_middleware(request: Request, call_next: Callable[[Request], A
         scenario=request.headers.get("x-performance-scenario"),
     )
     request.state.performance = perf_collector
-    master_db = MasterSessionLocal()
+    master_db = None
     tenant = None
     try:
-        tenant = load_tenant_context(request, master_db)
-        if tenant:
-            request.state.tenant = tenant
-        company_id = tenant.company.id if tenant else None
+        try:
+            master_db = MasterSessionLocal()
+            tenant = load_tenant_context(request, master_db)
+            if tenant:
+                request.state.tenant = tenant
+            company_id = tenant.company.id if tenant else None
+        except OperationalError:
+            logger.exception(
+                "master_db_unavailable",
+                extra={
+                    "event": "master_db_unavailable",
+                    "request_id": request_id,
+                    "correlation_id": correlation_id,
+                    "path": request.url.path,
+                    "method": request.method,
+                },
+            )
+            company_id = None
         observability_values = {
             "request_id": request_id,
             "correlation_id": correlation_id,
@@ -187,4 +202,5 @@ async def branding_middleware(request: Request, call_next: Callable[[Request], A
             )
             return response
     finally:
-        master_db.close()
+        if master_db is not None:
+            master_db.close()

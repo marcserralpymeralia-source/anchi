@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 from sqlalchemy import create_engine, select, func
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 from fastapi.responses import JSONResponse
 
@@ -33,6 +34,7 @@ from app.products.routes import _soft_delete_product  # noqa: E402
 from app.orders.routes import _soft_delete_order  # noqa: E402
 from app.admin.diagnostics import company_diagnostics  # noqa: E402
 from app.core.middleware import branding_middleware  # noqa: E402
+from app.core.app_factory import create_app  # noqa: E402
 from app.core.app_factory import internal_server_error_response  # noqa: E402
 from app.core.encryption import encrypt_secret  # noqa: E402
 from app.master_data.service import normalize_conflict_policy, upsert_customer, upsert_product  # noqa: E402
@@ -405,6 +407,22 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.assertEqual(error_response.headers.get("X-Request-ID"), request_id)
         self.assertEqual(error_response.headers.get("X-Correlation-ID"), request_id)
         self.assertIn(request_id, error_response.body.decode("utf-8"))
+
+    def test_app_still_serves_login_when_master_db_is_unavailable(self):
+        op_error = OperationalError("INIT", {}, Exception("boom"))
+
+        with patch("app.core.lifespan.init_master_db", side_effect=op_error), patch(
+            "app.core.middleware.MasterSessionLocal",
+            side_effect=op_error,
+        ):
+            app = create_app()
+            from fastapi.testclient import TestClient
+
+            with TestClient(app, raise_server_exceptions=False) as client:
+                response = client.get("/login")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("internal_error", response.text.lower())
 
 
 if __name__ == "__main__":
