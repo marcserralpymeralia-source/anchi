@@ -1,8 +1,13 @@
+import logging
+
 from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.master.database import get_master_db
 from app.master.service import TenantUser, load_tenant_context
+
+logger = logging.getLogger(__name__)
 
 
 def current_tenant_user(request: Request, master_db: Session = Depends(get_master_db)) -> TenantUser:
@@ -10,7 +15,17 @@ def current_tenant_user(request: Request, master_db: Session = Depends(get_maste
     if tenant and tenant.user and tenant.user.is_active:
         return tenant.user
 
-    tenant = load_tenant_context(request, master_db)
+    try:
+        tenant = load_tenant_context(request, master_db)
+    except SQLAlchemyError as exc:
+        logger.warning(
+            "tenant_context_unavailable route=%s error_type=%s",
+            request.url.path,
+            exc.__class__.__name__,
+            exc_info=True,
+        )
+        request.session.clear()
+        raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/login"}) from exc
     if tenant and tenant.user and tenant.user.is_active:
         request.state.tenant = tenant
         return tenant.user

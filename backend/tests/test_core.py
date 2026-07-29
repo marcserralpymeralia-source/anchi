@@ -28,6 +28,7 @@ from app.jobs.service import cancel_job, claim_next_job, retry_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.master.service import authenticate_master_user, load_tenant_context  # noqa: E402
+from app.auth.dependencies import current_user  # noqa: E402
 from app.tenancy.database import get_tenant_db  # noqa: E402
 from app.customers.routes import _soft_delete_customer  # noqa: E402
 from app.products.routes import _soft_delete_product  # noqa: E402
@@ -44,6 +45,7 @@ from app.settings.integrations import classify_integration_error, redact_email_c
 class FakeRequest:
     def __init__(self, session: dict | None = None, host: str = "localhost"):
         self.scope = {"session": session or {}}
+        self.session = self.scope["session"]
         self.headers = {"host": host}
         self.state = SimpleNamespace()
         self.url = SimpleNamespace(path="/demo")
@@ -189,6 +191,30 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
             next(get_tenant_db(request, db))
         self.assertEqual(ctx.exception.status_code, 303)
         self.assertEqual(ctx.exception.headers.get("Location"), "/login")
+        db.close()
+
+    def test_auth_dependencies_redirect_when_tenant_lookup_fails(self):
+        self.seed_master(with_tenant_db=True)
+        db = self.MasterSession()
+        request = FakeRequest(session={"membership_id": 1, "user_id": 1, "company_id": 1, "company_slug": "demo"})
+        with patch("app.auth.dependencies.load_tenant_context", side_effect=OperationalError("select 1", {}, Exception("boom"))):
+            with self.assertRaises(HTTPException) as ctx:
+                current_user(request, db)
+        self.assertEqual(ctx.exception.status_code, 303)
+        self.assertEqual(ctx.exception.headers.get("Location"), "/login")
+        self.assertEqual(request.scope["session"], {})
+        db.close()
+
+    def test_get_tenant_db_redirects_when_schema_provisioning_fails(self):
+        self.seed_master(with_tenant_db=True)
+        db = self.MasterSession()
+        request = FakeRequest(session={"membership_id": 1, "user_id": 1, "company_id": 1, "company_slug": "demo"})
+        with patch("app.tenancy.database.ensure_tenant_schema", side_effect=OperationalError("select 1", {}, Exception("boom"))):
+            with self.assertRaises(HTTPException) as ctx:
+                next(get_tenant_db(request, db))
+        self.assertEqual(ctx.exception.status_code, 303)
+        self.assertEqual(ctx.exception.headers.get("Location"), "/login")
+        self.assertEqual(request.scope["session"], {})
         db.close()
 
     def test_load_tenant_context_rejects_cross_company_session(self):

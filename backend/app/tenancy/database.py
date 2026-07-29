@@ -4,6 +4,7 @@ from collections.abc import Generator
 from functools import lru_cache
 
 from fastapi import Depends, HTTPException, Request, status
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -48,7 +49,14 @@ def ensure_tenant_schema(database_url: str, *, company_id: int | None = None, ap
 def get_tenant_db(request: Request, master_db: Session = Depends(get_master_db)) -> Generator[Session, None, None]:
     tenant = getattr(request.state, "tenant", None)
     if tenant is None:
-        tenant = load_tenant_context(request, master_db)
+        try:
+            tenant = load_tenant_context(request, master_db)
+        except SQLAlchemyError:
+            session = request.scope.get("session") or {}
+            if any(session.get(key) for key in ("membership_id", "user_id", "company_id", "company_slug")):
+                if isinstance(session, dict):
+                    session.clear()
+            raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/login"})
         if tenant:
             request.state.tenant = tenant
 
@@ -60,9 +68,16 @@ def get_tenant_db(request: Request, master_db: Session = Depends(get_master_db))
                 session.clear()
         raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/login"})
 
-    ensure_tenant_schema(database_url, company_id=tenant.company.id)
-    SessionFactory = tenant_db_session(database_url)
-    db = SessionFactory()
+    try:
+        ensure_tenant_schema(database_url, company_id=tenant.company.id)
+        SessionFactory = tenant_db_session(database_url)
+        db = SessionFactory()
+    except SQLAlchemyError:
+        session = request.scope.get("session") or {}
+        if any(session.get(key) for key in ("membership_id", "user_id", "company_id", "company_slug")):
+            if isinstance(session, dict):
+                session.clear()
+        raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/login"})
     try:
         yield db
     finally:
