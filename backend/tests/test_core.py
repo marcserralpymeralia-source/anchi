@@ -43,7 +43,7 @@ from app.core.app_factory import sqlalchemy_error_response  # noqa: E402
 from app.core.encryption import encrypt_secret  # noqa: E402
 from app.pages.routes import dashboard  # noqa: E402
 from app.settings.branding import branding_to_dict, default_branding_payload  # noqa: E402
-from app.dashboard.service import _safe_sort_timestamp  # noqa: E402
+from app.dashboard.service import _safe_sender_domain, _safe_sort_timestamp, email_workbench_item  # noqa: E402
 from app.master_data.service import normalize_conflict_policy, upsert_customer, upsert_product  # noqa: E402
 from app.settings.integrations import classify_integration_error, redact_email_config, validate_imap_config, validate_openai_config, validate_smtp_config  # noqa: E402
 
@@ -262,6 +262,25 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         naive_value = datetime(2026, 7, 29, 12, 0, 0)
         aware_value = datetime(2026, 7, 29, 12, 0, 0, tzinfo=timezone.utc)
         self.assertEqual(_safe_sort_timestamp(naive_value), aware_value.timestamp())
+
+    def test_email_workbench_item_handles_missing_sender(self):
+        email = SimpleNamespace(
+            id=1,
+            sender=None,
+            status="pending",
+            detected_type=None,
+            agent_status=None,
+            has_pdf=False,
+            body=None,
+            has_attachments=False,
+            processing_error=None,
+            received_at=datetime(2026, 7, 29, 12, 0, 0, tzinfo=timezone.utc),
+            subject="Prueba",
+        )
+        item = email_workbench_item(email)
+        self.assertEqual(item["sender_domain"], "")
+        self.assertEqual(_safe_sender_domain(None), "")
+        self.assertEqual(item["from_email"], None)
 
     def test_sqlalchemy_error_response_redirects_html_requests_to_login(self):
         request = FakeRequest(session={})

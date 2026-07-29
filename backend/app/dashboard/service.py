@@ -285,7 +285,7 @@ def order_workbench_item(order: Order, settings: ScoringSettings, *, include_lin
         "order_id": order.id,
         "received_at": order.email.received_at if order.email else order.created_at,
         "from_email": order.email.sender if order.email else "",
-        "sender_domain": order.email.sender.split("@")[-1] if order.email and "@" in order.email.sender else "",
+        "sender_domain": _safe_sender_domain(order.email.sender if order.email else None),
         "subject": order.email.subject if order.email else "",
         "customer_name": item["customer"],
         "suggested_customer": item["customer"],
@@ -313,7 +313,7 @@ def order_workbench_item(order: Order, settings: ScoringSettings, *, include_lin
 def email_workbench_item(email: Email) -> dict:
     agent_status = email_agent_status(email)
     action = "Procesar ahora" if agent_status == "not_processed" else "Revisar"
-    sender_domain = email.sender.split("@")[-1] if "@" in email.sender else ""
+    sender_domain = _safe_sender_domain(email.sender)
     priority_rank = 1 if agent_status == "error" else 3 if agent_status == "not_processed" else 7
     priority = "Alta" if priority_rank <= 2 else "Media" if priority_rank <= 4 else "Baja"
     return {
@@ -348,6 +348,12 @@ def email_workbench_item(email: Email) -> dict:
         "modal_id": f"email-modal-{email.id}",
         "detail_url": f"/workbench/item/email/{email.id}/detail",
     }
+
+
+def _safe_sender_domain(sender: str | None) -> str:
+    if not sender or "@" not in sender:
+        return ""
+    return sender.split("@", 1)[-1]
 
 
 def _customer_suggestion_maps(db: Session, company_id: int) -> dict[str, dict[str, str]]:
