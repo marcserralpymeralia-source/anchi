@@ -301,7 +301,10 @@ def dashboard(
         workbench = workbench_summary(db, user.company_id, filters, include_metrics=False)
     except Exception:
         workbench = _empty_workbench_summary(filters)
-    featured_process_item = workbench["items"][0] if workbench["items"] else None
+    featured_process_item = None
+    if workbench["items"]:
+        featured_process_item = dict(workbench["items"][0])
+        featured_process_item["date"] = featured_process_item.get("date") or featured_process_item.get("received_at")
     return templates.TemplateResponse("dashboard.html", {"request": request, "user": user, "workbench": workbench, "featured_process_item": featured_process_item, "filters": filters, "pagination": workbench["pagination"]})
 
 

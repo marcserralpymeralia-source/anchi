@@ -256,6 +256,36 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.assertEqual(response.context["workbench"]["items"], [])
         self.assertEqual(response.context["pagination"]["total_items"], 0)
 
+    def test_dashboard_normalizes_featured_item_date_from_received_at(self):
+        self.seed_master(with_tenant_db=True)
+        request = FakeRequest(session={"membership_id": 1, "user_id": 1, "company_id": 1, "company_slug": "demo"})
+        request.state.branding = branding_to_dict(default_branding_payload())
+        request.state.alert_center = SimpleNamespace(total=0, has_critical=False, high=0, medium=0, low=0, info=0)
+        fake_user = SimpleNamespace(company_id=1, role=SimpleNamespace(name="Administrador"))
+        fake_db = SimpleNamespace()
+        fake_item = {
+            "kind": "email",
+            "received_at": datetime(2026, 7, 29, 12, 0, 0, tzinfo=timezone.utc),
+            "customer_name": "Cliente Demo",
+            "origin": "Email",
+            "score": 80,
+            "category_label": "Confianza alta",
+            "subject": "Pedido demo",
+        }
+        fake_workbench = {
+            "items": [fake_item],
+            "pagination": {"page": 1, "page_size": 25, "total": 1, "pages": 1},
+            "tab_counts": {"all": 1, "pending": 0, "review": 0, "ready": 0, "errors": 0, "no_order": 0},
+        }
+        with patch("app.pages.routes.workbench_summary", return_value=fake_workbench):
+            response = dashboard(
+                request,
+                db=fake_db,
+                user=fake_user,
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(fake_workbench["items"][0]["received_at"], datetime(2026, 7, 29, 12, 0, 0, tzinfo=timezone.utc))
+
     def test_safe_sort_timestamp_handles_missing_and_naive_datetimes(self):
         self.assertEqual(_safe_sort_timestamp(None), 0.0)
         self.assertEqual(_safe_sort_timestamp("not-a-datetime"), 0.0)
