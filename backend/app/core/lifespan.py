@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from sqlalchemy import select
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import get_settings
 from app.master.database import MasterSessionLocal, init_master_db
@@ -53,7 +53,7 @@ async def app_lifespan(app: FastAPI):
                 master_db.commit()
         if settings.enable_legacy_sync:
             logger.info("Legacy sync enabled explicitly")
-    except OperationalError:
+    except SQLAlchemyError:
         master_db_ready = False
         logger.exception("No se pudo inicializar la base master en el arranque; la app arrancará en modo degradado")
     finally:

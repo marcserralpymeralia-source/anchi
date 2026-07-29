@@ -6,7 +6,7 @@ import time
 from collections.abc import Awaitable, Callable
 
 from fastapi import Request
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import get_settings
 from app.core.performance import performance_profiling_enabled, performance_scope, start_performance
@@ -79,7 +79,7 @@ async def branding_middleware(request: Request, call_next: Callable[[Request], A
             if tenant:
                 request.state.tenant = tenant
             company_id = tenant.company.id if tenant else None
-        except OperationalError:
+        except SQLAlchemyError:
             logger.exception(
                 "master_db_unavailable",
                 extra={

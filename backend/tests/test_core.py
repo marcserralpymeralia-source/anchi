@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 from sqlalchemy import create_engine, select, func
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import sessionmaker
 from fastapi.responses import JSONResponse
 
@@ -204,6 +204,21 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.assertEqual(ctx.exception.headers.get("Location"), "/login")
         self.assertEqual(request.scope["session"], {})
         db.close()
+
+    def test_branding_middleware_falls_back_on_sqlalchemy_schema_error(self):
+        self.seed_master(with_tenant_db=True)
+        request = FakeRequest(session={"membership_id": 1, "user_id": 1, "company_id": 1, "company_slug": "demo"})
+        with patch("app.core.middleware.load_tenant_context", side_effect=ProgrammingError("select * from missing", {}, Exception("boom"))):
+            with patch("app.core.middleware.MasterSessionLocal") as master_session_factory:
+                fake_db = self.MasterSession()
+                master_session_factory.return_value = fake_db
+                async def _call_next(_request):
+                    return JSONResponse({"ok": True})
+
+                response = asyncio.run(branding_middleware(request, _call_next))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(getattr(request.state, "tenant", None), None)
+        fake_db.close()
 
     def test_get_tenant_db_redirects_when_schema_provisioning_fails(self):
         self.seed_master(with_tenant_db=True)
