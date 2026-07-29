@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import RedirectResponse
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import and_, case, exists, func, literal, or_, select, union_all
 from sqlalchemy.orm import Session, selectinload
@@ -259,6 +260,11 @@ def _history_email_rows_stmt(
 
 
 @router.get("/")
+def root_page():
+    return RedirectResponse("/inicio", status_code=303)
+
+
+@router.get("/inicio")
 def dashboard(
     request: Request,
     date_from: str = "",

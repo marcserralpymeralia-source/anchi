@@ -22,7 +22,7 @@
         <button class="sidebar-toggle secondary" type="button" title="Contraer menu" aria-label="Contraer menu" onclick="toggleSidebar()">☰</button>
       </div>
       <nav class="nav">
-        <a href="/" title="Gestión de pedidos" class="{% if request.url.path == '/' %}active{% endif %}"><span class="nav-icon">▦</span><span class="nav-label">Gestión de pedidos</span></a>
+        <a href="/inicio" title="Gestión de pedidos" class="{% if request.url.path in ['/', '/inicio'] %}active{% endif %}"><span class="nav-icon">▦</span><span class="nav-label">Gestión de pedidos</span></a>
         <a href="/pedidos" title="Histórico" class="{% if request.url.path.startswith('/pedidos') or request.url.path.startswith('/history') %}active{% endif %}"><span class="nav-icon">◷</span><span class="nav-label">Histórico</span></a>
         <a href="/mail" title="Bandeja de entrada" class="{% if request.url.path.startswith('/mail') %}active{% endif %}"><span class="nav-icon">✉</span><span class="nav-label">Bandeja de entrada</span></a>
         {% if user.role.name in ["Administrador", "Superadmin"] %}

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 
 from app.auth.service import authenticate_user
+from app.core.templating import templates
 from app.master.models import MasterCompany
 from app.core.config import get_settings
 from app.master.database import get_master_db
@@ -59,12 +60,10 @@ def login(
         company.name if company else "",
         settings.environment,
     )
-    return RedirectResponse("/", status_code=303)
+    return RedirectResponse("/inicio", status_code=303)
 
 
 @router.post("/logout")
 def logout(request: Request):
     request.session.clear()
     return RedirectResponse("/login", status_code=303)
-
-from app.core.templating import templates
