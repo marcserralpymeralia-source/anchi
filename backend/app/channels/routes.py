@@ -237,13 +237,14 @@ def _resolution_destination_for_source(db: Session, user: TenantUser, source_kin
     order = db.get(Order, source.order_id) if source.order_id else None
     if order:
         return ResolutionDestination("order", source_kind, source.id, order.id, source.id, source.conversation_id, f"/orders/{order.id}", "Pedido")
+    inbound_focus = f"/channels?focus=inbound-{source.id}"
     if source.status == "error":
-        return ResolutionDestination("error", source_kind, source.id, None, source.id, source.conversation_id, f"/workbench/item/inbound/{source.id}/detail", "Error")
+        return ResolutionDestination("error", source_kind, source.id, None, source.id, source.conversation_id, inbound_focus, "Error")
     if source.status in {"processing", "queued"}:
-        return ResolutionDestination("processing", source_kind, source.id, None, source.id, source.conversation_id, f"/workbench/item/inbound/{source.id}/detail", "En proceso")
+        return ResolutionDestination("processing", source_kind, source.id, None, source.id, source.conversation_id, inbound_focus, "En proceso")
     if source.status in {"doubtful", "no_order", "processed", "matched", "order_detected"}:
-        return ResolutionDestination("proposal", source_kind, source.id, None, source.id, source.conversation_id, f"/workbench/item/inbound/{source.id}/detail", "Propuesta")
-    return ResolutionDestination("unprocessed", source_kind, source.id, None, source.id, source.conversation_id, f"/workbench/item/inbound/{source.id}/detail", "Pendiente")
+        return ResolutionDestination("proposal", source_kind, source.id, None, source.id, source.conversation_id, inbound_focus, "Propuesta")
+    return ResolutionDestination("unprocessed", source_kind, source.id, None, source.id, source.conversation_id, inbound_focus, "Pendiente")
 
 
 def _row_confidence(score: float | None) -> tuple[str, str]:

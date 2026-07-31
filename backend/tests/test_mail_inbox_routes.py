@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import unittest
 from pathlib import Path
+from datetime import datetime, timezone
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -13,6 +14,7 @@ os.environ.setdefault("PERFORMANCE_PROFILING_ENABLED", "true")
 os.environ.setdefault("ENABLE_PERFORMANCE_PROFILING", "true")
 
 from app.db.models import Email  # noqa: E402
+from app.master.models import EmailSyncState  # noqa: E402
 from scripts.performance_data import build_performance_fixture, performance_test_client  # noqa: E402
 
 
@@ -28,6 +30,7 @@ class MailInboxRoutesTests(unittest.TestCase):
             ("/mail", ("GET",)),
             ("/mail/{email_id}", ("GET",)),
             ("/mail/{email_id}/process", ("POST",)),
+            ("/cron/email-sync", ("GET", "POST")),
         }
         for item in expected:
             self.assertIn(item, routes)
@@ -51,6 +54,69 @@ class MailInboxRoutesTests(unittest.TestCase):
             self.assertNotIn("Internal Server Error", inbox.text)
             self.assertNotIn("Internal Server Error", detail.text)
         finally:
+            fixture.cleanup()
+
+    def test_mail_inbox_defaults_to_ten_and_filters_active_account(self):
+        fixture = build_performance_fixture("small")
+        master_engine = create_engine(fixture.master_database_url, connect_args={"check_same_thread": False})
+        tenant_engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        MasterSession = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
+        TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
+        try:
+            with MasterSession() as master_db:
+                state = master_db.scalar(select(EmailSyncState).where(EmailSyncState.company_id == fixture.company_id, EmailSyncState.channel_key == "email"))
+                self.assertIsNotNone(state)
+                assert state is not None
+                state.mailbox = "INBOX"
+                state.uidvalidity = "777"
+                master_db.commit()
+
+            with TenantSession() as tenant_db:
+                for index in range(12):
+                    tenant_db.add(
+                        Email(
+                            company_id=fixture.company_id,
+                            external_id=f"active-{index}",
+                            message_id=f"<active-{index}@example.com>",
+                            imap_mailbox="INBOX",
+                            imap_uidvalidity="777",
+                            imap_uid=str(200 + index),
+                            sender="nuevo@example.com",
+                            subject=f"Activo {index}",
+                            body="Pedido activo",
+                            received_at=datetime(2026, 7, 31, 12, index, tzinfo=timezone.utc),
+                        )
+                    )
+                for index in range(2):
+                    tenant_db.add(
+                        Email(
+                            company_id=fixture.company_id,
+                            external_id=f"legacy-{index}",
+                            message_id=f"<legacy-{index}@example.com>",
+                            imap_mailbox="INBOX",
+                            imap_uidvalidity="111",
+                            imap_uid=str(50 + index),
+                            sender="legacy@example.com",
+                            subject=f"Antiguo {index}",
+                            body="Pedido antiguo",
+                            received_at=datetime(2026, 7, 30, 12, index, tzinfo=timezone.utc),
+                        )
+                    )
+                tenant_db.commit()
+
+            with performance_test_client(fixture) as client:
+                inbox = client.get("/mail")
+
+            self.assertEqual(inbox.status_code, 200)
+            self.assertIn("Activo 11", inbox.text)
+            self.assertIn("Activo 2", inbox.text)
+            self.assertNotIn("Activo 0", inbox.text)
+            self.assertNotIn("Antiguo 0", inbox.text)
+            self.assertIn("Mostrando 1-10", inbox.text)
+            self.assertIn("Cuenta activa", inbox.text)
+        finally:
+            master_engine.dispose()
+            tenant_engine.dispose()
             fixture.cleanup()
 
 

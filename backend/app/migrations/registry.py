@@ -667,6 +667,10 @@ def _apply_master_email_sync_state(engine, dry_run: bool) -> list[str]:  # noqa:
             {
                 "mailbox": "VARCHAR(255)",
                 "uidvalidity": "VARCHAR(120)",
+                "source_provider": "VARCHAR(50)",
+                "source_host": "VARCHAR(255)",
+                "source_username": "VARCHAR(255)",
+                "source_connected_email": "VARCHAR(255)",
                 "last_successful_sync_at": "DATETIME",
                 "last_error_type": "VARCHAR(120)",
                 "sync_status": "VARCHAR(50) DEFAULT 'idle'",

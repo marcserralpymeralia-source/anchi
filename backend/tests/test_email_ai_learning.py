@@ -320,6 +320,7 @@ class EmailAiLearningTests(unittest.TestCase):
         master_db = self.MasterSession()
         settings = tenant_db.scalar(select(EmailSettings).where(EmailSettings.company_id == 1))
         state = master_db.scalar(select(EmailSyncState).where(EmailSyncState.company_id == 1, EmailSyncState.channel_key == "email"))
+        state.uidvalidity = "777"
         messages = {
             "1": b"From: compras@example.com\r\nSubject: Pedido A\r\nMessage-ID: <pedido-a@example.com>\r\n\r\nPedido 1",
             "2": b"From: compras@example.com\r\nSubject: Pedido B\r\nMessage-ID: <pedido-b@example.com>\r\n\r\nPedido 2",
@@ -336,6 +337,7 @@ class EmailAiLearningTests(unittest.TestCase):
         self.assertTrue(preview["ok"])
         self.assertEqual(preview["estimated"], 0)
         self.assertEqual(preview["checkpoint_uid"], "3")
+        self.assertEqual(preview["uidvalidity"], "777")
         self.assertEqual(preview["message"], "Se guardará el punto de partida actual y no se importará histórico.")
         self.assertTrue(client.uid_calls)
         self.assertEqual(client.uid_calls[0][0], "search")
@@ -377,6 +379,7 @@ class EmailAiLearningTests(unittest.TestCase):
         master_db = self.MasterSession()
         settings = tenant_db.scalar(select(EmailSettings).where(EmailSettings.company_id == 1))
         state = master_db.scalar(select(EmailSyncState).where(EmailSyncState.company_id == 1, EmailSyncState.channel_key == "email"))
+        state.uidvalidity = "777"
         state.last_seen_uid = "2"
         master_db.commit()
         client = FakeImapClient(
@@ -397,6 +400,7 @@ class EmailAiLearningTests(unittest.TestCase):
         self.assertEqual(result["found"], 1)
         self.assertEqual(result["downloaded"], 1)
         self.assertEqual(result["saved"], 1)
+        self.assertEqual(result["last_seen_uid_after"], "3")
         tenant_db.close()
         master_db.close()
 
@@ -406,6 +410,7 @@ class EmailAiLearningTests(unittest.TestCase):
         master_db = self.MasterSession()
         settings = tenant_db.scalar(select(EmailSettings).where(EmailSettings.company_id == 1))
         state = master_db.scalar(select(EmailSyncState).where(EmailSyncState.company_id == 1, EmailSyncState.channel_key == "email"))
+        state.uidvalidity = "777"
         state.last_seen_uid = "1"
         master_db.commit()
         messages = {
@@ -432,6 +437,39 @@ class EmailAiLearningTests(unittest.TestCase):
         self.assertEqual(result["errors"], 1)
         self.assertEqual(master_db.get(EmailSyncState, state.id).last_seen_uid, "3")
         self.assertEqual(tenant_db.scalar(select(func.count()).select_from(Email)) or 0, 1)
+        tenant_db.close()
+        master_db.close()
+
+    def test_incremental_sync_resets_checkpoint_when_uidvalidity_changes(self):
+        self._seed_imap()
+        tenant_db = self.TenantSession()
+        master_db = self.MasterSession()
+        settings = tenant_db.scalar(select(EmailSettings).where(EmailSettings.company_id == 1))
+        state = master_db.scalar(select(EmailSyncState).where(EmailSyncState.company_id == 1, EmailSyncState.channel_key == "email"))
+        state.uidvalidity = "111"
+        state.last_seen_uid = "2"
+        master_db.commit()
+        client = FakeImapClient(
+            {
+                "3": b"From: compras@example.com\r\nSubject: Pedido nuevo\r\nMessage-ID: <pedido-nuevo@example.com>\r\n\r\nPedido nuevo",
+            },
+            search_result=b"3",
+        )
+
+        with patch("app.settings.integrations._imap_client", return_value=client):
+            result = read_latest_imap_emails(tenant_db, settings, 1, auto_process=False, unread_only=False, sync_state=state, sync_session=master_db)
+
+        master_db.refresh(state)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["found"], 0)
+        self.assertEqual(result["saved"], 0)
+        self.assertEqual(result["last_seen_uid_after"], "3")
+        self.assertEqual(master_db.get(EmailSyncState, state.id).uidvalidity, "777")
+        self.assertEqual(master_db.get(EmailSyncState, state.id).last_seen_uid, "3")
+        self.assertEqual(tenant_db.scalar(select(func.count()).select_from(Email)) or 0, 0)
+        self.assertTrue(client.uid_calls)
+        self.assertEqual(client.uid_calls[0][0], "search")
+        self.assertIn("ALL", client.uid_calls[0])
         tenant_db.close()
         master_db.close()
 

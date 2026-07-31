@@ -52,6 +52,36 @@ def _should_run_job_inline() -> bool:
     return os.getenv("VERCEL") == "1" or not is_job_worker_started()
 
 
+def _sync_email_sync_state(master_db: Session, user: TenantUser, settings: EmailSettings) -> None:
+    state = master_db.scalar(
+        select(EmailSyncState).where(
+            EmailSyncState.company_id == user.company_id,
+            EmailSyncState.channel_key == "email",
+        )
+    )
+    if not state:
+        state = EmailSyncState(
+            company_id=user.company_id,
+            channel_key="email",
+            enabled=bool(settings.auto_sync_enabled),
+            frequency_seconds=60,
+            status="idle",
+        )
+        master_db.add(state)
+    state.enabled = bool(settings.auto_sync_enabled)
+    try:
+        state.frequency_seconds = max(int(settings.polling_frequency_minutes or 1), 1) * 60
+    except (TypeError, ValueError):
+        state.frequency_seconds = 60
+    state.mailbox = settings.mailbox or settings.inbox_folder or "INBOX"
+    state.source_provider = (settings.provider or "imap").strip().lower() or "imap"
+    state.source_host = (settings.imap_host or "").strip() or None
+    state.source_username = (settings.imap_username or "").strip() or None
+    state.source_connected_email = (settings.connected_email or settings.imap_username or "").strip() or None
+    state.updated_at = datetime.now(timezone.utc)
+    master_db.commit()
+
+
 def _run_email_sync_job_if_needed(request: Request, db: Session, user: TenantUser, job) -> dict | None:  # noqa: ANN001
     if not _should_run_job_inline():
         return None
@@ -357,7 +387,7 @@ def get_email_settings(db: Session = Depends(get_tenant_db), user: TenantUser = 
 
 
 @router.api_route("/email/receive", methods=["PUT", "POST"])
-async def update_email_receive(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+async def update_email_receive(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
     if not can_edit_email_settings(user):
         return JSONResponse({"error": "Solo Administrador puede modificar la configuracion de correo."}, status_code=403)
     request_id = getattr(request.state, "request_id", None)
@@ -423,12 +453,16 @@ async def update_email_receive(request: Request, db: Session = Depends(get_tenan
     except (TypeError, ValueError):
         settings.initial_history_limit = 50
     settings.initial_history_mode = settings.initial_history_mode if settings.initial_history_mode in {"new", "7d", "30d", "100", "custom"} else "new"
+    try:
+        _sync_email_sync_state(master_db, user, settings)
+    except Exception:
+        master_db.rollback()
     log_action(db, company_id=user.company_id, user=user, action="settings.email.receive.update", entity_type="settings", entity_id=settings.id, message="Configuracion de recepcion actualizada")
     return redirect_or_json(request, {"ok": True, "receive": serialize_email_settings(db, user.company_id)["receive"]}, "email-receive")
 
 
 @router.post("/email/disconnect")
-def disconnect_email_account(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def disconnect_email_account(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
     if not can_edit_email_settings(user):
         return RedirectResponse("/settings#email-account", status_code=303)
     settings = get_or_create_settings(db, EmailSettings, user.company_id)
@@ -464,6 +498,10 @@ def disconnect_email_account(db: Session = Depends(get_tenant_db), user: TenantU
     settings.updated_by = user.id
     settings.updated_at = datetime.now(timezone.utc)
     db.commit()
+    try:
+        _sync_email_sync_state(master_db, user, settings)
+    except Exception:
+        master_db.rollback()
     log_action(db, company_id=user.company_id, user=user, action="settings.email.disconnect", entity_type="settings", entity_id=settings.id, message="Cuenta de correo desconectada")
     return RedirectResponse("/settings#email-account", status_code=303)
 

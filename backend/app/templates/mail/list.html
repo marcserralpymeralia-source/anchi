@@ -31,11 +31,12 @@
       <span class="badge {% if email_status.imap_ready %}status-confirmed{% else %}status-doubtful{% endif %}">{{ "Conectada" if email_status.imap_ready else "Desconectada" }}</span>
     </div>
     <div class="settings-kpis">
-      <div><span>Dirección</span><strong>{{ mail_settings.connected_email or mail_settings.imap_username or "Sin definir" }}</strong></div>
+      <div><span>Cuenta activa</span><strong>{{ mail_settings.connected_email or mail_settings.imap_username or "Sin definir" }}</strong></div>
       <div><span>Servidor</span><strong>{{ mail_settings.imap_host or "Sin servidor" }}</strong></div>
       <div><span>Última sincronización</span><strong>{{ email_status.last_sync.at | local_dt(tenant_timezone, "%d/%m %H:%M") }}</strong></div>
       <div><span>Duplicados</span><strong>{{ email_status.last_sync.duplicates }}</strong></div>
     </div>
+    <p class="muted">Mostrando los correos de la cuenta activa en bloques de 10. Los anteriores siguen disponibles con paginación.</p>
   </section>
 
   <form class="filter-grid" method="get" action="/mail">

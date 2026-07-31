@@ -14,6 +14,8 @@ from app.dashboard.service import email_workbench_item
 from app.db.models import Email, EmailSettings, Order
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
+from app.master.database import get_master_db
+from app.master.models import EmailSyncState
 from app.master.service import TenantUser
 from app.settings.email_config import email_config_status
 from app.settings.service import get_or_create_settings
@@ -37,6 +39,27 @@ def _mail_cutoff(date_range: str) -> datetime | None:
     return None
 
 
+def _active_mail_scope(master_db: Session, company_id: int) -> tuple[str | None, str | None]:
+    state = master_db.scalar(
+        select(EmailSyncState).where(
+            EmailSyncState.company_id == company_id,
+            EmailSyncState.channel_key == "email",
+        )
+    )
+    if not state:
+        return None, None
+    return (state.mailbox or None), (state.uidvalidity or None)
+
+
+def _email_matches_active_scope(email: Email, scope: tuple[str | None, str | None]) -> bool:
+    mailbox, uidvalidity = scope
+    if mailbox and email.imap_mailbox and email.imap_mailbox != mailbox:
+        return False
+    if uidvalidity and email.imap_uidvalidity and email.imap_uidvalidity != uidvalidity:
+        return False
+    return True
+
+
 def _mail_status_key(email: Email) -> str:
     if email.archived:
         return "archived"
@@ -53,7 +76,13 @@ def _mail_status_key(email: Email) -> str:
     return "unread"
 
 
-def _apply_mail_filters(stmt, filters: dict) -> object:
+def _apply_mail_filters(stmt, filters: dict, *, scope: tuple[str | None, str | None] | None = None) -> object:
+    if scope:
+        mailbox, uidvalidity = scope
+        if mailbox:
+            stmt = stmt.where(Email.imap_mailbox == mailbox)
+        if uidvalidity:
+            stmt = stmt.where(Email.imap_uidvalidity == uidvalidity)
     cutoff = _mail_cutoff(filters.get("date_range", "30d"))
     if cutoff:
         stmt = stmt.where(Email.received_at >= cutoff)
@@ -97,10 +126,10 @@ def _order_map(db: Session, company_id: int, email_ids: list[int]) -> dict[int, 
     return {order.email_id: order for order in orders if order.email_id}
 
 
-def _load_mail_rows(db: Session, company_id: int, filters: dict) -> tuple[list[Email], dict[int, Order], dict[str, int]]:
+def _load_mail_rows(db: Session, company_id: int, filters: dict, *, scope: tuple[str | None, str | None] | None = None) -> tuple[list[Email], dict[int, Order], dict[str, int]]:
     stmt = select(Email).where(Email.company_id == company_id).options(selectinload(Email.attachments))
-    stmt = _apply_mail_filters(stmt, filters)
-    emails = db.scalars(stmt.order_by(Email.received_at.desc())).unique().all()
+    stmt = _apply_mail_filters(stmt, filters, scope=scope)
+    emails = db.scalars(stmt.order_by(Email.received_at.desc(), Email.id.desc())).unique().all()
     orders_by_email = _order_map(db, company_id, [email.id for email in emails])
     sort = (filters.get("sort") or "date_desc").strip()
     if sort == "date_asc":
@@ -129,25 +158,32 @@ def _load_mail_rows(db: Session, company_id: int, filters: dict) -> tuple[list[E
 
 
 @router.get("")
-def mail_inbox(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def mail_inbox(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
+    active_scope = _active_mail_scope(master_db, user.company_id)
     filters = {
         "status": request.query_params.get("status", "all"),
         "date_range": request.query_params.get("date_range", "30d"),
         "search": request.query_params.get("search", ""),
         "sort": request.query_params.get("sort", "date_desc"),
         "page": request.query_params.get("page", "1"),
-        "page_size": request.query_params.get("page_size", "25"),
+        "page_size": request.query_params.get("page_size", "10"),
     }
-    emails, orders_by_email, counts = _load_mail_rows(db, user.company_id, filters)
-    page, page_size = normalize_page(int(filters["page"] or 1), int(filters["page_size"] or 25))
+    emails, orders_by_email, counts = _load_mail_rows(db, user.company_id, filters, scope=active_scope)
+    page, page_size = normalize_page(int(filters["page"] or 1), int(filters["page_size"] or 10))
     total_items = len(emails)
     start = (page - 1) * page_size
     paged_emails = emails[start : start + page_size]
+    start_item = start + 1 if total_items else 0
+    end_item = min(start + page_size, total_items)
     pagination = {
         "page": page,
         "page_size": page_size,
         "total_items": total_items,
-        "total_pages": (total_items + page_size - 1) // page_size if total_items else 1,
+        "total_pages": (total_items + page_size - 1) // page_size if total_items else 0,
+        "has_previous": page > 1,
+        "has_next": page * page_size < total_items,
+        "start_item": start_item,
+        "end_item": end_item,
         "allowed_page_sizes": [10, 25, 50, 100],
     }
     return templates.TemplateResponse(
@@ -163,18 +199,21 @@ def mail_inbox(request: Request, db: Session = Depends(get_tenant_db), user: Ten
             "counts": counts,
             "mail_settings": get_or_create_settings(db, EmailSettings, user.company_id),
             "email_status": email_config_status(get_or_create_settings(db, EmailSettings, user.company_id)),
+            "active_mailbox": active_scope[0],
+            "active_uidvalidity": active_scope[1],
         },
     )
 
 
 @router.get("/{email_id}")
-def mail_detail(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def mail_detail(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
+    active_scope = _active_mail_scope(master_db, user.company_id)
     email = db.scalar(
         select(Email)
         .where(Email.id == email_id, Email.company_id == user.company_id)
         .options(selectinload(Email.attachments))
     )
-    if not email:
+    if not email or not _email_matches_active_scope(email, active_scope):
         return PlainTextResponse("No encontrado", status_code=404)
     order = db.scalar(
         select(Order)
@@ -208,23 +247,32 @@ def mail_detail(email_id: int, request: Request, db: Session = Depends(get_tenan
 
 
 @router.post("/{email_id}/process")
-def mail_process(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def mail_process(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
+    active_scope = _active_mail_scope(master_db, user.company_id)
+    email = db.get(Email, email_id)
+    if not email or email.company_id != user.company_id or not _email_matches_active_scope(email, active_scope):
+        return PlainTextResponse("No encontrado", status_code=404)
     job = enqueue_job(db, company_id=user.company_id, job_type="process_email", payload={"email_id": email_id}, created_by_user_id=user.id)
     log_action(db, company_id=user.company_id, user=user, action="mail.process", entity_type="job", entity_id=job.id, message=f"Correo encolado para procesar: {email_id}")
     return _redirect_back(request)
 
 
 @router.post("/{email_id}/reprocess")
-def mail_reprocess(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def mail_reprocess(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
+    active_scope = _active_mail_scope(master_db, user.company_id)
+    email = db.get(Email, email_id)
+    if not email or email.company_id != user.company_id or not _email_matches_active_scope(email, active_scope):
+        return PlainTextResponse("No encontrado", status_code=404)
     job = enqueue_job(db, company_id=user.company_id, job_type="process_email", payload={"email_id": email_id, "force": True}, created_by_user_id=user.id)
     log_action(db, company_id=user.company_id, user=user, action="mail.reprocess", entity_type="job", entity_id=job.id, message=f"Correo reencolado: {email_id}")
     return _redirect_back(request)
 
 
 @router.post("/{email_id}/mark-read")
-def mail_mark_read(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def mail_mark_read(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
+    active_scope = _active_mail_scope(master_db, user.company_id)
     email = db.get(Email, email_id)
-    if email and email.company_id == user.company_id:
+    if email and email.company_id == user.company_id and _email_matches_active_scope(email, active_scope):
         email.is_read = True
         email.archived = False
         db.commit()
@@ -233,9 +281,10 @@ def mail_mark_read(email_id: int, request: Request, db: Session = Depends(get_te
 
 
 @router.post("/{email_id}/archive")
-def mail_archive(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def mail_archive(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
+    active_scope = _active_mail_scope(master_db, user.company_id)
     email = db.get(Email, email_id)
-    if email and email.company_id == user.company_id:
+    if email and email.company_id == user.company_id and _email_matches_active_scope(email, active_scope):
         email.is_read = True
         email.archived = True
         db.commit()
@@ -244,9 +293,10 @@ def mail_archive(email_id: int, request: Request, db: Session = Depends(get_tena
 
 
 @router.post("/{email_id}/mark-no-order")
-def mail_mark_no_order(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def mail_mark_no_order(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
+    active_scope = _active_mail_scope(master_db, user.company_id)
     email = db.get(Email, email_id)
-    if email and email.company_id == user.company_id:
+    if email and email.company_id == user.company_id and _email_matches_active_scope(email, active_scope):
         email.status = "no_pedido"
         email.agent_status = "processed_no_order"
         email.detected_type = "no_pedido"
@@ -257,10 +307,11 @@ def mail_mark_no_order(email_id: int, request: Request, db: Session = Depends(ge
 
 
 @router.post("/{email_id}/link-order")
-def mail_link_order(email_id: int, request: Request, order_id: int = Form(...), db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def mail_link_order(email_id: int, request: Request, order_id: int = Form(...), db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
+    active_scope = _active_mail_scope(master_db, user.company_id)
     email = db.get(Email, email_id)
     order = db.get(Order, order_id)
-    if email and order and email.company_id == user.company_id and order.company_id == user.company_id:
+    if email and order and email.company_id == user.company_id and order.company_id == user.company_id and _email_matches_active_scope(email, active_scope):
         order.email_id = email.id
         email.is_read = True
         email.archived = False

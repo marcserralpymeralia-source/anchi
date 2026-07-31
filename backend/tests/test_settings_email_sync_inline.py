@@ -85,6 +85,7 @@ class SettingsEmailSyncInlineHttpTests(unittest.TestCase):
                     state = EmailSyncState(company_id=fixture.company_id, channel_key="email", enabled=True, frequency_seconds=60, status="idle")
                     master_db.add(state)
                 state.last_seen_uid = "139"
+                state.uidvalidity = "777"
                 master_db.commit()
 
             with TenantSession() as tenant_db:

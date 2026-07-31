@@ -28,6 +28,20 @@ def tenant_db_session(database_url: str):
     return sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
+@lru_cache(maxsize=128)
+def _ensure_tenant_schema_cached(database_url: str, company_id: int | None, application_version: str | None, baseline: bool) -> tuple[tuple[str, object], ...]:
+    summary = ensure_tenant_schema(database_url, company_id=company_id, application_version=application_version, baseline=baseline)
+    return tuple(summary.items())
+
+
+def ensure_tenant_schema_once(database_url: str, *, company_id: int | None = None, application_version: str | None = None, baseline: bool = False) -> dict:
+    return dict(_ensure_tenant_schema_cached(database_url, company_id, application_version, baseline))
+
+
+def clear_tenant_schema_cache() -> None:
+    _ensure_tenant_schema_cached.cache_clear()
+
+
 def _infer_company_id(engine) -> int | None:  # noqa: ANN001
     with engine.connect() as conn:
         inspector = inspect(conn)
@@ -69,7 +83,7 @@ def get_tenant_db(request: Request, master_db: Session = Depends(get_master_db))
         raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/login"})
 
     try:
-        ensure_tenant_schema(database_url, company_id=tenant.company.id)
+        ensure_tenant_schema_once(database_url, company_id=tenant.company.id)
         SessionFactory = tenant_db_session(database_url)
         db = SessionFactory()
     except SQLAlchemyError:

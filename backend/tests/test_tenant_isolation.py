@@ -24,7 +24,7 @@ from app.db.models import Company, Customer, ScoringSettings  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.master.service import TenantRole, TenantUser, load_tenant_context  # noqa: E402
-from app.tenancy.database import get_tenant_db  # noqa: E402
+from app.tenancy.database import clear_tenant_schema_cache, ensure_tenant_schema, get_tenant_db  # noqa: E402
 
 
 class FakeRequest:
@@ -36,6 +36,7 @@ class FakeRequest:
 
 class TenantIsolationTests(unittest.TestCase):
     def setUp(self):
+        clear_tenant_schema_cache()
         self.tempdir = tempfile.TemporaryDirectory()
         base = Path(self.tempdir.name)
         self.master_path = base / "master.sqlite"
@@ -52,6 +53,7 @@ class TenantIsolationTests(unittest.TestCase):
         self.TenantBSession = sessionmaker(bind=self.tenant_b_engine, autoflush=False, autocommit=False)
 
     def tearDown(self):
+        clear_tenant_schema_cache()
         self.master_engine.dispose()
         self.tenant_a_engine.dispose()
         self.tenant_b_engine.dispose()
@@ -222,6 +224,24 @@ class TenantIsolationTests(unittest.TestCase):
         finally:
             tenant_session.close()
             db.close()
+
+    def test_get_tenant_db_bootstraps_schema_once_per_database(self):
+        db = self.MasterSession()
+        company = MasterCompany(id=1, name="Demo", slug="demo", active=True)
+        user = MasterUser(id=1, email="admin@example.com", full_name="Admin", password_hash=hash_password("admin123"), is_active=True)
+        membership = CompanyMembership(id=1, user_id=1, company_id=1, role_key="Administrador", is_active=True, is_owner=False)
+        tenant_db = MasterTenantDatabase(company_id=1, database_key="demo", database_url=f"sqlite:///{self.tenant_a_path.as_posix()}", is_active=True, health_status="ok")
+        db.add_all([company, user, membership, tenant_db])
+        db.commit()
+
+        request = FakeRequest(session={"membership_id": 1, "user_id": 1, "company_id": 1, "company_slug": "demo"})
+        with patch("app.tenancy.database.ensure_tenant_schema", wraps=ensure_tenant_schema) as mocked_ensure:
+            tenant_session_1 = next(get_tenant_db(request, db))
+            tenant_session_1.close()
+            tenant_session_2 = next(get_tenant_db(request, db))
+            tenant_session_2.close()
+        self.assertEqual(mocked_ensure.call_count, 1)
+        db.close()
 
     def test_tenant_admin_is_not_master_admin(self):
         tenant_admin = TenantUser(

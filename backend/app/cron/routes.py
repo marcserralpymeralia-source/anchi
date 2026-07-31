@@ -1,0 +1,128 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.core.config import get_settings
+from app.db.models import EmailSettings
+from app.master.database import get_master_db
+from app.master.models import EmailSyncState, MasterTenantDatabase
+from app.settings.integrations import read_latest_imap_emails
+from app.settings.service import get_or_create_settings
+from app.tenancy.database import tenant_db_session
+from app.workers.email_worker import _acquire_lock, _release_lock  # noqa: PLC2701
+
+router = APIRouter(prefix="/cron", tags=["cron"])
+
+
+def _cron_authorized(request: Request) -> None:
+    settings = get_settings()
+    expected = (settings.cron_secret or "").strip()
+    if (request.headers.get("x-vercel-cron") or "").strip().lower() in {"1", "true", "yes"}:
+        return
+    provided = (
+        request.headers.get("x-cron-secret")
+        or request.query_params.get("secret")
+        or request.headers.get("authorization")
+        or ""
+    ).strip()
+    if expected and provided == expected:
+        return
+    if not expected:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cron secret no configurado.")
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cron no autorizado.")
+
+
+@router.api_route("/email-sync", methods=["GET", "POST"])
+def email_sync_cron(request: Request, master_db: Session = Depends(get_master_db)):
+    _cron_authorized(request)
+    now = datetime.now(timezone.utc)
+    due_states = master_db.scalars(
+        select(EmailSyncState)
+        .join(MasterTenantDatabase, MasterTenantDatabase.company_id == EmailSyncState.company_id)
+        .where(
+            MasterTenantDatabase.is_active.is_(True),
+            MasterTenantDatabase.database_url.is_not(None),
+            EmailSyncState.enabled.is_(True),
+            EmailSyncState.channel_key == "email",
+            EmailSyncState.next_run_at.is_not(None),
+            EmailSyncState.next_run_at <= now,
+        )
+    ).all()
+    result = {
+        "ok": True,
+        "checked": len(due_states),
+        "processed": 0,
+        "skipped": 0,
+        "found": 0,
+        "saved": 0,
+        "duplicates": 0,
+        "discarded": 0,
+        "errors": 0,
+        "tenants": [],
+    }
+    for state in due_states:
+        tenant = master_db.scalar(
+            select(MasterTenantDatabase).where(
+                MasterTenantDatabase.company_id == state.company_id,
+                MasterTenantDatabase.is_active.is_(True),
+            )
+        )
+        if not tenant or not tenant.database_url:
+            result["skipped"] += 1
+            continue
+        if not _acquire_lock(master_db, state, owner="cron-email-sync"):
+            result["skipped"] += 1
+            continue
+        session_factory = tenant_db_session(tenant.database_url)
+        db = session_factory()
+        try:
+            settings = get_or_create_settings(db, EmailSettings, tenant.company_id)
+            state.frequency_seconds = max(int(settings.polling_frequency_minutes or 1), 1) * 60
+            master_db.commit()
+            if not settings.auto_sync_enabled:
+                state.enabled = False
+                master_db.commit()
+                _release_lock(master_db, state, success=True)
+                result["skipped"] += 1
+                continue
+            sync_result = read_latest_imap_emails(
+                db,
+                settings,
+                tenant.company_id,
+                auto_process=settings.auto_process_on_fetch,
+                unread_only=settings.read_unread_only,
+                limit=max(min(int(settings.read_limit or 10), 50), 1),
+                sync_state=state,
+                sync_session=master_db,
+            )
+            tenant_result = {
+                "company_id": tenant.company_id,
+                "ok": bool(sync_result.get("ok")),
+                "found": int(sync_result.get("found") or 0),
+                "saved": int(sync_result.get("saved") or 0),
+                "duplicates": int(sync_result.get("duplicates") or 0),
+                "discarded": int(sync_result.get("discarded") or 0),
+                "errors": int(sync_result.get("errors") or 0),
+                "message": sync_result.get("message"),
+            }
+            result["processed"] += 1
+            result["found"] += tenant_result["found"]
+            result["saved"] += tenant_result["saved"]
+            result["duplicates"] += tenant_result["duplicates"]
+            result["discarded"] += tenant_result["discarded"]
+            result["errors"] += tenant_result["errors"]
+            result["tenants"].append(tenant_result)
+            _release_lock(master_db, state, success=bool(sync_result.get("ok")), error=None if sync_result.get("ok") else str(sync_result.get("message") or "error"))
+        except Exception as exc:  # noqa: BLE001
+            _release_lock(master_db, state, success=False, error=str(exc))
+            result["errors"] += 1
+            result["tenants"].append({"company_id": tenant.company_id, "ok": False, "message": str(exc)})
+        finally:
+            db.close()
+    master_db.commit()
+    return JSONResponse(result)

@@ -26,6 +26,11 @@ try:  # pragma: no cover - optional during phased extraction
 except Exception:  # noqa: BLE001
     health_router = None
 
+try:  # pragma: no cover - optional during phased extraction
+    from app.cron.routes import router as cron_router
+except Exception:  # noqa: BLE001
+    cron_router = None
+
 
 def get_registered_routers() -> list:
     routers = [
@@ -52,4 +57,6 @@ def get_registered_routers() -> list:
     ]
     if health_router is not None:
         routers.append(health_router)
+    if cron_router is not None:
+        routers.append(cron_router)
     return routers

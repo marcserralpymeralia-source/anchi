@@ -4,5 +4,11 @@
     "index.py": {
       "maxDuration": 60
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/cron/email-sync",
+      "schedule": "*/10 * * * *"
+    }
+  ]
 }

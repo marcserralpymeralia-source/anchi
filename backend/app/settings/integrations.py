@@ -332,6 +332,7 @@ def preview_initial_imap_sync(settings: EmailSettings) -> dict:
         if status != "OK":
             client.logout()
             return {"ok": False, "message": "No se pudo abrir la carpeta IMAP."}
+        uidvalidity = _imap_uidvalidity(client, mailbox)
         if plan["mode"] == "new":
             ids = _imap_uid_search(client, "ALL")
             if ids is None:
@@ -348,6 +349,7 @@ def preview_initial_imap_sync(settings: EmailSettings) -> dict:
                 "estimated": 0,
                 "date_label": "desde ahora",
                 "checkpoint_uid": highest_uid,
+                "uidvalidity": uidvalidity,
                 "message": "Se guardará el punto de partida actual y no se importará histórico.",
                 "warning": None,
             }
@@ -369,6 +371,7 @@ def preview_initial_imap_sync(settings: EmailSettings) -> dict:
                 "estimated": planned,
                 "date_label": None,
                 "checkpoint_uid": None,
+                "uidvalidity": uidvalidity,
                 "message": f"Se importarán aproximadamente {planned} correos.",
                 "warning": warning,
             }
@@ -390,6 +393,7 @@ def preview_initial_imap_sync(settings: EmailSettings) -> dict:
             "estimated": planned,
             "date_label": plan["date_label"],
             "checkpoint_uid": None,
+            "uidvalidity": uidvalidity,
             "message": f"Se importarán aproximadamente {planned} correos desde {plan['date_label']}.",
             "warning": warning,
         }
@@ -411,12 +415,17 @@ def run_initial_imap_sync(
         if not preview.get("ok"):
             return preview
         checkpoint_uid = preview.get("checkpoint_uid")
+        checkpoint_uidvalidity = preview.get("uidvalidity")
         if sync_state and sync_session:
             _update_sync_checkpoint(
                 sync_state,
                 sync_session,
                 mailbox=settings.mailbox or settings.inbox_folder or "INBOX",
-                uidvalidity=None,
+                uidvalidity=checkpoint_uidvalidity,
+                source_provider=(settings.provider or "imap").strip().lower() or "imap",
+                source_host=(settings.imap_host or "").strip() or None,
+                source_username=(settings.imap_username or "").strip() or None,
+                source_connected_email=(settings.connected_email or settings.imap_username or "").strip() or None,
                 last_uid=checkpoint_uid,
                 saved=0,
                 duplicates=0,
@@ -482,6 +491,37 @@ def _normalized_email_external_id(mailbox: str, uidvalidity: str | None, uid: st
     return f"{mailbox}:{uidvalidity or 'unknown'}:{uid}"
 
 
+def _current_imap_scope(settings: EmailSettings, mailbox: str) -> dict[str, str | None]:
+    return {
+        "provider": (settings.provider or "imap").strip().lower() or "imap",
+        "host": (settings.imap_host or "").strip() or None,
+        "username": (settings.imap_username or "").strip() or None,
+        "connected_email": (settings.connected_email or settings.imap_username or "").strip() or None,
+        "mailbox": mailbox,
+    }
+
+
+def _sync_state_matches_scope(sync_state: EmailSyncState | None, scope: dict[str, str | None], uidvalidity: str | None) -> bool:
+    if not sync_state or not sync_state.last_seen_uid:
+        return False
+    if sync_state.mailbox and sync_state.mailbox != scope["mailbox"]:
+        return False
+    if sync_state.uidvalidity and uidvalidity and sync_state.uidvalidity != uidvalidity:
+        return False
+    if sync_state.uidvalidity and not uidvalidity:
+        return False
+    for field, expected in (
+        ("source_provider", scope["provider"]),
+        ("source_host", scope["host"]),
+        ("source_username", scope["username"]),
+        ("source_connected_email", scope["connected_email"]),
+    ):
+        current = getattr(sync_state, field, None)
+        if current and expected and current != expected:
+            return False
+    return True
+
+
 def _existing_email_for_imap(
     db: Session,
     *,
@@ -506,6 +546,10 @@ def _update_sync_checkpoint(
     *,
     mailbox: str | None,
     uidvalidity: str | None,
+    source_provider: str | None = None,
+    source_host: str | None = None,
+    source_username: str | None = None,
+    source_connected_email: str | None = None,
     last_uid: str | None,
     saved: int,
     duplicates: int,
@@ -522,6 +566,10 @@ def _update_sync_checkpoint(
     now = datetime.now(timezone.utc)
     sync_state.mailbox = mailbox or sync_state.mailbox
     sync_state.uidvalidity = uidvalidity or sync_state.uidvalidity
+    sync_state.source_provider = source_provider or sync_state.source_provider
+    sync_state.source_host = source_host or sync_state.source_host
+    sync_state.source_username = source_username or sync_state.source_username
+    sync_state.source_connected_email = source_connected_email or sync_state.source_connected_email
     sync_state.last_seen_uid = last_uid or sync_state.last_seen_uid
     sync_state.last_checkpoint_uid = last_uid or sync_state.last_checkpoint_uid
     sync_state.last_sync_at = now
@@ -612,6 +660,7 @@ def _fetch_imap_emails(
     last_processed_uid: str | None = None
     should_auto_process = settings.auto_process_on_fetch if auto_process is None else auto_process
     last_seen_uid_before = sync_state.last_seen_uid if sync_state else None
+    current_scope = _current_imap_scope(settings, mailbox)
     try:
         settings.last_sync_message = f"{label} en curso"
         settings.last_sync_error = None
@@ -625,8 +674,79 @@ def _fetch_imap_emails(
         client.select(mailbox, readonly=not settings.mark_as_read_after_import)
         uidvalidity = _imap_uidvalidity(client, mailbox)
         effective_start_uid = start_uid
-        if not effective_start_uid and not end_uid and not start_date and not end_date and sync_state and sync_state.last_seen_uid and sync_state.backfill_status not in {"running", "paused"}:
-            effective_start_uid = _advance_uid(sync_state.last_seen_uid)
+        if not effective_start_uid and not end_uid and not start_date and not end_date and sync_state and sync_state.backfill_status not in {"running", "paused"}:
+            if _sync_state_matches_scope(sync_state, current_scope, uidvalidity):
+                effective_start_uid = _advance_uid(sync_state.last_seen_uid)
+            else:
+                logger.info(
+                    "email.sync.scope_reset",
+                    extra={
+                        "event": "email.sync.scope_reset",
+                        "company_id": company_id,
+                        "settings_id": getattr(settings, "id", None),
+                        "mailbox": mailbox,
+                        "uidvalidity": uidvalidity,
+                        "last_seen_uid_before": last_seen_uid_before,
+                        "source_provider": current_scope["provider"],
+                        "source_host": current_scope["host"],
+                        "source_username": current_scope["username"],
+                        "source_connected_email": current_scope["connected_email"],
+                    },
+                )
+                seed_ids = _imap_uid_search(client, "ALL")
+                if seed_ids is None:
+                    client.logout()
+                    return {"ok": False, "found": 0, "saved": 0, "downloaded": 0, "duplicates": 0, "discarded": 0, "errors": 0, "message": "No se pudo leer el buzón para fijar el nuevo punto de partida."}
+                highest_uid = seed_ids[-1].decode(errors="ignore") if seed_ids else None
+                if sync_state and sync_session:
+                    _update_sync_checkpoint(
+                        sync_state,
+                        sync_session,
+                        mailbox=mailbox,
+                        uidvalidity=uidvalidity,
+                        source_provider=current_scope["provider"],
+                        source_host=current_scope["host"],
+                        source_username=current_scope["username"],
+                        source_connected_email=current_scope["connected_email"],
+                        last_uid=highest_uid,
+                        saved=0,
+                        duplicates=0,
+                        attachments_saved=0,
+                        found=0,
+                        status="idle",
+                        progress=0,
+                        total=0,
+                    )
+                _update_sync_status(settings, True, 0, 0, "Se ha detectado un cambio de buzón y se ha guardado el punto de partida actual.")
+                db.commit()
+                log_action(db, company_id=company_id, user=None, action="email.sync.scope_reset", entity_type="email", message=f"Punto de partida actualizado para {mailbox}")
+                logger.info(
+                    "email.sync.scope_reset_completed",
+                    extra={
+                        "event": "email.sync.scope_reset_completed",
+                        "company_id": company_id,
+                        "settings_id": getattr(settings, "id", None),
+                        "mailbox": mailbox,
+                        "uidvalidity": uidvalidity,
+                        "last_seen_uid_before": last_seen_uid_before,
+                        "last_seen_uid_after": highest_uid,
+                    },
+                )
+                client.logout()
+                return {
+                    "ok": True,
+                    "found": 0,
+                    "downloaded": 0,
+                    "saved": 0,
+                    "duplicates": 0,
+                    "discarded": 0,
+                    "attachments": 0,
+                    "errors": 0,
+                    "uidvalidity": uidvalidity,
+                    "last_seen_uid_before": last_seen_uid_before,
+                    "last_seen_uid_after": highest_uid,
+                    "message": settings.last_sync_message,
+                }
         criteria = _imap_search_criteria(start_date=start_date, end_date=end_date, unread_only=unread_only, start_uid=effective_start_uid, end_uid=end_uid)
         logger.info(
             "email.sync.search",
@@ -790,6 +910,10 @@ def _fetch_imap_emails(
                     sync_session,
                     mailbox=mailbox,
                     uidvalidity=uidvalidity,
+                    source_provider=current_scope["provider"],
+                    source_host=current_scope["host"],
+                    source_username=current_scope["username"],
+                    source_connected_email=current_scope["connected_email"],
                     last_uid=last_processed_uid,
                     saved=saved,
                     duplicates=duplicates,
@@ -811,6 +935,10 @@ def _fetch_imap_emails(
                     sync_session,
                     mailbox=mailbox,
                     uidvalidity=uidvalidity,
+                    source_provider=current_scope["provider"],
+                    source_host=current_scope["host"],
+                    source_username=current_scope["username"],
+                    source_connected_email=current_scope["connected_email"],
                     last_uid=last_processed_uid,
                     saved=saved,
                     duplicates=duplicates,
@@ -826,6 +954,10 @@ def _fetch_imap_emails(
                     sync_session,
                     mailbox=mailbox,
                     uidvalidity=uidvalidity,
+                    source_provider=current_scope["provider"],
+                    source_host=current_scope["host"],
+                    source_username=current_scope["username"],
+                    source_connected_email=current_scope["connected_email"],
                     last_uid=last_processed_uid,
                     saved=saved,
                     duplicates=duplicates,
@@ -841,6 +973,10 @@ def _fetch_imap_emails(
                     sync_session,
                     mailbox=mailbox,
                     uidvalidity=uidvalidity,
+                    source_provider=current_scope["provider"],
+                    source_host=current_scope["host"],
+                    source_username=current_scope["username"],
+                    source_connected_email=current_scope["connected_email"],
                     last_uid=last_processed_uid or sync_state.backfill_last_uid,
                     saved=saved,
                     duplicates=duplicates,
@@ -897,6 +1033,10 @@ def _fetch_imap_emails(
                 sync_session,
                 mailbox=mailbox,
                 uidvalidity=None,
+                source_provider=current_scope["provider"],
+                source_host=current_scope["host"],
+                source_username=current_scope["username"],
+                source_connected_email=current_scope["connected_email"],
                 last_uid=last_processed_uid,
                 saved=saved,
                 duplicates=duplicates,

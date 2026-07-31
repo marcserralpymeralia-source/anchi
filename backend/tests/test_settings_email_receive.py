@@ -15,7 +15,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.encryption import decrypt_secret
 from app.db.models import EmailSettings, User
-from app.master.models import CompanyMembership
+from app.master.models import CompanyMembership, EmailSyncState
 from scripts.performance_data import build_performance_fixture, performance_test_client
 
 
@@ -120,6 +120,21 @@ class SettingsEmailReceiveHttpTests(unittest.TestCase):
                 assert encrypted_password is not None
                 self.assertNotEqual(encrypted_password, "DemoAppPassword123!")
                 self.assertEqual(decrypt_secret(encrypted_password), "DemoAppPassword123!")
+
+                with MasterSession() as db:
+                    state = db.scalar(
+                        select(EmailSyncState).where(
+                            EmailSyncState.company_id == fixture.company_id,
+                            EmailSyncState.channel_key == "email",
+                        )
+                    )
+                    self.assertIsNotNone(state)
+                    assert state is not None
+                    self.assertFalse(state.enabled)
+                    self.assertEqual(state.mailbox, "INBOX")
+                    self.assertEqual(state.source_provider, "gmail")
+                    self.assertEqual(state.source_host, "imap.gmail.com")
+                    self.assertEqual(state.source_username, "demo.user@example.com")
 
                 payload["imap_password_encrypted"] = "********"
                 payload["initial_history_limit"] = "20"

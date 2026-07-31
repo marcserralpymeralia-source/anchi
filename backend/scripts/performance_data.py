@@ -41,8 +41,10 @@ from app.db.models import (
 )
 from app.demo_seed import _ensure_order_bundle, _now, reset_demo_company
 from app.master.database import MasterBase
+from app.master.migrations import upgrade_master_schema
 from app.master.models import CompanyMembership, EmailSyncState, MasterCompany, MasterTenantDatabase, MasterUser
 from app.master.service import slugify
+from app.migrations.helpers import ensure_columns
 from app.tenancy.database import ensure_tenant_schema
 
 
@@ -441,21 +443,39 @@ def temporary_performance_environment(fixture: PerformanceFixture) -> Iterator[N
     master_database_module = importlib.import_module("app.master.database")
     operational_database_module = importlib.import_module("app.db.database")
     lifespan_module = importlib.import_module("app.core.lifespan")
+    middleware_module = importlib.import_module("app.core.middleware")
     tenancy_database_module = importlib.import_module("app.tenancy.database")
+    jobs_worker_module = importlib.import_module("app.workers.jobs_worker")
     previous_master_engine = master_database_module.engine
     previous_master_sessionlocal = master_database_module.MasterSessionLocal
     previous_operational_engine = operational_database_module.engine
     previous_operational_sessionlocal = operational_database_module.SessionLocal
     previous_lifespan_master_sessionlocal = lifespan_module.MasterSessionLocal
+    previous_middleware_master_sessionlocal = middleware_module.MasterSessionLocal
+    previous_jobs_worker_master_sessionlocal = jobs_worker_module.MasterSessionLocal
 
     master_engine = create_engine(fixture.master_database_url, connect_args=_connect_args(fixture.master_database_url))
     tenant_engine = create_engine(fixture.tenant_database_url, connect_args=_connect_args(fixture.tenant_database_url))
     master_database_module.engine = master_engine
     master_database_module.MasterSessionLocal = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
     lifespan_module.MasterSessionLocal = master_database_module.MasterSessionLocal
+    middleware_module.MasterSessionLocal = master_database_module.MasterSessionLocal
+    jobs_worker_module.MasterSessionLocal = master_database_module.MasterSessionLocal
     operational_database_module.engine = tenant_engine
     operational_database_module.SessionLocal = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
     operational_database_module.ensure_schema_for_engine(tenant_engine)
+    upgrade_master_schema(master_engine, baseline=True)
+    ensure_columns(
+        master_engine,
+        "email_sync_state",
+        {
+            "source_provider": "VARCHAR(50)",
+            "source_host": "VARCHAR(255)",
+            "source_username": "VARCHAR(255)",
+            "source_connected_email": "VARCHAR(255)",
+        },
+        dry_run=False,
+    )
     tenancy_database_module.get_tenant_engine.cache_clear()
     try:
         yield
@@ -465,6 +485,8 @@ def temporary_performance_environment(fixture: PerformanceFixture) -> Iterator[N
         operational_database_module.engine = previous_operational_engine
         operational_database_module.SessionLocal = previous_operational_sessionlocal
         lifespan_module.MasterSessionLocal = previous_lifespan_master_sessionlocal
+        middleware_module.MasterSessionLocal = previous_middleware_master_sessionlocal
+        jobs_worker_module.MasterSessionLocal = previous_jobs_worker_master_sessionlocal
         master_engine.dispose()
         tenant_engine.dispose()
         for key, value in previous.items():

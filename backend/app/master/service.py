@@ -189,6 +189,10 @@ def authenticate_master_user(master_db: Session, email: str, password: str) -> T
     )
     membership = ordered_memberships[0]
     tenant_db = _tenant_db_for(membership)
+    if tenant_db and tenant_db.database_url:
+        from app.tenancy.database import ensure_tenant_schema_once
+
+        ensure_tenant_schema_once(tenant_db.database_url, company_id=membership.company_id)
     return _membership_to_user(membership, tenant_db)
 
 
@@ -230,6 +234,10 @@ def load_tenant_context(request, master_db: Session) -> TenantContext | None:
             MasterTenantDatabase.is_active.is_(True),
         )
     )
+    if tenant_db and tenant_db.database_url:
+        from app.tenancy.database import ensure_tenant_schema_once
+
+        ensure_tenant_schema_once(tenant_db.database_url, company_id=membership.company_id)
     company = _company_to_context(membership.company, tenant_db)
     user = _membership_to_user(membership, tenant_db)
     return TenantContext(company=company, user=user)
