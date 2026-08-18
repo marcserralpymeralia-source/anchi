@@ -47,6 +47,8 @@ def _redirect_step(step: str, *, message: str = "", error: str = "") -> Redirect
 
 def _setup_context(request: Request, db: Session, user: TenantUser, step: str, **extra):
     status = get_setup_status(db, user.company_id)
+    step_order = list(SETUP_STEP_ORDER)
+    step_index = step_order.index(step) if step in step_order else 0
     company = db.get(Company, user.company_id)
     branding = get_or_create_branding(db, user.company_id)
     email = get_or_create_settings(db, EmailSettings, user.company_id)
@@ -58,6 +60,10 @@ def _setup_context(request: Request, db: Session, user: TenantUser, step: str, *
         "step": step,
         "steps": status.steps,
         "setup_status": status,
+        "step_number": min(step_index + 1, 6),
+        "step_total": 6,
+        "previous_step": step_order[step_index - 1] if step_index > 0 else "",
+        "next_step": step_order[step_index + 1] if step_index + 1 < len(step_order) else "",
         "company": company,
         "branding": branding,
         "email": email,

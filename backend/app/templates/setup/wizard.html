@@ -1,207 +1,295 @@
-<!doctype html>
-<html lang="es">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Configuración inicial · Anchi</title>
-  <link rel="stylesheet" href="/static/styles.css">
-</head>
-<body class="setup-body">
-  <main class="setup-shell">
-    <header class="setup-topbar">
-      <div>
-        <strong>Anchi</strong>
-        <span>Configuración inicial</span>
-      </div>
-      <form method="post" action="/logout"><button class="secondary compact-button">Cerrar sesión</button></form>
-    </header>
+{% extends "base.html" %}
+{% set step_titles = {
+  "company": "Configura tu empresa",
+  "channels": "Conecta un canal de entrada",
+  "products": "Importa tus productos",
+  "customers": "Importa tus clientes",
+  "customer_knowledge": "Mejora cómo Anchi entiende a tus clientes",
+  "openai": "Conecta OpenAI",
+  "complete": "Anchi está lista"
+} %}
+{% set step_descriptions = {
+  "company": "Define el nombre, logo e identidad básica que verán los usuarios.",
+  "channels": "Email o WhatsApp son suficientes para empezar. Puedes configurar ambos si los usas.",
+  "products": "Sube tu catálogo para que Anchi pueda reconocer las líneas de los pedidos.",
+  "customers": "Esto permitirá identificar automáticamente quién envía cada pedido.",
+  "customer_knowledge": "Puedes añadir históricos, referencias, equivalencias o instrucciones. Este paso es opcional.",
+  "openai": "Anchi utiliza OpenAI para interpretar los pedidos que recibe.",
+  "complete": "La configuración básica está completa. Ya puedes empezar a recibir y procesar pedidos."
+} %}
+{% macro step_url(key) -%}/setup/{{ key|replace('_', '-') }}{%- endmacro %}
+{% macro step_mark(status) -%}{% if status == "Completado" %}✓{% elif status == "Opcional" %}○{% elif status == "En progreso" %}●{% else %}○{% endif %}{%- endmacro %}
+{% block content %}
+<section class="setup-workspace">
+  <header class="setup-hero">
+    <div>
+      <p class="setup-kicker">Configuración inicial</p>
+      <h1>Configura Anchi</h1>
+      <p>Paso {{ step_number }} de {{ step_total }} · {{ step_titles.get(step, "Configuración inicial") }}</p>
+    </div>
+    <a class="button secondary compact-button" href="/settings">Resumen de configuración</a>
+  </header>
 
-    <nav class="setup-progress" aria-label="Progreso">
-      {% for item in steps %}
-        <a class="setup-step setup-step-{{ item.status|lower|replace(' ', '-') }}" href="/setup/{{ item.key|replace('_', '-') }}">
-          <span>{{ loop.index }}</span>
-          <strong>{{ item.label }}</strong>
-          <em>{{ item.status }}</em>
-        </a>
-      {% endfor %}
-    </nav>
+  <div class="setup-meter" aria-label="Progreso de configuración">
+    <div class="setup-meter-head">
+      <strong>Configuración completada: {{ setup_status.progress_percent }} %</strong>
+      <span>{{ setup_status.current_step|replace('_', ' ')|capitalize }}</span>
+    </div>
+    <div class="setup-meter-track"><span style="width: {{ setup_status.progress_percent }}%"></span></div>
+  </div>
 
-    {% if message %}<div class="notice">{{ message }}</div>{% endif %}
-    {% if error %}<div class="setup-error">{{ error }}</div>{% endif %}
+  <nav class="setup-progress" aria-label="Pasos de configuración">
+    {% for item in steps %}
+      {% set can_open = item.status in ["Completado", "En progreso", "Opcional"] or item.key == setup_status.current_step %}
+      <a class="setup-step setup-step-{{ item.status|lower|replace(' ', '-') }} {% if item.key == step %}is-current{% endif %} {% if not can_open %}is-disabled{% endif %}" href="{% if can_open %}{{ step_url(item.key) }}{% else %}#{% endif %}" {% if not can_open %}aria-disabled="true"{% endif %}>
+        <span>{{ step_mark(item.status) }}</span>
+        <strong>{{ item.label }}</strong>
+        <em>{{ item.status }}</em>
+      </a>
+    {% endfor %}
+  </nav>
+
+  {% if message %}<div class="setup-flash setup-flash-ok">✓ {{ message }}</div>{% endif %}
+  {% if error %}<div class="setup-flash setup-flash-error">{{ error }}</div>{% endif %}
+
+  <section class="setup-panel setup-step-panel">
+    <div class="setup-copy">
+      <p class="setup-kicker">Paso {{ step_number }} de {{ step_total }}</p>
+      <h2>{{ step_titles.get(step, "Configuración inicial") }}</h2>
+      <p>{{ step_descriptions.get(step, "") }}</p>
+    </div>
 
     {% if step == "company" %}
-      <section class="setup-panel">
-        <div class="setup-copy">
-          <h1>Configura tu empresa</h1>
-          <p>Define el nombre, logo e identidad básica que verán los usuarios.</p>
-        </div>
-        <form class="setup-form" method="post" action="/setup/company" enctype="multipart/form-data">
+      <form class="setup-form setup-company-layout js-loading-form" method="post" action="/setup/company" enctype="multipart/form-data">
+        <div class="setup-fields">
           <label>Nombre legal<input name="legal_name" value="{{ company.legal_name or company.name or '' }}" required></label>
-          <label>Nombre comercial<input name="commercial_name" value="{{ branding.company_name or company.name or '' }}" required></label>
-          <label>Logo<input type="file" name="logo" accept="image/png,image/jpeg,image/webp"></label>
-          {% if branding.logo_url %}<img class="setup-logo-preview" src="{{ branding.logo_url }}" alt="Logo actual">{% endif %}
+          <label>Nombre comercial<input name="commercial_name" value="{{ branding.company_name or company.name or '' }}" required data-company-preview></label>
           <div class="setup-grid-3">
             <label>País<input name="country" value="{{ company.country or 'España' }}"></label>
             <label>Idioma<input name="language" value="{{ company.language or 'es' }}"></label>
             <label>Zona horaria<input name="timezone" value="{{ company.timezone or 'Europe/Madrid' }}"></label>
           </div>
-          <label>Color principal<input type="color" name="primary_color" value="#157F6E"></label>
-          <div class="setup-actions">
-            <a class="button secondary" href="/setup">Volver</a>
-            <button class="primary">Guardar y continuar</button>
+          <label>Logo<input type="file" name="logo" accept="image/png,image/jpeg,image/webp" data-logo-input></label>
+          <label>Color principal<input type="color" name="primary_color" value="#157F6E" data-color-preview></label>
+        </div>
+        <aside class="setup-preview-card">
+          <div class="setup-preview-logo" data-logo-preview>
+            {% if branding.logo_url %}<img src="{{ branding.logo_url }}" alt="Logo actual">{% else %}<span>Logo</span>{% endif %}
           </div>
-        </form>
-      </section>
+          <strong data-company-name>{{ branding.company_name or company.name or "Empresa" }}</strong>
+          <span data-color-swatch style="background:#157F6E"></span>
+        </aside>
+        <div class="setup-actions setup-actions-wide">
+          <a class="button secondary" href="/settings">← Atrás</a>
+          <button class="primary" data-loading-text="Guardando...">Guardar y continuar →</button>
+        </div>
+      </form>
     {% elif step == "channels" %}
-      <section class="setup-panel">
-        <div class="setup-copy">
-          <h1>Conecta un canal de entrada</h1>
-          <p>Email o WhatsApp son suficientes para empezar. Puedes configurar ambos si los usas.</p>
-        </div>
-        <div class="setup-two">
-          <article class="setup-block">
-            <h2>Email</h2>
-            {% if setup_status.email_connected %}
-              <p><strong>Email conectado</strong></p>
-              <p>{{ email.connected_email or email.imap_username }}</p>
-              <form method="post" action="/setup/email/sync"><button class="secondary">Sincronizar ahora</button></form>
-            {% else %}
-              <p>Estado: No conectado</p>
-            {% endif %}
-            <form class="setup-form compact" method="post" action="/setup/email">
-              <label>Dirección de correo<input name="connected_email" value="{{ email.connected_email or email.imap_username or '' }}" required></label>
-              <div class="setup-grid-2">
-                <label>Host IMAP<input name="imap_host" value="{{ email.imap_host or 'imap.gmail.com' }}" required></label>
-                <label>Puerto<input type="number" name="imap_port" value="{{ email.imap_port or 993 }}" required></label>
-              </div>
-              <label>Usuario<input name="imap_username" value="{{ email.imap_username or '' }}" required></label>
-              <label>Contraseña o app password<input type="password" name="imap_password" placeholder="{% if email.imap_password_encrypted %}••••••••{% endif %}"></label>
-              <label>Carpeta<input name="inbox_folder" value="{{ email.inbox_folder or 'INBOX' }}"></label>
-              <label class="setup-check"><input type="checkbox" name="imap_use_ssl" checked> SSL/TLS</label>
-              <button class="primary">Probar y conectar correo</button>
-            </form>
-          </article>
-          <article class="setup-block">
-            <h2>WhatsApp</h2>
-            {% if setup_status.whatsapp_connected %}
-              <p><strong>WhatsApp conectado</strong></p>
-              <p>{{ whatsapp.phone_number_id }}</p>
-            {% else %}
-              <p>Estado: No conectado</p>
-            {% endif %}
-            <form class="setup-form compact" method="post" action="/setup/whatsapp">
-              <label>Phone Number ID<input name="phone_number_id" value="{{ whatsapp.phone_number_id or '' }}"></label>
-              <label>Business Account ID<input name="business_account_id" value="{{ whatsapp.business_account_id or '' }}"></label>
-              <label>Access Token<input type="password" name="access_token" placeholder="{% if whatsapp.access_token %}••••••••{% endif %}"></label>
-              <label>App Secret<input type="password" name="app_secret" placeholder="{% if whatsapp.app_secret %}••••••••{% endif %}"></label>
-              <label>Verify Token<input type="password" name="verify_token" placeholder="{% if whatsapp.verify_token %}••••••••{% endif %}"></label>
-              <label>Webhook<input value="{{ webhook_url }}" readonly></label>
-              <button class="primary">Probar y conectar WhatsApp</button>
-            </form>
-          </article>
-        </div>
-        <div class="setup-actions">
-          <a class="button secondary" href="/setup/company">Volver</a>
-          <a class="button primary" href="/setup/products">Continuar</a>
-        </div>
-      </section>
+      <div class="setup-channel-grid">
+        <article class="setup-channel-card {% if setup_status.email_connected %}is-ready{% endif %}">
+          <div class="setup-card-head">
+            <span class="setup-card-icon">E</span>
+            <div>
+              <h3>Email</h3>
+              <p>Recibe pedidos desde un buzón de correo.</p>
+            </div>
+            <strong>{{ "Conectado" if setup_status.email_connected else "No conectado" }}</strong>
+          </div>
+          {% if setup_status.email_connected %}
+            <p class="setup-channel-value">{{ email.connected_email or email.imap_username }}</p>
+            {% if email.last_sync_at %}<p class="setup-channel-note">Última sincronización: {{ email.last_sync_at | local_dt(company.timezone if company else "Europe/Madrid", "%d/%m %H:%M") }}</p>{% endif %}
+          {% endif %}
+          <button class="secondary compact-button" type="button" data-toggle-target="email-form">{{ "Editar" if setup_status.email_connected else "Configurar Email" }}</button>
+          <form id="email-form" class="setup-form setup-collapsible js-loading-form {% if setup_status.email_connected %}is-collapsed{% endif %}" method="post" action="/setup/email">
+            <label>Dirección de correo<input name="connected_email" value="{{ email.connected_email or email.imap_username or '' }}" required></label>
+            <div class="setup-grid-2">
+              <label>Host IMAP<input name="imap_host" value="{{ email.imap_host or 'imap.gmail.com' }}" required></label>
+              <label>Puerto<input type="number" name="imap_port" value="{{ email.imap_port or 993 }}" required></label>
+            </div>
+            <label>Usuario<input name="imap_username" value="{{ email.imap_username or '' }}" required></label>
+            <label>Contraseña o app password<input type="password" name="imap_password" placeholder="{% if email.imap_password_encrypted %}••••••••{% endif %}"></label>
+            <label>Carpeta<input name="inbox_folder" value="{{ email.inbox_folder or 'INBOX' }}"></label>
+            <label class="setup-check"><input type="checkbox" name="imap_use_ssl" checked> SSL/TLS</label>
+            <button class="primary" data-loading-text="Comprobando conexión...">Probar conexión</button>
+          </form>
+          {% if setup_status.email_connected %}
+            <form class="setup-inline-form js-loading-form" method="post" action="/setup/email/sync"><button class="secondary compact-button" data-loading-text="Sincronizando...">Sincronizar ahora</button></form>
+          {% endif %}
+        </article>
+
+        <article class="setup-channel-card {% if setup_status.whatsapp_connected %}is-ready{% endif %}">
+          <div class="setup-card-head">
+            <span class="setup-card-icon">W</span>
+            <div>
+              <h3>WhatsApp</h3>
+              <p>Recibe pedidos desde WhatsApp Business.</p>
+            </div>
+            <strong>{{ "Conectado" if setup_status.whatsapp_connected else "No conectado" }}</strong>
+          </div>
+          {% if setup_status.whatsapp_connected %}<p class="setup-channel-value">{{ whatsapp.phone_number_id }}</p>{% endif %}
+          <button class="secondary compact-button" type="button" data-toggle-target="whatsapp-form">{{ "Editar" if setup_status.whatsapp_connected else "Configurar WhatsApp" }}</button>
+          <form id="whatsapp-form" class="setup-form setup-collapsible js-loading-form {% if setup_status.whatsapp_connected %}is-collapsed{% endif %}" method="post" action="/setup/whatsapp">
+            <label>Phone Number ID<input name="phone_number_id" value="{{ whatsapp.phone_number_id or '' }}"></label>
+            <label>Business Account ID<input name="business_account_id" value="{{ whatsapp.business_account_id or '' }}"></label>
+            <label>Access Token<input type="password" name="access_token" placeholder="{% if whatsapp.access_token %}••••••••{% endif %}"></label>
+            <label>App Secret<input type="password" name="app_secret" placeholder="{% if whatsapp.app_secret %}••••••••{% endif %}"></label>
+            <label>Verify Token<input type="password" name="verify_token" placeholder="{% if whatsapp.verify_token %}••••••••{% endif %}"></label>
+            <label>Webhook<input value="{{ webhook_url }}" readonly></label>
+            <button class="primary" data-loading-text="Comprobando conexión...">Probar conexión</button>
+          </form>
+        </article>
+      </div>
+      <div class="setup-actions">
+        <a class="button secondary" href="/setup/company">← Atrás</a>
+        {% if setup_status.has_input_channel %}<a class="button primary" href="/setup/products">Continuar →</a>{% else %}<button class="primary" disabled>Continuar →</button>{% endif %}
+      </div>
     {% elif step in ["products", "customers"] %}
       {% set entity_label = "productos" if step == "products" else "clientes" %}
-      <section class="setup-panel">
-        <div class="setup-copy">
-          <h1>{% if step == "products" %}Importa tus productos{% else %}Importa tus clientes{% endif %}</h1>
-          <p>{% if step == "products" %}Sube tu catálogo para que Anchi identifique líneas de pedido.{% else %}Sube tus clientes para identificar pedidos por nombre, email o teléfono.{% endif %}</p>
+      {% set entity_count = setup_status.counts.products if step == "products" else setup_status.counts.customers %}
+      {% if entity_count %}
+        <div class="setup-result-card">
+          <strong>✓ {{ entity_count }} {{ entity_label }} disponibles</strong>
+          <span>Puedes volver a importar para actualizar datos existentes.</span>
         </div>
-        {% if not preview %}
-          <form class="setup-form" method="post" action="/setup/{{ step }}/preview" enctype="multipart/form-data">
-            <label>Archivo .xlsx o .csv<input type="file" name="file" accept=".xlsx,.csv" required></label>
-            <div class="setup-actions">
-              <a class="button secondary" href="/setup/{% if step == 'products' %}channels{% else %}products{% endif %}">Volver</a>
-              <button class="primary">Subir y detectar columnas</button>
-            </div>
-          </form>
-        {% else %}
-          <form class="setup-form" method="post" action="/setup/{{ step }}/import">
-            <input type="hidden" name="token" value="{{ preview.token }}">
-            <input type="hidden" name="filename" value="{{ preview.filename }}">
-            <div class="setup-import-summary">
-              <strong>{{ preview.rows_total }} filas detectadas</strong>
-              <span>{{ validation.rows_new }} nuevas · {{ validation.rows_update }} actualizadas · {{ validation.rows_error }} con revisión</span>
-            </div>
-            <div class="setup-mapping">
-              {% for column in preview.columns %}
-                <label>{{ column }}
-                  <select name="mapping:{{ column }}">
-                    <option value="__skip__">No importar</option>
-                    {% for field, label in preview.fields.items() %}
-                      <option value="{{ field }}" {% if preview.guessed_mapping.get(column) == field %}selected{% endif %}>{{ label }}</option>
-                    {% endfor %}
-                  </select>
-                </label>
-              {% endfor %}
-            </div>
-            {% if validation.errors %}<p class="setup-warning">{{ validation.errors[0] }}</p>{% endif %}
-            <div class="setup-actions">
-              <a class="button secondary" href="/setup/{{ step }}">Volver</a>
-              <button class="primary">Confirmar importación</button>
-            </div>
-          </form>
-        {% endif %}
-      </section>
-    {% elif step == "customer_knowledge" %}
-      <section class="setup-panel">
-        <div class="setup-copy">
-          <h1>Añade información adicional sobre tus clientes</h1>
-          <p>Puedes aportar históricos, equivalencias o instrucciones para ayudar a Anchi a interpretar mejor sus pedidos.</p>
-        </div>
-        <form class="setup-form" method="post" action="/setup/customer-knowledge/import" enctype="multipart/form-data">
-          <label>Cliente
-            <select name="customer_id">
-              <option value="">Selecciona cliente</option>
-              {% for customer in knowledge_customers or [] %}
-                <option value="{{ customer.id }}">{{ customer.fiscal_name }}</option>
-              {% endfor %}
-            </select>
+      {% endif %}
+      {% if not preview %}
+        <form class="setup-form js-loading-form" method="post" action="/setup/{{ step }}/preview" enctype="multipart/form-data">
+          <label class="setup-dropzone" data-dropzone>
+            <input type="file" name="file" accept=".xlsx,.csv" required data-file-input>
+            <span>Arrastra un archivo aquí</span>
+            <strong>Seleccionar archivo</strong>
+            <em data-file-name>Excel o CSV</em>
           </label>
-          <label>Histórico o equivalencias<input type="file" name="file" accept=".xlsx,.csv"></label>
           <div class="setup-actions">
-            <a class="button secondary" href="/setup/customers">Volver</a>
-            <button class="secondary" formaction="/setup/customer-knowledge/skip" formmethod="post">Omitir por ahora</button>
-            <button class="primary">Añadir información</button>
+            <a class="button secondary" href="/setup/{% if step == 'products' %}channels{% else %}products{% endif %}">← Atrás</a>
+            <button class="primary" data-loading-text="Revisando archivo...">Revisar importación</button>
           </div>
         </form>
-      </section>
+      {% else %}
+        <form class="setup-form js-loading-form" method="post" action="/setup/{{ step }}/import">
+          <input type="hidden" name="token" value="{{ preview.token }}">
+          <input type="hidden" name="filename" value="{{ preview.filename }}">
+          <div class="setup-import-summary">
+            <strong>{{ preview.rows_total }} filas detectadas</strong>
+            <span>{{ validation.rows_new }} nuevas · {{ validation.rows_update }} actualizadas · {{ validation.rows_error }} con revisión</span>
+          </div>
+          <div class="setup-mapping">
+            {% for column in preview.columns %}
+              <label>{{ column }}
+                <select name="mapping:{{ column }}">
+                  <option value="__skip__">No importar</option>
+                  {% for field, label in preview.fields.items() %}
+                    <option value="{{ field }}" {% if preview.guessed_mapping.get(column) == field %}selected{% endif %}>{{ label }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+            {% endfor %}
+          </div>
+          {% if validation.errors %}<p class="setup-warning">{{ validation.errors[0] }}</p>{% endif %}
+          <div class="setup-actions">
+            <a class="button secondary" href="/setup/{{ step }}">← Atrás</a>
+            <button class="primary" data-loading-text="Importando...">Confirmar importación →</button>
+          </div>
+        </form>
+      {% endif %}
+    {% elif step == "customer_knowledge" %}
+      <div class="setup-optional-card">
+        <strong>Este paso es opcional</strong>
+        <span>Puedes completar la configuración ahora y añadir históricos más adelante.</span>
+      </div>
+      <form class="setup-form js-loading-form" method="post" action="/setup/customer-knowledge/import" enctype="multipart/form-data">
+        <label>Cliente
+          <select name="customer_id">
+            <option value="">Selecciona cliente</option>
+            {% for customer in knowledge_customers or [] %}
+              <option value="{{ customer.id }}">{{ customer.fiscal_name }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label class="setup-dropzone" data-dropzone>
+          <input type="file" name="file" accept=".xlsx,.csv" data-file-input>
+          <span>Arrastra un histórico o equivalencias</span>
+          <strong>Seleccionar archivo</strong>
+          <em data-file-name>Excel o CSV</em>
+        </label>
+        <div class="setup-actions">
+          <a class="button secondary" href="/setup/customers">← Atrás</a>
+          <button class="secondary" formaction="/setup/customer-knowledge/skip" formmethod="post">Omitir por ahora</button>
+          <button class="primary" data-loading-text="Añadiendo...">Añadir información →</button>
+        </div>
+      </form>
     {% elif step == "openai" %}
-      <section class="setup-panel">
-        <div class="setup-copy">
-          <h1>Conecta OpenAI</h1>
-          <p>Introduce solo la API Key. Anchi aplica el modelo y la configuración segura por defecto.</p>
+      <form class="setup-form setup-narrow js-loading-form" method="post" action="/setup/openai">
+        {% if setup_status.openai_connected %}
+          <div class="setup-result-card"><strong>✓ OpenAI conectado</strong><span>Puedes guardar una nueva API key si necesitas cambiarla.</span></div>
+        {% endif %}
+        <label>API Key<input type="password" name="api_key" placeholder="{% if llm.api_key_encrypted %}••••••••{% endif %}" required></label>
+        <div class="setup-actions">
+          <a class="button secondary" href="/setup/customer-knowledge">← Atrás</a>
+          <button class="primary" data-loading-text="Comprobando conexión...">Probar conexión</button>
         </div>
-        <form class="setup-form" method="post" action="/setup/openai">
-          <label>API Key<input type="password" name="api_key" placeholder="{% if llm.api_key_encrypted %}••••••••{% endif %}" required></label>
-          <div class="setup-actions">
-            <a class="button secondary" href="/setup/customer-knowledge">Volver</a>
-            <button class="primary">Probar conexión</button>
-          </div>
-        </form>
-      </section>
+      </form>
     {% elif step == "complete" %}
-      <section class="setup-panel">
-        <div class="setup-copy">
-          <h1>Anchi está lista</h1>
-          <p>Ya puedes empezar a gestionar pedidos pendientes.</p>
-        </div>
+      <div class="setup-complete">
+        <div class="setup-complete-mark">✓</div>
+        <h2>Anchi está lista</h2>
+        <p>La configuración básica está completa. Ya puedes empezar a recibir y procesar pedidos.</p>
         <ul class="setup-checklist">
           <li>✓ Empresa configurada</li>
-          <li>✓ Canal de entrada conectado</li>
-          <li>✓ Productos importados</li>
-          <li>✓ Clientes importados</li>
-          <li>{% if setup_status.optional_customer_knowledge %}✓{% else %}○{% endif %} Información adicional — opcional</li>
+          <li>✓ {% if setup_status.email_connected %}Email conectado{% else %}Canal de entrada conectado{% endif %}</li>
+          <li>{% if setup_status.whatsapp_connected %}✓ WhatsApp conectado{% else %}○ WhatsApp opcional{% endif %}</li>
+          <li>✓ {{ setup_status.counts.products }} productos</li>
+          <li>✓ {{ setup_status.counts.customers }} clientes</li>
+          <li>{% if setup_status.optional_customer_knowledge %}✓ Información adicional{% else %}○ Información adicional opcional{% endif %}</li>
           <li>✓ OpenAI conectado</li>
         </ul>
-        <a class="button primary" href="/inicio">Empezar a gestionar pedidos</a>
-      </section>
+        <div class="setup-actions">
+          <a class="button secondary" href="/settings">Revisar configuración</a>
+          <a class="button primary" href="/inicio">Empezar a gestionar pedidos →</a>
+        </div>
+      </div>
     {% endif %}
-  </main>
-</body>
-</html>
+  </section>
+</section>
+
+<script>
+  document.querySelectorAll("[data-toggle-target]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const target = document.getElementById(button.dataset.toggleTarget);
+      if (target) target.classList.toggle("is-collapsed");
+    });
+  });
+  document.querySelectorAll("[data-file-input]").forEach((input) => {
+    const zone = input.closest("[data-dropzone]");
+    const label = zone?.querySelector("[data-file-name]");
+    input.addEventListener("change", () => {
+      if (label) label.textContent = input.files?.[0]?.name || "Excel o CSV";
+      zone?.classList.toggle("has-file", !!input.files?.length);
+    });
+    ["dragenter", "dragover"].forEach((eventName) => zone?.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      zone.classList.add("is-dragging");
+    }));
+    ["dragleave", "drop"].forEach((eventName) => zone?.addEventListener(eventName, (event) => {
+      event.preventDefault();
+      zone.classList.remove("is-dragging");
+    }));
+  });
+  const logoInput = document.querySelector("[data-logo-input]");
+  logoInput?.addEventListener("change", () => {
+    const file = logoInput.files?.[0];
+    if (!file) return;
+    const preview = document.querySelector("[data-logo-preview]");
+    const url = URL.createObjectURL(file);
+    if (preview) preview.innerHTML = `<img src="${url}" alt="Logo seleccionado">`;
+  });
+  document.querySelector("[data-company-preview]")?.addEventListener("input", (event) => {
+    const target = document.querySelector("[data-company-name]");
+    if (target) target.textContent = event.target.value || "Empresa";
+  });
+  document.querySelector("[data-color-preview]")?.addEventListener("input", (event) => {
+    const swatch = document.querySelector("[data-color-swatch]");
+    if (swatch) swatch.style.background = event.target.value;
+  });
+</script>
+{% endblock %}

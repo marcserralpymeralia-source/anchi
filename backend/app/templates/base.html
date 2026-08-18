@@ -33,7 +33,7 @@
         <a href="{{ href_customers }}" title="Clientes" class="{% if request.url.path.startswith('/customers') %}active{% endif %}"><span class="nav-icon">◫</span><span class="nav-label">Clientes</span></a>
         <a href="{{ href_products }}" title="Productos" class="{% if request.url.path.startswith('/products') %}active{% endif %}"><span class="nav-icon">▣</span><span class="nav-label">Productos</span></a>
         {% if user.role.name in ["Administrador", "Superadmin"] %}
-          <a href="{{ href_settings }}" title="Configuracion" class="{% if request.url.path.startswith('/settings') %}active{% endif %}"><span class="nav-icon">⚙</span><span class="nav-label">Configuracion</span></a>
+          <a href="{{ href_settings }}" title="Configuracion" class="{% if request.url.path.startswith('/settings') or request.url.path.startswith('/setup') %}active{% endif %}"><span class="nav-icon">⚙</span><span class="nav-label">Configuracion</span></a>
         {% endif %}
       </nav>
     </aside>

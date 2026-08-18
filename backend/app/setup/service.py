@@ -35,6 +35,7 @@ class SetupStatus:
     optional_customer_knowledge: bool
     is_operational: bool
     current_step: str
+    progress_percent: int
     counts: dict[str, int]
     steps: list[dict[str, Any]]
 
@@ -105,6 +106,8 @@ def get_setup_status(db: Session, company_id: int) -> SetupStatus:
         {"key": "customer_knowledge", "label": "Información adicional", "status": _step_status("customer_knowledge", optional_customer_knowledge, current_step, optional=True)},
         {"key": "openai", "label": "OpenAI", "status": _step_status("openai", openai_connected, current_step)},
     ]
+    completed_steps = len([step for step in steps if step["status"] == "Completado"])
+    progress_percent = round((completed_steps * 100) / len(steps)) if steps else 0
     return SetupStatus(
         company_configured=company_ready,
         email_connected=email_connected,
@@ -116,6 +119,7 @@ def get_setup_status(db: Session, company_id: int) -> SetupStatus:
         optional_customer_knowledge=optional_customer_knowledge,
         is_operational=is_operational,
         current_step=current_step,
+        progress_percent=progress_percent,
         counts={"products": int(product_count), "customers": int(customer_count), "customer_knowledge": int(knowledge_count)},
         steps=steps,
     )

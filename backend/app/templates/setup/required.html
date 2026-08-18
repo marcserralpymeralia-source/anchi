@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="setup-workspace">
+  <article class="setup-panel setup-required">
+    <div class="setup-copy">
+      <p class="setup-kicker">Configuración pendiente</p>
+      <h2>Anchi todavía no está lista</h2>
+      <p>Completa la configuración básica antes de trabajar con pedidos.</p>
+    </div>
+    <div class="setup-meter">
+      <div class="setup-meter-head">
+        <strong>Configuración completada: {{ setup_status.progress_percent }} %</strong>
+        <span>Pendiente</span>
+      </div>
+      <div class="setup-meter-track"><span style="width: {{ setup_status.progress_percent }}%"></span></div>
+    </div>
+    {% if missing_steps %}
+      <div class="setup-missing">
+        <strong>Falta:</strong>
+        <ul>
+          {% for item in missing_steps %}<li>{{ item }}</li>{% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+    <div class="setup-actions">
+      <a class="button secondary" href="/settings">Revisar configuración</a>
+      <a class="button primary" href="/setup">Continuar configuración</a>
+    </div>
+  </article>
+</section>
+{% endblock %}

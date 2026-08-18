@@ -1,49 +1,77 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="setup-panel">
-  <div class="setup-copy">
-    <h1>Configuración</h1>
-    <p>Revisa y edita los elementos necesarios para que Anchi pueda recibir y procesar pedidos.</p>
+<section class="setup-workspace">
+  <header class="setup-hero">
+    <div>
+      <p class="setup-kicker">Configuración</p>
+      <h1>Configuración de Anchi</h1>
+      <p>Completa estos pasos para dejar Anchi operativa.</p>
+    </div>
+    {% if setup_status.is_operational %}
+      <a class="button primary compact-button" href="/inicio">Ir a pedidos</a>
+    {% else %}
+      <a class="button primary compact-button" href="/setup">Continuar configuración</a>
+    {% endif %}
+  </header>
+
+  <div class="setup-meter">
+    <div class="setup-meter-head">
+      <strong>Configuración completada: {{ setup_status.progress_percent }} %</strong>
+      <span>{{ "Operativa" if setup_status.is_operational else "Pendiente" }}</span>
+    </div>
+    <div class="setup-meter-track"><span style="width: {{ setup_status.progress_percent }}%"></span></div>
   </div>
-  <div class="setup-two">
-    <article class="setup-block">
-      <h2>Empresa</h2>
-      <p>{{ "Configurado" if setup_status.company_configured else "Pendiente" }}</p>
-      <a class="button secondary compact-button" href="/setup/company">Editar</a>
-    </article>
-    <article class="setup-block">
-      <h2>Email</h2>
-      <p>{{ "Conectado" if setup_status.email_connected else "No configurado" }}</p>
-      {% if email.last_sync_at %}
-        <p>Última sincronización: {{ email.last_sync_at | local_dt(company.timezone if company else "Europe/Madrid", "%d/%m %H:%M") }}</p>
-      {% endif %}
-      <a class="button secondary compact-button" href="/setup/channels">Editar</a>
-    </article>
-    <article class="setup-block">
-      <h2>WhatsApp</h2>
-      <p>{{ "Conectado" if setup_status.whatsapp_connected else "No configurado" }}</p>
-      <a class="button secondary compact-button" href="/setup/channels">Editar</a>
-    </article>
-    <article class="setup-block">
-      <h2>Productos</h2>
-      <p>{{ setup_status.counts.products }}</p>
-      <a class="button secondary compact-button" href="/setup/products">Editar</a>
-    </article>
-    <article class="setup-block">
-      <h2>Clientes</h2>
-      <p>{{ setup_status.counts.customers }}</p>
-      <a class="button secondary compact-button" href="/setup/customers">Editar</a>
-    </article>
-    <article class="setup-block">
-      <h2>Información adicional</h2>
-      <p>{{ "Disponible" if setup_status.optional_customer_knowledge else "Opcional" }}</p>
-      <a class="button secondary compact-button" href="/setup/customer-knowledge">Editar</a>
-    </article>
-    <article class="setup-block">
-      <h2>OpenAI</h2>
-      <p>{{ "Conectado" if setup_status.openai_connected else "Pendiente" }}</p>
-      <a class="button secondary compact-button" href="/setup/openai">Editar</a>
-    </article>
+
+  <div class="setup-summary-grid">
+    <a class="setup-summary-card" href="/setup/company">
+      <span class="setup-card-icon">E</span>
+      <div>
+        <h2>Empresa</h2>
+        <p>{{ "Configurada" if setup_status.company_configured else "Pendiente" }}</p>
+      </div>
+      <strong>{{ "✓" if setup_status.company_configured else "○" }}</strong>
+    </a>
+    <a class="setup-summary-card" href="/setup/channels">
+      <span class="setup-card-icon">C</span>
+      <div>
+        <h2>Canales</h2>
+        <p>{% if setup_status.email_connected %}Email conectado{% else %}Email pendiente{% endif %} · {% if setup_status.whatsapp_connected %}WhatsApp conectado{% else %}WhatsApp opcional{% endif %}</p>
+        {% if email.last_sync_at %}<small>Última sincronización: {{ email.last_sync_at | local_dt(company.timezone if company else "Europe/Madrid", "%d/%m %H:%M") }}</small>{% endif %}
+      </div>
+      <strong>{{ "✓" if setup_status.has_input_channel else "○" }}</strong>
+    </a>
+    <a class="setup-summary-card" href="/setup/products">
+      <span class="setup-card-icon">P</span>
+      <div>
+        <h2>Productos</h2>
+        <p>{{ setup_status.counts.products }} productos</p>
+      </div>
+      <strong>{{ "✓" if setup_status.has_products else "○" }}</strong>
+    </a>
+    <a class="setup-summary-card" href="/setup/customers">
+      <span class="setup-card-icon">CL</span>
+      <div>
+        <h2>Clientes</h2>
+        <p>{{ setup_status.counts.customers }} clientes</p>
+      </div>
+      <strong>{{ "✓" if setup_status.has_customers else "○" }}</strong>
+    </a>
+    <a class="setup-summary-card" href="/setup/customer-knowledge">
+      <span class="setup-card-icon">I</span>
+      <div>
+        <h2>Información adicional</h2>
+        <p>{{ "Disponible" if setup_status.optional_customer_knowledge else "Opcional" }}</p>
+      </div>
+      <strong>{{ "✓" if setup_status.optional_customer_knowledge else "○" }}</strong>
+    </a>
+    <a class="setup-summary-card" href="/setup/openai">
+      <span class="setup-card-icon">AI</span>
+      <div>
+        <h2>OpenAI</h2>
+        <p>{{ "Conectado" if setup_status.openai_connected else "Pendiente" }}</p>
+      </div>
+      <strong>{{ "✓" if setup_status.openai_connected else "○" }}</strong>
+    </a>
   </div>
 </section>
 {% endblock %}

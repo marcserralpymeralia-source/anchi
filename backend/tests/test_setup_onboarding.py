@@ -185,6 +185,26 @@ class SetupOnboardingTests(unittest.TestCase):
             response = self._login(client)
             self.assertEqual(response.status_code, 303)
             self.assertEqual(response.headers["location"], "/setup")
+            setup_page = client.get("/setup/company")
+            self.assertEqual(setup_page.status_code, 200)
+            self.assertIn("Pedidos pendientes", setup_page.text)
+            self.assertIn("Configura Anchi", setup_page.text)
+            self.assertIn("Configuración completada", setup_page.text)
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+    def test_incomplete_setup_keeps_authenticated_user_inside_app(self):
+        fixture = SetupFixture()
+        client, cleanup = fixture.client()
+        try:
+            self._login(client)
+            response = client.get("/inicio")
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("Anchi todavía no está lista", response.text)
+            self.assertIn("Continuar configuración", response.text)
+            self.assertIn("Pedidos pendientes", response.text)
+            self.assertNotIn("/login", response.headers.get("location", ""))
         finally:
             cleanup()
             fixture.cleanup()

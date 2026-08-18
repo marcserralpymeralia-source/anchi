@@ -17,6 +17,7 @@ from app.dashboard.service import _customer_suggestion_maps, _load_order_line_me
 from app.orders.state import ERROR_ORDER_STATUSES, PENDING_ORDER_STATUSES, REVIEW_ORDER_STATUSES, TERMINAL_ORDER_STATUSES
 from app.master.service import TenantUser
 from app.settings.service import get_or_create_settings
+from app.setup.service import get_setup_status
 from app.tenancy.database import get_tenant_db
 
 router = APIRouter(tags=["pages"])
@@ -315,6 +316,19 @@ def dashboard(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
+    setup_status = get_setup_status(db, user.company_id)
+    if not setup_status.is_operational:
+        missing = [item["label"] for item in setup_status.steps if item["status"] not in {"Completado", "Opcional"}]
+        return templates.TemplateResponse(
+            "setup/required.html",
+            {
+                "request": request,
+                "user": user,
+                "title": "Configuración pendiente",
+                "setup_status": setup_status,
+                "missing_steps": missing,
+            },
+        )
     active_mode = mode or tab or "all"
     filters = {"date_from": date_from, "date_to": date_to, "customer_id": customer_id, "status": status, "email_type": email_type, "score_min": score_min, "score_max": score_max, "scoring_category": scoring_category, "agent_status": agent_status, "date_range": date_range or quick_range or "7d", "customer_or_sender": customer_or_sender, "has_attachments": has_attachments, "order_status": order_status, "mode": active_mode, "tab": active_mode, "work_status": work_status, "quick_range": date_range or quick_range or "7d", "has_pdf": has_pdf, "requires_review": requires_review, "issue_type": issue_type, "origin": origin, "sender": sender, "search": search, "reason": reason, "page": page, "page_size": page_size}
     try:
