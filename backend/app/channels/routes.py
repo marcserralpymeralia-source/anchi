@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
@@ -60,6 +61,18 @@ CHANNEL_INBOUND_STATUS_MAP = {
     "no_order": "no_order",
     "doubtful": "doubtful",
     "error": "error",
+}
+ENTRY_STATUS_LABELS = {
+    "not_processed": "Pendiente de procesar",
+    "queued": "Pendiente de procesar",
+    "processing": "Procesando",
+    "pending_reprocess": "Pendiente de procesar",
+    "processed": "Procesado como pedido",
+    "order_detected": "Procesado como pedido",
+    "no_order": "No es pedido",
+    "doubtful": "Pendiente de validar",
+    "error": "Error",
+    "discarded": "Descartado",
 }
 
 
@@ -176,7 +189,49 @@ def _inbound_status_key(row: dict) -> str:
 
 
 def _row_status_label(row: dict) -> str:
-    return agent_status_label(row["status_key"])
+    return ENTRY_STATUS_LABELS.get(row["status_key"], agent_status_label(row["status_key"]))
+
+
+def _chat_messages_from_row(row: dict) -> list[dict[str, str]]:
+    if row["kind"] != "inbound" or (row.get("channel_key") or "").lower() != "whatsapp":
+        return []
+    content = row.get("content_text") or ""
+    messages: list[dict[str, str]] = []
+    raw_payload = row.get("raw_payload_json")
+    if raw_payload:
+        try:
+            payload = json.loads(raw_payload)
+            for message in payload.get("messages", []):
+                text = message.get("text") or message.get("body") or message.get("content") or ""
+                if not text:
+                    continue
+                direction = "outbound" if message.get("direction") == "outbound" else "inbound"
+                messages.append(
+                    {
+                        "speaker": message.get("sender") or message.get("participant") or ("Operador" if direction == "outbound" else "Cliente"),
+                        "direction": direction,
+                        "text": text,
+                        "time": message.get("time") or message.get("timestamp") or "",
+                    }
+                )
+        except (TypeError, ValueError):
+            messages = []
+    if messages:
+        return messages[:30]
+    for line in content.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        speaker = "Cliente"
+        text = line
+        direction = "inbound"
+        if ":" in line:
+            speaker, text = [part.strip() for part in line.split(":", 1)]
+            lower_speaker = speaker.lower()
+            if any(token in lower_speaker for token in ("operador", "bot", "anchi", "empresa")):
+                direction = "outbound"
+        messages.append({"speaker": speaker, "direction": direction, "text": text, "time": ""})
+    return messages[:30]
 
 
 def _row_score(row: dict) -> float | None:
@@ -325,6 +380,7 @@ def _channel_union_subquery(company_id: int, *, email_channel_name: str) -> obje
             Email.subject.label("subject"),
             Email.conversation_id.label("conversation_id"),
             func.coalesce(Email.body, Email.extracted_text, literal("")).label("content_text"),
+            literal(None).label("raw_payload_json"),
             Email.agent_status.label("raw_status"),
             Email.status.label("email_status"),
             Email.detected_type.label("detected_type"),
@@ -399,6 +455,7 @@ def _channel_union_subquery(company_id: int, *, email_channel_name: str) -> obje
             func.coalesce(InboundMessage.subject, literal("Sin asunto")).label("subject"),
             InboundMessage.conversation_id.label("conversation_id"),
             func.coalesce(InboundMessage.original_content, InboundMessage.normalized_text, InboundMessage.extraction_json, literal("")).label("content_text"),
+            InboundMessage.raw_payload_json.label("raw_payload_json"),
             InboundMessage.status.label("raw_status"),
             InboundMessage.status.label("email_status"),
             InboundMessage.detected_type.label("detected_type"),
@@ -618,6 +675,7 @@ def _channel_item_from_row(row: dict, attachments: list[dict], *, email_channel_
         "recipient": row.get("recipient") or "",
         "subject": row.get("subject") or "Sin asunto",
         "content_text": content_text,
+        "chat_messages": _chat_messages_from_row(row),
         "summary": _clip(content_text or row.get("subject") or "Entrada sin contenido"),
         "received_at": _aware(received_at),
         "received_label": _format_dt(received_at),
@@ -784,6 +842,28 @@ def process_entry(entry_id: str, db: Session = Depends(get_tenant_db), user: Ten
     return _process_channel_entry_response(db, user, source_kind, source_id)
 
 
+@entries_router.post("/entries/sync")
+def sync_entries(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    job = enqueue_job(
+        db,
+        company_id=user.company_id,
+        job_type="email_sync",
+        payload={"auto_process": False, "unread_only": False},
+        created_by_user_id=user.id,
+    )
+    log_action(
+        db,
+        company_id=user.company_id,
+        user=user,
+        action="entries.sync.enqueue",
+        entity_type="job",
+        entity_id=job.id,
+        message="Sincronizacion IMAP encolada desde Entradas",
+    )
+    db.commit()
+    return RedirectResponse("/entries?sync=queued", status_code=303)
+
+
 def _paginate(total_items: int, page: int, page_size: int) -> dict:
     page, page_size = normalize_page(page, page_size)
     total_pages = (total_items + page_size - 1) // page_size if total_items else 0
@@ -804,8 +884,13 @@ def _paginate(total_items: int, page: int, page_size: int) -> dict:
     }
 
 
-@entries_router.get("/entries")
 @router.get("")
+def channels_legacy_redirect(request: Request):
+    suffix = f"?{request.url.query}" if request.url.query else ""
+    return RedirectResponse(f"/entries{suffix}", status_code=303)
+
+
+@entries_router.get("/entries")
 def channels_page(
     request: Request,
     tab: str = "all",

@@ -1268,6 +1268,14 @@ table.workbench-table .wide-cell { min-width: 220px; max-width: 360px; }
 .channel-tech-row { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; padding: 10px 11px; border: 1px solid var(--line); border-radius: 8px; background: #fbfcfd; }
 .channel-tech-row strong { display: block; font-size: 13px; }
 .channel-tech-row span { display: block; color: var(--muted); font-size: 12px; margin-top: 2px; word-break: break-word; }
+.notice { padding: 9px 11px; border: 1px solid #b9d8ce; border-radius: 7px; background: #eef8f4; color: #0f5f4a; font-size: 12px; font-weight: 700; }
+.channel-chat-preview { display: grid; gap: 8px; max-height: min(38vh, 360px); overflow: auto; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: #f8fafb; }
+.channel-chat-message { display: grid; gap: 4px; width: min(82%, 560px); padding: 8px 10px; border: 1px solid #dbe5e1; border-radius: 8px; background: #ffffff; }
+.channel-chat-message-outbound { justify-self: end; background: #e8f6f0; border-color: #c5e5d8; }
+.channel-chat-message-inbound { justify-self: start; }
+.channel-chat-meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 11px; color: var(--muted); }
+.channel-chat-meta strong { color: var(--text); font-size: 11px; }
+.channel-chat-message p { margin: 0; font-size: 12px; line-height: 1.35; color: var(--text); white-space: pre-wrap; word-break: break-word; }
 
 body { font-size: 13px; line-height: 1.35; }
 .main { padding: 20px; }

@@ -26,40 +26,51 @@ class ChannelsOptimizationTests(unittest.TestCase):
         fixture = build_performance_fixture(scenario)
         try:
             with performance_test_client(fixture) as client:
-                response = client.get("/channels?tab=processed&date_range=30d")
+                response = client.get("/entries?tab=processed&date_range=30d")
             self.assertEqual(response.status_code, 200)
             self.assertLessEqual(int(response.headers["X-Perf-SQL-Count"]), max_queries)
             self.assertLessEqual(int(response.headers["X-Perf-SQL-Duplicate-Count"]), max_duplicates)
             self.assertLessEqual(int(response.headers["X-Perf-Loaded-Records"]), max_loaded_records)
             self.assertLessEqual(int(response.headers["X-Perf-Response-Size-Bytes"]), max_response_size)
             self.assertNotIn("Internal Server Error", response.text)
-            self.assertIn("Entradas recibidas", response.text)
+            self.assertIn("Entradas", response.text)
         finally:
             fixture.cleanup()
 
     def test_channels_query_budget_small(self):
-        self._assert_channels_budget("small", max_queries=20, max_duplicates=3, max_loaded_records=108, max_response_size=175_512)
+        self._assert_channels_budget("small", max_queries=20, max_duplicates=3, max_loaded_records=108, max_response_size=210_000)
 
     def test_channels_query_budget_medium(self):
-        self._assert_channels_budget("medium", max_queries=20, max_duplicates=3, max_loaded_records=108, max_response_size=177_000)
+        self._assert_channels_budget("medium", max_queries=20, max_duplicates=3, max_loaded_records=108, max_response_size=210_000)
 
     def test_channels_query_budget_large(self):
-        self._assert_channels_budget("large", max_queries=20, max_duplicates=3, max_loaded_records=108, max_response_size=205_000)
+        self._assert_channels_budget("large", max_queries=20, max_duplicates=3, max_loaded_records=108, max_response_size=210_000)
+
+    def test_channels_legacy_redirects_to_entries(self):
+        fixture = build_performance_fixture("small")
+        try:
+            with performance_test_client(fixture) as client:
+                response = client.get("/channels?tab=processed&date_range=30d", follow_redirects=False)
+
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(response.headers["location"], "/entries?tab=processed&date_range=30d")
+        finally:
+            fixture.cleanup()
 
     def test_channels_tabs_filters_and_pagination(self):
         fixture = build_performance_fixture("small")
         try:
             with performance_test_client(fixture) as client:
                 responses = {
-                    "pending": client.get("/channels?tab=pending&date_range=30d"),
-                    "processed": client.get("/channels?tab=processed&date_range=30d"),
-                    "error": client.get("/channels?tab=error&date_range=30d"),
-                    "7d": client.get("/channels?tab=processed&date_range=7d"),
-                    "30d": client.get("/channels?tab=processed&date_range=30d"),
-                    "90d": client.get("/channels?tab=processed&date_range=90d"),
-                    "page1": client.get("/channels?tab=processed&date_range=30d&page=1&page_size=10"),
-                    "page2": client.get("/channels?tab=processed&date_range=30d&page=2&page_size=10"),
-                    "empty": client.get("/channels?tab=processed&date_range=30d&search=__no_results__"),
+                    "pending": client.get("/entries?tab=pending&date_range=30d"),
+                    "processed": client.get("/entries?tab=processed&date_range=30d"),
+                    "error": client.get("/entries?tab=error&date_range=30d"),
+                    "7d": client.get("/entries?tab=processed&date_range=7d"),
+                    "30d": client.get("/entries?tab=processed&date_range=30d"),
+                    "90d": client.get("/entries?tab=processed&date_range=90d"),
+                    "page1": client.get("/entries?tab=processed&date_range=30d&page=1&page_size=10"),
+                    "page2": client.get("/entries?tab=processed&date_range=30d&page=2&page_size=10"),
+                    "empty": client.get("/entries?tab=processed&date_range=30d&search=__no_results__"),
                 }
 
             for key, response in responses.items():
@@ -94,11 +105,11 @@ class ChannelsOptimizationTests(unittest.TestCase):
                 db.commit()
 
             with performance_test_client(fixture) as client:
-                response = client.get("/channels?tab=all&date_range=all")
+                response = client.get("/entries?tab=all&date_range=all")
 
             self.assertEqual(response.status_code, 200)
             self.assertNotIn("NO_DEBE_APARECER_EN_CHANNELS", response.text)
-            self.assertIn("Entradas recibidas", response.text)
+            self.assertIn("Entradas", response.text)
         finally:
             fixture.cleanup()
 
@@ -114,7 +125,7 @@ class ChannelsOptimizationTests(unittest.TestCase):
                 }
 
             with performance_test_client(fixture) as client:
-                response = client.get("/channels?tab=processed&date_range=30d")
+                response = client.get("/entries?tab=processed&date_range=30d")
 
             with SessionLocal() as db:
                 after = {

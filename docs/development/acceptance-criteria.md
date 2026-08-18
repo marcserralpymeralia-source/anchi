@@ -63,6 +63,10 @@
 - Mantener la navegacion principal limitada a `Pedidos pendientes`, `Entradas`, `Productos` y `Clientes`.
 - Mantener `Configuracion` como area secundaria visible para administradores.
 - Mantener `/entries` como ruta canonica para email, WhatsApp e importaciones manuales, sin duplicar entidades ni pipeline.
+- Mantener `/entries` autenticada como bandeja unica de entradas, sin ejecutar IMAP en peticiones GET y leyendo solo datos persistidos del tenant.
+- Redirigir `/channels` y `/history` hacia `/entries` con una unica respuesta 303 y sin exponer bucles de login.
+- Mantener `POST /entries/sync` como encolado idempotente de job `email_sync`, sin descargar correo dentro de la request.
+- Mostrar emails, WhatsApp, adjuntos, PDF, estado, score, pedido asociado y chat conversacional cuando exista contenido multimensaje.
 - Mantener el conocimiento operativo integrado dentro de la ficha de cliente y no como pestaña global principal.
 - Mantener rutas legacy como soporte interno cuando sean necesarias, pero sin exponerlas en la navegacion principal.
 - No alterar el modelo de datos salvo instruccion explicita.

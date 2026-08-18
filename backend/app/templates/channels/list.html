@@ -9,9 +9,15 @@
         <p>{{ page_subtitle or "Todo lo recibido por email, WhatsApp o importación manual." }}</p>
       </div>
       <div class="actions">
+        <form class="js-loading-form" method="post" action="/entries/sync">
+          <button class="primary compact-button" data-loading-text="Sincronizando...">Sincronizar ahora</button>
+        </form>
         <a class="button secondary compact-button" href="{{ request.url_for('manual_import_page') }}">Importar entrada</a>
       </div>
     </div>
+    {% if request.query_params.get("sync") == "queued" %}
+      <div class="notice">Sincronización iniciada. La bandeja se actualizará con los correos importados por el job.</div>
+    {% endif %}
 
     <div class="compact-metrics channels-summary">
       <article class="compact-card compact-card-muted"><span>Total</span><strong>{{ summary.total }}</strong></article>
@@ -147,7 +153,21 @@
             <span class="muted review-mail-snippet">{{ item.summary }}</span>
             <button type="button" class="secondary compact-button" onclick="copyText('channel-body-{{ item.entry_id }}')">Copiar</button>
           </div>
-          <pre id="channel-body-{{ item.entry_id }}" class="doc-text review-email-body">{{ item.content_text or item.origin }}</pre>
+          {% if item.chat_messages %}
+            <div id="channel-body-{{ item.entry_id }}" class="channel-chat-preview">
+              {% for message in item.chat_messages %}
+                <article class="channel-chat-message channel-chat-message-{{ message.direction }}">
+                  <div class="channel-chat-meta">
+                    <strong>{{ message.speaker }}</strong>
+                    {% if message.time %}<span>{{ message.time }}</span>{% endif %}
+                  </div>
+                  <p>{{ message.text }}</p>
+                </article>
+              {% endfor %}
+            </div>
+          {% else %}
+            <pre id="channel-body-{{ item.entry_id }}" class="doc-text review-email-body">{{ item.content_text or item.origin }}</pre>
+          {% endif %}
         </details>
 
         {% if item.has_attachments %}
