@@ -1,0 +1,199 @@
+.database-compact-page {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.database-compact-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.database-compact-head h2 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 1.1;
+}
+
+.database-compact-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line);
+}
+
+.database-compact-filter-form {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.database-compact-search {
+  min-width: 0;
+}
+
+.database-compact-select {
+  width: auto;
+  min-width: 118px;
+}
+
+.database-compact-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.database-flash {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding: 7px 9px;
+  border: 1px solid #b9d8ce;
+  border-radius: 6px;
+  background: #eef8f4;
+  color: #0f5f4a;
+  font-size: 12px;
+}
+
+.database-inline-panel {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.database-inline-panel > summary {
+  list-style: none;
+}
+
+.database-inline-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.database-inline-popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  gap: 8px;
+  width: min(420px, calc(100vw - 32px));
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: white;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, .12);
+}
+
+.database-inline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.database-inline-head a {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.database-import-popover textarea {
+  min-height: 72px;
+}
+
+.database-filters-popover {
+  width: min(320px, calc(100vw - 32px));
+}
+
+.database-table-compact {
+  display: table;
+  table-layout: fixed;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 7px;
+}
+
+.database-table-compact th,
+.database-table-compact td {
+  padding: 6px 8px;
+  font-size: 12px;
+  line-height: 1.25;
+  vertical-align: middle;
+}
+
+.database-table-compact th {
+  font-size: 11px;
+}
+
+.database-table-compact .table-name-block {
+  gap: 1px;
+}
+
+.database-table-compact .table-name-block strong,
+.database-table-compact .table-name-block span,
+.database-table-compact .cell-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.database-table-productsCompact [data-column="reference"] { width: 120px; }
+.database-table-productsCompact [data-column="name"] { width: auto; }
+.database-table-productsCompact [data-column="sale_unit"] { width: 76px; }
+.database-table-productsCompact [data-column="status"] { width: 96px; }
+.database-table-productsCompact [data-column="action"] { width: 120px; }
+.database-table-productsCompact [data-column="price"] { width: 88px; }
+
+.database-table-customersCompact [data-column="code"] { width: 98px; }
+.database-table-customersCompact [data-column="name"] { width: auto; }
+.database-table-customersCompact [data-column="primary_email"] { width: 220px; }
+.database-table-customersCompact [data-column="phone"] { width: 130px; }
+.database-table-customersCompact [data-column="status"] { width: 96px; }
+.database-table-customersCompact [data-column="action"] { width: 116px; }
+
+@media (max-width: 1280px) {
+  .database-compact-filter-form {
+    grid-template-columns: minmax(220px, 1fr) auto auto;
+  }
+
+  .database-table-customersCompact [data-column="primary_email"] {
+    width: 180px;
+  }
+}
+
+@media (max-width: 760px) {
+  .database-compact-head,
+  .database-compact-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .database-compact-filter-form {
+    grid-template-columns: 1fr;
+    width: 100%;
+  }
+
+  .database-compact-count {
+    margin-left: 0;
+  }
+
+  .database-inline-panel {
+    width: 100%;
+  }
+
+  .database-inline-panel > summary {
+    width: 100%;
+  }
+}

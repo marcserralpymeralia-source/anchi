@@ -1,15 +1,12 @@
 {% extends "base.html" %}
 {% set title = "Clientes" %}
+{% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css">{% endblock %}
 {% block content %}
-<section class="panel stack database-shell">
-  <div class="section-title-row">
-    <div>
-      <h2>Clientes</h2>
-    </div>
-    <div class="actions">
-      <button type="button" class="secondary compact-button" onclick="document.getElementById('create-customer').showModal()">Nuevo cliente</button>
-    </div>
-  </div>
+<section class="database-shell {% if view == 'list' %}database-compact-page{% else %}panel stack{% endif %}">
+  <header class="database-compact-head">
+    <h2>Clientes</h2>
+    <button type="button" onclick="document.getElementById('create-customer').showModal()">+ Nuevo cliente</button>
+  </header>
 
   <div class="workbench-tabs database-tabs">
     <a class="workbench-tab {% if view == 'list' %}active{% endif %}" href="/customers?view=list&status=all&page=1">
@@ -21,17 +18,24 @@
   </div>
 
   {% if view == "list" %}
-    <details class="panel stack database-section-accordion" id="customer-import-accordion">
-      <summary>
-        <span>Importación</span>
-        <span class="database-section-summary"><span>Excel, CSV o texto pegado</span></span>
-      </summary>
-      <div class="database-section-body compact">
-        <form class="stack js-loading-form js-import-paste-form" method="post" action="/imports/preview" enctype="multipart/form-data">
-          <input type="hidden" name="entity_type" value="customers">
-          <div class="database-import-grid">
+    <div class="database-compact-toolbar">
+      <form class="database-compact-filter-form" method="get" action="/customers">
+        <input type="hidden" name="view" value="list">
+        <input type="hidden" name="page" value="1">
+        <input class="database-compact-search" name="q" value="{{ q }}" placeholder="Buscar por nombre, código, email o teléfono...">
+        <button class="secondary compact-button" data-loading-text="Filtrando...">Filtrar</button>
+      </form>
+      <details class="database-inline-panel">
+        <summary class="button secondary compact-button">Importar</summary>
+        <div class="database-inline-popover database-import-popover">
+          <div class="database-inline-head">
+            <strong>Importar clientes</strong>
+            <a href="/imports/history">Histórico</a>
+          </div>
+          <form class="stack js-loading-form js-import-paste-form" method="post" action="/imports/preview" enctype="multipart/form-data">
+            <input type="hidden" name="entity_type" value="customers">
             <label>Archivo<input type="file" name="file" accept=".csv,.xlsx,.xls,.txt" data-import-file></label>
-            <label>Tabla pegada<textarea id="customer-import-text" name="pasted_text" rows="4" placeholder="Pega aquí una tabla desde Excel o texto delimitado por tabulaciones/comas"></textarea></label>
+            <label>Tabla pegada<textarea id="customer-import-text" name="pasted_text" rows="3" placeholder="Pega una tabla desde Excel o texto delimitado"></textarea></label>
             <label>Codificación
               <select name="encoding">
                 <option value="utf-8">UTF-8</option>
@@ -39,100 +43,78 @@
                 <option value="cp1252">Windows-1252</option>
               </select>
             </label>
-            <div class="actions database-actions">
-              <button data-loading-text="Cargando columnas...">Mapear columnas</button>
-              <a class="button secondary compact-button" href="/imports/history">Histórico</a>
-            </div>
-          </div>
-        </form>
-        <p class="muted" style="margin:8px 0 0;">Primero verás las columnas detectadas y podrás relacionarlas con los campos de la aplicación antes de confirmar. El nombre del cliente debe quedar mapeado.</p>
-      </div>
-    </details>
-
-    <details class="panel stack database-section-accordion" open>
-      <summary>
-        <span>Filtros</span>
-        <span class="database-section-summary"><span>{{ pagination.start_item }}-{{ pagination.end_item }} de {{ pagination.total_items }}</span></span>
-      </summary>
-      <div class="database-section-body compact">
-        <form class="filter-grid database-filters" method="get" action="/customers">
-          <input type="hidden" name="view" value="list">
-          <input type="hidden" name="page" value="1">
-          <label>Buscar cliente<input name="q" value="{{ q }}" placeholder="Buscar cliente, código, email o alias"></label>
-          <label>Estado
-            <select name="status">
-              {% for value, label in [("all","Todos"),("active","Activos"),("inactive","Inactivos"),("with_alias","Con alias"),("without_alias","Sin alias"),("recent","Recientes")] %}
-                <option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>
+            <button data-loading-text="Cargando columnas...">Mapear columnas</button>
+          </form>
+        </div>
+      </details>
+      <details class="database-inline-panel">
+        <summary class="button secondary compact-button">Más filtros</summary>
+        <div class="database-inline-popover database-filters-popover">
+          <form class="stack" method="get" action="/customers">
+            <input type="hidden" name="view" value="list">
+            <input type="hidden" name="page" value="1">
+            <input type="hidden" name="q" value="{{ q }}">
+            <label>Estado
+              <select name="status">
+                {% for value, label in [("all","Todos"),("active","Activos"),("inactive","Inactivos"),("with_alias","Con alias"),("without_alias","Sin alias"),("recent","Recientes")] %}
+                  <option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+            <label>Canal
+              <select name="channel">
+                <option value="">Todos</option>
+                <option value="Email" {% if channel == "Email" %}selected{% endif %}>Email</option>
+                <option value="WhatsApp" {% if channel == "WhatsApp" %}selected{% endif %}>WhatsApp</option>
+                <option value="Teléfono" {% if channel == "Teléfono" %}selected{% endif %}>Teléfono</option>
+                <option value="Dominio" {% if channel == "Dominio" %}selected{% endif %}>Dominio</option>
+                <option value="Contacto" {% if channel == "Contacto" %}selected{% endif %}>Contacto</option>
+              </select>
+            </label>
+            <label>Conocimiento
+              <select name="knowledge_state">
+                <option value="">Todos</option>
+                <option value="sin_conocimiento" {% if knowledge_state == "sin_conocimiento" %}selected{% endif %}>Sin conocimiento</option>
+                <option value="pendiente_importar" {% if knowledge_state == "pendiente_importar" %}selected{% endif %}>Pendiente de importar</option>
+                <option value="en_construccion" {% if knowledge_state == "en_construccion" %}selected{% endif %}>En construcción</option>
+                <option value="actualizado" {% if knowledge_state == "actualizado" %}selected{% endif %}>Actualizado</option>
+              </select>
+            </label>
+            <label>Tamaño página
+              <select name="page_size">
+                {% for size in pagination.allowed_page_sizes %}<option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>{% endfor %}
+              </select>
+            </label>
+            <button class="secondary compact-button" data-loading-text="Filtrando...">Aplicar</button>
+          </form>
+          <details class="column-toggle-panel">
+            <summary class="button secondary compact-button">Columnas</summary>
+            <div class="column-toggle-menu" data-table-key="customersCompact">
+              {% for key, label, checked in [
+                ("name","Cliente", true),
+                ("code","Código", true),
+                ("primary_email","Email", true),
+                ("channel","Canal", false),
+                ("knowledge","Conocimiento", false),
+                ("status","Estado", true),
+                ("last_activity","Última actividad", false),
+                ("tax_id","CIF/NIF", false),
+                ("phone","Teléfono", true),
+                ("address","Dirección", false),
+                ("aliases","Alias", false),
+                ("domains","Dominios", false),
+                ("notes","Observaciones", false)
+              ] %}
+                <label class="column-toggle-item"><input type="checkbox" data-column-checkbox="{{ key }}" {% if checked %}checked{% endif %}> <span>{{ label }}</span></label>
               {% endfor %}
-            </select>
-          </label>
-          <label>Canal
-            <select name="channel">
-              <option value="">Todos</option>
-              <option value="Email" {% if channel == "Email" %}selected{% endif %}>Email</option>
-              <option value="WhatsApp" {% if channel == "WhatsApp" %}selected{% endif %}>WhatsApp</option>
-              <option value="Teléfono" {% if channel == "Teléfono" %}selected{% endif %}>Teléfono</option>
-              <option value="Dominio" {% if channel == "Dominio" %}selected{% endif %}>Dominio</option>
-              <option value="Contacto" {% if channel == "Contacto" %}selected{% endif %}>Contacto</option>
-            </select>
-          </label>
-          <label>Conocimiento
-            <select name="knowledge_state">
-              <option value="">Todos</option>
-              <option value="sin_conocimiento" {% if knowledge_state == "sin_conocimiento" %}selected{% endif %}>Sin conocimiento</option>
-              <option value="pendiente_importar" {% if knowledge_state == "pendiente_importar" %}selected{% endif %}>Pendiente de importar</option>
-              <option value="en_construccion" {% if knowledge_state == "en_construccion" %}selected{% endif %}>En construcción</option>
-              <option value="actualizado" {% if knowledge_state == "actualizado" %}selected{% endif %}>Actualizado</option>
-            </select>
-          </label>
-          <details class="more-filters">
-            <summary>Más filtros</summary>
-            <div class="database-section-grid database-section-grid-compact">
-              <label>Tamaño página
-                <select name="page_size">
-                  {% for size in pagination.allowed_page_sizes %}<option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>{% endfor %}
-                </select>
-              </label>
             </div>
           </details>
-          <label>&nbsp;<button class="secondary" data-loading-text="Filtrando...">Filtrar</button></label>
-        </form>
-      </div>
-    </details>
-
-    <details class="panel stack database-section-accordion" open>
-      <summary>
-        <span>Listado</span>
-        <span class="database-section-summary"><span>{{ pagination.start_item }}-{{ pagination.end_item }} de {{ pagination.total_items }}</span></span>
-      </summary>
-      <div class="database-section-body">
-        <div class="database-list-header">
-          <div class="actions">
-            <details class="column-toggle-panel">
-              <summary class="button secondary compact-button">Columnas</summary>
-              <div class="column-toggle-menu" data-table-key="customers">
-                {% for key, label, checked in [
-                  ("name","Cliente", true),
-                  ("code","Código", true),
-                  ("primary_email","Email", true),
-                  ("channel","Canal", true),
-                  ("knowledge","Conocimiento", true),
-                  ("status","Estado", true),
-                  ("last_activity","Última actividad", true),
-                  ("tax_id","CIF/NIF", false),
-                  ("phone","Teléfono", false),
-                  ("address","Dirección", false),
-                  ("aliases","Alias", false),
-                  ("domains","Dominios", false),
-                  ("notes","Observaciones", false)
-                ] %}
-                  <label class="column-toggle-item"><input type="checkbox" data-column-checkbox="{{ key }}" {% if checked %}checked{% endif %}> <span>{{ label }}</span></label>
-                {% endfor %}
-              </div>
-            </details>
-          </div>
         </div>
-        <table class="data-table database-table database-table-customers">
+      </details>
+      <span class="database-compact-count">{{ pagination.total_items }} clientes</span>
+    </div>
+
+    <table class="data-table database-table database-table-customersCompact database-table-customers database-table-compact">
           <thead>
             <tr>
               <th data-column="name">Cliente</th>
@@ -193,9 +175,7 @@
             {% endfor %}
           </tbody>
         </table>
-        {% include "components/pagination.html" %}
-      </div>
-    </details>
+    {% include "components/pagination.html" %}
 
   {% else %}
     <section class="knowledge-shell knowledge-shell-full">

@@ -1,100 +1,101 @@
 {% extends "base.html" %}
 {% set title = "Productos" %}
+{% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css">{% endblock %}
 {% block content %}
 {% if request.query_params.get("imported") == "1" %}
-<section class="panel" style="margin-bottom:16px">
+<section class="database-flash">
   <strong>Importación completada</strong>
-  <span class="muted">Se han creado {{ request.query_params.get("created", "0") }} productos, actualizado {{ request.query_params.get("updated", "0") }} e ignorado {{ request.query_params.get("ignored", "0") }}.</span>
+  <span>+{{ request.query_params.get("created", "0") }} · {{ request.query_params.get("updated", "0") }} actualizados · {{ request.query_params.get("ignored", "0") }} ignorados</span>
 </section>
 {% endif %}
 {% if request.query_params.get("queued") == "1" %}
-<section class="panel" style="margin-bottom:16px">
+<section class="database-flash">
   <strong>Importación en cola</strong>
-  <span class="muted">La importación de productos se ha enviado al procesador en segundo plano.</span>
+  <span>La importación de productos se procesará en segundo plano.</span>
 </section>
 {% endif %}
-<section class="panel stack" style="margin-bottom:16px">
-  <div class="section-title-row">
-    <div>
-      <h3>Importación</h3>
-      <span class="muted">Excel, CSV o tabla pegada</span>
-    </div>
-    <a class="button secondary compact-button" href="/imports/history">Histórico</a>
-  </div>
-  <form class="stack js-loading-form js-import-paste-form" method="post" action="/imports/preview" enctype="multipart/form-data">
-    <input type="hidden" name="entity_type" value="products">
-    <div class="database-import-grid">
-      <label>Archivo<input type="file" name="file" accept=".csv,.xlsx,.xls,.txt" data-import-file></label>
-      <label>Tabla pegada<textarea name="pasted_text" rows="3" placeholder="Pega aquí una tabla desde Excel o texto delimitado"></textarea></label>
-      <label>Codificación
-        <select name="encoding"><option value="utf-8">UTF-8</option><option value="latin-1">ISO-8859-1</option><option value="cp1252">Windows-1252</option></select>
-      </label>
-      <div class="actions database-actions">
-        <button type="submit" data-loading-text="Cargando columnas...">Mapear columnas</button>
-      </div>
-    </div>
-  </form>
-  <p class="muted" style="margin:0">Primero verás las columnas detectadas y podrás relacionarlas con los campos de la aplicación antes de confirmar.</p>
-</section>
+<section class="database-compact-page">
+  <header class="database-compact-head">
+    <h2>Productos</h2>
+    <button type="button" onclick="document.getElementById('create-product').showModal()">+ Nuevo producto</button>
+  </header>
 
-<section class="panel stack" style="margin-bottom:16px">
-  <div class="section-title-row">
-    <div>
-      <h3>Filtros</h3>
-      <span class="badge">{{ pagination.start_item }}-{{ pagination.end_item }} de {{ pagination.total_items }}</span>
-    </div>
-    <details class="column-toggle-panel">
-      <summary class="button secondary compact-button">Columnas</summary>
-      <div class="column-toggle-menu" data-table-key="products">
-        {% for key, label, checked in [
-          ("reference","Referencia", true),
-          ("name","Producto", true),
-          ("family","Familia", true),
-          ("sale_unit","Unidad", true),
-          ("aliases","Alias", true),
-          ("customers","Clientes", true),
-          ("status","Estado", true),
-          ("price","Precio", false),
-          ("description_cont","Descripción larga", false),
-          ("supplier","Proveedor", false),
-          ("last_import","Última importación", false),
-          ("notes","Observaciones", false)
-        ] %}
-          <label class="column-toggle-item"><input type="checkbox" data-column-checkbox="{{ key }}" {% if checked %}checked{% endif %}> <span>{{ label }}</span></label>
-        {% endfor %}
+  <div class="database-compact-toolbar">
+    <form class="database-compact-filter-form" method="get" action="/products">
+      <input type="hidden" name="page" value="1">
+      <input class="database-compact-search" name="q" placeholder="Buscar por código, referencia o nombre..." value="{{ q }}">
+      <select class="database-compact-select" name="obsolete" aria-label="Estado">
+        <option value="">Estado</option>
+        <option value="no" {% if obsolete == "no" %}selected{% endif %}>Activos</option>
+        <option value="yes" {% if obsolete == "yes" %}selected{% endif %}>Obsoletos</option>
+      </select>
+      <button class="secondary compact-button" data-loading-text="Filtrando...">Filtrar</button>
+    </form>
+    <details class="database-inline-panel">
+      <summary class="button secondary compact-button">Importar</summary>
+      <div class="database-inline-popover database-import-popover">
+        <div class="database-inline-head">
+          <strong>Importar productos</strong>
+          <a href="/imports/history">Histórico</a>
+        </div>
+        <form class="stack js-loading-form js-import-paste-form" method="post" action="/imports/preview" enctype="multipart/form-data">
+          <input type="hidden" name="entity_type" value="products">
+          <label>Archivo<input type="file" name="file" accept=".csv,.xlsx,.xls,.txt" data-import-file></label>
+          <label>Tabla pegada<textarea name="pasted_text" rows="3" placeholder="Pega una tabla desde Excel o texto delimitado"></textarea></label>
+          <label>Codificación
+            <select name="encoding"><option value="utf-8">UTF-8</option><option value="latin-1">ISO-8859-1</option><option value="cp1252">Windows-1252</option></select>
+          </label>
+          <button type="submit" data-loading-text="Cargando columnas...">Mapear columnas</button>
+        </form>
       </div>
     </details>
+    <details class="database-inline-panel">
+      <summary class="button secondary compact-button">Más filtros</summary>
+      <div class="database-inline-popover database-filters-popover">
+        <form class="stack" method="get" action="/products">
+          <input type="hidden" name="page" value="1">
+          <input type="hidden" name="q" value="{{ q }}">
+          <input type="hidden" name="obsolete" value="{{ obsolete }}">
+          <label>Familia
+            <select name="family">
+              <option value="">Todas</option>
+              {% for item in families %}<option value="{{ item }}" {% if family == item %}selected{% endif %}>{{ item }}</option>{% endfor %}
+            </select>
+          </label>
+          <label>Tamaño página
+            <select name="page_size">
+              {% for size in pagination.allowed_page_sizes %}<option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>{% endfor %}
+            </select>
+          </label>
+          <button class="secondary compact-button" data-loading-text="Filtrando...">Aplicar</button>
+        </form>
+        <details class="column-toggle-panel">
+          <summary class="button secondary compact-button">Columnas</summary>
+          <div class="column-toggle-menu" data-table-key="productsCompact">
+            {% for key, label, checked in [
+              ("reference","Referencia", true),
+              ("name","Producto", true),
+              ("family","Familia", false),
+              ("sale_unit","Unidad", true),
+              ("aliases","Alias", false),
+              ("customers","Clientes", false),
+              ("status","Estado", true),
+              ("price","Precio", true),
+              ("description_cont","Descripción larga", false),
+              ("supplier","Proveedor", false),
+              ("last_import","Última importación", false),
+              ("notes","Observaciones", false)
+            ] %}
+              <label class="column-toggle-item"><input type="checkbox" data-column-checkbox="{{ key }}" {% if checked %}checked{% endif %}> <span>{{ label }}</span></label>
+            {% endfor %}
+          </div>
+        </details>
+      </div>
+    </details>
+    <span class="database-compact-count">{{ pagination.total_items }} productos</span>
   </div>
-  <form class="filter-grid" method="get" action="/products">
-    <input type="hidden" name="page" value="1">
-    <label>Buscar producto/referencia<input name="q" placeholder="Articulo, descripcion, marca, proveedor o familia" value="{{ q }}"></label>
-    <label>Familia
-      <select name="family">
-        <option value="">Todas</option>
-        {% for item in families %}<option value="{{ item }}" {% if family == item %}selected{% endif %}>{{ item }}</option>{% endfor %}
-      </select>
-    </label>
-    <label>Estado
-      <select name="obsolete">
-        <option value="">Todos</option>
-        <option value="no" {% if obsolete == "no" %}selected{% endif %}>No</option>
-        <option value="yes" {% if obsolete == "yes" %}selected{% endif %}>Si</option>
-      </select>
-    </label>
-    <label>Tamaño página
-      <select name="page_size">
-        {% for size in pagination.allowed_page_sizes %}<option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>{% endfor %}
-      </select>
-    </label>
-    <label>&nbsp;<button class="secondary" data-loading-text="Filtrando...">Filtrar</button></label>
-  </form>
-</section>
 
-<section class="panel stack" style="margin-bottom:16px">
-  <div class="actions"><button onclick="document.getElementById('create-product').showModal()">Crear producto</button></div>
-</section>
-
-<table class="data-table database-table database-table-products">
+<table class="data-table database-table database-table-productsCompact database-table-products database-table-compact">
   <thead><tr><th data-column="reference">Referencia</th><th data-column="name">Producto</th><th data-column="family">Familia</th><th data-column="sale_unit">Unidad</th><th data-column="aliases">Alias</th><th data-column="customers">Clientes</th><th data-column="status">Estado</th><th data-column="action">Acción</th><th data-column="price">Precio</th><th data-column="description_cont">Descripción larga</th><th data-column="supplier">Proveedor</th><th data-column="last_import">Última importación</th><th data-column="notes">Observaciones</th></tr></thead>
   <tbody>
   {% for product in products %}
@@ -129,6 +130,7 @@
   </tbody>
 </table>
 {% include "components/pagination.html" %}
+</section>
 
 {% macro product_form(product, dialog_id, is_new=False) %}
 <dialog id="{{ dialog_id }}" class="edit-dialog">

@@ -66,6 +66,31 @@ class OperationalNavigationTests(unittest.TestCase):
         finally:
             fixture.cleanup()
 
+    def test_products_and_customers_use_compact_list_toolbar(self):
+        fixture = build_performance_fixture("small")
+        try:
+            with performance_test_client(fixture) as client:
+                products = client.get("/products")
+                customers = client.get("/customers?view=list")
+
+            self.assertEqual(products.status_code, 200)
+            self.assertIn("+ Nuevo producto", products.text)
+            self.assertIn("Buscar por código, referencia o nombre", products.text)
+            self.assertIn(">Importar<", products.text)
+            self.assertIn("Más filtros", products.text)
+            self.assertIn("database-table-compact", products.text)
+            self.assertNotIn("<h3>Importación</h3>", products.text)
+
+            self.assertEqual(customers.status_code, 200)
+            self.assertIn("+ Nuevo cliente", customers.text)
+            self.assertIn("Buscar por nombre, código, email o teléfono", customers.text)
+            self.assertIn(">Importar<", customers.text)
+            self.assertIn("Más filtros", customers.text)
+            self.assertIn("database-table-compact", customers.text)
+            self.assertNotIn("<span>Importación</span>", customers.text)
+        finally:
+            fixture.cleanup()
+
     def test_entries_redirects_to_login_without_session(self):
         fixture = build_performance_fixture("small")
         try:

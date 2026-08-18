@@ -6,6 +6,7 @@
   <title>{{ title or app_settings.app_name }}</title>
   {% if request.state.branding.favicon_url %}<link rel="icon" href="{{ request.state.branding.favicon_url }}">{% endif %}
   <link rel="stylesheet" href="/static/styles.css">
+  {% block head_extra %}{% endblock %}
   <style>{{ branding_css_vars(request.state.branding)|safe }}</style>
 </head>
 <body>
