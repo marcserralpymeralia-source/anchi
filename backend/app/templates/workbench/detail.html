@@ -20,7 +20,7 @@
       <details class="review-actions-menu">
         <summary class="secondary compact-button">Acciones</summary>
         <div class="review-actions-menu-panel">
-          {% if order.email_id %}<form class="js-loading-form" method="post" action="/channels/email/{{ order.email_id }}/process"><button class="secondary compact-button" data-loading-text="Reprocesando...">Revisar de nuevo</button></form>{% endif %}
+          {% if order.email_id %}<form class="js-loading-form" method="post" action="/entries/email-{{ order.email_id }}/process"><button class="secondary compact-button" data-loading-text="Reprocesando...">Revisar de nuevo</button></form>{% endif %}
           <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/confirm" data-confirm="Confirmar pedido?"><button class="secondary compact-button" data-loading-text="Confirmando...">Confirmar pedido</button></form>
           <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/recalculate-score"><button class="secondary compact-button" data-loading-text="Recalculando...">Recalcular confianza</button></form>
           <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/export-ftp"><button class="secondary compact-button" data-loading-text="Exportando...">Enviar a gestión</button></form>
@@ -269,7 +269,7 @@
       <article class="subpanel">
         <h4>Acciones disponibles</h4>
         <div class="actions">
-          <a class="button secondary" href="/channels/email/{{ email.id }}/resolve">Revisar</a>
+          <a class="button secondary" href="/entries/email-{{ email.id }}/resolve">Revisar</a>
           <form class="js-loading-form" method="post" action="/workbench/email/{{ email.id }}/mark-no-order" data-confirm="Marcar esta entrada como no pedido?"><button class="secondary">Marcar como no pedido</button></form>
           <form class="js-loading-form" method="post" action="/workbench/email/{{ email.id }}/discard" data-confirm="Descartar este correo?"><button class="secondary">Descartar</button></form>
           <form class="js-loading-form" method="post" action="/workbench/email/{{ email.id }}/close"><button class="secondary">Marcar cerrado</button></form>

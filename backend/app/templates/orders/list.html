@@ -114,7 +114,7 @@
       <td><span class="badge {{ order.status|status_class }}">{{ order.status|status_label }}</span></td>
       <td class="actions">
         <a class="button secondary compact-button" href="/orders/{{ order.id }}" onclick="event.stopPropagation();">{{ request.state.branding.microcopy.review_order }}</a>
-        {% if order.email_id %}<a class="button secondary compact-button" href="/channels?focus=email-{{ order.email_id }}" onclick="event.stopPropagation();">Ver origen</a>{% endif %}
+        {% if order.email_id %}<a class="button secondary compact-button" href="/entries?focus=email-{{ order.email_id }}" onclick="event.stopPropagation();">Ver origen</a>{% endif %}
         <details class="row-more-actions" onclick="event.stopPropagation()">
           <summary class="button secondary compact-button">...</summary>
           <div class="row-more-actions-panel">

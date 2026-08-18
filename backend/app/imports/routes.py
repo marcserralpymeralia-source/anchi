@@ -195,7 +195,7 @@ def quick_import_page(
     return templates.TemplateResponse("imports/quick.html", context)
 
 
-@router.get("/manual")
+@router.get("/manual", name="manual_import_page")
 @router.get("/whatsapp")
 def whatsapp_import_page(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     default_channel = "whatsapp" if request.url.path.endswith("/whatsapp") else "email"

@@ -9,9 +9,7 @@
         <p>{{ page_subtitle or "Todo lo recibido por email, WhatsApp o importación manual." }}</p>
       </div>
       <div class="actions">
-        <span class="badge">Anchi demo</span>
-        <a class="button secondary compact-button" href="/imports/manual">Nueva entrada</a>
-        <a class="button secondary compact-button" href="/settings/channels">Configurar</a>
+        <a class="button secondary compact-button" href="{{ request.url_for('manual_import_page') }}">Importar entrada</a>
       </div>
     </div>
 
@@ -51,8 +49,6 @@
               {% endfor %}
             </select>
           </label>
-          <label>Score mínimo<input type="number" step="0.01" min="0" max="100" name="score_min" value="{{ filters.score_min }}"></label>
-          <label>Score máximo<input type="number" step="0.01" min="0" max="100" name="score_max" value="{{ filters.score_max }}"></label>
           <label>Tamaño<select name="page_size">{% for size in pagination.allowed_page_sizes %}<option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>{% endfor %}</select></label>
           <label>&nbsp;<button class="secondary" data-loading-text="Filtrando...">Filtrar</button></label>
         </div>
@@ -87,6 +83,10 @@
             <button class="secondary compact-button" type="button" onclick="event.stopPropagation(); openChannelModal('{{ row_id }}')">Abrir</button>
             {% if order_href %}
               <a class="button secondary compact-button" href="{{ order_href }}" onclick="event.stopPropagation();">Ver pedido</a>
+            {% elif item.status_key in ["not_processed", "queued", "processing", "pending_reprocess", "error", "doubtful", "no_order"] %}
+              <form class="js-loading-form" method="post" action="/entries/{{ item.entry_id }}/process" onclick="event.stopPropagation();">
+                <button class="primary compact-button" data-loading-text="Procesando...">Procesar como pedido</button>
+              </form>
             {% endif %}
           </div>
           <div class="queue-item-confidence-col queue-item-confidence-{{ confidence_class }}">
@@ -122,9 +122,14 @@
           <a class="button secondary compact-button" href="/orders/{{ item.order_id }}">Ver pedido</a>
         {% elif item.status_key in ["not_processed", "queued", "processing", "pending_reprocess"] %}
           <form class="js-loading-form review-channel-actions" method="post" action="/entries/{{ item.entry_id }}/process">
-            <button class="primary compact-button" data-loading-text="Procesando...">Procesar</button>
+            <button class="primary compact-button" data-loading-text="Procesando...">Procesar como pedido</button>
           </form>
           <a class="button secondary compact-button" href="/entries/{{ item.entry_id }}/resolve">Resolver</a>
+        {% elif item.status_key in ["error", "doubtful", "no_order"] %}
+          <a class="button secondary compact-button" href="/entries/{{ item.entry_id }}/resolve">Resolver</a>
+          <form class="js-loading-form review-channel-actions" method="post" action="/entries/{{ item.entry_id }}/process">
+            <button class="secondary compact-button" data-loading-text="Reintentando...">Reintentar</button>
+          </form>
         {% endif %}
         <button type="button" class="secondary compact-button" onclick="closeChannelModal('{{ item.entry_id }}')">Cerrar</button>
       </div>

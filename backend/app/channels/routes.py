@@ -468,6 +468,8 @@ def _channel_filters(base, *, tab: str, date_range: str, search: str, customer_i
             clauses.append(base.c.review_flag == 1)
         elif tab == "error":
             clauses.append(base.c.error_flag == 1)
+        elif tab == "no_order":
+            clauses.append(or_(base.c.raw_status.in_(("processed_no_order", "no_order")), base.c.detected_type == "no_pedido"))
 
     cutoff = _channel_date_cutoff(date_range) if date_range and date_range != "all" else None
     if cutoff is not None:
@@ -507,6 +509,7 @@ def _channel_summary(db: Session, base, *, tab: str, date_range: str, search: st
             func.sum(case((filtered.c.pending_flag == 1, 1), else_=0)).label("pending"),
             func.sum(case((filtered.c.review_flag == 1, 1), else_=0)).label("review"),
             func.sum(case((filtered.c.error_flag == 1, 1), else_=0)).label("error"),
+            func.sum(case((or_(filtered.c.raw_status.in_(("processed_no_order", "no_order")), filtered.c.detected_type == "no_pedido"), 1), else_=0)).label("no_order"),
             func.sum(case((filtered.c.order_id.is_not(None), 1), else_=0)).label("with_order"),
             func.sum(case((filtered.c.channel_key == "email", 1), else_=0)).label("email_count"),
             func.sum(case((filtered.c.channel_key == "whatsapp", 1), else_=0)).label("whatsapp_count"),
@@ -522,6 +525,7 @@ def _channel_summary(db: Session, base, *, tab: str, date_range: str, search: st
         "pending": int(summary_row.pending or 0),
         "review": int(summary_row.review or 0),
         "error": int(summary_row.error or 0),
+        "no_order": int(summary_row.no_order or 0),
         "with_order": int(summary_row.with_order or 0),
         "channel_counts": {
             "email": int(summary_row.email_count or 0),
@@ -665,6 +669,28 @@ def _resolve_channel_entry_response(db: Session, user: TenantUser, source_kind: 
     return RedirectResponse(destination.redirect_url, status_code=303)
 
 
+def _resolve_entry_review_response(request: Request, db: Session, user: TenantUser, source_kind: str, source_id: int):
+    destination = _resolution_destination_for_source(db, user, source_kind, source_id)
+    if not destination:
+        return PlainTextResponse("No encontrado", status_code=404)
+    if destination.order_id:
+        from app.orders.routes import order_detail
+
+        log_action(
+            db,
+            company_id=user.company_id,
+            user=user,
+            action=f"entry.resolve.{destination.source_kind}",
+            entity_type="channel_entry",
+            entity_id=destination.source_id,
+            message="Revision de pedido abierta desde Entradas",
+        )
+        db.commit()
+        return order_detail(destination.order_id, request, db=db, user=user)
+    tab = "error" if destination.state == "error" else "pending" if destination.state in {"unprocessed", "processing"} else "processed"
+    return channels_page(request, tab=tab, db=db, user=user)
+
+
 def _process_channel_entry_response(db: Session, user: TenantUser, source_kind: str, source_id: int) -> RedirectResponse | PlainTextResponse:
     destination = _resolution_destination_for_source(db, user, source_kind, source_id)
     if not destination:
@@ -732,21 +758,21 @@ def legacy_resolve_channel_entry(
 
 
 @entries_router.get("/entries/{entry_id}")
-def entry_detail(entry_id: str, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def entry_detail(entry_id: str, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     parsed = _parse_entry_id(entry_id)
     if not parsed:
         return PlainTextResponse("No encontrado", status_code=404)
     source_kind, source_id = parsed
-    return _resolve_channel_entry_response(db, user, source_kind, source_id)
+    return _resolve_entry_review_response(request, db, user, source_kind, source_id)
 
 
 @entries_router.get("/entries/{entry_id}/resolve")
-def resolve_entry(entry_id: str, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def resolve_entry(entry_id: str, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     parsed = _parse_entry_id(entry_id)
     if not parsed:
         return PlainTextResponse("No encontrado", status_code=404)
     source_kind, source_id = parsed
-    return _resolve_channel_entry_response(db, user, source_kind, source_id)
+    return _resolve_entry_review_response(request, db, user, source_kind, source_id)
 
 
 @entries_router.post("/entries/{entry_id}/process")
@@ -850,11 +876,10 @@ def channels_page(
             ("all", "Todos", summary["total"]),
             ("email", "Email", summary["channel_counts"].get("email", 0)),
             ("whatsapp", "WhatsApp", summary["channel_counts"].get("whatsapp", 0)),
-            ("voice", "Voz", summary["channel_counts"].get("voice", 0)),
-            ("social", "Redes", summary["channel_counts"].get("social", 0)),
             ("pending", "Pendientes", summary["pending"]),
             ("processed", "Procesados", summary["processed"]),
-            ("review", "Revisión", summary["review"]),
+            ("review", "Con pedido", summary["review"]),
+            ("no_order", "No es pedido", summary["no_order"]),
             ("error", "Errores", summary["error"]),
         ]
     )

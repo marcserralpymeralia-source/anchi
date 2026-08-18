@@ -44,10 +44,10 @@
     </div>
     <div class="review-header-actions review-header-actions-tight">
       {% if order.email_id %}
-        <a class="button secondary compact-button" href="/channels?focus=email-{{ order.email_id }}">Ver origen</a>
+        <a class="button secondary compact-button" href="/entries?focus=email-{{ order.email_id }}">Ver origen</a>
       {% endif %}
-      <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/recalculate-score">
-        <button class="secondary compact-button" data-loading-text="Recalculando...">Recalcular</button>
+      <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/reprocess">
+        <button class="secondary compact-button" data-loading-text="Reprocesando...">Reprocesar</button>
       </form>
       <button type="button" class="secondary compact-button" onclick="window.location.href='/orders'">Volver</button>
     </div>
@@ -174,7 +174,7 @@
         </label>
         <label class="span-2">Observaciones<textarea name="notes" form="order-review-form-{{ order.id }}" rows="2">{{ order.notes or "" }}</textarea></label>
       </div>
-      <form id="order-review-form-{{ order.id }}" class="js-loading-form" method="post" action="/orders/{{ order.id }}/update">
+      <form id="order-review-form-{{ order.id }}" class="js-loading-form" method="post" action="/orders/{{ order.id }}/save">
         <button class="secondary compact-button" data-loading-text="Guardando...">{{ request.state.branding.microcopy.save_changes }}</button>
       </form>
     </article>
@@ -184,16 +184,14 @@
     <div class="review-action-bar review-action-bar-v2">
       <span class="muted review-save-state">Corrige cliente y lineas, revisa el score y procesa en segundos.</span>
       <div class="footer-actions-primary">
-        <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/confirm" data-confirm="Confirmar pedido?"><button data-loading-text="Confirmando...">{{ request.state.branding.microcopy.confirm_order }}</button></form>
-        <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/export-ftp"><button class="secondary" data-loading-text="Exportando...">{{ request.state.branding.microcopy.send_to_management }}</button></form>
+        <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/validate" data-confirm="Validar pedido?"><button data-loading-text="Validando...">Validar pedido</button></form>
+        <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/export"><button class="secondary" data-loading-text="Exportando...">Enviar / Exportar</button></form>
       </div>
       <div class="footer-actions-secondary">
         <details class="footer-more-actions">
           <summary>Más acciones</summary>
           <div>
-            <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/generate-export"><button class="secondary" data-loading-text="Generando...">Generar archivo</button></form>
-            <form class="js-loading-form force-form" method="post" action="/orders/{{ order.id }}/force-confirm" data-confirm="Forzar confirmacion?"><input name="force_reason" required placeholder="Motivo"><button class="secondary" data-loading-text="Confirmando...">Forzar</button></form>
-            <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/mark-not-order" data-confirm="Marcar como no pedido?"><button class="secondary danger-soft">Marcar no pedido</button></form>
+            <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/reprocess"><button class="secondary" data-loading-text="Reprocesando...">Reprocesar</button></form>
             <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/discard" data-confirm="Descartar pedido?"><button class="secondary danger-soft">Descartar</button></form>
           </div>
         </details>

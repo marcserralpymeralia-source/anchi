@@ -260,14 +260,14 @@ def email_agent_status(email: Email, order: Order | None = None) -> str:
 
 def agent_status_label(status: str) -> str:
     return {
-        "not_processed": "Pendiente de analizar",
+        "not_processed": "Pendiente",
         "queued": "En cola",
         "processing": "Procesando",
-        "pending_reprocess": "Pendiente de reprocesar",
-        "processed": "Analizado por el agente",
-        "order_detected": "Pedido detectado por el agente",
-        "no_order": "Sin pedido detectado",
-        "doubtful": "Necesita revisión",
+        "pending_reprocess": "Pendiente",
+        "processed": "Procesado",
+        "order_detected": "Procesado como pedido",
+        "no_order": "No es pedido",
+        "doubtful": "Pendiente de validar",
         "error": "Error",
         "discarded": "Descartado",
     }.get(status, status)
@@ -712,6 +712,14 @@ def workbench_summary(db: Session, company_id: int, filters: dict, *, include_me
         items = [item for item in items if item["agent_status"] == "error" or str(item["order_status"]).startswith("error")]
     elif mode in {"no_order", "discarded_no_order"}:
         items = [item for item in items if item["agent_status"] in {"no_order", "discarded"}]
+    elif mode in {"", "all"}:
+        items = [
+            item for item in items
+            if item["agent_status"] in {"not_processed", "queued", "processing", "pending_reprocess", "doubtful", "error"}
+            or item["scoring_category"] in {"reviewable", "doubtful", "blocked"}
+            or item["order_status_label"] == "Listo para confirmar"
+            or str(item["order_status"]).startswith("error")
+        ]
 
     agent_status = filters.get("agent_status")
     if agent_status and agent_status != "all":

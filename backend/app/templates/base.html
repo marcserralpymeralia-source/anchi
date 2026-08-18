@@ -21,14 +21,19 @@
         </div>
         <button class="sidebar-toggle secondary" type="button" title="Contraer menu" aria-label="Contraer menu" onclick="toggleSidebar()">☰</button>
       </div>
+      {% set href_dashboard = request.url_for('dashboard') if request.url_for is defined else '/inicio' %}
+      {% set href_entries = request.url_for('channels_page') if request.url_for is defined else '/entries' %}
+      {% set href_customers = request.url_for('list_customers') if request.url_for is defined else '/customers' %}
+      {% set href_products = request.url_for('list_products') if request.url_for is defined else '/products' %}
+      {% set href_settings = request.url_for('settings_page') if request.url_for is defined else '/settings' %}
+      {% set href_import_manual = request.url_for('manual_import_page') if request.url_for is defined else '/imports/manual' %}
       <nav class="nav">
-        <a href="/inicio" title="Pedidos pendientes" class="{% if request.url.path in ['/', '/inicio'] %}active{% endif %}"><span class="nav-icon">▦</span><span class="nav-label">Pedidos pendientes</span></a>
-        <a href="/entries" title="Entradas" class="{% if request.url.path.startswith('/entries') or request.url.path.startswith('/mail') or request.url.path.startswith('/channels') or request.url.path.startswith('/history') %}active{% endif %}"><span class="nav-icon">✉</span><span class="nav-label">Entradas</span></a>
-        <a href="/products" title="Productos" class="{% if request.url.path.startswith('/products') %}active{% endif %}"><span class="nav-icon">▣</span><span class="nav-label">Productos</span></a>
-        <a href="/customers" title="Clientes" class="{% if request.url.path.startswith('/customers') %}active{% endif %}"><span class="nav-icon">◫</span><span class="nav-label">Clientes</span></a>
-        <a href="/knowledge" title="Conocimiento" class="{% if request.url.path.startswith('/knowledge') or request.url.path.startswith('/learning') %}active{% endif %}"><span class="nav-icon">◩</span><span class="nav-label">Conocimiento</span></a>
+        <a href="{{ href_dashboard }}" title="Pedidos pendientes" class="{% if request.url.path in ['/', '/inicio'] %}active{% endif %}"><span class="nav-icon">▦</span><span class="nav-label">Pedidos pendientes</span></a>
+        <a href="{{ href_entries }}" title="Entradas" class="{% if request.url.path.startswith('/entries') or request.url.path.startswith('/mail') or request.url.path.startswith('/channels') or request.url.path.startswith('/history') %}active{% endif %}"><span class="nav-icon">✉</span><span class="nav-label">Entradas</span></a>
+        <a href="{{ href_customers }}" title="Clientes" class="{% if request.url.path.startswith('/customers') %}active{% endif %}"><span class="nav-icon">◫</span><span class="nav-label">Clientes</span></a>
+        <a href="{{ href_products }}" title="Productos" class="{% if request.url.path.startswith('/products') %}active{% endif %}"><span class="nav-icon">▣</span><span class="nav-label">Productos</span></a>
         {% if user.role.name in ["Administrador", "Superadmin"] %}
-          <a href="/settings" title="Configuracion" class="{% if request.url.path.startswith('/settings') %}active{% endif %}"><span class="nav-icon">⚙</span><span class="nav-label">Configuracion</span></a>
+          <a href="{{ href_settings }}" title="Configuracion" class="{% if request.url.path.startswith('/settings') %}active{% endif %}"><span class="nav-icon">⚙</span><span class="nav-label">Configuracion</span></a>
         {% endif %}
       </nav>
     </aside>
@@ -40,7 +45,7 @@
             <span class="alerts-button-icon">🔔</span>
             <span class="alerts-button-badge {% if request.state.alert_center.has_critical %}alerts-badge-critical{% elif request.state.alert_center.high %}alerts-badge-high{% elif request.state.alert_center.medium %}alerts-badge-medium{% else %}alerts-badge-idle{% endif %}" id="alerts-badge">{{ request.state.alert_center.total }}</span>
           </button>
-          <a class="button secondary compact-button" href="/imports/manual">Nueva entrada</a>
+          <a class="button secondary compact-button" href="{{ href_import_manual }}">Nueva entrada</a>
           <span class="badge">{{ request.state.branding.company_name }}</span>
           {% if app_settings.environment != "production" %}<span class="badge">Demo</span>{% endif %}
           <span>{{ user.name }}</span>

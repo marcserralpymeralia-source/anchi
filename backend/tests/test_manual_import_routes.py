@@ -83,8 +83,8 @@ class ManualImportRoutesTests(unittest.TestCase):
 
             with performance_test_client(fixture) as client:
                 resolve_response = client.get(f"/entries/email-{email_id}/resolve", follow_redirects=False)
-                self.assertEqual(resolve_response.status_code, 303)
-                self.assertTrue(resolve_response.headers["location"].startswith("/"))
+                self.assertEqual(resolve_response.status_code, 200)
+                self.assertIn("Propuesta del agente", resolve_response.text)
 
                 process_response = client.post(f"/entries/email-{email_id}/process", follow_redirects=False)
                 self.assertEqual(process_response.status_code, 303)

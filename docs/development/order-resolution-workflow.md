@@ -9,7 +9,7 @@ Mantener una unica ruta operativa para resolver entradas de pedido sin separar e
 1. La entrada llega a `/entries` desde email, WhatsApp, inbound message o importacion manual.
 2. El usuario abre el elemento y pulsa `Procesar` o `Resolver`.
 3. La app dirige al detalle operativo correcto:
-   - si ya existe pedido, abre `/orders/{id}`;
+   - si ya existe pedido, renderiza la revision del pedido en una respuesta HTTP 200;
    - si no existe, encola el trabajo de procesamiento.
 4. La pantalla de revision muestra en una sola vista:
    - la entrada recibida,

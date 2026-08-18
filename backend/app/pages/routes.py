@@ -327,8 +327,12 @@ def dashboard(
     return templates.TemplateResponse("dashboard.html", {"request": request, "user": user, "workbench": workbench, "featured_process_item": featured_process_item, "filters": filters, "pagination": workbench["pagination"]})
 
 
-@router.get("/pedidos")
 @router.get("/history")
+def history_redirect():
+    return RedirectResponse("/entries?tab=processed&date_range=30d", status_code=303)
+
+
+@router.get("/pedidos")
 def pedidos_page(
     request: Request,
     date_range: str = "90d",

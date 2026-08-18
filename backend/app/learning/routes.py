@@ -161,7 +161,6 @@ def learning_overview(db: Session, company_id: int, limit: int = 12) -> dict:
     }
 
 
-@router.get("/knowledge")
 @router.get("/learning")
 def learning_page(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not has_admin_access(user):
@@ -188,6 +187,11 @@ def learning_page(request: Request, db: Session = Depends(get_tenant_db), user: 
             "alert_center": request.state.alert_center,
         },
     )
+
+
+@router.get("/knowledge")
+def knowledge_redirect(user: TenantUser = Depends(current_user)):
+    return RedirectResponse("/customers?view=knowledge", status_code=303)
 
 
 @router.post("/learning/corrections/{correction_id}/accept")

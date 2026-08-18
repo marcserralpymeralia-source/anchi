@@ -10,11 +10,11 @@ Anchi se presenta al usuario como un gestor de pedidos multicanal. La navegacion
 - `Entradas`: bandeja comun de correos, WhatsApp e importaciones manuales.
 - `Productos`: catalogo del tenant.
 - `Clientes`: base de clientes del tenant.
-- `Conocimiento`: reglas, correcciones, documentos y aprendizaje revisable.
 
 ## Area secundaria
 
 - `Configuracion`: canales, correo, identidad, scoring y parametros del tenant.
+- `Conocimiento del cliente`: reglas, correcciones, documentos y aprendizaje revisable dentro de cada ficha de cliente.
 
 ## Rutas canonicas
 
@@ -24,7 +24,7 @@ Anchi se presenta al usuario como un gestor de pedidos multicanal. La navegacion
 - `/entries/{entry_id}/process`: procesar una entrada.
 - `/entries/{entry_id}/resolve`: resolver una entrada.
 - `/imports/manual`: alta manual de entrada Email o WhatsApp.
-- `/knowledge`: conocimiento operativo.
+- `/knowledge`: redireccion de compatibilidad hacia clientes en vista de conocimiento.
 
 ## Reglas de producto
 

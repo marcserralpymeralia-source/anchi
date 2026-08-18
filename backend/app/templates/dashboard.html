@@ -5,32 +5,6 @@
 {% set tabs = workbench["tab_counts"] %}
 <section class="workbench-shell">
   <section class="panel workbench-queue-panel">
-    <form id="workbench-bulk-form" class="workbench-bulk-bar" method="post" action="/workbench/bulk-action" hidden>
-      <input type="hidden" name="selected_items" id="workbench-selected-items" value="[]">
-      <input type="hidden" name="target_state" id="workbench-target-state" value="">
-      <span class="workbench-bulk-count"><strong id="workbench-selected-count">0</strong> pedidos seleccionados</span>
-      <label class="workbench-bulk-state">
-        <span>Estado</span>
-        <select id="workbench-state-select">
-          <option value="">Cambiar estado</option>
-          <option value="pedido_pendiente_revision">Revisión</option>
-          <option value="pedido_confirmado">Confirmado</option>
-          <option value="pedido_exportado">Exportado</option>
-          <option value="no_pedido">Sin pedido</option>
-          <option value="dudoso">Dudoso</option>
-          <option value="descartado">Eliminado</option>
-        </select>
-      </label>
-      <div class="actions workbench-bulk-actions">
-        <button type="button" class="secondary compact-button" onclick="submitWorkbenchBulkAction('process')">Procesar</button>
-        <button type="button" class="secondary compact-button" onclick="submitWorkbenchBulkAction('reprocess')">Reprocesar</button>
-        <button type="button" class="secondary compact-button" onclick="submitWorkbenchBulkAction('confirm')">Confirmar</button>
-        <button type="button" class="secondary compact-button" onclick="submitWorkbenchBulkAction('mark_no_order')">Sin pedido</button>
-        <button type="button" class="secondary compact-button" onclick="submitWorkbenchBulkAction('export')">Exportar</button>
-        <button type="button" class="secondary compact-button" onclick="submitWorkbenchBulkAction('change_state')">Cambiar estado</button>
-        <button type="button" class="secondary compact-button" onclick="submitWorkbenchBulkAction('delete', true)">Eliminar</button>
-      </div>
-    </form>
     <details class="workbench-filters-panel" open>
       <summary>Filtros rápidos</summary>
       <div class="workbench-tabs">
@@ -75,23 +49,6 @@
         </form>
       </details>
     </details>
-
-    <div class="workbench-tools-row">
-      <div class="workbench-tools-note">
-        <strong>Trabajo activo</strong>
-        <span id="workbench-last-refresh">Ultima actualizacion: --:--</span>
-      </div>
-      <div class="actions">
-        <form class="js-loading-form" method="post" action="/workbench/process-recent" data-confirm="Procesar los 3 correos recientes?">
-          <input type="hidden" name="limit" value="3">
-          <button class="secondary compact-button" data-loading-text="Procesando...">Procesar 3 mails</button>
-        </form>
-      </div>
-    </div>
-
-    {% if featured_process_item %}
-      {% include "components/workbench_featured_item.html" %}
-    {% endif %}
 
     <div class="work-queue">
       {% for item in workbench["items"] %}
