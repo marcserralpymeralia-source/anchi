@@ -187,7 +187,7 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             next(get_tenant_db(request_missing, db))
         self.assertEqual(ctx.exception.status_code, 303)
-        self.assertEqual(ctx.exception.headers.get("Location"), "/login")
+        self.assertEqual(ctx.exception.headers.get("Location"), "/login?next=%2Fdemo")
         db.close()
 
     def test_get_tenant_db_redirects_to_login_without_session(self):
@@ -197,7 +197,7 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             next(get_tenant_db(request, db))
         self.assertEqual(ctx.exception.status_code, 303)
-        self.assertEqual(ctx.exception.headers.get("Location"), "/login")
+        self.assertEqual(ctx.exception.headers.get("Location"), "/login?next=%2Fdemo")
         db.close()
 
     def test_auth_dependencies_redirect_when_tenant_lookup_fails(self):
@@ -207,9 +207,8 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         with patch("app.auth.dependencies.load_tenant_context", side_effect=OperationalError("select 1", {}, Exception("boom"))):
             with self.assertRaises(HTTPException) as ctx:
                 current_user(request, db)
-        self.assertEqual(ctx.exception.status_code, 303)
-        self.assertEqual(ctx.exception.headers.get("Location"), "/login")
-        self.assertEqual(request.scope["session"], {})
+        self.assertEqual(ctx.exception.status_code, 503)
+        self.assertEqual(request.scope["session"]["membership_id"], 1)
         db.close()
 
     def test_branding_middleware_falls_back_on_sqlalchemy_schema_error(self):
@@ -234,9 +233,8 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         with patch("app.tenancy.database.ensure_tenant_schema", side_effect=OperationalError("select 1", {}, Exception("boom"))):
             with self.assertRaises(HTTPException) as ctx:
                 next(get_tenant_db(request, db))
-        self.assertEqual(ctx.exception.status_code, 303)
-        self.assertEqual(ctx.exception.headers.get("Location"), "/login")
-        self.assertEqual(request.scope["session"], {})
+        self.assertEqual(ctx.exception.status_code, 503)
+        self.assertEqual(request.scope["session"]["membership_id"], 1)
         db.close()
 
     def test_dashboard_falls_back_when_workbench_summary_fails(self):

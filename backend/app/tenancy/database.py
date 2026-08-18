@@ -8,6 +8,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.auth.redirects import login_location_for_request
 from app.master.database import get_master_db
 from app.master.service import load_tenant_context
 from app.db.database import Base
@@ -62,36 +63,41 @@ def ensure_tenant_schema(database_url: str, *, company_id: int | None = None, ap
 
 def get_tenant_db(request: Request, master_db: Session = Depends(get_master_db)) -> Generator[Session, None, None]:
     tenant = getattr(request.state, "tenant", None)
+    session = request.scope.get("session") or {}
+    has_any_identity = any(session.get(key) for key in ("membership_id", "user_id", "company_id", "company_slug"))
+    has_complete_identity = all(session.get(key) for key in ("membership_id", "user_id", "company_id"))
     if tenant is None:
         try:
             tenant = load_tenant_context(request, master_db)
         except SQLAlchemyError:
-            session = request.scope.get("session") or {}
-            if any(session.get(key) for key in ("membership_id", "user_id", "company_id", "company_slug")):
-                if isinstance(session, dict):
-                    session.clear()
-            raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/login"})
+            if has_complete_identity:
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Tenant no disponible")
+            if has_any_identity and isinstance(session, dict):
+                session.clear()
+            raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": login_location_for_request(request)})
         if tenant:
             request.state.tenant = tenant
+        elif has_complete_identity:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Membresia no disponible")
 
     database_url = tenant.company.database_url if tenant else None
     if not database_url:
-        session = request.scope.get("session") or {}
-        if any(session.get(key) for key in ("membership_id", "user_id", "company_id", "company_slug")):
-            if isinstance(session, dict):
-                session.clear()
-        raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/login"})
+        if has_complete_identity:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Tenant no disponible")
+        if has_any_identity and isinstance(session, dict):
+            session.clear()
+        raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": login_location_for_request(request)})
 
     try:
         ensure_tenant_schema_once(database_url, company_id=tenant.company.id)
         SessionFactory = tenant_db_session(database_url)
         db = SessionFactory()
     except SQLAlchemyError:
-        session = request.scope.get("session") or {}
-        if any(session.get(key) for key in ("membership_id", "user_id", "company_id", "company_slug")):
-            if isinstance(session, dict):
-                session.clear()
-        raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/login"})
+        if has_complete_identity:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Tenant no disponible")
+        if has_any_identity and isinstance(session, dict):
+            session.clear()
+        raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": login_location_for_request(request)})
     try:
         yield db
     finally:

@@ -4,16 +4,26 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.auth.redirects import login_location_for_request
 from app.master.database import get_master_db
 from app.master.service import TenantUser, load_tenant_context
 
 logger = logging.getLogger(__name__)
 
 
+def _has_any_session_identity(session: dict) -> bool:
+    return any(session.get(key) for key in ("membership_id", "user_id", "company_id", "company_slug"))
+
+
+def _has_complete_session_identity(session: dict) -> bool:
+    return all(session.get(key) for key in ("membership_id", "user_id", "company_id"))
+
+
 def current_tenant_user(request: Request, master_db: Session = Depends(get_master_db)) -> TenantUser:
     tenant = getattr(request.state, "tenant", None)
     if tenant and tenant.user and tenant.user.is_active:
         return tenant.user
+    session = request.scope.get("session") or {}
 
     try:
         tenant = load_tenant_context(request, master_db)
@@ -24,14 +34,20 @@ def current_tenant_user(request: Request, master_db: Session = Depends(get_maste
             exc.__class__.__name__,
             exc_info=True,
         )
-        request.session.clear()
-        raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/login"}) from exc
+        if _has_complete_session_identity(session):
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Tenant no disponible") from exc
+        if _has_any_session_identity(session):
+            request.session.clear()
+        raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": login_location_for_request(request)}) from exc
     if tenant and tenant.user and tenant.user.is_active:
         request.state.tenant = tenant
         return tenant.user
 
-    request.session.clear()
-    raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": "/login"})
+    if _has_complete_session_identity(session):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Membresia no disponible")
+    if _has_any_session_identity(session):
+        request.session.clear()
+    raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": login_location_for_request(request)})
 
 
 def current_user(request: Request, master_db: Session = Depends(get_master_db)) -> TenantUser:

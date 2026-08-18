@@ -17,6 +17,7 @@
       {% if login_branding.show_claim_login %}<p class="muted">{{ login_branding.primary_claim }}</p>{% endif %}
       {% if error %}<p class="error">{{ error }}</p>{% endif %}
       <form class="stack" method="post" action="/login">
+        <input type="hidden" name="next" value="{{ next_url or '/inicio' }}">
         <label>Email<input name="email" type="email" placeholder="usuario@empresa.com" required></label>
         <label>Password<input name="password" type="password" placeholder="Contraseña" required></label>
         <button>Entrar</button>

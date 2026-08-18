@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 
+from app.auth.redirects import DEFAULT_LOGIN_DESTINATION, safe_internal_next
 from app.auth.service import authenticate_user
 from app.core.templating import templates
 from app.master.models import MasterCompany
@@ -17,12 +18,14 @@ logger = logging.getLogger(__name__)
 
 
 @router.get("/login")
-def login_page(request: Request):
+def login_page(request: Request, next: str = ""):
+    next_url = safe_internal_next(next)
     return templates.TemplateResponse(
         "login.html",
         {
             "request": request,
             "error": None,
+            "next_url": next_url,
             "login_branding": branding_to_dict(default_branding_payload()),
         },
     )
@@ -33,8 +36,10 @@ def login(
     request: Request,
     email: str = Form(...),
     password: str = Form(...),
+    next: str = Form(DEFAULT_LOGIN_DESTINATION),
     master_db: Session = Depends(get_master_db),
 ):
+    next_url = safe_internal_next(next)
     user = authenticate_user(master_db, email, password)
     if not user:
         return templates.TemplateResponse(
@@ -42,6 +47,7 @@ def login(
             {
                 "request": request,
                 "error": "Credenciales no validas",
+                "next_url": next_url,
                 "login_branding": branding_to_dict(default_branding_payload()),
             },
             status_code=401,
@@ -60,7 +66,7 @@ def login(
         company.name if company else "",
         settings.environment,
     )
-    return RedirectResponse("/inicio", status_code=303)
+    return RedirectResponse(next_url, status_code=303)
 
 
 @router.post("/logout")

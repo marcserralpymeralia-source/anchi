@@ -76,7 +76,7 @@ class OperationalNavigationTests(unittest.TestCase):
                         response = client.get("/entries", follow_redirects=False)
 
             self.assertEqual(response.status_code, 303)
-            self.assertEqual(response.headers["location"], "/login")
+            self.assertEqual(response.headers["location"], "/login?next=%2Fentries")
         finally:
             fixture.cleanup()
 
