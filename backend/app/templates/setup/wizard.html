@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Configuración inicial · Anchi</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body class="setup-body">
+  <main class="setup-shell">
+    <header class="setup-topbar">
+      <div>
+        <strong>Anchi</strong>
+        <span>Configuración inicial</span>
+      </div>
+      <form method="post" action="/logout"><button class="secondary compact-button">Cerrar sesión</button></form>
+    </header>
+
+    <nav class="setup-progress" aria-label="Progreso">
+      {% for item in steps %}
+        <a class="setup-step setup-step-{{ item.status|lower|replace(' ', '-') }}" href="/setup/{{ item.key|replace('_', '-') }}">
+          <span>{{ loop.index }}</span>
+          <strong>{{ item.label }}</strong>
+          <em>{{ item.status }}</em>
+        </a>
+      {% endfor %}
+    </nav>
+
+    {% if message %}<div class="notice">{{ message }}</div>{% endif %}
+    {% if error %}<div class="setup-error">{{ error }}</div>{% endif %}
+
+    {% if step == "company" %}
+      <section class="setup-panel">
+        <div class="setup-copy">
+          <h1>Configura tu empresa</h1>
+          <p>Define el nombre, logo e identidad básica que verán los usuarios.</p>
+        </div>
+        <form class="setup-form" method="post" action="/setup/company" enctype="multipart/form-data">
+          <label>Nombre legal<input name="legal_name" value="{{ company.legal_name or company.name or '' }}" required></label>
+          <label>Nombre comercial<input name="commercial_name" value="{{ branding.company_name or company.name or '' }}" required></label>
+          <label>Logo<input type="file" name="logo" accept="image/png,image/jpeg,image/webp"></label>
+          {% if branding.logo_url %}<img class="setup-logo-preview" src="{{ branding.logo_url }}" alt="Logo actual">{% endif %}
+          <div class="setup-grid-3">
+            <label>País<input name="country" value="{{ company.country or 'España' }}"></label>
+            <label>Idioma<input name="language" value="{{ company.language or 'es' }}"></label>
+            <label>Zona horaria<input name="timezone" value="{{ company.timezone or 'Europe/Madrid' }}"></label>
+          </div>
+          <label>Color principal<input type="color" name="primary_color" value="#157F6E"></label>
+          <div class="setup-actions">
+            <a class="button secondary" href="/setup">Volver</a>
+            <button class="primary">Guardar y continuar</button>
+          </div>
+        </form>
+      </section>
+    {% elif step == "channels" %}
+      <section class="setup-panel">
+        <div class="setup-copy">
+          <h1>Conecta un canal de entrada</h1>
+          <p>Email o WhatsApp son suficientes para empezar. Puedes configurar ambos si los usas.</p>
+        </div>
+        <div class="setup-two">
+          <article class="setup-block">
+            <h2>Email</h2>
+            {% if setup_status.email_connected %}
+              <p><strong>Email conectado</strong></p>
+              <p>{{ email.connected_email or email.imap_username }}</p>
+              <form method="post" action="/setup/email/sync"><button class="secondary">Sincronizar ahora</button></form>
+            {% else %}
+              <p>Estado: No conectado</p>
+            {% endif %}
+            <form class="setup-form compact" method="post" action="/setup/email">
+              <label>Dirección de correo<input name="connected_email" value="{{ email.connected_email or email.imap_username or '' }}" required></label>
+              <div class="setup-grid-2">
+                <label>Host IMAP<input name="imap_host" value="{{ email.imap_host or 'imap.gmail.com' }}" required></label>
+                <label>Puerto<input type="number" name="imap_port" value="{{ email.imap_port or 993 }}" required></label>
+              </div>
+              <label>Usuario<input name="imap_username" value="{{ email.imap_username or '' }}" required></label>
+              <label>Contraseña o app password<input type="password" name="imap_password" placeholder="{% if email.imap_password_encrypted %}••••••••{% endif %}"></label>
+              <label>Carpeta<input name="inbox_folder" value="{{ email.inbox_folder or 'INBOX' }}"></label>
+              <label class="setup-check"><input type="checkbox" name="imap_use_ssl" checked> SSL/TLS</label>
+              <button class="primary">Probar y conectar correo</button>
+            </form>
+          </article>
+          <article class="setup-block">
+            <h2>WhatsApp</h2>
+            {% if setup_status.whatsapp_connected %}
+              <p><strong>WhatsApp conectado</strong></p>
+              <p>{{ whatsapp.phone_number_id }}</p>
+            {% else %}
+              <p>Estado: No conectado</p>
+            {% endif %}
+            <form class="setup-form compact" method="post" action="/setup/whatsapp">
+              <label>Phone Number ID<input name="phone_number_id" value="{{ whatsapp.phone_number_id or '' }}"></label>
+              <label>Business Account ID<input name="business_account_id" value="{{ whatsapp.business_account_id or '' }}"></label>
+              <label>Access Token<input type="password" name="access_token" placeholder="{% if whatsapp.access_token %}••••••••{% endif %}"></label>
+              <label>App Secret<input type="password" name="app_secret" placeholder="{% if whatsapp.app_secret %}••••••••{% endif %}"></label>
+              <label>Verify Token<input type="password" name="verify_token" placeholder="{% if whatsapp.verify_token %}••••••••{% endif %}"></label>
+              <label>Webhook<input value="{{ webhook_url }}" readonly></label>
+              <button class="primary">Probar y conectar WhatsApp</button>
+            </form>
+          </article>
+        </div>
+        <div class="setup-actions">
+          <a class="button secondary" href="/setup/company">Volver</a>
+          <a class="button primary" href="/setup/products">Continuar</a>
+        </div>
+      </section>
+    {% elif step in ["products", "customers"] %}
+      {% set entity_label = "productos" if step == "products" else "clientes" %}
+      <section class="setup-panel">
+        <div class="setup-copy">
+          <h1>{% if step == "products" %}Importa tus productos{% else %}Importa tus clientes{% endif %}</h1>
+          <p>{% if step == "products" %}Sube tu catálogo para que Anchi identifique líneas de pedido.{% else %}Sube tus clientes para identificar pedidos por nombre, email o teléfono.{% endif %}</p>
+        </div>
+        {% if not preview %}
+          <form class="setup-form" method="post" action="/setup/{{ step }}/preview" enctype="multipart/form-data">
+            <label>Archivo .xlsx o .csv<input type="file" name="file" accept=".xlsx,.csv" required></label>
+            <div class="setup-actions">
+              <a class="button secondary" href="/setup/{% if step == 'products' %}channels{% else %}products{% endif %}">Volver</a>
+              <button class="primary">Subir y detectar columnas</button>
+            </div>
+          </form>
+        {% else %}
+          <form class="setup-form" method="post" action="/setup/{{ step }}/import">
+            <input type="hidden" name="token" value="{{ preview.token }}">
+            <input type="hidden" name="filename" value="{{ preview.filename }}">
+            <div class="setup-import-summary">
+              <strong>{{ preview.rows_total }} filas detectadas</strong>
+              <span>{{ validation.rows_new }} nuevas · {{ validation.rows_update }} actualizadas · {{ validation.rows_error }} con revisión</span>
+            </div>
+            <div class="setup-mapping">
+              {% for column in preview.columns %}
+                <label>{{ column }}
+                  <select name="mapping:{{ column }}">
+                    <option value="__skip__">No importar</option>
+                    {% for field, label in preview.fields.items() %}
+                      <option value="{{ field }}" {% if preview.guessed_mapping.get(column) == field %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+              {% endfor %}
+            </div>
+            {% if validation.errors %}<p class="setup-warning">{{ validation.errors[0] }}</p>{% endif %}
+            <div class="setup-actions">
+              <a class="button secondary" href="/setup/{{ step }}">Volver</a>
+              <button class="primary">Confirmar importación</button>
+            </div>
+          </form>
+        {% endif %}
+      </section>
+    {% elif step == "customer_knowledge" %}
+      <section class="setup-panel">
+        <div class="setup-copy">
+          <h1>Añade información adicional sobre tus clientes</h1>
+          <p>Puedes aportar históricos, equivalencias o instrucciones para ayudar a Anchi a interpretar mejor sus pedidos.</p>
+        </div>
+        <form class="setup-form" method="post" action="/setup/customer-knowledge/import" enctype="multipart/form-data">
+          <label>Cliente
+            <select name="customer_id">
+              <option value="">Selecciona cliente</option>
+              {% for customer in knowledge_customers or [] %}
+                <option value="{{ customer.id }}">{{ customer.fiscal_name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Histórico o equivalencias<input type="file" name="file" accept=".xlsx,.csv"></label>
+          <div class="setup-actions">
+            <a class="button secondary" href="/setup/customers">Volver</a>
+            <button class="secondary" formaction="/setup/customer-knowledge/skip" formmethod="post">Omitir por ahora</button>
+            <button class="primary">Añadir información</button>
+          </div>
+        </form>
+      </section>
+    {% elif step == "openai" %}
+      <section class="setup-panel">
+        <div class="setup-copy">
+          <h1>Conecta OpenAI</h1>
+          <p>Introduce solo la API Key. Anchi aplica el modelo y la configuración segura por defecto.</p>
+        </div>
+        <form class="setup-form" method="post" action="/setup/openai">
+          <label>API Key<input type="password" name="api_key" placeholder="{% if llm.api_key_encrypted %}••••••••{% endif %}" required></label>
+          <div class="setup-actions">
+            <a class="button secondary" href="/setup/customer-knowledge">Volver</a>
+            <button class="primary">Probar conexión</button>
+          </div>
+        </form>
+      </section>
+    {% elif step == "complete" %}
+      <section class="setup-panel">
+        <div class="setup-copy">
+          <h1>Anchi está lista</h1>
+          <p>Ya puedes empezar a gestionar pedidos pendientes.</p>
+        </div>
+        <ul class="setup-checklist">
+          <li>✓ Empresa configurada</li>
+          <li>✓ Canal de entrada conectado</li>
+          <li>✓ Productos importados</li>
+          <li>✓ Clientes importados</li>
+          <li>{% if setup_status.optional_customer_knowledge %}✓{% else %}○{% endif %} Información adicional — opcional</li>
+          <li>✓ OpenAI conectado</li>
+        </ul>
+        <a class="button primary" href="/inicio">Empezar a gestionar pedidos</a>
+      </section>
+    {% endif %}
+  </main>
+</body>
+</html>

@@ -11,6 +11,7 @@ from typing import Any, Iterable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.encryption import decrypt_secret
 from app.db.models import ChannelSetting, Conversation, InboundMessage, InputChannel, MessageAttachment
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
@@ -68,6 +69,12 @@ def whatsapp_settings_map(db: Session, company_id: int) -> dict[str, str | None]
     return {setting.key: setting.value for setting in settings}
 
 
+def _secret_value(value: str | None) -> str:
+    if not value:
+        return ""
+    return decrypt_secret(value) or value
+
+
 def whatsapp_config(db: Session, company_id: int) -> WhatsAppTenantConfig:
     settings_map = whatsapp_settings_map(db, company_id)
     return WhatsAppTenantConfig(
@@ -75,9 +82,9 @@ def whatsapp_config(db: Session, company_id: int) -> WhatsAppTenantConfig:
         provider=(settings_map.get("provider") or WHATSAPP_PROVIDER).strip().lower() or WHATSAPP_PROVIDER,
         phone_number_id=(settings_map.get("phone_number_id") or "").strip(),
         business_account_id=(settings_map.get("business_account_id") or "").strip(),
-        access_token=(settings_map.get("access_token") or "").strip(),
-        verify_token=(settings_map.get("verify_token") or "").strip(),
-        app_secret=(settings_map.get("app_secret") or "").strip(),
+        access_token=_secret_value(settings_map.get("access_token")).strip(),
+        verify_token=_secret_value(settings_map.get("verify_token")).strip(),
+        app_secret=_secret_value(settings_map.get("app_secret")).strip(),
         webhook_enabled=_as_bool(settings_map.get("webhook_enabled")),
         bot_enabled=_as_bool(settings_map.get("bot_enabled"), default=True),
         default_language=(settings_map.get("default_language") or "es").strip(),

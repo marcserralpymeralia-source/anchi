@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import os
-import re
 import unittest
-from html import unescape
 
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("ENABLE_DEMO_BOOTSTRAP", "false")
@@ -17,43 +15,6 @@ from app.core.encryption import decrypt_secret
 from app.db.models import EmailSettings, User
 from app.master.models import CompanyMembership, EmailSyncState
 from scripts.performance_data import build_performance_fixture, performance_test_client
-
-
-def _extract_receive_payload(html: str) -> dict[str, str]:
-    marker = 'action="/settings/email/receive"'
-    start = html.find(marker)
-    if start == -1:
-        raise AssertionError("No se encontró el formulario de recepción de correo")
-    form_start = html.rfind("<form", 0, start)
-    form_end = html.find("</form>", start)
-    form_html = html[form_start : form_end + 7]
-    payload: dict[str, str] = {}
-
-    for match in re.finditer(r'<input([^>]*)name="([^"]+)"([^>]*)>', form_html, re.S):
-        attrs = f"{match.group(1)} {match.group(3)}"
-        name = match.group(2)
-        if 'type="checkbox"' in attrs:
-            if "checked" in attrs:
-                payload[name] = "on"
-            continue
-        value_match = re.search(r'value="([^"]*)"', attrs)
-        payload[name] = unescape(value_match.group(1)) if value_match else ""
-
-    for match in re.finditer(r'<textarea([^>]*)name="([^"]+)"[^>]*>(.*?)</textarea>', form_html, re.S):
-        payload[match.group(2)] = unescape(match.group(3))
-
-    for match in re.finditer(r'<select([^>]*)name="([^"]+)"[^>]*>(.*?)</select>', form_html, re.S):
-        name = match.group(2)
-        body = match.group(3)
-        selected = re.search(r'<option value="([^"]*)" selected', body)
-        if selected:
-            payload[name] = unescape(selected.group(1))
-            continue
-        first = re.search(r'<option value="([^"]*)"', body)
-        if first and name not in payload:
-            payload[name] = unescape(first.group(1))
-
-    return payload
 
 
 class SettingsEmailReceiveHttpTests(unittest.TestCase):
@@ -74,24 +35,28 @@ class SettingsEmailReceiveHttpTests(unittest.TestCase):
                 db.commit()
 
             with performance_test_client(fixture) as client:
-                settings_html = client.get("/settings").text
-                payload = _extract_receive_payload(settings_html)
-                payload.update(
-                    {
-                        "provider": "gmail",
-                        "imap_host": "imap.gmail.com",
-                        "imap_port": "993",
-                        "imap_security": "ssl_tls",
-                        "imap_use_ssl": "on",
-                        "imap_username": "demo.user@example.com",
-                        "imap_password_encrypted": "DemoAppPassword123!",
-                        "inbox_folder": "INBOX",
-                        "initial_history_mode": "new",
-                        "initial_history_limit": "20",
-                        "auto_sync_enabled": "",
-                        "auto_process_on_fetch": "",
-                    }
-                )
+                settings_page = client.get("/settings")
+                self.assertEqual(settings_page.status_code, 200)
+                self.assertIn("/setup/channels", settings_page.text)
+                payload = {
+                    "provider": "gmail",
+                    "connected_email": "demo.user@example.com",
+                    "imap_host": "imap.gmail.com",
+                    "imap_port": "993",
+                    "imap_security": "ssl_tls",
+                    "imap_use_ssl": "on",
+                    "imap_username": "demo.user@example.com",
+                    "imap_password_encrypted": "DemoAppPassword123!",
+                    "inbox_folder": "INBOX",
+                    "mailbox": "INBOX",
+                    "initial_history_mode": "new",
+                    "initial_history_limit": "20",
+                    "auto_sync_enabled": "",
+                    "auto_process_on_fetch": "",
+                    "read_unread_only": "",
+                    "mark_as_read_after_import": "",
+                    "move_after_processing": "",
+                }
 
                 response = client.post("/settings/email/receive", data=payload, follow_redirects=False)
                 self.assertEqual(response.status_code, 303)

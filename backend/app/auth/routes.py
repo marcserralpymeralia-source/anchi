@@ -11,6 +11,8 @@ from app.core.templating import templates
 from app.master.models import MasterCompany
 from app.core.config import get_settings
 from app.master.database import get_master_db
+from app.setup.service import get_setup_status
+from app.tenancy.database import tenant_db_session
 from app.settings.branding import branding_to_dict, default_branding_payload
 
 router = APIRouter()
@@ -56,6 +58,14 @@ def login(
     request.session["company_id"] = user.company_id
     request.session["membership_id"] = user.membership_id
     request.session["company_slug"] = user.company_slug
+    if next_url == DEFAULT_LOGIN_DESTINATION and user.database_url:
+        TenantSession = tenant_db_session(user.database_url)
+        tenant_db = TenantSession()
+        try:
+            if not get_setup_status(tenant_db, user.company_id).is_operational:
+                next_url = "/setup"
+        finally:
+            tenant_db.close()
     company = master_db.get(MasterCompany, user.company_id)
     settings = get_settings()
     logger.info(

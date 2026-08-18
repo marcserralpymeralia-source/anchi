@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="setup-panel">
+  <div class="setup-copy">
+    <h1>Configuración</h1>
+    <p>Revisa y edita los elementos necesarios para que Anchi pueda recibir y procesar pedidos.</p>
+  </div>
+  <div class="setup-two">
+    <article class="setup-block">
+      <h2>Empresa</h2>
+      <p>{{ "Configurado" if setup_status.company_configured else "Pendiente" }}</p>
+      <a class="button secondary compact-button" href="/setup/company">Editar</a>
+    </article>
+    <article class="setup-block">
+      <h2>Email</h2>
+      <p>{{ "Conectado" if setup_status.email_connected else "No configurado" }}</p>
+      {% if email.last_sync_at %}
+        <p>Última sincronización: {{ email.last_sync_at | local_dt(company.timezone if company else "Europe/Madrid", "%d/%m %H:%M") }}</p>
+      {% endif %}
+      <a class="button secondary compact-button" href="/setup/channels">Editar</a>
+    </article>
+    <article class="setup-block">
+      <h2>WhatsApp</h2>
+      <p>{{ "Conectado" if setup_status.whatsapp_connected else "No configurado" }}</p>
+      <a class="button secondary compact-button" href="/setup/channels">Editar</a>
+    </article>
+    <article class="setup-block">
+      <h2>Productos</h2>
+      <p>{{ setup_status.counts.products }}</p>
+      <a class="button secondary compact-button" href="/setup/products">Editar</a>
+    </article>
+    <article class="setup-block">
+      <h2>Clientes</h2>
+      <p>{{ setup_status.counts.customers }}</p>
+      <a class="button secondary compact-button" href="/setup/customers">Editar</a>
+    </article>
+    <article class="setup-block">
+      <h2>Información adicional</h2>
+      <p>{{ "Disponible" if setup_status.optional_customer_knowledge else "Opcional" }}</p>
+      <a class="button secondary compact-button" href="/setup/customer-knowledge">Editar</a>
+    </article>
+    <article class="setup-block">
+      <h2>OpenAI</h2>
+      <p>{{ "Conectado" if setup_status.openai_connected else "Pendiente" }}</p>
+      <a class="button secondary compact-button" href="/setup/openai">Editar</a>
+    </article>
+  </div>
+</section>
+{% endblock %}

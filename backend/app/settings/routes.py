@@ -26,6 +26,7 @@ from app.settings.email_config import TEMPLATE_VARIABLES, email_config_status, e
 from app.settings.integrations import classify_sample, extract_sample, preview_initial_imap_sync, run_initial_imap_sync, send_test_email, test_imap_connection, test_smtp_connection
 from app.settings.application import run_connection_test, update_settings_section_async
 from app.settings.service import get_or_create_settings, resolve_updated_by_id, update_with_form
+from app.setup.service import get_setup_status
 from app.dashboard.service import recent_processed_emails_overview
 from app.jobs.service import enqueue_job, execute_job_inline
 from app.tenancy.database import get_tenant_db
@@ -146,6 +147,20 @@ def _clone_email_settings_for_preview(db: Session, company_id: int, data: dict) 
 
 @router.get("")
 def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    setup_status = get_setup_status(db, user.company_id)
+    email = get_or_create_settings(db, EmailSettings, user.company_id)
+    company = db.get(Company, user.company_id)
+    return templates.TemplateResponse(
+        "setup/settings_summary.html",
+        {
+            "request": request,
+            "user": user,
+            "setup_status": setup_status,
+            "company": company,
+            "email": email,
+            "title": "Configuración",
+        },
+    )
     llm_settings = get_or_create_settings(db, LLMSettings, user.company_id)
     scoring_settings = get_or_create_settings(db, ScoringSettings, user.company_id)
     decision_settings = get_or_create_settings(db, DecisionSettings, user.company_id)
