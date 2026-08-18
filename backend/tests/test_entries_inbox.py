@@ -17,6 +17,7 @@ from app.core import lifespan as lifespan_module  # noqa: E402
 from app.core.app_factory import create_app  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
+from app.channels.routes import _channel_union_subquery  # noqa: E402
 from app.db.models import BackgroundJob, Company, Email, EmailAttachment, InboundMessage, InputChannel, Order, utcnow  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from scripts.performance_data import build_performance_fixture, temporary_performance_environment  # noqa: E402
@@ -65,6 +66,11 @@ class EntriesInboxTests(unittest.TestCase):
         self.assertIn(("/entries/{entry_id}", ("GET",)), routes)
         self.assertIn(("/entries/{entry_id}/resolve", ("GET",)), routes)
         self.assertIn(("/entries/{entry_id}/process", ("POST",)), routes)
+
+    def test_entries_union_keeps_provider_before_score(self):
+        columns = list(_channel_union_subquery(1, email_channel_name="Email").c.keys())
+        self.assertLess(columns.index("provider"), columns.index("score"))
+        self.assertEqual(columns[columns.index("provider") + 1], "score")
 
     def test_unauthenticated_entries_returns_to_entries_after_login(self):
         fixture = build_performance_fixture("small")

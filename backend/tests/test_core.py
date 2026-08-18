@@ -321,14 +321,14 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.assertEqual(suggest_customer_for_email(db, 1, SimpleNamespace(sender="")), "")
         db.close()
 
-    def test_sqlalchemy_error_response_redirects_html_requests_to_login(self):
+    def test_sqlalchemy_error_response_returns_operational_error_for_html_requests(self):
         request = FakeRequest(session={})
         request.headers["accept"] = "text/html"
         request.state.request_id = "req-1"
         request.state.correlation_id = "corr-1"
         response = sqlalchemy_error_response(request, OperationalError("select 1", {}, Exception("boom")))
-        self.assertEqual(response.status_code, 303)
-        self.assertEqual(response.headers.get("location"), "/login")
+        self.assertEqual(response.status_code, 503)
+        self.assertIsNone(response.headers.get("location"))
         self.assertEqual(response.headers.get("x-request-id"), "req-1")
         self.assertEqual(response.headers.get("x-correlation-id"), "corr-1")
 

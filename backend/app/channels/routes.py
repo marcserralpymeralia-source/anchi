@@ -392,6 +392,7 @@ def _channel_union_subquery(company_id: int, *, email_channel_name: str) -> obje
                 Order.customer_detected_name,
                 literal("Cliente no identificado"),
             ).label("customer_name"),
+            literal("imap").label("provider"),
             Order.score.label("score"),
             Order.status.label("order_status"),
             Order.customer_identification_method.label("customer_identification_method"),
@@ -437,7 +438,6 @@ def _channel_union_subquery(company_id: int, *, email_channel_name: str) -> obje
         .outerjoin(email_validated_customer, Order.validated_customer_id == email_validated_customer.id)
         .outerjoin(email_customer, Order.customer_id == email_customer.id)
         .outerjoin(email_attachment_stats, email_attachment_stats.c.source_id == Email.id)
-        .add_columns(literal("imap").label("provider"))
         .where(Email.company_id == company_id)
     )
 

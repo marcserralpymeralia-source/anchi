@@ -4,8 +4,10 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+import logging
+
+from fastapi.responses import HTMLResponse
 from fastapi.responses import JSONResponse
-from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.exc import SQLAlchemyError
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -19,6 +21,8 @@ from app.core.middleware import branding_middleware
 from app.core.router_registry import get_registered_routers
 from app.core.templating import templates
 from app.settings.branding import branding_css_vars
+
+logger = logging.getLogger(__name__)
 
 
 def internal_server_error_response(request) -> JSONResponse:  # noqa: ANN001
@@ -39,9 +43,22 @@ def internal_server_error_response(request) -> JSONResponse:  # noqa: ANN001
 
 
 def sqlalchemy_error_response(request, exc: Exception):  # noqa: ANN001
+    logger.exception(
+        "AUTH_REASON=schema_error route=%s method=%s error_type=%s",
+        request.url.path,
+        request.method,
+        exc.__class__.__name__,
+    )
     accept = (request.headers.get("accept") or "").lower()
     if request.method in {"GET", "HEAD"} or "text/html" in accept:
-        response = RedirectResponse("/login", status_code=303)
+        response = HTMLResponse(
+            "<!doctype html><html lang=\"es\"><head><meta charset=\"utf-8\"><title>Servicio temporalmente no disponible</title></head>"
+            "<body><main style=\"font-family:system-ui,sans-serif;padding:24px\">"
+            "<h1>Servicio temporalmente no disponible</h1>"
+            "<p>No se ha podido cargar esta pantalla por un problema temporal de base de datos.</p>"
+            "</main></body></html>",
+            status_code=503,
+        )
         request_id = getattr(request.state, "request_id", None)
         correlation_id = getattr(request.state, "correlation_id", None) or request_id
         if request_id:
