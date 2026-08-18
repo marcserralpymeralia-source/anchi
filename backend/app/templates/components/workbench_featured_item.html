@@ -15,7 +15,7 @@
     </div>
     <div class="queue-item-actions">
       <button class="button secondary compact-button" type="button" onclick="openWorkbenchItemDetail('{{ featured_process_item.detail_url }}')">Abrir</button>
-      <a class="button secondary compact-button" href="/pedidos?kind=orders&date_range=30d&search=PEdido+compra">Histórico</a>
+      <a class="button secondary compact-button" href="/entries?tab=processed&date_range=30d&search=Pedido+compra">Origen</a>
     </div>
     <div class="queue-item-confidence-col queue-item-confidence-amber">
       <span class="queue-item-score queue-item-confidence-amber">{{ "%.0f"|format(featured_process_item.score or 0) }}%</span>

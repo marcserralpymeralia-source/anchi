@@ -437,7 +437,7 @@ def whatsapp_import_confirm(
     log_action(db, company_id=user.company_id, user=user, action="imports.manual.confirm", entity_type="inbound_message", entity_id=message.id, message=f"Importacion manual ({channel}) importada: {message.id}")
     if "application/json" in (request.headers.get("accept") or ""):
         return {"ok": True, "message_id": message.id, "conversation_id": conversation.id, "job_id": job.id}
-    return RedirectResponse(f"/channels?focus=inbound-{message.id}", status_code=303)
+    return RedirectResponse(f"/entries?focus=inbound-{message.id}", status_code=303)
 
 
 @router.post("/quick")

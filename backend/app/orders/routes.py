@@ -432,6 +432,7 @@ def update_order_customer(order_id: int, validated_customer_id: int = Form(...),
     return RedirectResponse("/orders", status_code=303)
 
 
+@router.post("/{order_id}/save")
 @router.post("/{order_id}/update")
 def update_order(
     order_id: int,
@@ -702,6 +703,17 @@ def recalculate_score(order_id: int, db: Session = Depends(get_tenant_db), user:
     return RedirectResponse("/orders", status_code=303)
 
 
+@router.post("/{order_id}/reprocess")
+def reprocess_order(order_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    order = db.get(Order, order_id)
+    if order and order.company_id == user.company_id:
+        job = enqueue_job(db, company_id=user.company_id, job_type="process_order", payload={"order_id": order.id}, created_by_user_id=user.id)
+        log_action(db, company_id=user.company_id, user=user, action="order.reprocess", entity_type="job", entity_id=job.id, message="Reprocesamiento de pedido encolado")
+        db.commit()
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
+
+
+@router.post("/{order_id}/validate")
 @router.post("/{order_id}/confirm")
 def confirm_order(order_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     order = db.scalar(select(Order).where(Order.id == order_id, Order.company_id == user.company_id).options(selectinload(Order.lines)))

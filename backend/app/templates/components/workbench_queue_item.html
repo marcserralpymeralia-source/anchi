@@ -26,8 +26,8 @@
   </div>
   <div class="queue-item-actions">
     {% if item.kind == "email" and item.agent_status == "not_processed" %}
-      <form class="js-loading-form" method="post" action="/channels/email/{{ item.email_id }}/process"><button class="primary compact-button" data-loading-text="Procesando..." onclick="event.stopPropagation();">Procesar</button></form>
-      <a class="button secondary compact-button" href="/channels/email/{{ item.email_id }}/resolve" onclick="event.stopPropagation();">Resolver</a>
+      <form class="js-loading-form" method="post" action="/entries/email-{{ item.email_id }}/process"><button class="primary compact-button" data-loading-text="Procesando..." onclick="event.stopPropagation();">Procesar</button></form>
+      <a class="button secondary compact-button" href="/entries/email-{{ item.email_id }}/resolve" onclick="event.stopPropagation();">Resolver</a>
     {% elif item.kind == "order" and item.order_status_label == "Listo para confirmar" %}
       <form class="js-loading-form" method="post" action="/orders/{{ item.order_id }}/confirm" data-confirm="Confirmar pedido?"><button class="primary compact-button" data-loading-text="Confirmando..." onclick="event.stopPropagation();">Procesar</button></form>
       <button class="secondary compact-button" type="button" onclick="event.stopPropagation(); openWorkbenchItemDetail('{{ item.detail_url }}')">Resolver</button>
@@ -40,7 +40,7 @@
       <div class="workbench-more-menu-panel">
         {% if item.kind == "order" %}
           <a href="/orders/{{ item.order_id }}" onclick="event.stopPropagation();">Editar pedido</a>
-          {% if item.email_id %}<a href="/channels?focus=email-{{ item.email_id }}" onclick="event.stopPropagation();">Ver origen</a>{% endif %}
+          {% if item.email_id %}<a href="/entries?focus=email-{{ item.email_id }}" onclick="event.stopPropagation();">Ver origen</a>{% endif %}
           {% if item.email_id %}<a href="/orders/{{ item.order_id }}#attachments" onclick="event.stopPropagation();">Ver adjuntos</a>{% endif %}
           <form class="js-loading-form" method="post" action="/orders/{{ item.order_id }}/recalculate-score"><button class="secondary compact-button" data-loading-text="Recalculando..." onclick="event.stopPropagation();">Recalcular confianza</button></form>
           <form class="js-loading-form" method="post" action="/orders/{{ item.order_id }}/export-ftp"><button class="secondary compact-button" data-loading-text="Exportando..." onclick="event.stopPropagation();">Enviar a gestión</button></form>

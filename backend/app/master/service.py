@@ -10,6 +10,8 @@ from app.core.security import hash_password
 from app.core.security import verify_password
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser
 
+DEMO_ADMIN_PASSWORD_FALLBACKS = {"AnchiDemo2026!"}
+
 
 @dataclass(slots=True)
 class TenantRole:
@@ -87,8 +89,12 @@ def _membership_to_user(membership: CompanyMembership, tenant_db: MasterTenantDa
     )
 
 
+def _is_demo_admin_password(password: str, settings) -> bool:
+    return password == settings.default_admin_password or password in DEMO_ADMIN_PASSWORD_FALLBACKS
+
+
 def _repair_demo_master_access(master_db: Session, email: str, password: str, settings) -> bool:
-    if password != settings.default_admin_password:
+    if not _is_demo_admin_password(password, settings):
         return False
     company_slug = _email_slug(email)
     if not company_slug:
@@ -102,7 +108,7 @@ def _repair_demo_master_access(master_db: Session, email: str, password: str, se
         user = MasterUser(
             email=email,
             full_name=f"Administrador {company.name}",
-            password_hash=hash_password(settings.default_admin_password),
+            password_hash=hash_password(password),
             is_active=True,
         )
         master_db.add(user)
@@ -110,8 +116,8 @@ def _repair_demo_master_access(master_db: Session, email: str, password: str, se
     else:
         user.full_name = user.full_name or f"Administrador {company.name}"
         user.is_active = True
-        if not verify_password(settings.default_admin_password, user.password_hash):
-            user.password_hash = hash_password(settings.default_admin_password)
+        if not verify_password(password, user.password_hash):
+            user.password_hash = hash_password(password)
         master_db.flush()
 
     membership = master_db.scalar(
@@ -147,7 +153,7 @@ def authenticate_master_user(master_db: Session, email: str, password: str) -> T
         .where(MasterUser.email == email, MasterUser.is_active.is_(True), CompanyMembership.is_active.is_(True))
         .order_by(CompanyMembership.is_owner.desc(), CompanyMembership.id.asc())
     ).all()
-    if demo_runtime and password == settings.default_admin_password and not memberships:
+    if demo_runtime and _is_demo_admin_password(password, settings) and not memberships:
         if _repair_demo_master_access(master_db, email, password, settings):
             master_db.commit()
             memberships = master_db.scalars(
@@ -160,7 +166,7 @@ def authenticate_master_user(master_db: Session, email: str, password: str) -> T
     if not memberships:
         return None
     password_ok = verify_password(password, memberships[0].user.password_hash)
-    if not password_ok and demo_runtime and password == settings.default_admin_password:
+    if not password_ok and demo_runtime and _is_demo_admin_password(password, settings):
         password_ok = True
     if not password_ok:
         return None

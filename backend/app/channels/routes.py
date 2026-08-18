@@ -24,6 +24,7 @@ from app.settings.service import get_or_create_settings
 from app.tenancy.database import get_tenant_db
 
 router = APIRouter(prefix="/channels", tags=["channels"])
+entries_router = APIRouter(tags=["entries"])
 
 
 @dataclass(slots=True)
@@ -237,7 +238,7 @@ def _resolution_destination_for_source(db: Session, user: TenantUser, source_kin
     order = db.get(Order, source.order_id) if source.order_id else None
     if order:
         return ResolutionDestination("order", source_kind, source.id, order.id, source.id, source.conversation_id, f"/orders/{order.id}", "Pedido")
-    inbound_focus = f"/channels?focus=inbound-{source.id}"
+    inbound_focus = f"/entries?focus=inbound-{source.id}"
     if source.status == "error":
         return ResolutionDestination("error", source_kind, source.id, None, source.id, source.conversation_id, inbound_focus, "Error")
     if source.status in {"processing", "queued"}:
@@ -584,7 +585,7 @@ def _attachment_rows(db: Session, *, company_id: int, source_kind: str, source_i
     return grouped
 
 
-def _channel_item_from_row(row: dict, attachments: list[dict], *, email_channel_name: str) -> dict:
+def _channel_item_from_row(row: dict, attachments: list[dict], *, email_channel_name: str, route_base: str = "/channels") -> dict:
     score = _row_score(row)
     confidence_key, confidence_label = _row_confidence(score)
     status_key = _email_status_key(row) if row["kind"] == "email" else _inbound_status_key(row)
@@ -628,7 +629,7 @@ def _channel_item_from_row(row: dict, attachments: list[dict], *, email_channel_
         "has_attachments": has_attachments,
         "attachment_count": attachment_count,
         "attachments": attachments,
-        "detail_href": f"/channels?focus={row['kind']}-{source_id}",
+        "detail_href": f"{route_base}?focus={row['kind']}-{source_id}",
         "order_href": f"/orders/{row['order_id']}" if row.get("order_id") else "",
         "preview_href": f"/channels/{row['kind']}/{source_id}/attachments/{attachments[0]['id']}/preview" if attachments else "",
         "download_href": f"/channels/{row['kind']}/{source_id}/attachments/{attachments[0]['id']}" if attachments else "",
@@ -636,14 +637,18 @@ def _channel_item_from_row(row: dict, attachments: list[dict], *, email_channel_
     return item
 
 
-@router.get("/{source_kind}/{source_id}/resolve")
-def resolve_channel_entry(
-    source_kind: str,
-    source_id: int,
-    request: Request,
-    db: Session = Depends(get_tenant_db),
-    user: TenantUser = Depends(current_user),
-):
+def _parse_entry_id(entry_id: str) -> tuple[str, int] | None:
+    if "-" not in entry_id:
+        if entry_id.isdigit():
+            return "email", int(entry_id)
+        return None
+    source_kind, raw_id = entry_id.split("-", 1)
+    if source_kind not in {"email", "inbound"} or not raw_id.isdigit():
+        return None
+    return source_kind, int(raw_id)
+
+
+def _resolve_channel_entry_response(db: Session, user: TenantUser, source_kind: str, source_id: int) -> RedirectResponse | PlainTextResponse:
     destination = _resolution_destination_for_source(db, user, source_kind, source_id)
     if not destination:
         return PlainTextResponse("No encontrado", status_code=404)
@@ -660,14 +665,7 @@ def resolve_channel_entry(
     return RedirectResponse(destination.redirect_url, status_code=303)
 
 
-@router.post("/{source_kind}/{source_id}/process")
-def process_channel_entry(
-    source_kind: str,
-    source_id: int,
-    request: Request,
-    db: Session = Depends(get_tenant_db),
-    user: TenantUser = Depends(current_user),
-):
+def _process_channel_entry_response(db: Session, user: TenantUser, source_kind: str, source_id: int) -> RedirectResponse | PlainTextResponse:
     destination = _resolution_destination_for_source(db, user, source_kind, source_id)
     if not destination:
         return PlainTextResponse("No encontrado", status_code=404)
@@ -700,6 +698,28 @@ def process_channel_entry(
     return RedirectResponse(destination.redirect_url, status_code=303)
 
 
+@router.get("/{source_kind}/{source_id}/resolve")
+def resolve_channel_entry(
+    source_kind: str,
+    source_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    return _resolve_channel_entry_response(db, user, source_kind, source_id)
+
+
+@router.post("/{source_kind}/{source_id}/process")
+def process_channel_entry(
+    source_kind: str,
+    source_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    return _process_channel_entry_response(db, user, source_kind, source_id)
+
+
 @router.post("/{source_kind}/{source_id}/resolve")
 def legacy_resolve_channel_entry(
     source_kind: str,
@@ -708,10 +728,34 @@ def legacy_resolve_channel_entry(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
-    destination = _resolution_destination_for_source(db, user, source_kind, source_id)
-    if not destination:
+    return _resolve_channel_entry_response(db, user, source_kind, source_id)
+
+
+@entries_router.get("/entries/{entry_id}")
+def entry_detail(entry_id: str, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    parsed = _parse_entry_id(entry_id)
+    if not parsed:
         return PlainTextResponse("No encontrado", status_code=404)
-    return RedirectResponse(destination.redirect_url, status_code=303)
+    source_kind, source_id = parsed
+    return _resolve_channel_entry_response(db, user, source_kind, source_id)
+
+
+@entries_router.get("/entries/{entry_id}/resolve")
+def resolve_entry(entry_id: str, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    parsed = _parse_entry_id(entry_id)
+    if not parsed:
+        return PlainTextResponse("No encontrado", status_code=404)
+    source_kind, source_id = parsed
+    return _resolve_channel_entry_response(db, user, source_kind, source_id)
+
+
+@entries_router.post("/entries/{entry_id}/process")
+def process_entry(entry_id: str, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    parsed = _parse_entry_id(entry_id)
+    if not parsed:
+        return PlainTextResponse("No encontrado", status_code=404)
+    source_kind, source_id = parsed
+    return _process_channel_entry_response(db, user, source_kind, source_id)
 
 
 def _paginate(total_items: int, page: int, page_size: int) -> dict:
@@ -734,6 +778,7 @@ def _paginate(total_items: int, page: int, page_size: int) -> dict:
     }
 
 
+@entries_router.get("/entries")
 @router.get("")
 def channels_page(
     request: Request,
@@ -748,6 +793,13 @@ def channels_page(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
+    route_base = "/entries" if request.url.path.startswith("/entries") else "/channels"
+    page_title = "Entradas" if route_base == "/entries" else "Entradas recibidas"
+    page_subtitle = (
+        "Todo lo recibido por email, WhatsApp o importación manual, con su estado y pedido relacionado."
+        if route_base == "/entries"
+        else "Bandeja de compatibilidad para revisar el origen recibido y su trazabilidad cuando haga falta."
+    )
     settings = get_or_create_settings(db, EmailSettings, user.company_id)
     query_params = dict(request.query_params)
     score_min_value = _parse_score(score_min)
@@ -785,7 +837,7 @@ def channels_page(
     for raw_row in visible_raw_rows:
         row = dict(raw_row)
         attachments = email_attachment_map.get(int(row["source_id"]), []) if row["kind"] == "email" else message_attachment_map.get(int(row["source_id"]), [])
-        visible_rows.append(_channel_item_from_row(row, attachments, email_channel_name=channels_by_key.get("email", "Email")))
+        visible_rows.append(_channel_item_from_row(row, attachments, email_channel_name=channels_by_key.get("email", "Email"), route_base=route_base))
     customer_rows = tuple(
         db.execute(
             select(Customer.id, Customer.code, Customer.fiscal_name)
@@ -813,6 +865,9 @@ def channels_page(
             "request": request,
             "user": user,
             "channels": visible_rows,
+            "route_base": route_base,
+            "page_title": page_title,
+            "page_subtitle": page_subtitle,
             "summary": summary,
             "tabs": tabs,
             "filters": {

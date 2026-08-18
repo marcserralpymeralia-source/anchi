@@ -1,16 +1,17 @@
 {% extends "base.html" %}
-{% set title = "Entradas recibidas" %}
+{% set title = page_title or "Entradas" %}
 {% block content %}
 <section class="workbench-shell channels-shell">
   <section class="panel workbench-queue-panel">
     <div class="workbench-header">
       <div>
-        <h2>Entradas recibidas</h2>
-        <p>Vista técnica para revisar el origen recibido y su trazabilidad cuando haga falta.</p>
+        <h2>{{ page_title or "Entradas" }}</h2>
+        <p>{{ page_subtitle or "Todo lo recibido por email, WhatsApp o importación manual." }}</p>
       </div>
       <div class="actions">
         <span class="badge">Anchi demo</span>
-        <a class="button secondary compact-button" href="/settings/channels">Configurar canal</a>
+        <a class="button secondary compact-button" href="/imports/manual">Nueva entrada</a>
+        <a class="button secondary compact-button" href="/settings/channels">Configurar</a>
       </div>
     </div>
 
@@ -25,13 +26,13 @@
       <summary>Filtros</summary>
       <div class="workbench-tabs">
         {% for key, label, count in tabs %}
-          {% set href = "/channels?tab=" ~ key ~ "&date_range=" ~ filters.date_range ~ "&customer_id=" ~ filters.customer_id ~ "&search=" ~ (filters.search|urlencode) ~ "&score_min=" ~ filters.score_min ~ "&score_max=" ~ filters.score_max %}
+          {% set href = route_base ~ "?tab=" ~ key ~ "&date_range=" ~ filters.date_range ~ "&customer_id=" ~ filters.customer_id ~ "&search=" ~ (filters.search|urlencode) ~ "&score_min=" ~ filters.score_min ~ "&score_max=" ~ filters.score_max %}
           <a class="workbench-tab {% if filters.tab == key %}active{% endif %}" href="{{ href }}">
             <span>{{ label }}</span><strong>{{ count }}</strong>
           </a>
         {% endfor %}
       </div>
-      <form class="workbench-filters-form" method="get" action="/channels">
+      <form class="workbench-filters-form" method="get" action="{{ route_base }}">
         <input type="hidden" name="tab" value="{{ filters.tab }}">
         <div class="filter-grid workbench-quick-filters">
           <label>Buscar<input name="search" value="{{ filters.search }}" placeholder="Remitente, asunto o texto"></label>
@@ -73,9 +74,9 @@
           <div class="queue-item-main">
             <strong class="queue-item-name">{{ item.customer_name }}</strong>
             <div class="queue-item-tags">
-              <a class="queue-item-tag queue-item-tag-channel" href="/channels?tab={{ item.channel_key }}&date_range={{ filters.date_range }}&customer_id={{ filters.customer_id }}&search={{ filters.search|urlencode }}&score_min={{ filters.score_min }}&score_max={{ filters.score_max }}" onclick="event.stopPropagation();">{{ item.channel_name }}</a>
+              <a class="queue-item-tag queue-item-tag-channel" href="{{ route_base }}?tab={{ item.channel_key }}&date_range={{ filters.date_range }}&customer_id={{ filters.customer_id }}&search={{ filters.search|urlencode }}&score_min={{ filters.score_min }}&score_max={{ filters.score_max }}" onclick="event.stopPropagation();">{{ item.channel_name }}</a>
               {% if item.provider_label %}<span class="queue-item-tag queue-item-tag-status">{{ item.provider_label }}</span>{% endif %}
-              <a class="queue-item-tag queue-item-tag-status" href="/channels?tab={% if item.status_key in ['doubtful','no_order'] %}review{% elif item.status_key in ['not_processed','queued','processing','pending_reprocess'] %}pending{% elif item.status_key == 'error' %}error{% else %}processed{% endif %}&date_range={{ filters.date_range }}&customer_id={{ filters.customer_id }}&search={{ filters.search|urlencode }}&score_min={{ filters.score_min }}&score_max={{ filters.score_max }}" onclick="event.stopPropagation();">{{ item.status_label }}</a>
+              <a class="queue-item-tag queue-item-tag-status" href="{{ route_base }}?tab={% if item.status_key in ['doubtful','no_order'] %}review{% elif item.status_key in ['not_processed','queued','processing','pending_reprocess'] %}pending{% elif item.status_key == 'error' %}error{% else %}processed{% endif %}&date_range={{ filters.date_range }}&customer_id={{ filters.customer_id }}&search={{ filters.search|urlencode }}&score_min={{ filters.score_min }}&score_max={{ filters.score_max }}" onclick="event.stopPropagation();">{{ item.status_label }}</a>
               <span class="queue-item-tag queue-item-tag-confidence queue-item-confidence-{{ confidence_class }}">{{ item.confidence_label }}</span>
               {% if item.has_attachments %}<span class="queue-item-tag">Adjuntos</span>{% endif %}
             </div>
@@ -120,10 +121,10 @@
         {% if item.order_id %}
           <a class="button secondary compact-button" href="/orders/{{ item.order_id }}">Ver pedido</a>
         {% elif item.status_key in ["not_processed", "queued", "processing", "pending_reprocess"] %}
-          <form class="js-loading-form review-channel-actions" method="post" action="/channels/{{ item.kind }}/{{ source_id }}/process">
+          <form class="js-loading-form review-channel-actions" method="post" action="/entries/{{ item.entry_id }}/process">
             <button class="primary compact-button" data-loading-text="Procesando...">Procesar</button>
           </form>
-          <a class="button secondary compact-button" href="/channels/{{ item.kind }}/{{ source_id }}/resolve">Resolver</a>
+          <a class="button secondary compact-button" href="/entries/{{ item.entry_id }}/resolve">Resolver</a>
         {% endif %}
         <button type="button" class="secondary compact-button" onclick="closeChannelModal('{{ item.entry_id }}')">Cerrar</button>
       </div>

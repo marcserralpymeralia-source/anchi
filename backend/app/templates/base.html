@@ -22,19 +22,13 @@
         <button class="sidebar-toggle secondary" type="button" title="Contraer menu" aria-label="Contraer menu" onclick="toggleSidebar()">☰</button>
       </div>
       <nav class="nav">
-        <a href="/inicio" title="Gestión de pedidos" class="{% if request.url.path in ['/', '/inicio'] %}active{% endif %}"><span class="nav-icon">▦</span><span class="nav-label">Gestión de pedidos</span></a>
-        <a href="/pedidos" title="Histórico" class="{% if request.url.path.startswith('/pedidos') or request.url.path.startswith('/history') %}active{% endif %}"><span class="nav-icon">◷</span><span class="nav-label">Histórico</span></a>
-        <a href="/mail" title="Bandeja de entrada" class="{% if request.url.path.startswith('/mail') %}active{% endif %}"><span class="nav-icon">✉</span><span class="nav-label">Bandeja de entrada</span></a>
+        <a href="/inicio" title="Pedidos pendientes" class="{% if request.url.path in ['/', '/inicio'] %}active{% endif %}"><span class="nav-icon">▦</span><span class="nav-label">Pedidos pendientes</span></a>
+        <a href="/entries" title="Entradas" class="{% if request.url.path.startswith('/entries') or request.url.path.startswith('/mail') or request.url.path.startswith('/channels') or request.url.path.startswith('/history') %}active{% endif %}"><span class="nav-icon">✉</span><span class="nav-label">Entradas</span></a>
+        <a href="/products" title="Productos" class="{% if request.url.path.startswith('/products') %}active{% endif %}"><span class="nav-icon">▣</span><span class="nav-label">Productos</span></a>
+        <a href="/customers" title="Clientes" class="{% if request.url.path.startswith('/customers') %}active{% endif %}"><span class="nav-icon">◫</span><span class="nav-label">Clientes</span></a>
+        <a href="/knowledge" title="Conocimiento" class="{% if request.url.path.startswith('/knowledge') or request.url.path.startswith('/learning') %}active{% endif %}"><span class="nav-icon">◩</span><span class="nav-label">Conocimiento</span></a>
         {% if user.role.name in ["Administrador", "Superadmin"] %}
-          <a href="/customers" title="Clientes" class="{% if request.url.path.startswith('/customers') %}active{% endif %}"><span class="nav-icon">◫</span><span class="nav-label">Clientes</span></a>
-          <a href="/products" title="Productos" class="{% if request.url.path.startswith('/products') %}active{% endif %}"><span class="nav-icon">▣</span><span class="nav-label">Productos</span></a>
-          <a href="/imports/quick" title="Importación rápida" class="{% if request.url.path.startswith('/imports/quick') %}active{% endif %}"><span class="nav-icon">◩</span><span class="nav-label">Importación rápida</span></a>
-          <a href="/imports/manual" title="Importación manual" class="{% if request.url.path.startswith('/imports/manual') or request.url.path.startswith('/imports/whatsapp') %}active{% endif %}"><span class="nav-icon">⬚</span><span class="nav-label">Importación manual</span></a>
           <a href="/settings" title="Configuracion" class="{% if request.url.path.startswith('/settings') %}active{% endif %}"><span class="nav-icon">⚙</span><span class="nav-label">Configuracion</span></a>
-          <a href="/jobs/monitor" title="Jobs" class="{% if request.url.path.startswith('/jobs') %}active{% endif %}"><span class="nav-icon">⧗</span><span class="nav-label">Jobs</span></a>
-        {% endif %}
-        {% if user.role.name == "Superadmin" %}
-          <a href="/users" title="Usuarios" class="{% if request.url.path.startswith('/users') %}active{% endif %}"><span class="nav-icon">◌</span><span class="nav-label">Usuarios</span></a>
         {% endif %}
       </nav>
     </aside>
@@ -46,7 +40,7 @@
             <span class="alerts-button-icon">🔔</span>
             <span class="alerts-button-badge {% if request.state.alert_center.has_critical %}alerts-badge-critical{% elif request.state.alert_center.high %}alerts-badge-high{% elif request.state.alert_center.medium %}alerts-badge-medium{% else %}alerts-badge-idle{% endif %}" id="alerts-badge">{{ request.state.alert_center.total }}</span>
           </button>
-          <a class="button secondary compact-button" href="/imports/manual">Importación manual</a>
+          <a class="button secondary compact-button" href="/imports/manual">Nueva entrada</a>
           <span class="badge">{{ request.state.branding.company_name }}</span>
           {% if app_settings.environment != "production" %}<span class="badge">Demo</span>{% endif %}
           <span>{{ user.name }}</span>

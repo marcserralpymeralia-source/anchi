@@ -56,7 +56,7 @@ def _normalize_featured_process_item(item: dict) -> dict:
     normalized["category_label"] = normalized.get("category_label") or normalized.get("category") or "Sin analizar"
     normalized["subject"] = normalized.get("subject") or "Pedido compra"
     normalized["detail_url"] = normalized.get("detail_url") or (
-        f"/orders/{normalized['order_id']}" if normalized.get("order_id") else f"/channels?focus=email-{normalized['email_id']}" if normalized.get("email_id") else "/"
+        f"/orders/{normalized['order_id']}" if normalized.get("order_id") else f"/entries?focus=email-{normalized['email_id']}" if normalized.get("email_id") else "/"
     )
     return normalized
 
@@ -632,7 +632,7 @@ def pedidos_page(
                         "kind_label": "Pedido",
                         "date": _aware(order.created_at),
                         "url": f"/orders/{order.id}",
-                        "secondary_url": f"/channels?tab=processed&date_range=30d&search={quote_plus(order.email.subject or order.email.sender or order.customer_detected_name or '')}" if order.email else "/orders",
+                        "secondary_url": f"/entries?tab=processed&date_range=30d&search={quote_plus(order.email.subject or order.email.sender or order.customer_detected_name or '')}" if order.email else "/orders",
                         "title": item["customer_name"] or order.customer_detected_name or "Pedido",
                         "subtitle": order.email.subject if order.email else "",
                     }
@@ -649,8 +649,8 @@ def pedidos_page(
                     {
                         "kind_label": "Correo",
                         "date": _aware(email.received_at),
-                        "url": f"/channels?tab=processed&date_range=30d&search={quote_plus(email.subject or email.sender or '')}",
-                        "secondary_url": f"/channels?tab=email&date_range=30d&search={quote_plus(email.sender or email.subject or '')}",
+                        "url": f"/entries?tab=processed&date_range=30d&search={quote_plus(email.subject or email.sender or '')}",
+                        "secondary_url": f"/entries?tab=email&date_range=30d&search={quote_plus(email.sender or email.subject or '')}",
                         "title": email.subject or "Correo sin asunto",
                         "subtitle": email.sender,
                         "customer_name": suggest_customer_for_email(db, user.company_id, email, suggestion_maps=suggestion_maps) or item["customer_name"],

@@ -100,6 +100,10 @@ def learning_overview(db: Session, company_id: int, limit: int = 12) -> dict:
     documents_pending = db.scalar(select(func.count()).select_from(RagDocument).where(RagDocument.company_id == company_id, RagDocument.embedding_status.in_(("pending", "processing")))) or 0
     documents_excluded = db.scalar(select(func.count()).select_from(RagDocument).where(RagDocument.company_id == company_id, RagDocument.embedding_status == "excluded")) or 0
     documents_errors = db.scalar(select(func.count()).select_from(RagDocument).where(RagDocument.company_id == company_id, RagDocument.embedding_status.in_(("error", "failed")))) or 0
+    last_indexing_at = db.scalar(
+        select(func.max(RagDocument.created_at))
+        .where(RagDocument.company_id == company_id, RagDocument.embedding_status.in_(("indexed", "ready", "completed")))
+    )
     import_jobs_total = 0
     import_jobs_errors = 0
     rag_cases_total = db.scalar(select(func.count()).select_from(RagCase).where(RagCase.company_id == company_id)) or 0
@@ -117,6 +121,8 @@ def learning_overview(db: Session, company_id: int, limit: int = 12) -> dict:
             "documents_indexed": documents_indexed,
             "documents_pending": documents_pending,
             "documents_excluded": documents_excluded,
+            "last_indexing_at": last_indexing_at,
+            "last_import_at": None,
             "import_jobs_total": import_jobs_total,
             "rag_cases_total": rag_cases_total,
             "learning_errors": documents_errors + import_jobs_errors,
@@ -155,6 +161,7 @@ def learning_overview(db: Session, company_id: int, limit: int = 12) -> dict:
     }
 
 
+@router.get("/knowledge")
 @router.get("/learning")
 def learning_page(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not has_admin_access(user):

@@ -60,6 +60,10 @@
 
 - No romper el arranque local.
 - No cambiar rutas ni endpoints salvo que el objetivo lo requiera.
+- Mantener la navegacion principal limitada a `Pedidos pendientes`, `Entradas`, `Productos`, `Clientes` y `Conocimiento`.
+- Mantener `Configuracion` como area secundaria visible para administradores.
+- Mantener `/entries` como ruta canonica para email, WhatsApp e importaciones manuales, sin duplicar entidades ni pipeline.
+- Mantener rutas legacy como soporte interno cuando sean necesarias, pero sin exponerlas en la navegacion principal.
 - No alterar el modelo de datos salvo instruccion explicita.
 - No permitir acceso cruzado entre dos companias con IDs coincidentes en bases distintas.
 - Mantener jobs idempotentes, con reintentos limitados, historial de intentos y recovery de jobs bloqueados.

@@ -26,6 +26,10 @@ class ManualImportRoutesTests(unittest.TestCase):
         expected = {
             ("/imports/manual", ("GET",)),
             ("/imports/manual/preview", ("POST",)),
+            ("/entries", ("GET",)),
+            ("/entries/{entry_id}", ("GET",)),
+            ("/entries/{entry_id}/process", ("POST",)),
+            ("/entries/{entry_id}/resolve", ("GET",)),
             ("/channels/{source_kind}/{source_id}/process", ("POST",)),
             ("/channels/{source_kind}/{source_id}/resolve", ("GET",)),
         }
@@ -78,11 +82,11 @@ class ManualImportRoutesTests(unittest.TestCase):
             self.assertIsNotNone(email_id)
 
             with performance_test_client(fixture) as client:
-                resolve_response = client.get(f"/channels/email/{email_id}/resolve", follow_redirects=False)
+                resolve_response = client.get(f"/entries/email-{email_id}/resolve", follow_redirects=False)
                 self.assertEqual(resolve_response.status_code, 303)
                 self.assertTrue(resolve_response.headers["location"].startswith("/"))
 
-                process_response = client.post(f"/channels/email/{email_id}/process", follow_redirects=False)
+                process_response = client.post(f"/entries/email-{email_id}/process", follow_redirects=False)
                 self.assertEqual(process_response.status_code, 303)
                 self.assertTrue(process_response.headers["location"].startswith("/"))
         finally:

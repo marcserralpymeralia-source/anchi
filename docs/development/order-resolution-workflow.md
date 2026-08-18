@@ -6,7 +6,7 @@ Mantener una unica ruta operativa para resolver entradas de pedido sin separar e
 
 ## Flujo funcional
 
-1. La entrada llega a `channels` o a `imports`.
+1. La entrada llega a `/entries` desde email, WhatsApp, inbound message o importacion manual.
 2. El usuario abre el elemento y pulsa `Procesar` o `Resolver`.
 3. La app dirige al detalle operativo correcto:
    - si ya existe pedido, abre `/orders/{id}`;
@@ -22,6 +22,7 @@ Mantener una unica ruta operativa para resolver entradas de pedido sin separar e
 
 ## Decisiones tecnicas
 
+- Usar `/entries` como ruta canonica de bandeja operativa y mantener `/channels` como compatibilidad interna.
 - Reutilizar la pantalla de revision de pedido como destino util para la resolucion.
 - No duplicar la logica de acciones entre email e inbound message.
 - Mantener el preview de WhatsApp como chat, no como texto plano.
