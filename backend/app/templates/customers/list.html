@@ -93,13 +93,13 @@
               {% for key, label, checked in [
                 ("name","Cliente", true),
                 ("code","Código", true),
-                ("primary_email","Email", true),
+                ("primary_email","Contacto", true),
                 ("channel","Canal", false),
                 ("knowledge","Conocimiento", false),
                 ("status","Estado", true),
                 ("last_activity","Última actividad", false),
                 ("tax_id","CIF/NIF", false),
-                ("phone","Teléfono", true),
+                ("phone","Teléfono", false),
                 ("address","Dirección", false),
                 ("aliases","Alias", false),
                 ("domains","Dominios", false),
@@ -119,12 +119,12 @@
             <tr>
               <th data-column="name">Cliente</th>
               <th data-column="code">Código</th>
-              <th data-column="primary_email">Email</th>
+              <th data-column="primary_email">Contacto</th>
+              <th data-column="status">Estado</th>
+              <th data-column="action">Acción</th>
               <th data-column="channel">Canal</th>
               <th data-column="knowledge">Conocimiento</th>
-              <th data-column="status">Estado</th>
               <th data-column="last_activity">Última actividad</th>
-              <th data-column="action">Acción</th>
               <th data-column="tax_id">CIF/NIF</th>
               <th data-column="phone">Teléfono</th>
               <th data-column="address">Dirección</th>
@@ -137,20 +137,24 @@
             {% for row in customers %}
               <tr>
                 <td class="wide-cell" data-column="name" title="{{ row.fiscal_name }}">
-                  <div class="table-name-block">
-                    <strong>{{ row.commercial_name or row.fiscal_name }}</strong>
-                    {% if row.commercial_name %}<span>{{ row.fiscal_name }}</span>{% endif %}
+                  <div class="database-primary-cell">
+                    <strong class="database-primary-text">{{ row.commercial_name or row.fiscal_name }}</strong>
+                    {% if row.tax_id or row.city %}
+                      <span class="database-secondary-text">{% if row.tax_id %}{{ row.tax_id }}{% endif %}{% if row.tax_id and row.city %} · {% endif %}{% if row.city %}{{ row.city }}{% endif %}</span>
+                    {% elif row.commercial_name %}
+                      <span class="database-secondary-text">{{ row.fiscal_name }}</span>
+                    {% endif %}
                   </div>
                 </td>
-                <td data-column="code">{{ row.code }}</td>
-                <td data-column="primary_email" class="cell-ellipsis" title="{{ row.primary_email or '—' }}">{{ row.primary_email or '—' }}</td>
-                <td data-column="channel"><span class="badge">{{ row.habitual_channel }}</span></td>
-                <td data-column="knowledge">
-                  <span class="badge {% if row.knowledge_state == 'Actualizado' %}status-confirmed{% elif row.knowledge_state in ['Con sugerencias', 'Requiere revisión', 'En construcción'] %}status-doubtful{% elif row.knowledge_state == 'Con errores' %}status-discarded{% else %}status-confirmed{% endif %}">{{ row.knowledge_state }}</span>
-                  <div class="muted" style="margin-top:4px;">{{ row.quality_percent }}% calidad</div>
+                <td data-column="code"><span class="database-code-text">{{ row.code }}</span></td>
+                <td data-column="primary_email" title="{{ row.primary_email or row.phone or '—' }}">
+                  <div class="database-contact-cell">
+                    {% if row.primary_email %}<span class="database-secondary-text">{{ row.primary_email }}</span>{% endif %}
+                    {% if row.phone %}<span class="database-secondary-text">{{ row.phone }}</span>{% endif %}
+                    {% if not row.primary_email and not row.phone %}<span class="database-secondary-text">—</span>{% endif %}
+                  </div>
                 </td>
-                <td data-column="status"><span class="badge {{ 'status-confirmed' if row.status == 'active' and not row.company_inactive else 'status-discarded' }}">{{ row.status_label }}</span></td>
-                <td data-column="last_activity" class="cell-ellipsis" title="{{ row.last_updated or row.last_order_at or '—' }}">{{ row.last_updated or row.last_order_at or '—' }}</td>
+                <td data-column="status"><span class="badge database-badge {{ 'status-confirmed' if row.status == 'active' and not row.company_inactive else 'status-discarded' }}">{{ row.status_label }}</span></td>
                 <td data-column="action" class="actions database-row-actions">
                   <a class="button secondary compact-button" href="/customers/{{ row.id }}/knowledge">Abrir</a>
                   <details class="row-more-actions">
@@ -163,6 +167,12 @@
                     </div>
                   </details>
                 </td>
+                <td data-column="channel"><span class="badge database-badge">{{ row.habitual_channel }}</span></td>
+                <td data-column="knowledge">
+                  <span class="badge database-badge {% if row.knowledge_state == 'Actualizado' %}status-confirmed{% elif row.knowledge_state in ['Con sugerencias', 'Requiere revisión', 'En construcción'] %}status-doubtful{% elif row.knowledge_state == 'Con errores' %}status-discarded{% else %}status-confirmed{% endif %}">{{ row.knowledge_state }}</span>
+                  <div class="muted" style="margin-top:4px;">{{ row.quality_percent }}% calidad</div>
+                </td>
+                <td data-column="last_activity" class="cell-ellipsis" title="{{ row.last_updated or row.last_order_at or '—' }}">{{ row.last_updated or row.last_order_at or '—' }}</td>
                 <td data-column="tax_id" class="cell-ellipsis" title="{{ row.tax_id or '—' }}">{{ row.tax_id or '—' }}</td>
                 <td data-column="phone" class="cell-ellipsis" title="{{ row.phone or '—' }}">{{ row.phone or '—' }}</td>
                 <td data-column="address" class="cell-ellipsis" title="{{ row.address or '—' }}">{{ row.address or '—' }}</td>
