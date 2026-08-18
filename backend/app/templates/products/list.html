@@ -96,35 +96,46 @@
   </div>
 
 <table class="data-table database-table database-table-productsCompact database-table-products database-table-compact">
+  <colgroup>
+    <col data-column="name" class="data-table__col-product">
+    <col data-column="reference" class="data-table__col-reference">
+    <col data-column="sale_unit" class="data-table__col-unit">
+    <col data-column="price" class="data-table__col-price">
+    <col data-column="status" class="data-table__col-status">
+    <col data-column="action" class="data-table__col-actions">
+    <col data-column="family">
+    <col data-column="aliases">
+    <col data-column="customers">
+    <col data-column="description_cont">
+    <col data-column="supplier">
+    <col data-column="last_import">
+    <col data-column="notes">
+  </colgroup>
   <thead><tr><th data-column="name">Producto</th><th data-column="reference">Referencia</th><th data-column="sale_unit">Unidad</th><th data-column="price">Precio</th><th data-column="status">Estado</th><th data-column="action">Acción</th><th data-column="family">Familia</th><th data-column="aliases">Alias</th><th data-column="customers">Clientes</th><th data-column="description_cont">Descripción larga</th><th data-column="supplier">Proveedor</th><th data-column="last_import">Última importación</th><th data-column="notes">Observaciones</th></tr></thead>
   <tbody>
   {% for product in products %}
     <tr>
       {% set stats = product_stats.get(product.id, {}) %}
-      <td data-column="name" class="wide-cell" title="{{ product.name }}">
-        <div class="database-primary-cell">
-          <strong class="database-primary-text">{{ product.name }}</strong>
-          {% set product_secondary = product.family or product.brand or product.usual_supplier %}
-          {% if product_secondary %}<span class="database-secondary-text">{{ product_secondary }}</span>{% endif %}
-        </div>
-      </td>
+      <td data-column="name" class="wide-cell" title="{{ product.name }}"><span class="data-table__primary">{{ product.name }}</span></td>
       <td data-column="reference"><span class="database-code-text">{{ product.reference }}</span></td>
       <td data-column="sale_unit">{{ product.sale_unit or "—" }}</td>
       <td data-column="price">{{ "%.2f"|format(product.sale_price) if product.sale_price is not none else "—" }}</td>
-      <td data-column="status"><span class="badge database-badge {{ 'status-confirmed' if product.status == 'active' and not product.obsolete else 'status-discarded' }}">{{ product.status|status_label }}</span></td>
-      <td data-column="action" class="actions database-row-actions">
-        <button class="secondary compact-button" onclick="document.getElementById('product-{{ product.id }}').showModal()">Abrir</button>
-        <details class="row-more-actions">
-          <summary class="button secondary compact-button">...</summary>
-          <div class="row-more-actions-panel">
-            <button type="button" onclick="document.getElementById('product-{{ product.id }}').showModal()">Editar</button>
-            <a href="#" onclick="event.preventDefault(); document.getElementById('product-delete-{{ product.id }}').showModal();">Eliminar</a>
-          </div>
-        </details>
+      <td data-column="status"><span class="badge data-table__status {{ 'status-confirmed' if product.status == 'active' and not product.obsolete else 'status-discarded' }}">{{ product.status|status_label }}</span></td>
+      <td data-column="action" class="database-actions-cell">
+        <div class="data-table__actions">
+          <button class="secondary compact-button" onclick="document.getElementById('product-{{ product.id }}').showModal()">Abrir</button>
+          <details class="row-more-actions">
+            <summary class="button secondary compact-button">...</summary>
+            <div class="row-more-actions-panel">
+              <button type="button" onclick="document.getElementById('product-{{ product.id }}').showModal()">Editar</button>
+              <a href="#" onclick="event.preventDefault(); document.getElementById('product-delete-{{ product.id }}').showModal();">Eliminar</a>
+            </div>
+          </details>
+        </div>
       </td>
       <td data-column="family" class="cell-ellipsis" title="{{ product.family or '—' }}">{{ product.family or "—" }}</td>
-      <td data-column="aliases"><span class="badge database-badge">{{ product.aliases|length }}</span></td>
-      <td data-column="customers"><span class="badge database-badge">{{ stats.customers or 0 }}</span></td>
+      <td data-column="aliases"><span class="badge data-table__status">{{ product.aliases|length }}</span></td>
+      <td data-column="customers"><span class="badge data-table__status">{{ stats.customers or 0 }}</span></td>
       <td data-column="description_cont" class="cell-ellipsis" title="{{ product.description_cont or product.description or '—' }}">{{ (product.description_cont or product.description or "—")[:140] }}</td>
       <td data-column="supplier" class="cell-ellipsis" title="{{ product.usual_supplier or '—' }}">{{ product.usual_supplier or "—" }}</td>
       <td data-column="last_import">{{ stats.last_import or (product.created_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M")) }}</td>
@@ -202,7 +213,7 @@
     const table = document.querySelector(`.database-table-${tableKey}`);
     if (!table) return;
     const checkboxes = Array.from(panel.querySelectorAll("[data-column-checkbox]"));
-    const storageKey = `database.columns.${tableKey}`;
+    const storageKey = `database.columns.${tableKey}.v2`;
     const saved = (() => { try { return JSON.parse(localStorage.getItem(storageKey) || "null"); } catch { return null; } })();
     if (Array.isArray(saved) && saved.length) checkboxes.forEach((checkbox) => { checkbox.checked = saved.includes(checkbox.dataset.columnCheckbox); });
     const apply = () => {

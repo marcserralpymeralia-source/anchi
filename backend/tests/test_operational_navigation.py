@@ -79,7 +79,8 @@ class OperationalNavigationTests(unittest.TestCase):
             self.assertIn(">Importar<", products.text)
             self.assertIn("Más filtros", products.text)
             self.assertIn("database-table-compact", products.text)
-            self.assertIn("database-primary-text", products.text)
+            self.assertIn("data-table__primary", products.text)
+            self.assertIn("data-table__actions", products.text)
             self.assertIn('data-column="price"', products.text)
             self.assertNotIn("<h3>Importación</h3>", products.text)
 
@@ -90,7 +91,8 @@ class OperationalNavigationTests(unittest.TestCase):
             self.assertIn("Más filtros", customers.text)
             self.assertIn("database-table-compact", customers.text)
             self.assertIn(">Contacto<", customers.text)
-            self.assertIn("database-contact-cell", customers.text)
+            self.assertIn(">Localidad<", customers.text)
+            self.assertIn("data-table__actions", customers.text)
             self.assertNotIn("<span>Importación</span>", customers.text)
         finally:
             fixture.cleanup()
