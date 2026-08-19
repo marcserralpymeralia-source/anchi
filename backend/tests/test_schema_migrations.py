@@ -17,14 +17,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.security import hash_password  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import BackgroundJob, Conversation, Customer, Email, EmailSettings, JobAttempt, Order, OrderLine, ProductEmbedding, TenantSchemaMigration  # noqa: E402
+from app.db.models import BackgroundJob, Conversation, Customer, Email, EmailSettings, JobAttempt, KnowledgeEntry, Order, OrderLine, ProductEmbedding, TenantSchemaMigration  # noqa: E402
 from app.jobs.service import enqueue_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.migrations import CURRENT_MASTER_SCHEMA_CHECKSUM, CURRENT_MASTER_SCHEMA_NAME, CURRENT_MASTER_SCHEMA_VERSION, master_migration_report, upgrade_master_schema  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.migrations.inspection import discover_sqlite_files, inspect_database_url, inventory_records, simulate_sqlite_reference  # noqa: E402
 from app.migrations.helpers import table_exists  # noqa: E402
-from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_tenant_product_embeddings  # noqa: E402
+from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_tenant_knowledge_entries, _apply_tenant_product_embeddings  # noqa: E402
 from app.tenancy.migrations import tenant_migration_report, upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import run_worker_cycle  # noqa: E402
 
@@ -277,6 +277,17 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertIn("CREATE TABLE product_embeddings (...)", actions)
         model_columns = set(ProductEmbedding.__table__.columns.keys())
         db_columns = {column["name"] for column in inspect(self.tenant_engine).get_columns("product_embeddings")}
+        self.assertEqual(model_columns, db_columns)
+
+    def test_knowledge_entries_migration_creates_model_columns(self):
+        self._create_tables_without_ledger(self.tenant_engine, Base.metadata)
+        KnowledgeEntry.__table__.drop(bind=self.tenant_engine)
+
+        actions = _apply_tenant_knowledge_entries(self.tenant_engine, dry_run=False)
+
+        self.assertIn("CREATE TABLE knowledge_entries (...)", actions)
+        model_columns = set(KnowledgeEntry.__table__.columns.keys())
+        db_columns = {column["name"] for column in inspect(self.tenant_engine).get_columns("knowledge_entries")}
         self.assertEqual(model_columns, db_columns)
 
     def test_master_email_sync_state_registry_contains_listener_columns(self):

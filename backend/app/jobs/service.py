@@ -32,6 +32,7 @@ DEFAULT_MAX_RETRIES = {
     "import_confirm": 1,
     "import_file": 1,
     "index_product_embeddings": 1,
+    "index_knowledge_entries": 1,
 }
 FORBIDDEN_PAYLOAD_KEYS = {
     "password",

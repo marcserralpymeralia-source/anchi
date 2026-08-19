@@ -515,6 +515,31 @@ class ProductEmbedding(Base):
     __table_args__ = (UniqueConstraint("company_id", "product_id", "embedding_model", "embedding_version"),)
 
 
+class KnowledgeEntry(Base):
+    __tablename__ = "knowledge_entries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    source_type: Mapped[str] = mapped_column(String(80), index=True)
+    source_id: Mapped[str] = mapped_column(String(120), index=True)
+    scope: Mapped[str] = mapped_column(String(40), default="global", index=True)
+    content: Mapped[str] = mapped_column(Text)
+    customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"), index=True)
+    product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"), index=True)
+    metadata_json: Mapped[str | None] = mapped_column(Text)
+    embedding_json: Mapped[str | None] = mapped_column(Text)
+    embedding_text: Mapped[str | None] = mapped_column(Text)
+    embedding_model: Mapped[str | None] = mapped_column(String(120), index=True)
+    embedding_version: Mapped[str | None] = mapped_column(String(50), index=True)
+    content_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    dimensions: Mapped[int] = mapped_column(Integer, default=0)
+    embedded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (UniqueConstraint("company_id", "source_type", "source_id"),)
+
+
 class CustomerProductKnowledge(Base):
     __tablename__ = "customer_product_knowledge"
 

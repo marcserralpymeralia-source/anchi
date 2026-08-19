@@ -44,6 +44,7 @@ from app.db.models import (
     LLMSettings,
 )
 from app.logs.service import log_action
+from app.knowledge.service import retrieve_product_knowledge
 from app.orders.state import ORDER_STATE
 from app.semantic_retrieval.embeddings import EmbeddingProvider
 from app.semantic_retrieval.products import find_product_candidates
@@ -646,6 +647,17 @@ class DecisionEngineService:
             company_id,
             query=text or detected_name or reference or "",
         )
+        knowledge_evidence = self._product_knowledge_evidence(
+            db,
+            company_id,
+            query=text or detected_name or reference or "",
+            customer_id=customer_id,
+            product_ids=[
+                item.product_id
+                for item in [*candidates.values(), *semantic_candidates]
+                if item.product_id is not None
+            ],
+        )
         ordered = sorted(candidates.values(), key=lambda item: (item.confidence, item.source == "learned_alias", item.source == "approved_alias"), reverse=True)
         selected = ordered[0] if ordered else None
         alternatives = ordered[1:4]
@@ -673,10 +685,21 @@ class DecisionEngineService:
             }
             for item in semantic_candidates
         )
+        evidence.extend(
+            {
+                "label": item.label,
+                "source": item.source,
+                "confidence": item.confidence,
+                "reason": item.reason,
+                "metadata": item.metadata,
+            }
+            for item in knowledge_evidence
+        )
         return {
             "selected": selected,
             "alternatives": alternatives,
             "semantic_candidates": semantic_candidates,
+            "knowledge_evidence": knowledge_evidence,
             "requires_review": requires_review,
             "evidence": evidence,
             "llm_supported": settings.enable_llm_support and bool(getattr(get_or_create_settings(db, LLMSettings, company_id), "api_key_encrypted", None)),
@@ -705,6 +728,42 @@ class DecisionEngineService:
                 },
             )
             for candidate in candidates
+        ]
+
+    def _product_knowledge_evidence(self, db: Session, company_id: int, *, query: str, customer_id: int | None, product_ids: list[int]) -> list[DecisionCandidate]:
+        if not query.strip():
+            return []
+        try:
+            evidences = retrieve_product_knowledge(
+                db,
+                company_id=company_id,
+                raw_description=query,
+                customer_id=customer_id,
+                candidate_product_ids=product_ids,
+                provider=self.semantic_provider,
+                limit=5,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.info("product_knowledge_unavailable", extra={"company_id": company_id, "error_type": type(exc).__name__})
+            return []
+        return [
+            DecisionCandidate(
+                evidence.content[:160],
+                "business_knowledge",
+                evidence.relevance,
+                f"Evidencia {evidence.source_type}: {evidence.content[:180]}",
+                product_id=evidence.product_id,
+                metadata={
+                    "knowledge_entry_id": evidence.id,
+                    "source_type": evidence.source_type,
+                    "source_id": evidence.source_id,
+                    "scope": evidence.scope,
+                    "customer_id": evidence.customer_id,
+                    "product_id": evidence.product_id,
+                    "relevance": evidence.relevance,
+                },
+            )
+            for evidence in evidences
         ]
 
 

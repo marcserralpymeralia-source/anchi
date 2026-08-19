@@ -786,6 +786,29 @@ def _apply_tenant_product_embeddings(engine, dry_run: bool) -> list[str]:  # noq
     return actions
 
 
+def _apply_tenant_knowledge_entries(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    from app.db.models import KnowledgeEntry
+
+    actions: list[str] = []
+    with engine.connect() as conn:
+        if "knowledge_entries" not in inspect(conn).get_table_names():
+            actions.append("CREATE TABLE knowledge_entries (...)")
+            if not dry_run:
+                KnowledgeEntry.__table__.create(bind=engine, checkfirst=True)
+        elif not dry_run:
+            KnowledgeEntry.__table__.create(bind=engine, checkfirst=True)
+    actions.extend(
+        ensure_unique_index(
+            engine,
+            "knowledge_entries",
+            "uq_knowledge_entries_source",
+            ("company_id", "source_type", "source_id"),
+            dry_run=dry_run,
+        )
+    )
+    return actions
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -822,6 +845,12 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant product semantic embeddings",
         checksum=checksum_text("tenant", "product_semantic_embeddings", "product_embeddings"),
         upgrade=_apply_tenant_product_embeddings,
+    ),
+    MigrationSpec(
+        version="2026.08.19.3",
+        name="tenant business knowledge entries",
+        checksum=checksum_text("tenant", "business_knowledge_entries", "knowledge_entries"),
+        upgrade=_apply_tenant_knowledge_entries,
     ),
 ]
 

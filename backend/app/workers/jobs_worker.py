@@ -28,6 +28,7 @@ import app.master.database as master_database
 from app.master.database import MasterSessionLocal
 from app.master.models import EmailSyncState, MasterTenantDatabase
 from app.imports.service import confirm_import, guess_mapping, read_preview
+from app.knowledge.service import index_knowledge_entries
 from app.orders.routes import _customer_label, _sync_customer_product_knowledge, validate_confirmation
 from app.semantic_retrieval.products import index_products
 from app.settings.integrations import backfill_imap_emails, read_latest_imap_emails
@@ -54,6 +55,7 @@ JOB_TYPES = {
     "export_order_ftp",
     "bulk_order_action",
     "index_product_embeddings",
+    "index_knowledge_entries",
 }
 
 
@@ -98,6 +100,8 @@ def _process_job(db, job: BackgroundJob) -> dict:
         return _process_export_job(db, job, payload)
     if job.job_type == "index_product_embeddings":
         return _process_product_embeddings_job(db, job, payload)
+    if job.job_type == "index_knowledge_entries":
+        return _process_knowledge_entries_job(db, job, payload)
     if job.job_type == "bulk_order_action":
         return _process_bulk_action(db, job, payload)
     if job.job_type == "email_sync":
@@ -253,6 +257,21 @@ def _process_product_embeddings_job(db, job: BackgroundJob, payload: dict) -> di
     return {
         "ok": stats.failed == 0,
         "message": "Embeddings de productos indexados" if stats.failed == 0 else "Indexacion de embeddings completada con errores",
+        "scanned": stats.scanned,
+        "indexed": stats.indexed,
+        "skipped": stats.skipped,
+        "failed": stats.failed,
+    }
+
+
+def _process_knowledge_entries_job(db, job: BackgroundJob, payload: dict) -> dict:
+    batch_size = max(1, min(int(payload.get("batch_size") or 64), 256))
+    model = str(payload.get("model") or "").strip() or None
+    stats = index_knowledge_entries(db, company_id=job.company_id, model=model, batch_size=batch_size)
+    update_job_progress(db, job, 100)
+    return {
+        "ok": stats.failed == 0,
+        "message": "Conocimiento empresarial indexado" if stats.failed == 0 else "Indexacion de conocimiento completada con errores",
         "scanned": stats.scanned,
         "indexed": stats.indexed,
         "skipped": stats.skipped,
