@@ -23,14 +23,14 @@
   </div>
   <div class="queue-item-actions">
     {% if item.kind == "email" and item.agent_status == "not_processed" %}
-      <form class="js-loading-form" method="post" action="/entries/email-{{ item.email_id }}/process"><button class="primary compact-button" data-loading-text="Procesando..." onclick="event.stopPropagation();">Procesar como pedido</button></form>
+      <form class="js-loading-form" method="post" action="/entries/email-{{ item.email_id }}/process"><button class="primary compact-button" data-loading-text="Procesando..." onclick="event.stopPropagation();">Procesar</button></form>
     {% elif item.kind == "order" and item.order_status_label == "Listo para confirmar" %}
-      <a class="button primary compact-button" href="/orders/{{ item.order_id }}" onclick="event.stopPropagation();">Revisar pedido</a>
+      <a class="button primary compact-button" href="/orders/{{ item.order_id }}" onclick="event.stopPropagation();">Revisar</a>
     {% else %}
       {% if item.kind == "order" %}
-        <a class="button primary compact-button" href="/orders/{{ item.order_id }}" onclick="event.stopPropagation();">Revisar pedido</a>
+        <a class="button primary compact-button" href="/orders/{{ item.order_id }}" onclick="event.stopPropagation();">Revisar</a>
       {% else %}
-        <a class="button primary compact-button" href="/entries/email-{{ item.email_id }}/resolve" onclick="event.stopPropagation();">Revisar entrada</a>
+        <a class="button primary compact-button" href="/entries/email-{{ item.email_id }}/resolve" onclick="event.stopPropagation();">Revisar</a>
       {% endif %}
     {% endif %}
   </div>

@@ -91,7 +91,7 @@
               <a class="button secondary compact-button" href="{{ order_href }}" onclick="event.stopPropagation();">Ver pedido</a>
             {% elif item.status_key in ["not_processed", "queued", "processing", "pending_reprocess", "error", "doubtful", "no_order"] %}
               <form class="js-loading-form" method="post" action="/entries/{{ item.entry_id }}/process" onclick="event.stopPropagation();">
-                <button class="primary compact-button" data-loading-text="Procesando...">Procesar como pedido</button>
+                <button class="primary compact-button" data-loading-text="Procesando...">Procesar</button>
               </form>
             {% endif %}
           </div>
@@ -128,7 +128,7 @@
           <a class="button secondary compact-button" href="/orders/{{ item.order_id }}">Ver pedido</a>
         {% elif item.status_key in ["not_processed", "queued", "processing", "pending_reprocess"] %}
           <form class="js-loading-form review-channel-actions" method="post" action="/entries/{{ item.entry_id }}/process">
-            <button class="primary compact-button" data-loading-text="Procesando...">Procesar como pedido</button>
+            <button class="primary compact-button" data-loading-text="Procesando...">Procesar</button>
           </form>
           <a class="button secondary compact-button" href="/entries/{{ item.entry_id }}/resolve">Resolver</a>
         {% elif item.status_key in ["error", "doubtful", "no_order"] %}
