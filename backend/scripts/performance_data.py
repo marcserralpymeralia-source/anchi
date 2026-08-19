@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from unittest.mock import patch
 
 from app.core.config import get_settings
+from app.core.encryption import encrypt_secret
 from app.core.security import hash_password
 from app.db.database import Base
 from app.db.models import (
@@ -31,6 +32,7 @@ from app.db.models import (
     ImportJob,
     InputChannel,
     JobAttempt,
+    LLMSettings,
     Order,
     OrderLine,
     Product,
@@ -366,6 +368,23 @@ def build_performance_fixture(scenario: str, base_dir: Path | None = None) -> Pe
     try:
         company, user = _setup_master(master_db, tenant_database_url)
         reset_demo_company(tenant_db)
+
+        company_row = tenant_db.get(Company, company.id)
+        company_row.country = "España"
+
+        llm = tenant_db.scalar(
+            select(LLMSettings).where(LLMSettings.company_id == company.id)
+        )
+        llm.provider = "openai"
+
+        with patch.dict(
+            os.environ,
+            {"ENCRYPTION_KEY": "CKHCB4gFGn7kJVxowWH2pEdPucfPaZugSsMgoJU6eNE="},
+        ):
+            get_settings.cache_clear()
+            llm.api_key_encrypted = encrypt_secret("performance-test-key")
+
+        get_settings.cache_clear()
         _seed_extra_customers(tenant_db, company.id, plan.extra_customers)
         _seed_extra_products(tenant_db, company.id, plan.extra_products)
         _seed_extra_imports(tenant_db, company.id, user.id, plan.extra_imports)

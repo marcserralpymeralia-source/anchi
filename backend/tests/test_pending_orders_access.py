@@ -15,7 +15,10 @@ from app.core import lifespan as lifespan_module  # noqa: E402
 from app.core.app_factory import create_app  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
-from app.db.models import Company, Email, Order, utcnow  # noqa: E402
+from app.core.encryption import encrypt_secret
+from app.db.models import Company, Customer, Email, InputChannel, LLMSettings, Order, Product, utcnow
+from app.settings.branding import get_or_create_branding
+from app.settings.service import get_or_create_settings
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from scripts.performance_data import build_performance_fixture, temporary_performance_environment  # noqa: E402
 
@@ -160,50 +163,82 @@ class PendingOrdersAccessTests(unittest.TestCase):
                 db.add(MasterTenantDatabase(company_id=2, database_key="tenant-b", database_url=fixture.tenant_database_url, is_active=True, health_status="ok"))
                 db.commit()
             with TenantSession() as db:
-                db.add(Company(id=2, name="Tenant B", active=True))
-                email_a = Email(
-                    company_id=1,
-                    sender="a@example.com",
-                    subject="Pedido visible tenant A",
-                    body="A",
-                    status="processed",
-                    agent_status="processed_doubtful",
-                    detected_type="pedido",
-                    received_at=utcnow(),
-                )
-                email_b = Email(
+               company_b = Company(
+                id=2,
+                name="Tenant B",
+                legal_name="Tenant B SL",
+                country="España",
+                language="es",
+                timezone="Europe/Madrid",
+                active=True,
+            )
+            db.add(company_b)
+            db.flush()
+
+            branding = get_or_create_branding(db, 2)
+            branding.app_name = "Anchi"
+            branding.company_name = "Tenant B"
+
+            db.add(
+                InputChannel(
                     company_id=2,
-                    sender="b@example.com",
-                    subject="Pedido visible tenant B",
-                    body="B",
-                    status="processed",
-                    agent_status="processed_doubtful",
-                    detected_type="pedido",
-                    received_at=utcnow(),
+                    key="email",
+                    name="Email",
+                    channel_type="email",
+                    is_active=True,
                 )
-                db.add_all([email_a, email_b])
-                db.flush()
-                db.add(
-                    Order(
-                        company_id=1,
-                        email_id=email_a.id,
-                        customer_detected_name="Pedido visible tenant A",
-                        score=65,
-                        status="pending_review",
-                        created_at=utcnow(),
-                    )
+            )
+            db.add(Product(company_id=2, reference="TB-P001", name="Producto Tenant B"))
+            db.add(Customer(company_id=2, code="TB-C001", fiscal_name="Cliente Tenant B"))
+
+            llm = get_or_create_settings(db, LLMSettings, 2)
+            llm.provider = "openai"
+            llm.api_key_encrypted = encrypt_secret("tenant-b-performance-key")
+
+            email_a = Email(
+                company_id=1,
+                sender="a@example.com",
+                subject="Pedido visible tenant A",
+                body="A",
+                status="processed",
+                agent_status="processed_doubtful",
+                detected_type="pedido",
+                received_at=utcnow(),
+            )
+            email_b = Email(
+                company_id=2,
+                sender="b@example.com",
+                subject="Pedido visible tenant B",
+                body="B",
+                status="processed",
+                agent_status="processed_doubtful",
+                detected_type="pedido",
+                received_at=utcnow(),
+            )
+            db.add_all([email_a, email_b])
+            db.flush()
+
+            db.add(
+                Order(
+                    company_id=1,
+                    email_id=email_a.id,
+                    customer_detected_name="Pedido visible tenant A",
+                    score=65,
+                    status="pending_review",
+                    created_at=utcnow(),
                 )
-                db.add(
-                    Order(
-                        company_id=2,
-                        email_id=email_b.id,
-                        customer_detected_name="Pedido visible tenant B",
-                        score=65,
-                        status="pending_review",
-                        created_at=utcnow(),
-                    )
+            )
+            db.add(
+                Order(
+                    company_id=2,
+                    email_id=email_b.id,
+                    customer_detected_name="Pedido visible tenant B",
+                    score=65,
+                    status="pending_review",
+                    created_at=utcnow(),
                 )
-                db.commit()
+            )
+            db.commit()
 
             client.post("/login", data={"email": fixture.admin_email, "password": fixture.admin_password}, follow_redirects=False)
             tenant_a = client.get("/inicio", follow_redirects=False)

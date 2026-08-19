@@ -43,6 +43,7 @@ def login(
 ):
     next_url = safe_internal_next(next)
     user = authenticate_user(master_db, email, password)
+
     if not user:
         return templates.TemplateResponse(
             "login.html",
@@ -54,11 +55,13 @@ def login(
             },
             status_code=401,
         )
+
     request.session["user_id"] = user.id
     request.session["company_id"] = user.company_id
     request.session["membership_id"] = user.membership_id
     request.session["company_slug"] = user.company_slug
-    if next_url == DEFAULT_LOGIN_DESTINATION and user.database_url:
+
+    if next_url == DEFAULT_LOGIN_DESTINATION and getattr(user, "database_url", None):
         TenantSession = tenant_db_session(user.database_url)
         tenant_db = TenantSession()
         try:
@@ -66,8 +69,10 @@ def login(
                 next_url = "/setup"
         finally:
             tenant_db.close()
+
     company = master_db.get(MasterCompany, user.company_id)
     settings = get_settings()
+
     logger.info(
         "Login correcto: user_id=%s email=%s company_id=%s company=%s env=%s",
         user.id,
@@ -76,6 +81,7 @@ def login(
         company.name if company else "",
         settings.environment,
     )
+
     return RedirectResponse(next_url, status_code=303)
 
 

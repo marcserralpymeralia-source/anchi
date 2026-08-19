@@ -37,6 +37,7 @@ from app.products.routes import _soft_delete_product  # noqa: E402
 from app.orders.routes import _soft_delete_order  # noqa: E402
 from app.admin.diagnostics import company_diagnostics  # noqa: E402
 from app.core.middleware import branding_middleware  # noqa: E402
+from app.core.templating import templates  # noqa: E402
 from app.core.app_factory import create_app  # noqa: E402
 from app.core.app_factory import internal_server_error_response  # noqa: E402
 from app.core.app_factory import sqlalchemy_error_response  # noqa: E402
@@ -239,49 +240,146 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
 
     def test_dashboard_falls_back_when_workbench_summary_fails(self):
         self.seed_master(with_tenant_db=True)
-        request = FakeRequest(session={"membership_id": 1, "user_id": 1, "company_id": 1, "company_slug": "demo"})
+        request = FakeRequest(
+            session={
+                "membership_id": 1,
+                "user_id": 1,
+                "company_id": 1,
+                "company_slug": "demo",
+            }
+        )
         request.state.branding = branding_to_dict(default_branding_payload())
-        request.state.alert_center = SimpleNamespace(total=0, has_critical=False, high=0, medium=0, low=0, info=0)
-        fake_user = SimpleNamespace(company_id=1, role=SimpleNamespace(name="Administrador"))
+        request.state.alert_center = SimpleNamespace(
+            total=0,
+            has_critical=False,
+            high=0,
+            medium=0,
+            low=0,
+            info=0,
+        )
+        fake_user = SimpleNamespace(
+            company_id=1,
+            role=SimpleNamespace(name="Administrador"),
+        )
         fake_db = SimpleNamespace()
-        with patch("app.pages.routes.workbench_summary", side_effect=OperationalError("select 1", {}, Exception("boom"))):
-            response = dashboard(
-                request,
-                db=fake_db,
-                user=fake_user,
-            )
+
+        with patch.dict(
+            templates.env.globals,
+            {
+                "branding_css_vars": lambda payload: "",
+                "app_settings": SimpleNamespace(environment="test"),
+            },
+        ):
+            with patch(
+                "app.pages.routes.is_setup_operational",
+                return_value=True,
+            ):
+                with patch(
+                    "app.pages.routes.workbench_summary",
+                    side_effect=OperationalError(
+                        "select 1",
+                        {},
+                        Exception("boom"),
+                    ),
+                ):
+                    response = dashboard(
+                        request,
+                        db=fake_db,
+                        user=fake_user,
+                    )
+
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context["workbench"]["items"], [])
         self.assertEqual(response.context["pagination"]["total_items"], 0)
 
     def test_dashboard_normalizes_featured_item_legacy_fields(self):
         self.seed_master(with_tenant_db=True)
-        request = FakeRequest(session={"membership_id": 1, "user_id": 1, "company_id": 1, "company_slug": "demo"})
+        request = FakeRequest(
+            session={
+                "membership_id": 1,
+                "user_id": 1,
+                "company_id": 1,
+                "company_slug": "demo",
+            }
+        )
         request.state.branding = branding_to_dict(default_branding_payload())
-        request.state.alert_center = SimpleNamespace(total=0, has_critical=False, high=0, medium=0, low=0, info=0)
-        fake_user = SimpleNamespace(company_id=1, role=SimpleNamespace(name="Administrador"))
+        request.state.alert_center = SimpleNamespace(
+            total=0,
+            has_critical=False,
+            high=0,
+            medium=0,
+            low=0,
+            info=0,
+        )
+        fake_user = SimpleNamespace(
+            company_id=1,
+            role=SimpleNamespace(name="Administrador"),
+        )
         fake_db = SimpleNamespace()
+
         fake_item = {
             "kind": "email",
-            "received_at": datetime(2026, 7, 29, 12, 0, 0, tzinfo=timezone.utc),
+            "received_at": datetime(
+                2026,
+                7,
+                29,
+                12,
+                0,
+                0,
+                tzinfo=timezone.utc,
+            ),
             "customer": "Cliente Demo",
             "channel": "Email",
             "score": None,
         }
+
         fake_workbench = {
             "items": [fake_item],
-            "pagination": {"page": 1, "page_size": 25, "total": 1, "pages": 1},
-            "tab_counts": {"all": 1, "pending": 0, "review": 0, "ready": 0, "errors": 0, "no_order": 0},
+            "pagination": {
+                "page": 1,
+                "page_size": 25,
+                "total": 1,
+                "pages": 1,
+            },
+            "tab_counts": {
+                "all": 1,
+                "pending": 0,
+                "review": 0,
+                "ready": 0,
+                "errors": 0,
+                "no_order": 0,
+            },
         }
-        with patch("app.pages.routes.workbench_summary", return_value=fake_workbench):
-            response = dashboard(
-                request,
-                db=fake_db,
-                user=fake_user,
-            )
+
+        with patch.dict(
+            templates.env.globals,
+            {
+                "branding_css_vars": lambda payload: "",
+                "app_settings": SimpleNamespace(environment="test"),
+            },
+        ):
+            with patch(
+                "app.pages.routes.is_setup_operational",
+                return_value=True,
+            ):
+                with patch(
+                    "app.pages.routes.workbench_summary",
+                    return_value=fake_workbench,
+                ):
+                    response = dashboard(
+                        request,
+                        db=fake_db,
+                        user=fake_user,
+                    )
+
         self.assertEqual(response.status_code, 200)
+
         featured = response.context["featured_process_item"]
-        self.assertEqual(featured["date"], datetime(2026, 7, 29, 12, 0, 0, tzinfo=timezone.utc))
+
+        self.assertEqual(
+            featured["date"],
+            datetime(2026, 7, 29, 12, 0, 0, tzinfo=timezone.utc),
+        )
         self.assertEqual(featured["customer_name"], "Cliente Demo")
         self.assertEqual(featured["origin"], "Email")
         self.assertEqual(featured["score"], 0)

@@ -65,7 +65,91 @@ def _step_status(key: str, completed: bool, current_step: str, *, optional: bool
         return "En progreso"
     return "Pendiente"
 
+def is_setup_operational(db: Session, company_id: int) -> bool:
+    row = db.execute(
+        select(
+            Company.name,
+            Company.legal_name,
+            Company.country,
+            Company.language,
+            Company.timezone,
+            BrandingSettings.company_name,
+            BrandingSettings.app_name,
+            EmailSettings.imap_host,
+            EmailSettings.imap_username,
+            EmailSettings.imap_password_encrypted,
+            LLMSettings.provider,
+            LLMSettings.api_key_encrypted,
+            select(InputChannel.id)
+            .where(
+                InputChannel.company_id == company_id,
+                InputChannel.is_active.is_(True),
+            )
+            .exists()
+            .label("has_active_channel"),
+            select(Product.id)
+            .where(
+                Product.company_id == company_id,
+                Product.deleted_at.is_(None),
+            )
+            .exists()
+            .label("has_product"),
+            select(Customer.id)
+            .where(
+                Customer.company_id == company_id,
+                Customer.deleted_at.is_(None),
+            )
+            .exists()
+            .label("has_customer"),
+        )
+        .select_from(Company)
+        .outerjoin(
+            BrandingSettings,
+            BrandingSettings.company_id == Company.id,
+        )
+        .outerjoin(
+            EmailSettings,
+            EmailSettings.company_id == Company.id,
+        )
+        .outerjoin(
+            LLMSettings,
+            LLMSettings.company_id == Company.id,
+        )
+        .where(Company.id == company_id)
+    ).one_or_none()
 
+    if row is None:
+        return False
+
+    company_ready = bool(
+        (row.name or row.legal_name)
+        and row.country
+        and row.language
+        and row.timezone
+        and row.company_name
+        and row.app_name
+    )
+
+    email_connected = bool(
+        row.imap_host
+        and row.imap_username
+        and row.imap_password_encrypted
+    )
+
+    has_input_channel = email_connected or bool(row.has_active_channel)
+
+    openai_connected = bool(
+        row.provider in {"openai", "openai_compatible", "azure_openai"}
+        and decrypt_secret(row.api_key_encrypted)
+    )
+
+    return bool(
+        company_ready
+        and has_input_channel
+        and row.has_product
+        and row.has_customer
+        and openai_connected
+    )
 def get_setup_status(db: Session, company_id: int) -> SetupStatus:
     email = get_or_create_settings(db, EmailSettings, company_id)
     llm = get_or_create_settings(db, LLMSettings, company_id)
