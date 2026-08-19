@@ -494,6 +494,27 @@ class ProductAlias(Base):
     alias: Mapped[str] = mapped_column(String(255), index=True)
 
 
+class ProductEmbedding(Base):
+    __tablename__ = "product_embeddings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    product_id: Mapped[int] = mapped_column(ForeignKey("products.id"), index=True)
+    embedding_json: Mapped[str] = mapped_column(Text)
+    embedding_text: Mapped[str] = mapped_column(Text)
+    embedding_model: Mapped[str] = mapped_column(String(120), index=True)
+    embedding_version: Mapped[str] = mapped_column(String(50), index=True)
+    content_hash: Mapped[str] = mapped_column(String(64), index=True)
+    dimensions: Mapped[int] = mapped_column(Integer, default=0)
+    embedded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    product: Mapped[Product] = relationship()
+
+    __table_args__ = (UniqueConstraint("company_id", "product_id", "embedding_model", "embedding_version"),)
+
+
 class CustomerProductKnowledge(Base):
     __tablename__ = "customer_product_knowledge"
 

@@ -29,6 +29,7 @@ from app.master.database import MasterSessionLocal
 from app.master.models import EmailSyncState, MasterTenantDatabase
 from app.imports.service import confirm_import, guess_mapping, read_preview
 from app.orders.routes import _customer_label, _sync_customer_product_knowledge, validate_confirmation
+from app.semantic_retrieval.products import index_products
 from app.settings.integrations import backfill_imap_emails, read_latest_imap_emails
 from app.settings.service import get_or_create_settings
 from app.jobs.service import claim_next_job, fail_job, finish_job, job_payload, job_trace, recover_stale_jobs, update_job_progress
@@ -52,6 +53,7 @@ JOB_TYPES = {
     "export_order",
     "export_order_ftp",
     "bulk_order_action",
+    "index_product_embeddings",
 }
 
 
@@ -94,6 +96,8 @@ def _process_job(db, job: BackgroundJob) -> dict:
         return _process_import_job(db, job, payload)
     if job.job_type in {"export_order", "export_order_ftp"}:
         return _process_export_job(db, job, payload)
+    if job.job_type == "index_product_embeddings":
+        return _process_product_embeddings_job(db, job, payload)
     if job.job_type == "bulk_order_action":
         return _process_bulk_action(db, job, payload)
     if job.job_type == "email_sync":
@@ -239,6 +243,21 @@ def _process_job(db, job: BackgroundJob) -> dict:
         result = AgentProcessingService().pipeline.process_inbound_message(db, inbound_message)
         return {"ok": True, **result}
     raise RuntimeError(f"Tipo de job no soportado: {job.job_type}")
+
+
+def _process_product_embeddings_job(db, job: BackgroundJob, payload: dict) -> dict:
+    batch_size = max(1, min(int(payload.get("batch_size") or 64), 256))
+    model = str(payload.get("model") or "").strip() or None
+    stats = index_products(db, company_id=job.company_id, model=model, batch_size=batch_size)
+    update_job_progress(db, job, 100)
+    return {
+        "ok": stats.failed == 0,
+        "message": "Embeddings de productos indexados" if stats.failed == 0 else "Indexacion de embeddings completada con errores",
+        "scanned": stats.scanned,
+        "indexed": stats.indexed,
+        "skipped": stats.skipped,
+        "failed": stats.failed,
+    }
 
 
 def _process_import_job(db, job: BackgroundJob, payload: dict) -> dict:

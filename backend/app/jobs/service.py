@@ -31,6 +31,7 @@ DEFAULT_MAX_RETRIES = {
     "bulk_order_action": 2,
     "import_confirm": 1,
     "import_file": 1,
+    "index_product_embeddings": 1,
 }
 FORBIDDEN_PAYLOAD_KEYS = {
     "password",

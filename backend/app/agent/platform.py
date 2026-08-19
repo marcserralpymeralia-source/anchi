@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
@@ -44,8 +45,13 @@ from app.db.models import (
 )
 from app.logs.service import log_action
 from app.orders.state import ORDER_STATE
+from app.semantic_retrieval.embeddings import EmbeddingProvider
+from app.semantic_retrieval.products import find_product_candidates
 from app.settings.integrations import classify_sample, extract_sample
 from app.settings.service import get_or_create_settings
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -363,8 +369,9 @@ class DecisionCandidate:
 
 
 class DecisionEngineService:
-    def __init__(self) -> None:
+    def __init__(self, *, semantic_provider: EmbeddingProvider | None = None) -> None:
         self.rag = RAGRetrievalService()
+        self.semantic_provider = semantic_provider
 
     def decision_settings(self, db: Session, company_id: int) -> DecisionSettings:
         return get_or_create_settings(db, DecisionSettings, company_id)
@@ -634,6 +641,11 @@ class DecisionEngineService:
                     )
                 )
 
+        semantic_candidates = self._semantic_product_candidates(
+            db,
+            company_id,
+            query=text or detected_name or reference or "",
+        )
         ordered = sorted(candidates.values(), key=lambda item: (item.confidence, item.source == "learned_alias", item.source == "approved_alias"), reverse=True)
         selected = ordered[0] if ordered else None
         alternatives = ordered[1:4]
@@ -641,22 +653,59 @@ class DecisionEngineService:
         if selected:
             second = alternatives[0].confidence if alternatives else 0
             requires_review = selected.confidence < 0.9 or (selected.confidence - second) < 0.08
+        evidence = [
+            {
+                "label": item.label,
+                "source": item.source,
+                "confidence": item.confidence,
+                "reason": item.reason,
+                "metadata": item.metadata,
+            }
+            for item in ordered
+        ]
+        evidence.extend(
+            {
+                "label": item.label,
+                "source": item.source,
+                "confidence": item.confidence,
+                "reason": item.reason,
+                "metadata": item.metadata,
+            }
+            for item in semantic_candidates
+        )
         return {
             "selected": selected,
             "alternatives": alternatives,
+            "semantic_candidates": semantic_candidates,
             "requires_review": requires_review,
-            "evidence": [
-                {
-                    "label": item.label,
-                    "source": item.source,
-                    "confidence": item.confidence,
-                    "reason": item.reason,
-                    "metadata": item.metadata,
-                }
-                for item in ordered
-            ],
+            "evidence": evidence,
             "llm_supported": settings.enable_llm_support and bool(getattr(get_or_create_settings(db, LLMSettings, company_id), "api_key_encrypted", None)),
         }
+
+    def _semantic_product_candidates(self, db: Session, company_id: int, *, query: str) -> list[DecisionCandidate]:
+        if not query.strip():
+            return []
+        try:
+            candidates = find_product_candidates(db, company_id=company_id, query=query, provider=self.semantic_provider, limit=5)
+        except Exception as exc:  # noqa: BLE001
+            logger.info("semantic_product_candidates_unavailable", extra={"company_id": company_id, "error_type": type(exc).__name__})
+            return []
+        return [
+            DecisionCandidate(
+                candidate.name,
+                "semantic_candidate",
+                round(candidate.similarity, 4),
+                "Candidato semántico por descripción del pedido. Requiere validación determinista o humana.",
+                product_id=candidate.product_id,
+                metadata={
+                    "reference": candidate.reference,
+                    "similarity": round(candidate.similarity, 4),
+                    "embedding_model": candidate.embedding_model,
+                    "embedding_version": candidate.embedding_version,
+                },
+            )
+            for candidate in candidates
+        ]
 
 
 class ScoringService:
@@ -1340,6 +1389,7 @@ class UnifiedOrderPipelineService:
                 ean=ean or None,
                 text=raw_line.get("texto_original") or raw_line.get("original_text") or source_text,
             )
+            semantic_candidates = product_decision.get("semantic_candidates") or []
             quantity = raw_line.get("cantidad") or raw_line.get("quantity")
             product, product_method, product_score = self.product_matching.match(db, inbound_message.company_id, reference=reference, detected_name=product_name)
             if product_decision["selected"] and product_decision["selected"].product_id:
@@ -1362,6 +1412,9 @@ class UnifiedOrderPipelineService:
                     doubt = (doubt + "; " if doubt else "") + "Cantidad ambigua"
             if doubt:
                 review_reasons.append(doubt)
+                if semantic_candidates:
+                    top_semantic = semantic_candidates[0]
+                    review_reasons.append(f"Candidato semantico sugerido: {top_semantic.label} ({top_semantic.confidence:.2f}). Requiere validacion humana.")
             elif product_decision["selected"]:
                 review_reasons.append(f"Linea {product_decision['selected'].label} por {product_decision['selected'].source}: {product_decision['selected'].reason}")
             db.add(

@@ -763,6 +763,29 @@ def _apply_tenant_ai_learning(engine, dry_run: bool) -> list[str]:  # noqa: ANN0
     return actions
 
 
+def _apply_tenant_product_embeddings(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    from app.db.models import ProductEmbedding
+
+    actions: list[str] = []
+    with engine.connect() as conn:
+        if "product_embeddings" not in inspect(conn).get_table_names():
+            actions.append("CREATE TABLE product_embeddings (...)")
+            if not dry_run:
+                ProductEmbedding.__table__.create(bind=engine, checkfirst=True)
+        elif not dry_run:
+            ProductEmbedding.__table__.create(bind=engine, checkfirst=True)
+    actions.extend(
+        ensure_unique_index(
+            engine,
+            "product_embeddings",
+            "uq_product_embeddings_product_model_version",
+            ("company_id", "product_id", "embedding_model", "embedding_version"),
+            dry_run=dry_run,
+        )
+    )
+    return actions
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -793,6 +816,12 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant ai execution and learning control",
         checksum=checksum_text("tenant", "ai_execution_and_learning_control", "prompt_executions", "learning_proposals", "emails", "inbound_messages"),
         upgrade=_apply_tenant_ai_learning,
+    ),
+    MigrationSpec(
+        version="2026.08.19.2",
+        name="tenant product semantic embeddings",
+        checksum=checksum_text("tenant", "product_semantic_embeddings", "product_embeddings"),
+        upgrade=_apply_tenant_product_embeddings,
     ),
 ]
 
