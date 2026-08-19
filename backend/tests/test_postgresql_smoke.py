@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.security import hash_password
 from app.db.database import Base
+from app.db.models import Company
 from app.master.database import MasterBase
 from app.master.migrations import master_migration_report, upgrade_master_schema
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser
@@ -28,6 +29,18 @@ class PostgreSQLSmokeTests(unittest.TestCase):
             master_session = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)()
             tenant_session = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)()
             try:
+                tenant_session.add(
+                    Company(
+                        id=1,
+                        name="PG Demo",
+                        legal_name="PG Demo SL",
+                        active=True,
+                        country="España",
+                        language="es",
+                        timezone="Europe/Madrid",
+                    )
+                )
+                tenant_session.commit()
                 master_session.add_all(
                     [
                         MasterCompany(id=1, name="PG Demo", slug="pg-demo", active=True, legal_name="PG Demo SL"),
