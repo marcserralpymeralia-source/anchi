@@ -58,6 +58,6 @@ jobs:
           pip install -r requirements.txt
       - name: PostgreSQL smoke
         env:
-          POSTGRES_TEST_MASTER_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/anchi
+          POSTGRES_TEST_MASTER_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/postgres
           POSTGRES_TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/anchi
         run: APP_ENV=test python -m unittest tests.test_postgresql_smoke
