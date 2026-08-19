@@ -428,6 +428,48 @@ TENANT_JOB_COLUMNS = {
 }
 
 
+MASTER_EMAIL_SYNC_STATE_COLUMNS = {
+    "mailbox": "VARCHAR(255)",
+    "uidvalidity": "VARCHAR(120)",
+    "source_provider": "VARCHAR(50)",
+    "source_host": "VARCHAR(255)",
+    "source_username": "VARCHAR(255)",
+    "source_connected_email": "VARCHAR(255)",
+    "last_successful_sync_at": "DATETIME",
+    "last_error_type": "VARCHAR(120)",
+    "sync_status": "VARCHAR(50) DEFAULT 'idle'",
+    "listener_status": "VARCHAR(50) DEFAULT 'inactive'",
+    "listener_owner": "VARCHAR(120)",
+    "listener_last_started_at": "DATETIME",
+    "listener_last_heartbeat_at": "DATETIME",
+    "listener_last_error_at": "DATETIME",
+    "listener_last_error_message": "TEXT",
+    "last_checkpoint_uid": "VARCHAR(120)",
+    "backfill_status": "VARCHAR(50) DEFAULT 'idle'",
+    "backfill_total": "INTEGER DEFAULT 0",
+    "backfill_processed": "INTEGER DEFAULT 0",
+    "backfill_created": "INTEGER DEFAULT 0",
+    "backfill_duplicates": "INTEGER DEFAULT 0",
+    "backfill_errors": "INTEGER DEFAULT 0",
+    "backfill_last_uid": "VARCHAR(120)",
+    "backfill_checkpoint_json": "TEXT",
+    "backfill_started_at": "DATETIME",
+    "backfill_last_checkpoint_at": "DATETIME",
+    "backfill_paused_at": "DATETIME",
+    "backfill_completed_at": "DATETIME",
+    "backfill_cancelled_at": "DATETIME",
+}
+
+MASTER_EMAIL_LISTENER_COLUMNS = {
+    "listener_status": "VARCHAR(50) DEFAULT 'inactive'",
+    "listener_owner": "VARCHAR(120)",
+    "listener_last_started_at": "DATETIME",
+    "listener_last_heartbeat_at": "DATETIME",
+    "listener_last_error_at": "DATETIME",
+    "listener_last_error_message": "TEXT",
+}
+
+
 def _apply_tenant_metadata(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     from app.db.models import TenantSchemaMigration
 
@@ -664,37 +706,7 @@ def _apply_master_email_sync_state(engine, dry_run: bool) -> list[str]:  # noqa:
         ensure_columns(
             engine,
             "email_sync_state",
-            {
-                "mailbox": "VARCHAR(255)",
-                "uidvalidity": "VARCHAR(120)",
-                "source_provider": "VARCHAR(50)",
-                "source_host": "VARCHAR(255)",
-                "source_username": "VARCHAR(255)",
-                "source_connected_email": "VARCHAR(255)",
-                "last_successful_sync_at": "DATETIME",
-                "last_error_type": "VARCHAR(120)",
-                "sync_status": "VARCHAR(50) DEFAULT 'idle'",
-                "listener_status": "VARCHAR(50) DEFAULT 'inactive'",
-                "listener_owner": "VARCHAR(120)",
-                "listener_last_started_at": "DATETIME",
-                "listener_last_heartbeat_at": "DATETIME",
-                "listener_last_error_at": "DATETIME",
-                "listener_last_error_message": "TEXT",
-                "last_checkpoint_uid": "VARCHAR(120)",
-                "backfill_status": "VARCHAR(50) DEFAULT 'idle'",
-                "backfill_total": "INTEGER DEFAULT 0",
-                "backfill_processed": "INTEGER DEFAULT 0",
-                "backfill_created": "INTEGER DEFAULT 0",
-                "backfill_duplicates": "INTEGER DEFAULT 0",
-                "backfill_errors": "INTEGER DEFAULT 0",
-                "backfill_last_uid": "VARCHAR(120)",
-                "backfill_checkpoint_json": "TEXT",
-                "backfill_started_at": "DATETIME",
-                "backfill_last_checkpoint_at": "DATETIME",
-                "backfill_paused_at": "DATETIME",
-                "backfill_completed_at": "DATETIME",
-                "backfill_cancelled_at": "DATETIME",
-            },
+            MASTER_EMAIL_SYNC_STATE_COLUMNS,
             dry_run=dry_run,
         )
     )
@@ -702,19 +714,11 @@ def _apply_master_email_sync_state(engine, dry_run: bool) -> list[str]:  # noqa:
 
 
 def _apply_master_email_listener_state(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
-    return ensure_columns(
-        engine,
-        "email_sync_state",
-        {
-            "listener_status": "VARCHAR(50) DEFAULT 'inactive'",
-            "listener_owner": "VARCHAR(120)",
-            "listener_last_started_at": "DATETIME",
-            "listener_last_heartbeat_at": "DATETIME",
-            "listener_last_error_at": "DATETIME",
-            "listener_last_error_message": "TEXT",
-        },
-        dry_run=dry_run,
-    )
+    return ensure_columns(engine, "email_sync_state", MASTER_EMAIL_LISTENER_COLUMNS, dry_run=dry_run)
+
+
+def _apply_master_email_sync_state_repair(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    return ensure_columns(engine, "email_sync_state", MASTER_EMAIL_SYNC_STATE_COLUMNS, dry_run=dry_run)
 
 
 def _apply_tenant_ai_learning(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
@@ -872,6 +876,12 @@ MASTER_SCHEMA_MIGRATIONS = [
         name="master email listener state",
         checksum=checksum_text("master", "email_listener_state", "email_sync_state"),
         upgrade=_apply_master_email_listener_state,
+    ),
+    MigrationSpec(
+        version="2026.08.19.2",
+        name="master email sync state repair",
+        checksum=checksum_text("master", "email_sync_state_repair", "email_sync_state", *MASTER_EMAIL_SYNC_STATE_COLUMNS.keys()),
+        upgrade=_apply_master_email_sync_state_repair,
     ),
 ]
 

@@ -21,10 +21,10 @@ from app.db.models import BackgroundJob, Conversation, Customer, Email, EmailSet
 from app.jobs.service import enqueue_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.migrations import CURRENT_MASTER_SCHEMA_CHECKSUM, CURRENT_MASTER_SCHEMA_NAME, CURRENT_MASTER_SCHEMA_VERSION, master_migration_report, upgrade_master_schema  # noqa: E402
-from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
+from app.master.models import CompanyMembership, EmailSyncState, MasterCompany, MasterSchemaMigration, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.migrations.inspection import discover_sqlite_files, inspect_database_url, inventory_records, simulate_sqlite_reference  # noqa: E402
 from app.migrations.helpers import table_exists  # noqa: E402
-from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_tenant_knowledge_entries, _apply_tenant_product_embeddings  # noqa: E402
+from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, MASTER_EMAIL_SYNC_STATE_COLUMNS, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_master_email_sync_state_repair, _apply_tenant_knowledge_entries, _apply_tenant_product_embeddings  # noqa: E402
 from app.tenancy.migrations import tenant_migration_report, upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import run_worker_cycle  # noqa: E402
 
@@ -318,6 +318,73 @@ class SchemaMigrationTests(unittest.TestCase):
             "listener_last_error_message",
         ):
             self.assertIn(column, columns)
+
+    def test_master_email_sync_repair_fixes_partial_checkpoint_schema(self):
+        MasterSchemaMigration.__table__.create(bind=self.master_engine, checkfirst=True)
+        with self.master_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE email_sync_state (
+                        id INTEGER PRIMARY KEY,
+                        company_id INTEGER,
+                        channel_key VARCHAR(80),
+                        enabled BOOLEAN DEFAULT true,
+                        frequency_seconds INTEGER DEFAULT 60,
+                        status VARCHAR(50) DEFAULT 'idle'
+                    )
+                    """
+                )
+            )
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO schema_migrations
+                    (version, name, checksum, execution_ms, status, applied_at, last_checked_at, created_at, updated_at)
+                    VALUES
+                    ('2026.07.16.1', 'master email sync checkpoints', 'legacy-checksum', 0, 'current', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """
+                )
+            )
+
+        result = upgrade_master_schema(self.master_engine, application_version="test-repair")
+
+        columns = {column["name"] for column in inspect(self.master_engine).get_columns("email_sync_state")}
+        self.assertTrue(set(MASTER_EMAIL_SYNC_STATE_COLUMNS).issubset(columns))
+        self.assertIn("2026.08.19.2", result["applied_versions"])
+        self.assertTrue(result["is_current"])
+
+    def test_master_email_sync_repair_is_safe_to_run_twice(self):
+        with self.master_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE email_sync_state (
+                        id INTEGER PRIMARY KEY,
+                        company_id INTEGER,
+                        channel_key VARCHAR(80),
+                        enabled BOOLEAN DEFAULT true,
+                        frequency_seconds INTEGER DEFAULT 60,
+                        status VARCHAR(50) DEFAULT 'idle'
+                    )
+                    """
+                )
+            )
+
+        first_actions = _apply_master_email_sync_state_repair(self.master_engine, dry_run=False)
+        second_actions = _apply_master_email_sync_state_repair(self.master_engine, dry_run=False)
+
+        self.assertTrue(first_actions)
+        self.assertEqual(second_actions, [])
+
+    def test_master_email_sync_repair_noops_when_schema_is_current(self):
+        MasterBase.metadata.create_all(self.master_engine)
+
+        actions = _apply_master_email_sync_state_repair(self.master_engine, dry_run=False)
+
+        self.assertEqual(actions, [])
+        columns = {column["name"] for column in inspect(self.master_engine).get_columns("email_sync_state")}
+        self.assertTrue(set(EmailSyncState.__table__.columns.keys()).issubset(columns))
 
     def test_upgrade_tenant_repairs_missing_email_settings_columns_on_current_schema(self):
         with self.tenant_engine.begin() as conn:
