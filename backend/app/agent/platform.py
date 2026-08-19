@@ -10,6 +10,8 @@ from typing import Any, Protocol
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.agent.extraction import OrderExtractionInput, OrderExtractionResult, extract_order
+from app.core.encryption import decrypt_secret
 from app.db.models import (
     Alert,
     Email,
@@ -1062,7 +1064,17 @@ class UnifiedOrderPipelineService:
                 db.commit()
                 return {"ok": True, "status": "order_detected", "message": "Pedido detectado. Extraccion desactivada por configuracion."}
 
-            extraction = self._extract(db, llm_settings, inbound_message.company_id, normalized)
+            extraction = self._extract(db, llm_settings, inbound_message.company_id, normalized, inbound_message)
+            extraction_meta = extraction.get("_extraction_meta") if isinstance(extraction.get("_extraction_meta"), dict) else {}
+            log_action(
+                db,
+                company_id=inbound_message.company_id,
+                user=user,
+                action="agent.extraction_completed",
+                entity_type="inbound_message",
+                entity_id=inbound_message.id,
+                message=f"Extraccion: {extraction_meta.get('source') or 'legacy_extraction'}",
+            )
             order = self._create_order(db, inbound_message, email, extraction, normalized)
             score_result = self.scoring.score_order(db, order)
             order.score = score_result.total_score
@@ -1120,7 +1132,118 @@ class UnifiedOrderPipelineService:
             raise RuntimeError(result.get("message") or "Error llamando al proveedor IA.")
         return _json_from_content(result.get("content", ""))
 
-    def _extract(self, db: Session, settings: LLMSettings, company_id: int, text: str) -> dict[str, Any]:
+    def _extract(self, db: Session, settings: LLMSettings, company_id: int, text: str, inbound_message: InboundMessage | None = None) -> dict[str, Any]:
+        structured, structured_error = self._extract_structured(settings, text, inbound_message)
+        if structured:
+            return self._legacy_payload_from_structured(structured)
+        legacy = self._extract_legacy(db, settings, company_id, text)
+        legacy.setdefault(
+            "_extraction_meta",
+            {
+                "source": "legacy_extraction",
+                "schemaVersion": None,
+                "model": settings.extraction_model or "gpt-4.1-mini",
+                "structuredFallbackReason": structured_error,
+            },
+        )
+        return legacy
+
+    def _extract_structured(self, settings: LLMSettings, text: str, inbound_message: InboundMessage | None = None) -> tuple[OrderExtractionResult | None, str | None]:
+        if not settings.api_key_encrypted:
+            return None, "missing_api_key"
+        try:
+            result = extract_order(
+                OrderExtractionInput(
+                    text=text[:16000],
+                    sourceType=self._source_type_for_extraction(inbound_message),
+                    sourceId=str(inbound_message.id) if inbound_message and inbound_message.id else None,
+                ),
+                model=settings.extraction_model or "gpt-4.1-mini",
+                api_key=decrypt_secret(settings.api_key_encrypted),
+                base_url=settings.base_url or "https://api.openai.com/v1",
+                timeout_seconds=settings.timeout_seconds,
+            )
+        except Exception as exc:
+            return None, exc.__class__.__name__
+        if not result.extracted_data.is_order or not result.extracted_data.lines:
+            return None, "structured_no_order_or_without_lines"
+        return result, None
+
+    def _source_type_for_extraction(self, inbound_message: InboundMessage | None) -> str:
+        if not inbound_message:
+            return "unknown"
+        raw = " ".join(
+            value
+            for value in [
+                inbound_message.provider,
+                inbound_message.content_type,
+                inbound_message.source_mailbox,
+            ]
+            if value
+        ).lower()
+        if "whatsapp" in raw:
+            return "whatsapp"
+        if "email" in raw or "imap" in raw or inbound_message.source_mailbox:
+            return "email"
+        if "pdf" in raw or inbound_message.has_pdf:
+            return "pdf"
+        if "audio" in raw or inbound_message.has_audio:
+            return "voice"
+        if "social" in raw:
+            return "social"
+        return "unknown"
+
+    def _legacy_payload_from_structured(self, result: OrderExtractionResult) -> dict[str, Any]:
+        extracted = result.extracted_data
+        extraction_payload = extracted.model_dump(by_alias=True)
+        notes = list(extracted.notes)
+        lines: list[dict[str, Any]] = []
+        for line in extracted.lines:
+            line_uncertainties = [uncertainty.model_dump() for uncertainty in line.uncertainties]
+            if line.notes:
+                notes.extend(line.notes)
+            confidence = 0.92
+            if line.requires_review:
+                confidence = 0.62
+            if line.quantity is None or line.raw_description is None:
+                confidence = min(confidence, 0.5)
+            lines.append(
+                {
+                    "texto_original": line.raw_text,
+                    "producto_detectado": line.raw_description,
+                    "cantidad": line.quantity,
+                    "unidad": line.unit,
+                    "confianza_extraccion": confidence,
+                    "requires_review": line.requires_review,
+                    "uncertainties": line_uncertainties,
+                    "source_fields": {
+                        "rawDescription": line.raw_description_source,
+                        "quantity": line.quantity_source,
+                        "unit": line.unit_source,
+                    },
+                }
+            )
+        return {
+            "cliente": {
+                "nombre_detectado": extracted.customer.raw_name,
+                "source_fields": {"rawName": extracted.customer.raw_name_source},
+            },
+            "pedido": {
+                "observaciones": "\n".join(dict.fromkeys(note for note in notes if note)),
+                "lineas": lines,
+            },
+            "requiere_revision_humana": extracted.requires_review,
+            "motivos_revision": [uncertainty.reason for uncertainty in extracted.uncertainties],
+            "_extraction_meta": {
+                "source": "structured_order_extraction",
+                "schemaVersion": result.schema_version,
+                "model": result.model,
+                "timestamp": result.timestamp.isoformat(),
+                "payload": extraction_payload,
+            },
+        }
+
+    def _extract_legacy(self, db: Session, settings: LLMSettings, company_id: int, text: str) -> dict[str, Any]:
         prompt = _active_prompt(
             db,
             company_id,
@@ -1190,7 +1313,9 @@ class UnifiedOrderPipelineService:
         )
         db.add(order)
         db.flush()
-        review_reasons: list[str] = []
+        review_reasons: list[str] = list(extracted.get("motivos_revision") or [])
+        if extracted.get("requiere_revision_humana") and not review_reasons:
+            review_reasons.append("La extraccion requiere revision humana")
         if not customer:
             review_reasons.append("Cliente no identificado")
         elif customer_decision["selected"]:
@@ -1198,6 +1323,11 @@ class UnifiedOrderPipelineService:
         elif customer_decision["evidence"]:
             review_reasons.append(f"Cliente con evidencia parcial: {customer_decision['evidence'][0]['reason']}")
         for raw_line in self._lines_from_extraction(extracted):
+            for uncertainty in raw_line.get("uncertainties") or []:
+                if isinstance(uncertainty, dict) and uncertainty.get("reason"):
+                    review_reasons.append(str(uncertainty["reason"]))
+            if raw_line.get("requires_review"):
+                review_reasons.append("Linea marcada para revision por extraccion")
             product_name = raw_line.get("producto_detectado") or raw_line.get("producto") or raw_line.get("description") or raw_line.get("descripcion")
             reference = raw_line.get("referencia_detectada") or raw_line.get("referencia") or raw_line.get("reference")
             ean = raw_line.get("ean") or raw_line.get("sku")

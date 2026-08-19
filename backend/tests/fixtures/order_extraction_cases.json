@@ -1,0 +1,131 @@
+[
+  {
+    "name": "clear_single_line",
+    "payload": {
+      "isOrder": true,
+      "customer": {"rawName": "Supermercados Norte SL", "rawNameSource": "expressed"},
+      "lines": [
+        {"rawText": "20 cajas de tomate pera", "rawDescription": "tomate pera", "rawDescriptionSource": "expressed", "quantity": 20, "quantitySource": "expressed", "unit": "cajas", "unitSource": "expressed", "notes": [], "uncertainties": [], "requiresReview": false}
+      ],
+      "notes": [],
+      "uncertainties": [],
+      "requiresReview": false
+    }
+  },
+  {
+    "name": "multi_line_order",
+    "payload": {
+      "isOrder": true,
+      "customer": {"rawName": "Hostal Playa", "rawNameSource": "expressed"},
+      "lines": [
+        {"rawText": "5 packs agua 1,5L", "rawDescription": "agua 1,5L", "rawDescriptionSource": "expressed", "quantity": 5, "quantitySource": "expressed", "unit": "packs", "unitSource": "expressed", "notes": [], "uncertainties": [], "requiresReview": false},
+        {"rawText": "3 cajas limones", "rawDescription": "limones", "rawDescriptionSource": "expressed", "quantity": 3, "quantitySource": "expressed", "unit": "cajas", "unitSource": "expressed", "notes": [], "uncertainties": [], "requiresReview": false}
+      ],
+      "notes": ["Entrega manana por la manana"],
+      "uncertainties": [],
+      "requiresReview": false
+    }
+  },
+  {
+    "name": "not_order",
+    "payload": {
+      "isOrder": false,
+      "customer": {"rawName": null, "rawNameSource": "unknown"},
+      "lines": [],
+      "notes": ["Consulta de disponibilidad sin pedido confirmado."],
+      "uncertainties": [],
+      "requiresReview": false
+    }
+  },
+  {
+    "name": "ambiguous_quantity",
+    "payload": {
+      "isOrder": true,
+      "customer": {"rawName": "Bar Avenida", "rawNameSource": "expressed"},
+      "lines": [
+        {"rawText": "mandame unas cajas de cerveza", "rawDescription": "cerveza", "rawDescriptionSource": "expressed", "quantity": null, "quantitySource": "unknown", "unit": "cajas", "unitSource": "expressed", "notes": [], "uncertainties": [{"field": "lines[0].quantity", "reason": "La expresion 'unas cajas' no permite convertir la cantidad con seguridad."}], "requiresReview": true}
+      ],
+      "notes": [],
+      "uncertainties": [{"field": "lines[0].quantity", "reason": "Cantidad ambigua."}],
+      "requiresReview": true
+    }
+  },
+  {
+    "name": "informal_product",
+    "payload": {
+      "isOrder": true,
+      "customer": {"rawName": "Restaurante Centro", "rawNameSource": "expressed"},
+      "lines": [
+        {"rawText": "10 de las botellas pequenas azules", "rawDescription": "botellas pequenas azules", "rawDescriptionSource": "expressed", "quantity": 10, "quantitySource": "expressed", "unit": null, "unitSource": "unknown", "notes": ["Producto descrito de forma informal."], "uncertainties": [{"field": "lines[0].rawDescription", "reason": "Descripcion informal sin referencia exacta."}], "requiresReview": true}
+      ],
+      "notes": [],
+      "uncertainties": [],
+      "requiresReview": true
+    }
+  },
+  {
+    "name": "usual_order_contextual",
+    "payload": {
+      "isOrder": true,
+      "customer": {"rawName": "Tienda Sol", "rawNameSource": "inferred"},
+      "lines": [
+        {"rawText": "ponme lo de siempre", "rawDescription": null, "rawDescriptionSource": "unknown", "quantity": null, "quantitySource": "unknown", "unit": null, "unitSource": "unknown", "notes": ["El cliente pide una pauta historica no incluida en el texto."], "uncertainties": [{"field": "lines[0]", "reason": "La expresion 'lo de siempre' requiere contexto historico o revision humana."}], "requiresReview": true}
+      ],
+      "notes": [],
+      "uncertainties": [{"field": "lines[0]", "reason": "No hay productos ni cantidades expresadas."}],
+      "requiresReview": true
+    }
+  },
+  {
+    "name": "line_requires_review",
+    "payload": {
+      "isOrder": true,
+      "customer": {"rawName": "Catering Alameda", "rawNameSource": "expressed"},
+      "lines": [
+        {"rawText": "12 bandejas de surtido", "rawDescription": "surtido", "rawDescriptionSource": "expressed", "quantity": 12, "quantitySource": "expressed", "unit": "bandejas", "unitSource": "expressed", "notes": ["Surtido sin detalle de composicion."], "uncertainties": [{"field": "lines[0].rawDescription", "reason": "Producto generico que requiere confirmacion."}], "requiresReview": true}
+      ],
+      "notes": [],
+      "uncertainties": [],
+      "requiresReview": true
+    }
+  },
+  {
+    "name": "incomplete_text",
+    "payload": {
+      "isOrder": true,
+      "customer": {"rawName": null, "rawNameSource": "unknown"},
+      "lines": [
+        {"rawText": "necesito 4 para manana", "rawDescription": null, "rawDescriptionSource": "unknown", "quantity": 4, "quantitySource": "expressed", "unit": null, "unitSource": "unknown", "notes": [], "uncertainties": [{"field": "lines[0].rawDescription", "reason": "No se indica que producto se solicita."}], "requiresReview": true}
+      ],
+      "notes": ["Texto incompleto."],
+      "uncertainties": [{"field": "customer.rawName", "reason": "No aparece nombre de cliente."}],
+      "requiresReview": true
+    }
+  },
+  {
+    "name": "delivery_notes",
+    "payload": {
+      "isOrder": true,
+      "customer": {"rawName": "Frutas Levante", "rawNameSource": "expressed"},
+      "lines": [
+        {"rawText": "8 cajas de naranjas", "rawDescription": "naranjas", "rawDescriptionSource": "expressed", "quantity": 8, "quantitySource": "expressed", "unit": "cajas", "unitSource": "expressed", "notes": [], "uncertainties": [], "requiresReview": false}
+      ],
+      "notes": ["Entregar antes de las 10 y llamar al llegar."],
+      "uncertainties": [],
+      "requiresReview": false
+    }
+  },
+  {
+    "name": "no_invention",
+    "payload": {
+      "isOrder": true,
+      "customer": {"rawName": "Autoservicio Mar", "rawNameSource": "expressed"},
+      "lines": [
+        {"rawText": "2 cajas del refuerzo", "rawDescription": "refuerzo", "rawDescriptionSource": "expressed", "quantity": 2, "quantitySource": "expressed", "unit": "cajas", "unitSource": "expressed", "notes": ["No se debe inventar referencia ni producto ERP."], "uncertainties": [{"field": "lines[0].rawDescription", "reason": "Descripcion comercial incompleta."}], "requiresReview": true}
+      ],
+      "notes": [],
+      "uncertainties": [],
+      "requiresReview": true
+    }
+  }
+]

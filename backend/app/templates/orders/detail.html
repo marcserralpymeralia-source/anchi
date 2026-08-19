@@ -138,12 +138,18 @@
     <div class="pane-title-row">
       <h3>Propuesta del agente</h3>
       <span class="badge">{{ score_label }}</span>
+      {% if extraction_diagnostics %}
+        <span class="badge {{ extraction_diagnostics.badge_class }}">{{ extraction_diagnostics.label }}</span>
+      {% endif %}
     </div>
 
     <article class="subpanel order-summary-card compact-order-summary-card">
       <div class="order-kpi-strip">
         <span><strong>Confianza:</strong> {{ "%.0f"|format(score_value) }}%</span>
         <span><strong>Estado:</strong> {{ order.status|status_label }}</span>
+        {% if extraction_diagnostics %}
+          <span><strong>Extracción:</strong> {{ extraction_diagnostics.label }}{% if extraction_diagnostics.schema_version %} · v{{ extraction_diagnostics.schema_version }}{% endif %}{% if extraction_diagnostics.uncertainty_count %} · {{ extraction_diagnostics.uncertainty_count }} dudas{% endif %}</span>
+        {% endif %}
         {% if order.review_reasons %}
           <span class="truncate-inline" title="{{ order.review_reasons }}"><strong>Motivos:</strong> {{ order.review_reasons }}</span>
         {% endif %}

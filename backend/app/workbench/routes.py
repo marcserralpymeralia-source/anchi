@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Red
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.agent.extraction.diagnostics import extraction_diagnostics_from_messages, extraction_diagnostics_from_payload
 from app.agent.services import AgentProcessingService, ScoringService
 from app.auth.dependencies import current_user
 from app.core.templating import templates
@@ -224,6 +225,7 @@ def workbench_item_detail(kind: str, item_id: int, request: Request, db: Session
                 selectinload(Order.email).selectinload(Email.attachments),
                 selectinload(Order.customer),
                 selectinload(Order.validated_customer),
+                selectinload(Order.conversation).selectinload(Conversation.messages),
             )
         )
         if not order:
@@ -232,9 +234,10 @@ def workbench_item_detail(kind: str, item_id: int, request: Request, db: Session
         customers = db.scalars(select(Customer).where(Customer.company_id == user.company_id).order_by(Customer.fiscal_name)).all()
         products = db.scalars(select(Product).where(Product.company_id == user.company_id).order_by(Product.reference)).all()
         item = order_workbench_item(order, get_or_create_settings(db, ScoringSettings, user.company_id))
+        extraction_diagnostics = extraction_diagnostics_from_messages(order.conversation.messages if order.conversation else [])
         return templates.TemplateResponse(
             "workbench/detail.html",
-            {"request": request, "user": user, "kind": "order", "order": order, "item": item, "conversation_preview": conversation_preview, "customers": customers, "products": products},
+            {"request": request, "user": user, "kind": "order", "order": order, "item": item, "conversation_preview": conversation_preview, "customers": customers, "products": products, "extraction_diagnostics": extraction_diagnostics},
         )
     if kind == "email":
         email = db.scalar(
@@ -277,6 +280,7 @@ def workbench_item_detail(kind: str, item_id: int, request: Request, db: Session
         item = _inbound_item(inbound, order=order)
         customers = db.scalars(select(Customer).where(Customer.company_id == user.company_id).order_by(Customer.fiscal_name)).all()
         products = db.scalars(select(Product).where(Product.company_id == user.company_id).order_by(Product.reference)).all()
+        extraction_diagnostics = extraction_diagnostics_from_payload(inbound.extraction_json)
         return templates.TemplateResponse(
             "workbench/detail.html",
             {
@@ -289,6 +293,7 @@ def workbench_item_detail(kind: str, item_id: int, request: Request, db: Session
                 "item": item,
                 "customers": customers,
                 "products": products,
+                "extraction_diagnostics": extraction_diagnostics,
             },
         )
     return PlainTextResponse("Tipo no soportado", status_code=400)

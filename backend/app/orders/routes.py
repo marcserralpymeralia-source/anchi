@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Red
 from sqlalchemy import case, exists, func, or_, select
 from sqlalchemy.orm import Session, load_only, selectinload
 
+from app.agent.extraction.diagnostics import extraction_diagnostics_from_messages
 from app.core.templating import templates
 from app.agent.platform import LearningService
 from app.agent.services import MockAgentService, ScoringService
@@ -340,6 +341,7 @@ def order_detail(
                 InboundMessage.recipient,
                 InboundMessage.original_content,
                 InboundMessage.normalized_text,
+                InboundMessage.extraction_json,
                 InboundMessage.raw_payload_json,
                 InboundMessage.direction,
                 InboundMessage.received_at,
@@ -374,6 +376,7 @@ def order_detail(
     customer_context = _review_customer_snapshot(db, order, customer_source) if order else {"identified": False}
     line_suggestions = {line.id: _product_suggestions_for_line(products, line) for line in (order.lines or [])}
     conversation_preview = _conversation_preview(order)
+    extraction_diagnostics = extraction_diagnostics_from_messages(order.conversation.messages if order and order.conversation else [])
     return templates.TemplateResponse(
         "orders/detail.html",
         {
@@ -387,6 +390,7 @@ def order_detail(
             "customer_q": customer_q,
             "product_q": product_q,
             "conversation_preview": conversation_preview,
+            "extraction_diagnostics": extraction_diagnostics,
         },
     )
 

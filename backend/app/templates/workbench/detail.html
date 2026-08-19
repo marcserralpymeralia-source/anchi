@@ -13,6 +13,9 @@
       <div class="review-header-meta">
         <span class="badge agent-{{ item.agent_status }}">{{ item.agent_status_label }}</span>
         <span class="badge">{{ item.origin }}</span>
+        {% if extraction_diagnostics is defined and extraction_diagnostics %}
+          <span class="badge {{ extraction_diagnostics.badge_class }}">{{ extraction_diagnostics.label }}</span>
+        {% endif %}
       </div>
     </div>
     <div class="review-header-actions review-header-actions-tight">
@@ -144,7 +147,7 @@
         </details>
         <div class="review-proposal-head review-proposal-head-compact">
           <span class="review-proposal-caption">Artículos interpretados</span>
-          <span class="review-proposal-note">{% if order.lines|length == 1 %}1 línea{% else %}{{ order.lines|length }} líneas{% endif %}{% if doubt_count %} · {{ doubt_count }} incidencias{% endif %}</span>
+          <span class="review-proposal-note">{% if order.lines|length == 1 %}1 línea{% else %}{{ order.lines|length }} líneas{% endif %}{% if doubt_count %} · {{ doubt_count }} incidencias{% endif %}{% if extraction_diagnostics is defined and extraction_diagnostics and extraction_diagnostics.uncertainty_count %} · {{ extraction_diagnostics.uncertainty_count }} dudas extracción{% endif %}</span>
         </div>
       </form>
       <article class="subpanel review-lines-panel">
