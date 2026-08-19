@@ -295,13 +295,14 @@ class EntriesInboxTests(unittest.TestCase):
             self.assertEqual(first.status_code, 303)
             self.assertEqual(second.status_code, 303)
             self.assertEqual(sync_first.status_code, 303)
-            self.assertEqual(sync_first.headers["location"], "/entries?sync=queued")
+            self.assertEqual(sync_first.headers["location"], "/entries?sync=error")
             self.assertEqual(sync_second.status_code, 303)
             with TenantSession() as db:
                 process_jobs = db.scalars(select(BackgroundJob).where(BackgroundJob.company_id == 1, BackgroundJob.job_type == "process_email")).all()
                 sync_jobs = db.scalars(select(BackgroundJob).where(BackgroundJob.company_id == 1, BackgroundJob.job_type == "email_sync")).all()
             self.assertEqual(len(process_jobs), 1)
             self.assertEqual(len(sync_jobs), 1)
+            self.assertTrue(all(job.status == "failed" for job in sync_jobs))
         finally:
             tenant_engine.dispose()
             fixture.cleanup()

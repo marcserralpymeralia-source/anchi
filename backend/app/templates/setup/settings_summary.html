@@ -36,6 +36,19 @@
       <div>
         <h2>Canales</h2>
         <p>{% if setup_status.email_connected %}Email conectado{% else %}Email pendiente{% endif %} · {% if setup_status.whatsapp_connected %}WhatsApp conectado{% else %}WhatsApp opcional{% endif %}</p>
+        {% if email_sync_state %}
+          <small>
+            Recepción:
+            {% if email_sync_state.listener_status in ["polling", "reconciling"] %}
+              escuchando
+            {% elif email.auto_sync_enabled %}
+              pendiente de worker externo
+            {% else %}
+              manual
+            {% endif %}
+            {% if email_sync_state.listener_last_heartbeat_at %} · pulso {{ email_sync_state.listener_last_heartbeat_at | local_dt(company.timezone if company else "Europe/Madrid", "%d/%m %H:%M") }}{% endif %}
+          </small>
+        {% endif %}
         {% if email.last_sync_at %}<small>Última sincronización: {{ email.last_sync_at | local_dt(company.timezone if company else "Europe/Madrid", "%d/%m %H:%M") }}</small>{% endif %}
       </div>
       <strong>{{ "✓" if setup_status.has_input_channel else "○" }}</strong>

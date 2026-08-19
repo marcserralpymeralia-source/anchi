@@ -19,7 +19,7 @@ from app.core.pagination import normalize_page
 from app.core.templating import templates
 from app.dashboard.service import agent_status_label
 from app.db.models import Customer, Email, EmailAttachment, EmailSettings, InboundMessage, InputChannel, MessageAttachment, Order
-from app.jobs.service import enqueue_job
+from app.jobs.service import enqueue_job, execute_job_inline
 from app.logs.service import log_action
 from app.settings.service import get_or_create_settings
 from app.tenancy.database import get_tenant_db
@@ -844,24 +844,27 @@ def process_entry(entry_id: str, db: Session = Depends(get_tenant_db), user: Ten
 
 @entries_router.post("/entries/sync")
 def sync_entries(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    settings = get_or_create_settings(db, EmailSettings, user.company_id)
+    safe_limit = max(min(int(settings.read_limit or 10), 50), 1)
     job = enqueue_job(
         db,
         company_id=user.company_id,
         job_type="email_sync",
-        payload={"auto_process": False, "unread_only": False},
+        payload={"auto_process": False, "unread_only": False, "limit": safe_limit},
         created_by_user_id=user.id,
     )
+    result = execute_job_inline(db, job)
     log_action(
         db,
         company_id=user.company_id,
         user=user,
-        action="entries.sync.enqueue",
+        action="entries.sync.inline",
         entity_type="job",
         entity_id=job.id,
-        message="Sincronizacion IMAP encolada desde Entradas",
+        message=result.get("message") or "Sincronizacion IMAP ejecutada desde Entradas",
     )
-    db.commit()
-    return RedirectResponse("/entries?sync=queued", status_code=303)
+    status = "success" if result.get("ok") else "error"
+    return RedirectResponse(f"/entries?sync={status}", status_code=303)
 
 
 def _paginate(total_items: int, page: int, page_size: int) -> dict:

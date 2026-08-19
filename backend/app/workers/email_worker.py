@@ -9,12 +9,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.db.models import EmailSettings
 import app.master.database as master_database
 from app.master.models import EmailSyncState, MasterTenantDatabase
-from app.settings.integrations import read_latest_imap_emails
-from app.settings.service import get_or_create_settings
-from app.tenancy.database import tenant_db_session
+from app.workers.email_listener import reconcile_tenant_email
 
 logger = logging.getLogger(__name__)
 _worker_started = False
@@ -82,28 +79,12 @@ def _release_lock(master_db: Session, state: EmailSyncState, *, success: bool, e
 
 
 def _run_due_tenant(master_db: Session, tenant: MasterTenantDatabase, state: EmailSyncState) -> None:
-    session_factory = tenant_db_session(tenant.database_url)
-    db = session_factory()
     try:
-        email_settings = get_or_create_settings(db, EmailSettings, tenant.company_id)
-        if not email_settings.auto_sync_enabled:
-            state.enabled = False
-            master_db.commit()
-            return
-        read_latest_imap_emails(
-            db,
-            email_settings,
-            tenant.company_id,
-            auto_process=email_settings.auto_process_on_fetch,
-            sync_state=state,
-            sync_session=master_db,
-        )
+        reconcile_tenant_email(master_db, tenant, owner="email-worker")
         _release_lock(master_db, state, success=True)
     except Exception as exc:  # noqa: BLE001
         logger.exception("Error sincronizando tenant %s: %s", tenant.company_id, exc)
         _release_lock(master_db, state, success=False, error=str(exc))
-    finally:
-        db.close()
 
 
 def _worker_loop() -> None:

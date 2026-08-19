@@ -1,5 +1,4 @@
 import logging
-import os
 from datetime import datetime, timezone
 from datetime import date
 from urllib.parse import urlsplit, urlunsplit
@@ -31,7 +30,6 @@ from app.dashboard.service import recent_processed_emails_overview
 from app.jobs.service import enqueue_job, execute_job_inline
 from app.tenancy.database import get_tenant_db
 from app.tenancy.migrations import tenant_migration_report
-from app.workers.jobs_worker import is_job_worker_started
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +45,6 @@ def _queued_job_response(request: Request, job_id: int, fallback: str = "/settin
             payload["message"] = result.get("message") or payload["message"]
         return JSONResponse(payload)
     return RedirectResponse(request.headers.get("referer") or fallback, status_code=303)
-
-
-def _should_run_job_inline() -> bool:
-    return os.getenv("VERCEL") == "1" or not is_job_worker_started()
 
 
 def _sync_email_sync_state(master_db: Session, user: TenantUser, settings: EmailSettings) -> None:
@@ -84,8 +78,6 @@ def _sync_email_sync_state(master_db: Session, user: TenantUser, settings: Email
 
 
 def _run_email_sync_job_if_needed(request: Request, db: Session, user: TenantUser, job) -> dict | None:  # noqa: ANN001
-    if not _should_run_job_inline():
-        return None
     request_id = getattr(request.state, "request_id", None)
     logger.info(
         "settings.email.read.inline.start",
@@ -146,9 +138,10 @@ def _clone_email_settings_for_preview(db: Session, company_id: int, data: dict) 
 
 
 @router.get("")
-def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
     setup_status = get_setup_status(db, user.company_id)
     email = get_or_create_settings(db, EmailSettings, user.company_id)
+    email_sync_state = master_db.scalar(select(EmailSyncState).where(EmailSyncState.company_id == user.company_id, EmailSyncState.channel_key == "email"))
     company = db.get(Company, user.company_id)
     return templates.TemplateResponse(
         "setup/settings_summary.html",
@@ -158,6 +151,7 @@ def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: 
             "setup_status": setup_status,
             "company": company,
             "email": email,
+            "email_sync_state": email_sync_state,
             "title": "Configuración",
         },
     )
@@ -850,10 +844,12 @@ def read_email(request: Request, db: Session = Depends(get_tenant_db), user: Ten
         "settings.email.read.start",
         extra={"event": "settings.email.read.start", "request_id": request_id, "company_id": user.company_id, "user_id": user.id},
     )
-    job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": False}, created_by_user_id=user.id)
+    settings = get_or_create_settings(db, EmailSettings, user.company_id)
+    safe_limit = max(min(int(settings.read_limit or 10), 50), 1)
+    job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": False, "limit": safe_limit}, created_by_user_id=user.id)
     logger.info(
-        "settings.email.read.queued",
-        extra={"event": "settings.email.read.queued", "request_id": request_id, "company_id": user.company_id, "job_id": job.id, "job_type": job.job_type},
+        "settings.email.read.requested",
+        extra={"event": "settings.email.read.requested", "request_id": request_id, "company_id": user.company_id, "job_id": job.id, "job_type": job.job_type},
     )
     result = _run_email_sync_job_if_needed(request, db, user, job)
     if result is not None:
@@ -867,7 +863,7 @@ def read_email(request: Request, db: Session = Depends(get_tenant_db), user: Ten
             message=result.get("message") or "Lectura IMAP completada",
         )
         return _queued_job_response(request, job.id, result=result)
-    log_action(db, company_id=user.company_id, user=user, action="email.read", entity_type="job", entity_id=job.id, message="Lectura IMAP encolada")
+    log_action(db, company_id=user.company_id, user=user, action="email.read", entity_type="job", entity_id=job.id, message="Lectura IMAP solicitada")
     return _queued_job_response(request, job.id)
 
 
@@ -878,10 +874,12 @@ def read_unprocessed_email(request: Request, db: Session = Depends(get_tenant_db
         "settings.email.read_unprocessed.start",
         extra={"event": "settings.email.read_unprocessed.start", "request_id": request_id, "company_id": user.company_id, "user_id": user.id},
     )
-    job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": True, "limit": 3}, created_by_user_id=user.id)
+    settings = get_or_create_settings(db, EmailSettings, user.company_id)
+    safe_limit = max(min(int(settings.read_limit or 10), 50), 1)
+    job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": True, "limit": safe_limit}, created_by_user_id=user.id)
     logger.info(
-        "settings.email.read_unprocessed.queued",
-        extra={"event": "settings.email.read_unprocessed.queued", "request_id": request_id, "company_id": user.company_id, "job_id": job.id, "job_type": job.job_type},
+        "settings.email.read_unprocessed.requested",
+        extra={"event": "settings.email.read_unprocessed.requested", "request_id": request_id, "company_id": user.company_id, "job_id": job.id, "job_type": job.job_type},
     )
     result = _run_email_sync_job_if_needed(request, db, user, job)
     if result is not None:
@@ -895,7 +893,7 @@ def read_unprocessed_email(request: Request, db: Session = Depends(get_tenant_db
             message=result.get("message") or "Lectura de correos recientes completada",
         )
         return _queued_job_response(request, job.id, "/settings#email-diagnostics", result=result)
-    log_action(db, company_id=user.company_id, user=user, action="email.read_unprocessed", entity_type="job", entity_id=job.id, message="Lectura de correos recientes encolada")
+    log_action(db, company_id=user.company_id, user=user, action="email.read_unprocessed", entity_type="job", entity_id=job.id, message="Lectura de correos recientes solicitada")
     return _queued_job_response(request, job.id, "/settings#email-diagnostics")
 
 

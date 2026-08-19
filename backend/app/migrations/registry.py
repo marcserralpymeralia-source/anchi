@@ -674,6 +674,12 @@ def _apply_master_email_sync_state(engine, dry_run: bool) -> list[str]:  # noqa:
                 "last_successful_sync_at": "DATETIME",
                 "last_error_type": "VARCHAR(120)",
                 "sync_status": "VARCHAR(50) DEFAULT 'idle'",
+                "listener_status": "VARCHAR(50) DEFAULT 'inactive'",
+                "listener_owner": "VARCHAR(120)",
+                "listener_last_started_at": "DATETIME",
+                "listener_last_heartbeat_at": "DATETIME",
+                "listener_last_error_at": "DATETIME",
+                "listener_last_error_message": "TEXT",
                 "last_checkpoint_uid": "VARCHAR(120)",
                 "backfill_status": "VARCHAR(50) DEFAULT 'idle'",
                 "backfill_total": "INTEGER DEFAULT 0",
@@ -693,6 +699,22 @@ def _apply_master_email_sync_state(engine, dry_run: bool) -> list[str]:  # noqa:
         )
     )
     return actions
+
+
+def _apply_master_email_listener_state(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    return ensure_columns(
+        engine,
+        "email_sync_state",
+        {
+            "listener_status": "VARCHAR(50) DEFAULT 'inactive'",
+            "listener_owner": "VARCHAR(120)",
+            "listener_last_started_at": "DATETIME",
+            "listener_last_heartbeat_at": "DATETIME",
+            "listener_last_error_at": "DATETIME",
+            "listener_last_error_message": "TEXT",
+        },
+        dry_run=dry_run,
+    )
 
 
 def _apply_tenant_ai_learning(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
@@ -786,6 +808,12 @@ MASTER_SCHEMA_MIGRATIONS = [
         name="master email sync checkpoints",
         checksum=checksum_text("master", "email_sync_checkpoints", "email_sync_state"),
         upgrade=_apply_master_email_sync_state,
+    ),
+    MigrationSpec(
+        version="2026.08.19.1",
+        name="master email listener state",
+        checksum=checksum_text("master", "email_listener_state", "email_sync_state"),
+        upgrade=_apply_master_email_listener_state,
     ),
 ]
 

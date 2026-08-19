@@ -24,7 +24,7 @@ from app.master.migrations import CURRENT_MASTER_SCHEMA_CHECKSUM, CURRENT_MASTER
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.migrations.inspection import discover_sqlite_files, inspect_database_url, inventory_records, simulate_sqlite_reference  # noqa: E402
 from app.migrations.helpers import table_exists  # noqa: E402
-from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, TENANT_COMPAT_COLUMNS  # noqa: E402
+from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state  # noqa: E402
 from app.tenancy.migrations import tenant_migration_report, upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import run_worker_cycle  # noqa: E402
 
@@ -267,6 +267,35 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertIn("initial_history_mode", registry_columns)
         self.assertIn("initial_history_limit", registry_columns)
         self.assertTrue(registry_columns.issubset(model_columns))
+
+    def test_master_email_sync_state_registry_contains_listener_columns(self):
+        with self.master_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE email_sync_state (
+                        id INTEGER PRIMARY KEY,
+                        company_id INTEGER,
+                        channel_key VARCHAR(80),
+                        enabled BOOLEAN DEFAULT true,
+                        frequency_seconds INTEGER DEFAULT 60,
+                        status VARCHAR(50) DEFAULT 'idle'
+                    )
+                    """
+                )
+            )
+        actions = _apply_master_email_listener_state(self.master_engine, dry_run=False)
+        self.assertTrue(actions)
+        columns = {column["name"] for column in inspect(self.master_engine).get_columns("email_sync_state")}
+        for column in (
+            "listener_status",
+            "listener_owner",
+            "listener_last_started_at",
+            "listener_last_heartbeat_at",
+            "listener_last_error_at",
+            "listener_last_error_message",
+        ):
+            self.assertIn(column, columns)
 
     def test_upgrade_tenant_repairs_missing_email_settings_columns_on_current_schema(self):
         with self.tenant_engine.begin() as conn:

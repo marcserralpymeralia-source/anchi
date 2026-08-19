@@ -15,7 +15,7 @@ from app.core.encryption import encrypt_secret
 from app.core.templating import templates
 from app.db.models import ChannelSetting, Company, Customer, EmailSettings, InputChannel, LLMSettings, Setting
 from app.imports.service import create_preview, read_preview, validate_import, confirm_import
-from app.jobs.service import enqueue_job
+from app.jobs.service import enqueue_job, execute_job_inline
 from app.logs.service import log_action
 from app.master.database import get_master_db
 from app.master.models import EmailSyncState
@@ -258,9 +258,9 @@ def setup_email_test(
 
 @router.post("/email/sync")
 def setup_email_sync(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
-    enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": False}, created_by_user_id=user.id)
-    db.commit()
-    return _redirect_step("channels", message="Sincronización iniciada")
+    job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": False}, created_by_user_id=user.id)
+    result = execute_job_inline(db, job)
+    return _redirect_step("channels", message=result.get("message") or "Sincronización completada")
 
 
 @router.post("/whatsapp")

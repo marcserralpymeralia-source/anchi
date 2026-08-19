@@ -301,16 +301,16 @@ def workbench_read_email(request: Request, db: Session = Depends(get_tenant_db),
         "workbench.email.read.start",
         extra={"event": "workbench.email.read.start", "request_id": request_id, "company_id": user.company_id, "user_id": user.id},
     )
-    job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": False}, created_by_user_id=user.id)
+    settings = get_or_create_settings(db, EmailSettings, user.company_id)
+    safe_limit = max(min(int(settings.read_limit or 10), 50), 1)
+    job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": False, "limit": safe_limit}, created_by_user_id=user.id)
     logger.info(
-        "workbench.email.read.queued",
-        extra={"event": "workbench.email.read.queued", "request_id": request_id, "company_id": user.company_id, "job_id": job.id, "job_type": job.job_type},
+        "workbench.email.read.requested",
+        extra={"event": "workbench.email.read.requested", "request_id": request_id, "company_id": user.company_id, "job_id": job.id, "job_type": job.job_type},
     )
-    result = _run_job_inline_if_needed(request, db, user, job, action="workbench.email.read.inline", message="Lectura IMAP completada")
-    if result is not None:
-        return _queued_job_response(request, job.id, result=result)
-    log_action(db, company_id=user.company_id, user=user, action="workbench.email.read", entity_type="job", entity_id=job.id, message="Lectura IMAP encolada")
-    return _queued_job_response(request, job.id)
+    result = execute_job_inline(db, job)
+    log_action(db, company_id=user.company_id, user=user, action="workbench.email.read.inline", entity_type="job", entity_id=job.id, message=result.get("message") or "Lectura IMAP completada")
+    return _queued_job_response(request, job.id, result=result)
 
 
 @router.post("/workbench/process-pending")
