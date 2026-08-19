@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from sqlalchemy import or_, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
 from app.auth.dependencies import current_user
@@ -22,6 +24,7 @@ from app.settings.service import get_or_create_settings
 from app.tenancy.database import get_tenant_db
 
 router = APIRouter(prefix="/mail", tags=["mail"])
+logger = logging.getLogger(__name__)
 
 
 def _redirect_back(request: Request, fallback: str = "/mail") -> RedirectResponse:
@@ -51,11 +54,58 @@ def _active_mail_scope(master_db: Session, company_id: int) -> tuple[str | None,
     return (state.mailbox or None), (state.uidvalidity or None)
 
 
+def _latest_email_scope(db: Session, company_id: int) -> tuple[str | None, str | None]:
+    row = db.execute(
+        select(Email.imap_mailbox, Email.imap_uidvalidity)
+        .where(
+            Email.company_id == company_id,
+            Email.archived.is_(False),
+            Email.imap_mailbox.is_not(None),
+        )
+        .order_by(Email.received_at.desc(), Email.id.desc())
+        .limit(1)
+    ).first()
+    if not row:
+        return None, None
+    mailbox, uidvalidity = row
+    return (mailbox or None), (uidvalidity or None)
+
+
+def _resolve_mail_scope(master_db: Session, db: Session, company_id: int) -> tuple[str | None, str | None]:
+    try:
+        scope = _active_mail_scope(master_db, company_id)
+    except SQLAlchemyError:
+        logger.warning(
+            "mail.scope_resolution.master_error",
+            extra={
+                "event": "mail.scope_resolution.master_error",
+                "company_id": company_id,
+            },
+            exc_info=True,
+        )
+        scope = None
+    if scope and any(scope):
+        return scope
+    fallback_scope = _latest_email_scope(db, company_id)
+    if fallback_scope and any(fallback_scope):
+        logger.info(
+            "mail.scope_resolution.fallback_scope",
+            extra={
+                "event": "mail.scope_resolution.fallback_scope",
+                "company_id": company_id,
+                "mailbox": fallback_scope[0],
+                "uidvalidity": fallback_scope[1],
+            },
+        )
+        return fallback_scope
+    return None, None
+
+
 def _email_matches_active_scope(email: Email, scope: tuple[str | None, str | None]) -> bool:
     mailbox, uidvalidity = scope
-    if mailbox and email.imap_mailbox and email.imap_mailbox != mailbox:
+    if mailbox and email.imap_mailbox != mailbox:
         return False
-    if uidvalidity and email.imap_uidvalidity and email.imap_uidvalidity != uidvalidity:
+    if uidvalidity and email.imap_uidvalidity != uidvalidity:
         return False
     return True
 
@@ -159,7 +209,10 @@ def _load_mail_rows(db: Session, company_id: int, filters: dict, *, scope: tuple
 
 @router.get("")
 def mail_inbox(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
-    active_scope = _active_mail_scope(master_db, user.company_id)
+    mail_settings = get_or_create_settings(db, EmailSettings, user.company_id)
+    if not email_config_status(mail_settings)["imap_ready"]:
+        return RedirectResponse("/settings#email-receive", status_code=303)
+    active_scope = _resolve_mail_scope(master_db, db, user.company_id)
     filters = {
         "status": request.query_params.get("status", "all"),
         "date_range": request.query_params.get("date_range", "30d"),
@@ -197,8 +250,8 @@ def mail_inbox(request: Request, db: Session = Depends(get_tenant_db), user: Ten
             "filters": filters,
             "pagination": pagination,
             "counts": counts,
-            "mail_settings": get_or_create_settings(db, EmailSettings, user.company_id),
-            "email_status": email_config_status(get_or_create_settings(db, EmailSettings, user.company_id)),
+            "mail_settings": mail_settings,
+            "email_status": email_config_status(mail_settings),
             "active_mailbox": active_scope[0],
             "active_uidvalidity": active_scope[1],
         },
@@ -207,7 +260,7 @@ def mail_inbox(request: Request, db: Session = Depends(get_tenant_db), user: Ten
 
 @router.get("/{email_id}")
 def mail_detail(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
-    active_scope = _active_mail_scope(master_db, user.company_id)
+    active_scope = _resolve_mail_scope(master_db, db, user.company_id)
     email = db.scalar(
         select(Email)
         .where(Email.id == email_id, Email.company_id == user.company_id)
@@ -248,7 +301,7 @@ def mail_detail(email_id: int, request: Request, db: Session = Depends(get_tenan
 
 @router.post("/{email_id}/process")
 def mail_process(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
-    active_scope = _active_mail_scope(master_db, user.company_id)
+    active_scope = _resolve_mail_scope(master_db, db, user.company_id)
     email = db.get(Email, email_id)
     if not email or email.company_id != user.company_id or not _email_matches_active_scope(email, active_scope):
         return PlainTextResponse("No encontrado", status_code=404)
@@ -259,7 +312,7 @@ def mail_process(email_id: int, request: Request, db: Session = Depends(get_tena
 
 @router.post("/{email_id}/reprocess")
 def mail_reprocess(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
-    active_scope = _active_mail_scope(master_db, user.company_id)
+    active_scope = _resolve_mail_scope(master_db, db, user.company_id)
     email = db.get(Email, email_id)
     if not email or email.company_id != user.company_id or not _email_matches_active_scope(email, active_scope):
         return PlainTextResponse("No encontrado", status_code=404)
@@ -270,7 +323,7 @@ def mail_reprocess(email_id: int, request: Request, db: Session = Depends(get_te
 
 @router.post("/{email_id}/mark-read")
 def mail_mark_read(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
-    active_scope = _active_mail_scope(master_db, user.company_id)
+    active_scope = _resolve_mail_scope(master_db, db, user.company_id)
     email = db.get(Email, email_id)
     if email and email.company_id == user.company_id and _email_matches_active_scope(email, active_scope):
         email.is_read = True
@@ -282,7 +335,7 @@ def mail_mark_read(email_id: int, request: Request, db: Session = Depends(get_te
 
 @router.post("/{email_id}/archive")
 def mail_archive(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
-    active_scope = _active_mail_scope(master_db, user.company_id)
+    active_scope = _resolve_mail_scope(master_db, db, user.company_id)
     email = db.get(Email, email_id)
     if email and email.company_id == user.company_id and _email_matches_active_scope(email, active_scope):
         email.is_read = True
@@ -294,7 +347,7 @@ def mail_archive(email_id: int, request: Request, db: Session = Depends(get_tena
 
 @router.post("/{email_id}/mark-no-order")
 def mail_mark_no_order(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
-    active_scope = _active_mail_scope(master_db, user.company_id)
+    active_scope = _resolve_mail_scope(master_db, db, user.company_id)
     email = db.get(Email, email_id)
     if email and email.company_id == user.company_id and _email_matches_active_scope(email, active_scope):
         email.status = "no_pedido"
@@ -308,7 +361,7 @@ def mail_mark_no_order(email_id: int, request: Request, db: Session = Depends(ge
 
 @router.post("/{email_id}/link-order")
 def mail_link_order(email_id: int, request: Request, order_id: int = Form(...), db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
-    active_scope = _active_mail_scope(master_db, user.company_id)
+    active_scope = _resolve_mail_scope(master_db, db, user.company_id)
     email = db.get(Email, email_id)
     order = db.get(Order, order_id)
     if email and order and email.company_id == user.company_id and order.company_id == user.company_id and _email_matches_active_scope(email, active_scope):

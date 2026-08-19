@@ -4,7 +4,9 @@ import os
 import unittest
 from pathlib import Path
 from datetime import datetime, timezone
+from unittest.mock import patch
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
@@ -13,7 +15,7 @@ os.environ.setdefault("ENABLE_DEMO_BOOTSTRAP", "false")
 os.environ.setdefault("PERFORMANCE_PROFILING_ENABLED", "true")
 os.environ.setdefault("ENABLE_PERFORMANCE_PROFILING", "true")
 
-from app.db.models import Email  # noqa: E402
+from app.db.models import Email, EmailSettings  # noqa: E402
 from app.master.models import EmailSyncState  # noqa: E402
 from scripts.performance_data import build_performance_fixture, performance_test_client  # noqa: E402
 
@@ -117,6 +119,42 @@ class MailInboxRoutesTests(unittest.TestCase):
         finally:
             master_engine.dispose()
             tenant_engine.dispose()
+            fixture.cleanup()
+
+    def test_mail_inbox_redirects_to_settings_when_imap_is_not_ready(self):
+        fixture = build_performance_fixture("small")
+        tenant_engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
+        try:
+            with TenantSession() as tenant_db:
+                settings = tenant_db.scalar(select(EmailSettings).where(EmailSettings.company_id == fixture.company_id))
+                self.assertIsNotNone(settings)
+                assert settings is not None
+                settings.imap_host = None
+                settings.imap_username = None
+                settings.imap_password_encrypted = None
+                tenant_db.commit()
+
+            with performance_test_client(fixture) as client:
+                response = client.get("/mail", follow_redirects=False)
+
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(response.headers["location"], "/settings#email-receive")
+        finally:
+            tenant_engine.dispose()
+            fixture.cleanup()
+
+    def test_mail_inbox_falls_back_when_scope_resolution_fails(self):
+        fixture = build_performance_fixture("small")
+        try:
+            with performance_test_client(fixture) as client, patch("app.mail.routes._active_mail_scope", side_effect=SQLAlchemyError("boom")):
+                response = client.get("/mail")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("Bandeja de entrada", response.text)
+            self.assertNotIn("Internal Server Error", response.text)
+            self.assertNotIn("Location", response.headers)
+        finally:
             fixture.cleanup()
 
 
