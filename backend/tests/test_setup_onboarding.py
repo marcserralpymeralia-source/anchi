@@ -227,6 +227,17 @@ class SetupOnboardingTests(unittest.TestCase):
                     follow_redirects=False,
                 )
             self.assertEqual(email.status_code, 303)
+
+            with fixture.TenantSession() as db:
+                email_channel = db.scalar(
+                    select(InputChannel).where(
+                        InputChannel.company_id == 1,
+                        InputChannel.key == "email",
+                    )
+                )
+                self.assertIsNotNone(email_channel)
+                self.assertTrue(email_channel.is_active)
+
             products_csv = b"SKU,Descripcion producto,Unidad,Precio venta\nP001,Producto Demo,uds,12.5\n"
             product_preview = client.post("/setup/products/preview", files={"file": ("products.csv", products_csv, "text/csv")})
             self.assertEqual(product_preview.status_code, 200)

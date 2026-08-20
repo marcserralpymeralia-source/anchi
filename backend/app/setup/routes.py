@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import current_user
+from app.channels.service import get_or_create_channel
 from app.core.encryption import encrypt_secret
 from app.core.templating import templates
 from app.db.models import ChannelSetting, Company, Customer, EmailSettings, InputChannel, LLMSettings, Setting
@@ -208,9 +209,8 @@ def setup_email_connect(
     if not result.get("ok"):
         db.commit()
         return _redirect_step("channels", error=result.get("message") or "No se pudo conectar el correo.")
-    email_channel = db.scalar(select(InputChannel).where(InputChannel.company_id == user.company_id, InputChannel.key == "email"))
-    if email_channel:
-        email_channel.is_active = True
+    email_channel = get_or_create_channel(db, user.company_id, "email")
+    email_channel.is_active = True
     state = master_db.scalar(select(EmailSyncState).where(EmailSyncState.company_id == user.company_id, EmailSyncState.channel_key == "email"))
     if not state:
         state = EmailSyncState(company_id=user.company_id, channel_key="email", enabled=False, status="idle")
