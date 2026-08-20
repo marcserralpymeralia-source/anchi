@@ -20,11 +20,11 @@ os.environ.setdefault("APP_ENV", "development")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.agent.services import AgentProcessingService  # noqa: E402
+from app.agent.services import AgentProcessingService, MockAgentService  # noqa: E402
 from app.channels.service import get_or_create_channel  # noqa: E402
 from app.core.encryption import encrypt_secret  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import AuditLog, BackgroundJob, Conversation, Customer, CustomerContactPoint, Email, ExportFile, FTPSettings, InboundMessage, LLMSettings, Order, OrderLine, Product, ProductAlias, ScoringSettings  # noqa: E402
+from app.db.models import AuditLog, BackgroundJob, Company, Conversation, Customer, CustomerContactPoint, Email, ExportFile, FTPSettings, InboundMessage, LLMSettings, Order, OrderLine, Product, ProductAlias, ScoringSettings  # noqa: E402
 from app.jobs.service import enqueue_job, retry_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import MasterCompany, MasterTenantDatabase  # noqa: E402
@@ -125,6 +125,28 @@ class RegressionFlowsTests(unittest.TestCase):
 
     def _seed_user(self):
         return SimpleNamespace(id=1, company_id=1, role=SimpleNamespace(name="Administrador"))
+
+    def test_mock_order_uses_tenant_company_name(self):
+        db = self.TenantSession()
+        try:
+            db.add(Company(id=1, name="Tenant Prueba SL"))
+            db.commit()
+
+            MockAgentService().create_mock_order(db, 1)
+
+            email = db.scalar(
+                select(Email).where(
+                    Email.company_id == 1,
+                    Email.external_id.like("mock-1-%"),
+                )
+            )
+
+            self.assertIsNotNone(email)
+            self.assertIn("Tenant Prueba SL", email.extracted_text or "")
+            self.assertNotIn("Anchi Demo", email.extracted_text or "")
+            self.assertNotEqual(email.sender, "compras@anchi-demo.local")
+        finally:
+            db.close()
 
     def test_email_to_review_confirm_export_and_audit_flow(self):
         self._seed_master()

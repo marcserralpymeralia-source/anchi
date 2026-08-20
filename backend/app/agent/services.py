@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from app.agent.platform import UnifiedOrderPipelineService
 from app.channels.service import get_or_create_channel
-from app.db.models import Customer, CustomerAlias, CustomerContactPoint, CustomerDomain, Email, EmailAttachment, EmailSettings, InboundMessage, InputChannel, LLMSettings, Order, OrderLine, Product, ProductAlias, PromptTemplate, PromptVersion, ScoringSettings
+from app.db.models import Company, Customer, CustomerAlias, CustomerContactPoint, CustomerDomain, Email, EmailAttachment, EmailSettings, InboundMessage, InputChannel, LLMSettings, Order, OrderLine, Product, ProductAlias, PromptTemplate, PromptVersion, ScoringSettings
 from app.messages.service import get_or_create_conversation
 from app.orders.state import ORDER_STATE
 from app.logs.service import log_action
@@ -454,14 +454,16 @@ startxref
         return path
 
     def create_mock_order(self, db: Session, company_id: int) -> Order:
+        company = db.scalar(select(Company).where(Company.id == company_id))
+        company_name = company.name if company else f"Tenant {company_id}"
         order_key = f"mock-{company_id}-{date.today().isoformat()}"
         email = Email(
             company_id=company_id,
             external_id=order_key,
-            sender="compras@anchi-demo.local",
+            sender=f"compras+{company_id}@example.local",
             subject="Pedido de prueba",
             body="Adjuntamos pedido de prueba.",
-            extracted_text="10 unidades producto demo para Anchi Demo SL",
+            extracted_text=f"10 unidades producto demo para {company_name}",
             status="pedido_detectado",
             detected_type="pedido",
         )
