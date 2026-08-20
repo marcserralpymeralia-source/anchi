@@ -26,6 +26,8 @@ from app.settings.integrations import (  # noqa: E402
     _normalized_email_external_id,
 )
 
+from app.agent.platform import UnifiedOrderPipelineService
+
 from app.messages.service import (  # noqa: E402
     NormalizedMessage,
     normalize_direction,
@@ -310,6 +312,84 @@ class MessagesAndConversationsTests(unittest.TestCase):
 
         db.close()
 
+
+
+    def test_email_and_whatsapp_share_same_pipeline_contract(self):
+        self._seed_llm()
+        db = self.Session()
+
+        email_message, email_conversation = persist_normalized_message(
+            db,
+            NormalizedMessage(
+                company_id=1,
+                channel_key="email",
+                provider="imap",
+                external_id="contract-email-1",
+                sender="cliente@email.com",
+                recipients=["pedidos@email.com"],
+                subject="Pedido email",
+                text_content="10 cajas",
+                external_thread_id="thread-email",
+                metadata={"source": "email"},
+            ),
+            content_type="email",
+        )
+
+        whatsapp_message, whatsapp_conversation = persist_normalized_message(
+            db,
+            NormalizedMessage(
+                company_id=1,
+                channel_key="whatsapp",
+                provider="meta",
+                external_id="contract-whatsapp-1",
+                sender="34600000000",
+                recipients=["34900000000"],
+                subject="Pedido whatsapp",
+                text_content="10 cajas",
+                external_thread_id="thread-whatsapp",
+                metadata={"source": "whatsapp"},
+            ),
+            content_type="whatsapp_text",
+        )
+
+        db.commit()
+
+        received = []
+
+        def fake_process(_self, session, inbound_message, user=None, force_order=False, email=None):
+            received.append(inbound_message)
+            return {
+                "ok": True,
+                "status": "received",
+            }
+
+        with patch(
+            "app.agent.platform.UnifiedOrderPipelineService.process_inbound_message",
+            new=fake_process,
+        ):
+            pipeline = UnifiedOrderPipelineService()
+            pipeline.process_inbound_message(db, email_message)
+            pipeline.process_inbound_message(db, whatsapp_message)
+
+        self.assertEqual(len(received), 2)
+        self.assertEqual(received[0].company_id, 1)
+        self.assertEqual(received[1].company_id, 1)
+
+        self.assertNotEqual(
+            received[0].channel_id,
+            received[1].channel_id,
+        )
+
+        self.assertEqual(
+            received[0].conversation_id,
+            email_conversation.id,
+        )
+        self.assertEqual(
+            received[1].conversation_id,
+            whatsapp_conversation.id,
+        )
+
+        db.close()
 
     def test_imap_external_id_is_stable_without_message_id(self):
         self.assertEqual(
