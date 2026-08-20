@@ -199,7 +199,7 @@ class AgentProcessingService:
                 "email",
             )
             if not channel.is_active:
-                channel.is_active = True
+                raise ValueError("Email channel is disabled for this tenant")
             inbound_message = InboundMessage(
                 company_id=email.company_id,
                 channel_id=channel.id if channel else None,

@@ -18,6 +18,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.agent.services import AgentProcessingService  # noqa: E402
+from app.channels.service import get_or_create_channel  # noqa: E402
 from app.core.encryption import encrypt_secret  # noqa: E402
 from app.db.database import Base  # noqa: E402
 from app.db.models import Conversation, Email, InboundMessage, LLMSettings, Order  # noqa: E402
@@ -114,6 +115,10 @@ class MessagesAndConversationsTests(unittest.TestCase):
         db = self.Session()
         email = Email(company_id=1, external_id="mail-1", sender="cliente@example.com", subject="Pedido", body="10 cajas")
         db.add(email)
+        db.commit()
+
+        channel = get_or_create_channel(db, 1, "email")
+        channel.is_active = True
         db.commit()
 
         calls = {"count": 0}
@@ -487,6 +492,31 @@ class MessagesAndConversationsTests(unittest.TestCase):
         self.assertEqual(conversation.company_id, 2)
 
         db.close()
+
+    def test_process_email_rejects_disabled_email_channel(self):
+        db = self.Session()
+        try:
+            email = Email(
+                company_id=1,
+                external_id="disabled-email-1",
+                sender="cliente@example.com",
+                subject="Pedido",
+                body="10 cajas",
+            )
+            db.add(email)
+            db.flush()
+
+            channel = get_or_create_channel(db, 1, "email")
+            channel.is_active = False
+            db.flush()
+
+            with self.assertRaisesRegex(
+                ValueError,
+                "Email channel is disabled for this tenant",
+            ):
+                AgentProcessingService().process_email(db, email)
+        finally:
+            db.close()
 
 
 if __name__ == "__main__":
