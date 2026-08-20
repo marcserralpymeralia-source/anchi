@@ -144,9 +144,16 @@ class SchemaMigrationTests(unittest.TestCase):
         self._seed_current_tenant_without_ledger()
         self._seed_master_catalog(f"sqlite:///{self.tenant_path.as_posix()}")
 
+        orphan_path = Path(self.tempdir.name) / "orphan.sqlite"
+        with create_engine(
+            f"sqlite:///{orphan_path.as_posix()}",
+            connect_args={"check_same_thread": False},
+        ).begin() as conn:
+            conn.execute(text("CREATE TABLE misc (id INTEGER PRIMARY KEY)"))
+
         db = self.MasterSession()
         try:
-            items = inventory_records(db, Path(__file__).resolve().parents[2])
+            items = inventory_records(db, Path(self.tempdir.name))
         finally:
             db.close()
 
