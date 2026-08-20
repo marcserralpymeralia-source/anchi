@@ -19,6 +19,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.agent.services import AgentProcessingService  # noqa: E402
+from app.channels.service import get_or_create_channel  # noqa: E402
 from app.db.database import Base  # noqa: E402
 from app.db.models import BackgroundJob, Customer, Email, ImportJob, JobAttempt, LLMSettings, Order, OrderLine  # noqa: E402
 from app.imports.service import create_preview  # noqa: E402
@@ -182,6 +183,11 @@ class JobsReliabilityTests(unittest.TestCase):
         email = Email(company_id=1, external_id="mail-1", sender="cliente@example.com", subject="Pedido", body="10 cajas")
         db.add(email)
         db.commit()
+
+        channel = get_or_create_channel(db, 1, "email")
+        channel.is_active = True
+        db.commit()
+
         calls = {"count": 0}
 
         def fake_process_inbound_message(_self, session, inbound_message, user=None, force_order=False, email=None):  # noqa: ANN001
@@ -244,6 +250,11 @@ class JobsReliabilityTests(unittest.TestCase):
         email = Email(company_id=1, external_id="mail-2", sender="cliente@example.com", subject="Pedido worker", body="3 cajas")
         db.add(email)
         db.commit()
+
+        channel = get_or_create_channel(db, 1, "email")
+        channel.is_active = True
+        db.commit()
+
         job = enqueue_job(db, company_id=1, job_type="process_email", payload={"email_id": email.id}, created_by_user_id=1)
         db.close()
 

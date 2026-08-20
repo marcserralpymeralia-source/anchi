@@ -21,6 +21,7 @@ os.environ.setdefault("APP_ENV", "development")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.agent.services import AgentProcessingService  # noqa: E402
+from app.channels.service import get_or_create_channel  # noqa: E402
 from app.core.encryption import encrypt_secret  # noqa: E402
 from app.db.database import Base  # noqa: E402
 from app.db.models import AuditLog, BackgroundJob, Conversation, Customer, CustomerContactPoint, Email, ExportFile, FTPSettings, InboundMessage, LLMSettings, Order, OrderLine, Product, ProductAlias, ScoringSettings  # noqa: E402
@@ -133,6 +134,10 @@ class RegressionFlowsTests(unittest.TestCase):
         db = self.TenantSession()
         email = Email(company_id=1, external_id="mail-e2e-1", sender="cliente@example.com", subject="Pedido demo", body="Necesitamos 5 unidades de P-100.")
         db.add(email)
+        db.commit()
+
+        channel = get_or_create_channel(db, 1, "email")
+        channel.is_active = True
         db.commit()
 
         classification = json.dumps({"tipo_correo": "pedido", "confianza": 0.96, "motivo": "Pedido claro"}, ensure_ascii=False)
