@@ -1092,6 +1092,22 @@ class UnifiedOrderPipelineService:
         self.alerts = AlertService()
 
     def process_inbound_message(self, db: Session, inbound_message: InboundMessage, user=None, force_order: bool = False, email: Email | None = None) -> dict[str, Any]:
+        if not force_order and inbound_message.order_id:
+            order = db.scalar(
+                select(Order).where(
+                    Order.id == inbound_message.order_id,
+                    Order.company_id == inbound_message.company_id,
+                )
+            )
+            if order:
+                return {
+                    "ok": True,
+                    "status": "order_detected",
+                    "message": f"Pedido {order.id} ya habia sido creado.",
+                    "order_id": order.id,
+                    "score": order.score,
+                }
+
         llm_settings = get_or_create_settings(db, LLMSettings, inbound_message.company_id)
         email_settings = get_or_create_settings(db, EmailSettings, inbound_message.company_id)
         if not llm_settings.agent_enabled or llm_settings.provider == "disabled" or llm_settings.agent_mode == "desactivado":

@@ -21,6 +21,11 @@ from app.agent.services import AgentProcessingService  # noqa: E402
 from app.core.encryption import encrypt_secret  # noqa: E402
 from app.db.database import Base  # noqa: E402
 from app.db.models import Conversation, Email, InboundMessage, LLMSettings, Order  # noqa: E402
+from app.settings.integrations import (  # noqa: E402
+    _existing_email_for_imap,
+    _normalized_email_external_id,
+)
+
 from app.messages.service import (  # noqa: E402
     NormalizedMessage,
     normalize_direction,
@@ -244,6 +249,123 @@ class MessagesAndConversationsTests(unittest.TestCase):
             db.scalar(select(func.count()).select_from(Conversation)),
             2,
         )
+
+        db.close()
+
+
+    def test_message_identity_is_scoped_by_tenant_channel_and_provider(self):
+        db = self.Session()
+
+        first, _ = upsert_inbound_message(
+            db,
+            company_id=1,
+            channel_key="email",
+            provider="imap",
+            external_id="same-id",
+            sender="a@example.com",
+            text_content="pedido",
+        )
+
+        duplicate, _ = upsert_inbound_message(
+            db,
+            company_id=1,
+            channel_key="email",
+            provider="imap",
+            external_id="same-id",
+            sender="a@example.com",
+            text_content="pedido repetido",
+        )
+
+        other_channel, _ = upsert_inbound_message(
+            db,
+            company_id=1,
+            channel_key="whatsapp",
+            provider="meta",
+            external_id="same-id",
+            sender="34600000000",
+            text_content="pedido",
+        )
+
+        other_tenant, _ = upsert_inbound_message(
+            db,
+            company_id=2,
+            channel_key="email",
+            provider="imap",
+            external_id="same-id",
+            sender="b@example.com",
+            text_content="pedido",
+        )
+
+        db.commit()
+
+        self.assertEqual(first.id, duplicate.id)
+        self.assertNotEqual(first.id, other_channel.id)
+        self.assertNotEqual(first.id, other_tenant.id)
+
+        self.assertEqual(
+            db.scalar(select(func.count()).select_from(InboundMessage)),
+            3,
+        )
+
+        db.close()
+
+
+    def test_imap_external_id_is_stable_without_message_id(self):
+        self.assertEqual(
+            _normalized_email_external_id("INBOX", "999", "42"),
+            "INBOX:999:42",
+        )
+        self.assertEqual(
+            _normalized_email_external_id("INBOX", None, "42"),
+            "INBOX:unknown:42",
+        )
+
+    def test_imap_duplicate_detection_works_without_message_id(self):
+        db = self.Session()
+
+        external_id = _normalized_email_external_id(
+            "INBOX",
+            "12345",
+            "77",
+        )
+
+        email = Email(
+            company_id=1,
+            external_id=external_id,
+            message_id=None,
+            imap_mailbox="INBOX",
+            imap_uidvalidity="12345",
+            imap_uid="77",
+            sender="cliente@example.com",
+            subject="Pedido sin Message-ID",
+            body="10 cajas",
+        )
+        db.add(email)
+        db.commit()
+
+        duplicate = _existing_email_for_imap(
+            db,
+            company_id=1,
+            mailbox="INBOX",
+            uidvalidity="12345",
+            uid="77",
+            message_id=None,
+            external_id=external_id,
+        )
+
+        other_tenant = _existing_email_for_imap(
+            db,
+            company_id=2,
+            mailbox="INBOX",
+            uidvalidity="12345",
+            uid="77",
+            message_id=None,
+            external_id=external_id,
+        )
+
+        self.assertIsNotNone(duplicate)
+        self.assertEqual(duplicate.id, email.id)
+        self.assertIsNone(other_tenant)
 
         db.close()
 

@@ -232,6 +232,99 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(conversation)
         db.close()
 
+
+    def test_reprocessing_same_whatsapp_message_does_not_duplicate_order(self):
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {
+                                    "phone_number_id": "pn-123",
+                                    "business_account_id": "ba-123",
+                                },
+                                "messages": [
+                                    {
+                                        "id": "wa-idempotency-1",
+                                        "from": "+34600000000",
+                                        "type": "text",
+                                        "text": {
+                                            "body": "Pedido de 5 unidades de P-100 para Cliente WhatsApp SL"
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+
+        events = parse_payload_events(payload)
+        db = self.TenantSession()
+        message = persist_event(db, 1, events[0])
+        db.commit()
+
+        classification = json.dumps(
+            {
+                "tipo_correo": "pedido",
+                "confianza": 0.97,
+                "motivo": "Pedido claro",
+            },
+            ensure_ascii=False,
+        )
+        extraction = json.dumps(
+            {
+                "cliente": {
+                    "nombre_detectado": "Cliente WhatsApp SL",
+                    "codigo_cliente_detectado": "C001",
+                },
+                "pedido": {
+                    "fecha_pedido": "2026-07-16",
+                    "lineas": [
+                        {
+                            "texto_original": "5 unidades de P-100",
+                            "referencia_detectada": "P-100",
+                            "producto_detectado": "Producto WhatsApp",
+                            "cantidad": 5,
+                            "unidad": "uds",
+                            "confianza_extraccion": 0.95,
+                        }
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        )
+
+        pipeline = UnifiedOrderPipelineService()
+
+        with patch(
+            "app.agent.platform.classify_sample",
+            return_value={"ok": True, "content": classification},
+        ), patch(
+            "app.agent.platform.extract_sample",
+            return_value={"ok": True, "content": extraction},
+        ):
+            first = pipeline.process_inbound_message(db, message)
+            second = pipeline.process_inbound_message(db, message)
+
+        self.assertTrue(first["ok"])
+        self.assertTrue(second["ok"])
+        self.assertEqual(first["order_id"], second["order_id"])
+
+        self.assertEqual(
+            db.scalar(select(func.count()).select_from(InboundMessage)) or 0,
+            1,
+        )
+        self.assertEqual(
+            db.scalar(select(func.count()).select_from(Order)) or 0,
+            1,
+        )
+
+        db.close()
+
+
     def test_webhook_tenant_resolution_by_slug(self):
         master_db = self.MasterSession()
         company, tenant = resolve_company_from_slug(master_db, "whatsapp-demo")
