@@ -15,13 +15,14 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.core.security import hash_password  # noqa: E402
+from app.core.security import hash_password, verify_password  # noqa: E402
 from app.db.database import Base  # noqa: E402
 from app.db.models import BackgroundJob, Conversation, Customer, Email, EmailSettings, JobAttempt, KnowledgeEntry, Order, OrderLine, ProductEmbedding, TenantSchemaMigration  # noqa: E402
 from app.jobs.service import enqueue_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.migrations import CURRENT_MASTER_SCHEMA_CHECKSUM, CURRENT_MASTER_SCHEMA_NAME, CURRENT_MASTER_SCHEMA_VERSION, master_migration_report, upgrade_master_schema  # noqa: E402
 from app.master.models import CompanyMembership, EmailSyncState, MasterCompany, MasterSchemaMigration, MasterTenantDatabase, MasterUser  # noqa: E402
+from app.master.provisioning import _ensure_master_user  # noqa: E402
 from app.migrations.inspection import discover_sqlite_files, inspect_database_url, inventory_records, simulate_sqlite_reference  # noqa: E402
 from app.migrations.helpers import table_exists  # noqa: E402
 from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, MASTER_EMAIL_SYNC_STATE_COLUMNS, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_master_email_sync_state_repair, _apply_tenant_knowledge_entries, _apply_tenant_product_embeddings  # noqa: E402
@@ -63,6 +64,35 @@ class SchemaMigrationTests(unittest.TestCase):
         )
         db.commit()
         db.close()
+
+    def test_existing_master_user_keeps_password_during_provisioning(self) -> None:
+        MasterBase.metadata.create_all(self.master_engine)
+        db = self.MasterSession()
+        try:
+            user = _ensure_master_user(
+                db,
+                "admin@example.com",
+                "Administrador Inicial",
+                "initial-password",
+            )
+            db.commit()
+            original_hash = user.password_hash
+
+            same_user = _ensure_master_user(
+                db,
+                "admin@example.com",
+                "Administrador Actualizado",
+                "different-password",
+            )
+            db.commit()
+
+            self.assertEqual(same_user.id, user.id)
+            self.assertEqual(same_user.full_name, "Administrador Actualizado")
+            self.assertEqual(same_user.password_hash, original_hash)
+            self.assertTrue(verify_password("initial-password", same_user.password_hash))
+            self.assertFalse(verify_password("different-password", same_user.password_hash))
+        finally:
+            db.close()
 
     def _seed_current_tenant_without_ledger(self, *, with_jobs: bool = False) -> None:
         self._create_tables_without_ledger(self.tenant_engine, Base.metadata)

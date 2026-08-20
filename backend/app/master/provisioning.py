@@ -54,7 +54,6 @@ def _ensure_master_user(master_db: Session, email: str, full_name: str, password
         master_db.flush()
         return user
     user.full_name = full_name
-    user.password_hash = hash_password(password)
     user.is_active = True
     master_db.flush()
     return user
