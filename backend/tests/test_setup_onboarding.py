@@ -238,6 +238,16 @@ class SetupOnboardingTests(unittest.TestCase):
                 self.assertIsNotNone(email_channel)
                 self.assertTrue(email_channel.is_active)
 
+                whatsapp_channel = db.scalar(
+                    select(InputChannel).where(
+                        InputChannel.company_id == 1,
+                        InputChannel.key == "whatsapp",
+                    )
+                )
+                self.assertTrue(
+                    whatsapp_channel is None or not whatsapp_channel.is_active
+                )
+
             products_csv = b"SKU,Descripcion producto,Unidad,Precio venta\nP001,Producto Demo,uds,12.5\n"
             product_preview = client.post("/setup/products/preview", files={"file": ("products.csv", products_csv, "text/csv")})
             self.assertEqual(product_preview.status_code, 200)
