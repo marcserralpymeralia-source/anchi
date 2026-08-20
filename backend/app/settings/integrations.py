@@ -23,7 +23,10 @@ from app.agent.prompt_runtime import run_prompt_execution
 from app.core.encryption import decrypt_secret
 from app.db.models import Email, EmailAttachment, EmailSettings, InboundMessage, LLMSettings, MessageAttachment
 from app.master.models import EmailSyncState
-from app.messages.service import upsert_inbound_message
+from app.messages.service import (
+    NormalizedMessage,
+    persist_normalized_message,
+)
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
 
@@ -1179,48 +1182,55 @@ def _is_attachment(part: EmailMessage) -> bool:
     return bool(filename) or disposition in {"attachment", "inline"} and content_type not in {"text/plain", "text/html"}
 
 
-def _create_inbound_message(db: Session, company_id: int, email: Email, settings: EmailSettings, msg: EmailMessage, body: str) -> InboundMessage:
-    inbound_message, conversation = upsert_inbound_message(
-        db,
+def _create_inbound_message(
+    db: Session,
+    company_id: int,
+    email: Email,
+    settings: EmailSettings,
+    msg: EmailMessage,
+    body: str,
+) -> InboundMessage:
+    metadata = {
+        "message_id": email.message_id or email.external_id,
+        "from": email.sender,
+        "subject": email.subject,
+        "date": msg.get("Date"),
+        "imap_mailbox": email.imap_mailbox or settings.mailbox or settings.inbox_folder,
+        "imap_uidvalidity": email.imap_uidvalidity,
+        "imap_uid": email.imap_uid,
+    }
+
+    normalized = NormalizedMessage(
         company_id=company_id,
         channel_key="email",
         provider=settings.provider or "imap",
         external_id=email.external_id,
         sender=email.sender,
-        recipients=[settings.connected_email or settings.imap_username] if (settings.connected_email or settings.imap_username) else [],
+        recipients=[settings.connected_email or settings.imap_username]
+        if (settings.connected_email or settings.imap_username)
+        else [],
         subject=email.subject,
         text_content=body,
         direction="inbound",
         external_thread_id=msg.get("In-Reply-To") or msg.get("References"),
         received_at=email.received_at,
-        metadata={
-            "message_id": email.message_id or email.external_id,
-            "from": email.sender,
-            "subject": email.subject,
-            "date": msg.get("Date"),
-            "imap_mailbox": email.imap_mailbox or settings.mailbox or settings.inbox_folder,
-            "imap_uidvalidity": email.imap_uidvalidity,
-            "imap_uid": email.imap_uid,
-        },
+        metadata=metadata,
+    )
+
+    inbound_message, conversation = persist_normalized_message(
+        db,
+        normalized,
         content_type="email",
         has_attachments=False,
         has_pdf=False,
         has_audio=False,
     )
+
     email.conversation_id = conversation.id
     inbound_message.conversation_id = conversation.id
-    inbound_message.provider = settings.provider or "imap"
-    inbound_message.raw_payload_json = inbound_message.raw_payload_json or json.dumps(
-        {
-            "message_id": email.message_id or email.external_id,
-            "from": email.sender,
-            "subject": email.subject,
-            "date": msg.get("Date"),
-            "imap_mailbox": email.imap_mailbox or settings.mailbox or settings.inbox_folder,
-            "imap_uidvalidity": email.imap_uidvalidity,
-            "imap_uid": email.imap_uid,
-        },
-        ensure_ascii=False,
+    inbound_message.raw_payload_json = (
+        inbound_message.raw_payload_json
+        or json.dumps(metadata, ensure_ascii=False)
     )
     return inbound_message
 

@@ -15,7 +15,12 @@ from app.core.encryption import decrypt_secret
 from app.db.models import ChannelSetting, Conversation, InboundMessage, InputChannel, MessageAttachment
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
-from app.messages.service import normalize_recipients, upsert_inbound_message
+from app.messages.service import (
+    NormalizedMessage,
+    normalize_recipients,
+    persist_normalized_message,
+    upsert_inbound_message,
+)
 from app.master.models import MasterCompany, MasterTenantDatabase
 
 
@@ -210,8 +215,7 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
         log_action(db, company_id=company_id, user=user, action="whatsapp.status_received", entity_type="inbound_message", entity_id=message.id, message=f"Estado WhatsApp recibido: {status_value}")
         return message
 
-    message, conversation = upsert_inbound_message(
-        db,
+    normalized = NormalizedMessage(
         company_id=company_id,
         channel_key=WHATSAPP_CHANNEL_KEY,
         provider=WHATSAPP_PROVIDER,
@@ -222,6 +226,10 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
         text_content=event.get("text_content"),
         external_thread_id=event.get("external_thread_id"),
         metadata=metadata,
+    )
+    message, conversation = persist_normalized_message(
+        db,
+        normalized,
         content_type=event.get("message_type") or "whatsapp",
         has_attachments=bool(event.get("attachments")),
         has_pdf=any(attachment.get("is_pdf") for attachment in event.get("attachments", [])),

@@ -21,7 +21,13 @@ from app.agent.services import AgentProcessingService  # noqa: E402
 from app.core.encryption import encrypt_secret  # noqa: E402
 from app.db.database import Base  # noqa: E402
 from app.db.models import Conversation, Email, InboundMessage, LLMSettings, Order  # noqa: E402
-from app.messages.service import normalize_direction, normalize_recipients, upsert_inbound_message  # noqa: E402
+from app.messages.service import (  # noqa: E402
+    NormalizedMessage,
+    normalize_direction,
+    normalize_recipients,
+    persist_normalized_message,
+    upsert_inbound_message,
+)
 
 
 class MessagesAndConversationsTests(unittest.TestCase):
@@ -175,6 +181,70 @@ class MessagesAndConversationsTests(unittest.TestCase):
         self.assertNotEqual(first.id, second.id)
         self.assertNotEqual(first_conversation.id, second_conversation.id)
         self.assertEqual(db.scalar(select(func.count()).select_from(Conversation)), 2)
+        db.close()
+
+
+    def test_normalized_message_is_common_channel_contract(self):
+        db = self.Session()
+
+        email = NormalizedMessage(
+            company_id=1,
+            channel_key="email",
+            provider="imap",
+            external_id="email-001",
+            sender="cliente@example.com",
+            recipients=["pedidos@example.com"],
+            subject="Pedido",
+            text_content="10 cajas",
+            external_thread_id="thread-email-001",
+            received_at=datetime.now(timezone.utc),
+            metadata={"source": "email"},
+        )
+
+        whatsapp = NormalizedMessage(
+            company_id=1,
+            channel_key="whatsapp",
+            provider="meta",
+            external_id="wa-001",
+            sender="34600000000",
+            recipients=["34900000000"],
+            subject="WhatsApp",
+            text_content="10 cajas",
+            external_thread_id="thread-wa-001",
+            received_at=datetime.now(timezone.utc),
+            metadata={"source": "whatsapp"},
+        )
+
+        email_message, email_conversation = persist_normalized_message(
+            db,
+            email,
+            content_type="email",
+        )
+        whatsapp_message, whatsapp_conversation = persist_normalized_message(
+            db,
+            whatsapp,
+            content_type="whatsapp_text",
+        )
+        db.commit()
+
+        self.assertEqual(email_message.company_id, 1)
+        self.assertEqual(whatsapp_message.company_id, 1)
+        self.assertEqual(email_message.provider, "imap")
+        self.assertEqual(whatsapp_message.provider, "meta")
+        self.assertEqual(email_message.source_external_id, "email-001")
+        self.assertEqual(whatsapp_message.source_external_id, "wa-001")
+        self.assertIsNotNone(email_conversation.id)
+        self.assertIsNotNone(whatsapp_conversation.id)
+
+        self.assertEqual(
+            db.scalar(select(func.count()).select_from(InboundMessage)),
+            2,
+        )
+        self.assertEqual(
+            db.scalar(select(func.count()).select_from(Conversation)),
+            2,
+        )
+
         db.close()
 
 

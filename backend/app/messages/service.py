@@ -28,6 +28,38 @@ class NormalizedMessage:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+
+def persist_normalized_message(
+    db: Session,
+    message: NormalizedMessage,
+    *,
+    content_type: str | None = None,
+    has_attachments: bool = False,
+    has_pdf: bool = False,
+    has_audio: bool = False,
+) -> tuple[InboundMessage, Conversation]:
+    return upsert_inbound_message(
+        db,
+        company_id=message.company_id,
+        channel_key=message.channel_key,
+        provider=message.provider,
+        external_id=message.external_id,
+        sender=message.sender,
+        recipients=message.recipients,
+        subject=message.subject,
+        text_content=message.text_content,
+        html_content=message.html_content,
+        direction=message.direction,
+        external_thread_id=message.external_thread_id,
+        received_at=message.received_at,
+        sent_at=message.sent_at,
+        metadata=message.metadata,
+        content_type=content_type,
+        has_attachments=has_attachments,
+        has_pdf=has_pdf,
+        has_audio=has_audio,
+    )
+
 def normalize_provider(value: str | None) -> str:
     return (value or "imap").strip().lower() or "imap"
 
