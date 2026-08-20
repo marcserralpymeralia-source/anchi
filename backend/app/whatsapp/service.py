@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.encryption import decrypt_secret
+from app.channels.service import get_or_create_channel
 from app.db.models import ChannelSetting, Conversation, InboundMessage, InputChannel, MessageAttachment
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
@@ -47,25 +48,11 @@ class WhatsAppTenantConfig:
 
 
 def get_or_create_whatsapp_channel(db: Session, company_id: int) -> InputChannel:
-    channel = db.scalar(select(InputChannel).where(InputChannel.company_id == company_id, InputChannel.key == WHATSAPP_CHANNEL_KEY))
-    if channel:
-        return channel
-    channel = InputChannel(
-        company_id=company_id,
-        key=WHATSAPP_CHANNEL_KEY,
-        name="WhatsApp",
-        channel_type="message",
-        is_active=False,
-        is_default=False,
-        supports_text=True,
-        supports_attachments=True,
-        supports_audio=True,
-        supports_documents=True,
-        supports_images=True,
+    return get_or_create_channel(
+        db,
+        company_id,
+        WHATSAPP_CHANNEL_KEY,
     )
-    db.add(channel)
-    db.flush()
-    return channel
 
 
 def whatsapp_settings_map(db: Session, company_id: int) -> dict[str, str | None]:

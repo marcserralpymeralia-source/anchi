@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from app.agent.platform import UnifiedOrderPipelineService
+from app.channels.service import get_or_create_channel
 from app.db.models import Customer, CustomerAlias, CustomerContactPoint, CustomerDomain, Email, EmailAttachment, EmailSettings, InboundMessage, InputChannel, LLMSettings, Order, OrderLine, Product, ProductAlias, PromptTemplate, PromptVersion, ScoringSettings
 from app.messages.service import get_or_create_conversation
 from app.orders.state import ORDER_STATE
@@ -192,11 +193,13 @@ class AgentProcessingService:
             )
         )
         if not inbound_message:
-            channel = db.scalar(select(InputChannel).where(InputChannel.company_id == email.company_id, InputChannel.key == "email"))
-            if not channel:
-                channel = InputChannel(company_id=email.company_id, key="email", name="Email", channel_type="message", is_active=True, is_default=True, supports_text=True, supports_attachments=True, supports_documents=True)
-                db.add(channel)
-                db.flush()
+            channel = get_or_create_channel(
+                db,
+                email.company_id,
+                "email",
+            )
+            if not channel.is_active:
+                channel.is_active = True
             inbound_message = InboundMessage(
                 company_id=email.company_id,
                 channel_id=channel.id if channel else None,
