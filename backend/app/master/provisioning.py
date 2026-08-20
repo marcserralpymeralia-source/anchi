@@ -174,33 +174,42 @@ def provision_company_database(master_db: Session, legacy_db: Session, company: 
     return tenant_db, was_provisioned
 
 
-def provision_demo_external_tenant(
+def provision_external_tenant(
     master_db: Session,
     *,
     tenant_database_url: str,
-    company_name: str = "Anchi Demo",
-    company_slug: str = "anchi-demo",
-    admin_email: str = "admin@anchi.local",
-    admin_password: str = "AnchiDemo2026!",
+    company_name: str,
+    company_slug: str,
+    admin_email: str,
+    admin_password: str,
 ) -> dict[str, str]:
     database_url = (tenant_database_url or "").strip()
     if not database_url:
-        raise ValueError("TENANT_DATABASE_URL is required for external demo provisioning")
+        raise ValueError("TENANT_DATABASE_URL is required for external tenant provisioning")
     if database_url.startswith("sqlite"):
-        raise ValueError("TENANT_DATABASE_URL cannot use sqlite in external demo provisioning")
+        raise ValueError("TENANT_DATABASE_URL cannot use sqlite in external tenant provisioning")
 
     company = _ensure_master_company(master_db, company_name, company_slug)
     user = _ensure_master_user(master_db, admin_email, f"Administrador {company_name}", admin_password)
     membership = _ensure_membership(master_db, user, company)
     tenant = _ensure_tenant_database_row(master_db, company, database_url)
 
-    engine = create_engine(database_url, connect_args={"check_same_thread": False} if database_url.startswith("sqlite") else {})
+    engine = create_engine(
+        database_url,
+        connect_args={"check_same_thread": False} if database_url.startswith("sqlite") else {},
+    )
     Base.metadata.create_all(bind=engine)
+
     tenant_session = _session_factory(database_url)()
     try:
         tenant_company = tenant_session.get(TenantCompany, company.id)
         if tenant_company is None:
-            tenant_company = TenantCompany(id=company.id, name=company.name, legal_name=company.legal_name or company.name, active=True)
+            tenant_company = TenantCompany(
+                id=company.id,
+                name=company.name,
+                legal_name=company.legal_name or company.name,
+                active=True,
+            )
             tenant_session.add(tenant_company)
         else:
             tenant_company.name = company.name
@@ -211,6 +220,7 @@ def provision_demo_external_tenant(
         tenant_session.close()
 
     ensure_tenant_schema(database_url, company_id=company.id)
+
     session_factory = _session_factory(database_url)
     tenant_db = session_factory()
     try:
@@ -222,12 +232,35 @@ def provision_demo_external_tenant(
     tenant.health_status = "ok"
     tenant.notes = "Provisioned against external database"
     master_db.commit()
+
     return {
         "company_id": str(company.id),
         "company_slug": company.slug,
         "tenant_database": tenant.database_url,
         "admin_email": admin_email,
-        "admin_password": admin_password,
         "membership_id": str(membership.id),
         "health_status": tenant.health_status,
+    }
+
+
+def provision_demo_external_tenant(
+    master_db: Session,
+    *,
+    tenant_database_url: str,
+    company_name: str = "Anchi Demo",
+    company_slug: str = "anchi-demo",
+    admin_email: str = "admin@anchi.local",
+    admin_password: str = "AnchiDemo2026!",
+) -> dict[str, str]:
+    result = provision_external_tenant(
+        master_db,
+        tenant_database_url=tenant_database_url,
+        company_name=company_name,
+        company_slug=company_slug,
+        admin_email=admin_email,
+        admin_password=admin_password,
+    )
+    return {
+        **result,
+        "admin_password": admin_password,
     }
