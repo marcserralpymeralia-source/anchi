@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Conversation, InboundMessage, InputChannel
@@ -268,7 +269,12 @@ def upsert_inbound_message(
 def link_message_to_order(db: Session, message: InboundMessage, order_id: int | None) -> None:
     message.order_id = order_id
     if message.conversation_id:
-        conversation = db.get(Conversation, message.conversation_id)
+        conversation = db.scalar(
+            select(Conversation).where(
+                Conversation.id == message.conversation_id,
+                Conversation.company_id == message.company_id,
+            )
+        )
         if conversation and order_id and conversation.last_activity_at is None:
             conversation.last_activity_at = message.received_at or datetime.now(timezone.utc)
             conversation.updated_at = datetime.now(timezone.utc)

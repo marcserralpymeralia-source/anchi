@@ -230,7 +230,12 @@ class AgentProcessingService:
             db.flush()
         if not force_order:
             if inbound_message.order_id:
-                order = db.get(Order, inbound_message.order_id)
+                order = db.scalar(
+                    select(Order).where(
+                        Order.id == inbound_message.order_id,
+                        Order.company_id == inbound_message.company_id,
+                    )
+                )
                 if order:
                     return {
                         "ok": True,

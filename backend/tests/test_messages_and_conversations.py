@@ -32,6 +32,7 @@ from app.messages.service import (  # noqa: E402
     normalize_recipients,
     persist_normalized_message,
     upsert_inbound_message,
+    link_message_to_order,
 )
 
 
@@ -366,6 +367,44 @@ class MessagesAndConversationsTests(unittest.TestCase):
         self.assertIsNotNone(duplicate)
         self.assertEqual(duplicate.id, email.id)
         self.assertIsNone(other_tenant)
+
+        db.close()
+
+
+    def test_message_link_cannot_touch_conversation_from_other_tenant(self):
+        db = self.Session()
+
+        tenant_one, _ = upsert_inbound_message(
+            db,
+            company_id=1,
+            channel_key="email",
+            provider="imap",
+            external_id="tenant-one-message",
+            sender="a@example.com",
+            text_content="pedido",
+        )
+
+        tenant_two, conversation_two = upsert_inbound_message(
+            db,
+            company_id=2,
+            channel_key="email",
+            provider="imap",
+            external_id="tenant-two-message",
+            sender="b@example.com",
+            text_content="pedido",
+        )
+
+        db.commit()
+
+        link_message_to_order(
+            db,
+            tenant_one,
+            999,
+        )
+
+        conversation = db.get(Conversation, conversation_two.id)
+
+        self.assertEqual(conversation.company_id, 2)
 
         db.close()
 

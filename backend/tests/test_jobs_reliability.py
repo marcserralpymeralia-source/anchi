@@ -22,7 +22,7 @@ from app.agent.services import AgentProcessingService  # noqa: E402
 from app.db.database import Base  # noqa: E402
 from app.db.models import BackgroundJob, Customer, Email, ImportJob, JobAttempt, LLMSettings, Order, OrderLine  # noqa: E402
 from app.imports.service import create_preview  # noqa: E402
-from app.jobs.service import claim_next_job, enqueue_job, fail_job, finish_job, recover_stale_jobs, retry_job  # noqa: E402
+from app.jobs.service import claim_next_job, enqueue_job, fail_job, finish_job, recover_stale_jobs, retry_job, get_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.tenancy.migrations import upgrade_tenant_schema  # noqa: E402
@@ -271,6 +271,36 @@ class JobsReliabilityTests(unittest.TestCase):
         self.assertEqual(processed_job.status, "success")
         self.assertEqual(db.scalar(select(func.count()).select_from(Order)) or 0, 1)
         self.assertEqual(db.scalar(select(func.count()).select_from(JobAttempt).where(JobAttempt.job_id == job.id)) or 0, 1)
+        db.close()
+
+
+    def test_job_access_isolated_by_company(self):
+        db = self.TenantSession()
+
+        job = enqueue_job(
+            db,
+            company_id=1,
+            job_type="process_inbound_message",
+            payload={"test": True},
+            dedupe_key="tenant-isolation-job",
+        )
+        db.commit()
+
+        same_company = get_job(
+            db,
+            company_id=1,
+            job_id=job.id,
+        )
+
+        other_company = get_job(
+            db,
+            company_id=2,
+            job_id=job.id,
+        )
+
+        self.assertIsNotNone(same_company)
+        self.assertIsNone(other_company)
+
         db.close()
 
 
