@@ -1340,6 +1340,7 @@ class UnifiedOrderPipelineService:
             lines.append(
                 {
                     "texto_original": line.raw_text,
+                    "referencia_detectada": line.reference,
                     "producto_detectado": line.raw_description,
                     "cantidad": line.quantity,
                     "unidad": line.unit,
@@ -1348,6 +1349,7 @@ class UnifiedOrderPipelineService:
                     "uncertainties": line_uncertainties,
                     "source_fields": {
                         "rawDescription": line.raw_description_source,
+                        "reference": line.reference_source,
                         "quantity": line.quantity_source,
                         "unit": line.unit_source,
                     },

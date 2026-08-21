@@ -6,6 +6,8 @@ Reglas obligatorias:
 - Decide si la entrada contiene un pedido real o no.
 - No busques, inventes ni asignes customerId, productId, codigos Sage, referencias ERP ni equivalencias internas.
 - Conserva el texto original relevante de cada linea en rawText.
+- Si una linea contiene un codigo o referencia de articulo visible en el documento (por ejemplo GCPLATO17), extraelo en reference.
+- Solo extrae referencias que aparezcan literalmente en el texto. Nunca generes referencias ni las busques en catalogos.
 - Extrae solo lo expresado por el cliente o lo estrictamente inferible del texto.
 - Usa null cuando cliente, producto, cantidad o unidad sean desconocidos.
 - Si una cantidad o unidad es ambigua, mantenla como null y añade uncertainty.
