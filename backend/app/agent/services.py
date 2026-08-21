@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import date, datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -160,9 +161,14 @@ def _json_from_content(content: str) -> dict:
     if not text:
         raise ValueError("Respuesta vacia del proveedor IA.")
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else {"value": parsed}
     except json.JSONDecodeError:
-        raise ValueError("OpenAI ha devuelto una respuesta no valida: no es JSON.")
+        match = re.search(r"\{.*\}", text, flags=re.S)
+        if match:
+            parsed = json.loads(match.group(0))
+            return parsed if isinstance(parsed, dict) else {"value": parsed}
+    raise ValueError("OpenAI ha devuelto una respuesta no valida: no es JSON.")
 
 
 def _active_prompt(db: Session, company_id: int, purpose: str, fallback: str) -> str:

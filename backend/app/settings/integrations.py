@@ -13,6 +13,7 @@ from email import policy
 from email import message_from_bytes
 from email.header import decode_header, make_header
 from email.message import EmailMessage
+from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
@@ -1331,7 +1332,16 @@ def _extract_pdf_text(db: Session, attachment: EmailAttachment) -> None:
 
 
 def _extract_text_from_pdf_bytes(data: bytes) -> str:
-    # Fallback ligero para PDFs con texto embebido sin depender de librerias externas.
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(BytesIO(data))
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        if text.strip():
+            return text.strip()
+    except Exception:
+        logger.exception("Fallo extrayendo PDF con pypdf; usando fallback ligero.")
+
     chunks: list[str] = []
     raw = data.decode("latin-1", errors="ignore")
     for match in re.finditer(r"\((.*?)\)\s*Tj", raw, re.S):
