@@ -16,7 +16,7 @@ from app.core.app_factory import create_app  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.core.encryption import encrypt_secret
-from app.db.models import Company, Customer, Email, InputChannel, LLMSettings, Order, Product, utcnow
+from app.db.models import Company, Customer, Email, InputChannel, LLMSettings, Order, OrderLine, Product, utcnow
 from app.settings.branding import get_or_create_branding
 from app.settings.service import get_or_create_settings
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
@@ -147,6 +147,262 @@ class PendingOrdersAccessTests(unittest.TestCase):
         finally:
             cleanup()
             master_engine.dispose()
+            fixture.cleanup()
+
+    def test_order_mutations_reject_cross_tenant_entities(self):
+        fixture = build_performance_fixture("small")
+        master_engine, MasterSession = _session_factory(fixture.master_database_url)
+        tenant_engine, TenantSession = _session_factory(fixture.tenant_database_url)
+        client, cleanup = self._client_for(fixture)
+        try:
+            with MasterSession() as db:
+                db.add(MasterCompany(id=2, name="Tenant B", slug="tenant-b", active=True))
+                db.add(
+                    MasterUser(
+                        id=2,
+                        email="admin@tenant-b.local",
+                        full_name="Admin B",
+                        password_hash=hash_password("admin123"),
+                        is_active=True,
+                    )
+                )
+                db.add(
+                    CompanyMembership(
+                        id=2,
+                        user_id=2,
+                        company_id=2,
+                        role_key="Administrador",
+                        is_active=True,
+                        is_owner=True,
+                    )
+                )
+                db.add(
+                    MasterTenantDatabase(
+                        company_id=2,
+                        database_key="tenant-b",
+                        database_url=fixture.tenant_database_url,
+                        is_active=True,
+                        health_status="ok",
+                    )
+                )
+                db.commit()
+
+            with TenantSession() as db:
+                if not db.get(Company, 2):
+                    db.add(
+                        Company(
+                            id=2,
+                            name="Tenant B",
+                            legal_name="Tenant B SL",
+                            country="España",
+                            language="es",
+                            timezone="Europe/Madrid",
+                            active=True,
+                        )
+                    )
+                    db.flush()
+
+                customer_a = Customer(
+                    company_id=1,
+                    code="TA-CROSS-001",
+                    fiscal_name="Cliente Tenant A Cross",
+                )
+                customer_b = Customer(
+                    company_id=2,
+                    code="TB-CROSS-001",
+                    fiscal_name="Cliente Tenant B Cross",
+                )
+                product_a = Product(
+                    company_id=1,
+                    reference="TA-CROSS-P001",
+                    name="Producto Tenant A Cross",
+                )
+                product_b = Product(
+                    company_id=2,
+                    reference="TB-CROSS-P001",
+                    name="Producto Tenant B Cross",
+                )
+                db.add_all([customer_a, customer_b, product_a, product_b])
+                db.flush()
+
+                order_a = Order(
+                    company_id=1,
+                    customer_id=customer_a.id,
+                    validated_customer_id=customer_a.id,
+                    customer_detected_name="Pedido A",
+                    score=60,
+                    status="pending_review",
+                    created_at=utcnow(),
+                )
+                order_a_other = Order(
+                    company_id=1,
+                    customer_id=customer_a.id,
+                    validated_customer_id=customer_a.id,
+                    customer_detected_name="Pedido A secundario",
+                    score=60,
+                    status="pending_review",
+                    created_at=utcnow(),
+                )
+                db.add_all([order_a, order_a_other])
+                db.flush()
+
+                line_a = OrderLine(
+                    company_id=1,
+                    order_id=order_a.id,
+                    product_id=product_a.id,
+                    validated_product_id=product_a.id,
+                    original_text="Linea A",
+                    quantity=1,
+                    unit="ud",
+                    extraction_confidence=1,
+                    line_score=100,
+                    validation_status="validated",
+                )
+                line_other = OrderLine(
+                    company_id=1,
+                    order_id=order_a_other.id,
+                    product_id=product_a.id,
+                    validated_product_id=product_a.id,
+                    original_text="Linea de otro pedido",
+                    quantity=2,
+                    unit="ud",
+                    extraction_confidence=1,
+                    line_score=100,
+                    validation_status="validated",
+                )
+                db.add_all([line_a, line_other])
+                db.commit()
+
+                order_a_id = order_a.id
+                order_a_other_id = order_a_other.id
+                line_a_id = line_a.id
+                line_other_id = line_other.id
+                customer_a_id = customer_a.id
+                customer_b_id = customer_b.id
+                product_a_id = product_a.id
+                product_b_id = product_b.id
+
+            login = client.post(
+                "/login",
+                data={
+                    "email": fixture.admin_email,
+                    "password": fixture.admin_password,
+                },
+                follow_redirects=False,
+            )
+            self.assertEqual(login.status_code, 303)
+
+            # Tenant A no puede asignar un cliente de Tenant B.
+            response = client.post(
+                f"/orders/{order_a_id}/customer",
+                data={"validated_customer_id": customer_b_id},
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 303)
+
+            with TenantSession() as db:
+                order = db.get(Order, order_a_id)
+                self.assertEqual(order.customer_id, customer_a_id)
+                self.assertEqual(order.validated_customer_id, customer_a_id)
+
+            # Tampoco puede hacerlo mediante el formulario general del pedido.
+            response = client.post(
+                f"/orders/{order_a_id}/update",
+                data={
+                    "validated_customer_id": customer_b_id,
+                    "order_date": "",
+                    "requested_delivery_date": "",
+                    "notes": "No debe aplicarse",
+                    "status": "",
+                },
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 303)
+
+            with TenantSession() as db:
+                order = db.get(Order, order_a_id)
+                self.assertEqual(order.customer_id, customer_a_id)
+                self.assertEqual(order.validated_customer_id, customer_a_id)
+                self.assertNotEqual(order.notes, "No debe aplicarse")
+
+            # Tenant A no puede sustituir el producto por uno de Tenant B.
+            response = client.post(
+                f"/orders/{order_a_id}/lines/{line_a_id}",
+                data={
+                    "validated_product_id": product_b_id,
+                    "quantity": 9,
+                    "unit": "caja",
+                },
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 303)
+
+            with TenantSession() as db:
+                line = db.get(OrderLine, line_a_id)
+                self.assertEqual(line.product_id, product_a_id)
+                self.assertEqual(line.validated_product_id, product_a_id)
+                self.assertEqual(line.quantity, 1)
+
+            # Tenant A no puede añadir una linea usando un producto de Tenant B.
+            with TenantSession() as db:
+                before_count = (
+                    db.query(OrderLine)
+                    .filter(OrderLine.order_id == order_a_id)
+                    .count()
+                )
+
+            response = client.post(
+                f"/orders/{order_a_id}/lines",
+                data={
+                    "validated_product_id": product_b_id,
+                    "original_text": "Producto cruzado",
+                    "quantity": 5,
+                    "unit": "ud",
+                },
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 303)
+
+            with TenantSession() as db:
+                after_count = (
+                    db.query(OrderLine)
+                    .filter(OrderLine.order_id == order_a_id)
+                    .count()
+                )
+                self.assertEqual(after_count, before_count)
+
+            # Una linea de otro pedido no puede duplicarse bajo order_a.
+            response = client.post(
+                f"/orders/{order_a_id}/lines/{line_other_id}/duplicate",
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 303)
+
+            with TenantSession() as db:
+                other_order_lines = (
+                    db.query(OrderLine)
+                    .filter(OrderLine.order_id == order_a_id)
+                    .count()
+                )
+                self.assertEqual(other_order_lines, before_count)
+
+            # Ni puede borrarse indicando un order_id al que no pertenece.
+            response = client.post(
+                f"/orders/{order_a_id}/lines/{line_other_id}/delete",
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 303)
+
+            with TenantSession() as db:
+                self.assertIsNotNone(db.get(OrderLine, line_other_id))
+                self.assertEqual(
+                    db.get(OrderLine, line_other_id).order_id,
+                    order_a_other_id,
+                )
+        finally:
+            cleanup()
+            master_engine.dispose()
+            tenant_engine.dispose()
             fixture.cleanup()
 
     def test_pending_orders_are_scoped_by_authenticated_tenant(self):

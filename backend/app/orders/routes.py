@@ -398,12 +398,17 @@ def order_detail(
 @router.post("/{order_id}/customer")
 def update_order_customer(order_id: int, validated_customer_id: int = Form(...), db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     order = db.get(Order, order_id)
-    if order and order.company_id == user.company_id:
+    new_customer = db.get(Customer, validated_customer_id)
+    if (
+        order
+        and order.company_id == user.company_id
+        and new_customer
+        and new_customer.company_id == user.company_id
+    ):
         previous_customer = order.validated_customer or order.customer
-        order.validated_customer_id = validated_customer_id
-        order.customer_id = validated_customer_id
-        new_customer = db.get(Customer, validated_customer_id)
-        if new_customer and (not previous_customer or previous_customer.id != new_customer.id):
+        order.validated_customer_id = new_customer.id
+        order.customer_id = new_customer.id
+        if not previous_customer or previous_customer.id != new_customer.id:
             db.add(
                 ManualCorrection(
                     company_id=user.company_id,
@@ -449,18 +454,22 @@ def update_order(
     user: TenantUser = Depends(current_user),
 ):
     order = db.get(Order, order_id)
-    if order and order.company_id == user.company_id:
+    new_customer = db.get(Customer, validated_customer_id) if validated_customer_id else None
+    customer_is_valid = (
+        not validated_customer_id
+        or (new_customer is not None and new_customer.company_id == user.company_id)
+    )
+    if order and order.company_id == user.company_id and customer_is_valid:
         previous_notes = order.notes or ""
         previous_customer_id = order.validated_customer_id or order.customer_id
-        order.validated_customer_id = validated_customer_id or None
-        order.customer_id = validated_customer_id or order.customer_id
+        order.validated_customer_id = new_customer.id if new_customer else None
+        order.customer_id = new_customer.id if new_customer else order.customer_id
         order.order_date = order_date
         order.requested_delivery_date = requested_delivery_date
         order.notes = notes
         if status:
             ORDER_STATE.change_state(order, status)
-        if validated_customer_id and validated_customer_id != previous_customer_id:
-            new_customer = db.get(Customer, validated_customer_id)
+        if new_customer and new_customer.id != previous_customer_id:
             old_customer = db.get(Customer, previous_customer_id) if previous_customer_id else None
             if new_customer:
                 db.add(
@@ -507,17 +516,28 @@ def update_order_line(
 ):
     line = db.get(OrderLine, line_id)
     order = db.get(Order, order_id)
-    if line and order and line.company_id == user.company_id and order.company_id == user.company_id:
+    new_product = db.get(Product, validated_product_id) if validated_product_id else None
+    product_is_valid = (
+        not validated_product_id
+        or (new_product is not None and new_product.company_id == user.company_id)
+    )
+    if (
+        line
+        and order
+        and line.company_id == user.company_id
+        and order.company_id == user.company_id
+        and line.order_id == order.id
+        and product_is_valid
+    ):
         old_product = line.validated_product or line.product
         old_quantity = line.quantity
         old_unit = line.unit
-        line.validated_product_id = validated_product_id or None
-        line.product_id = validated_product_id or line.product_id
+        line.validated_product_id = new_product.id if new_product else None
+        line.product_id = new_product.id if new_product else line.product_id
         line.quantity = quantity
         line.unit = unit
         line.validation_status = "validated" if line.validated_product_id and quantity else "pending"
         line.doubt_reason = "" if line.validation_status == "validated" else "Linea pendiente de validar"
-        new_product = db.get(Product, validated_product_id) if validated_product_id else None
         if new_product and (not old_product or old_product.id != new_product.id):
             db.add(
                 ManualCorrection(
@@ -606,7 +626,11 @@ def add_order_line(
 ):
     order = db.get(Order, order_id)
     product = db.get(Product, validated_product_id) if validated_product_id else None
-    if order and order.company_id == user.company_id:
+    product_is_valid = (
+        not validated_product_id
+        or (product is not None and product.company_id == user.company_id)
+    )
+    if order and order.company_id == user.company_id and product_is_valid:
         line = OrderLine(
             company_id=user.company_id,
             order_id=order.id,
@@ -644,7 +668,13 @@ def add_order_line(
 def duplicate_order_line(order_id: int, line_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     line = db.get(OrderLine, line_id)
     order = db.get(Order, order_id)
-    if line and order and line.company_id == user.company_id and order.company_id == user.company_id:
+    if (
+        line
+        and order
+        and line.company_id == user.company_id
+        and order.company_id == user.company_id
+        and line.order_id == order.id
+    ):
         new_line = OrderLine(
             company_id=user.company_id,
             order_id=order.id,
@@ -677,7 +707,13 @@ def delete_order_line_post(order_id: int, line_id: int, db: Session = Depends(ge
 def delete_order_line(order_id: int, line_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     line = db.get(OrderLine, line_id)
     order = db.get(Order, order_id)
-    if line and order and line.company_id == user.company_id and order.company_id == user.company_id:
+    if (
+        line
+        and order
+        and line.company_id == user.company_id
+        and order.company_id == user.company_id
+        and line.order_id == order.id
+    ):
         old_product = line.validated_product or line.product
         if old_product:
             LearningService().penalize_customer_product_knowledge(
