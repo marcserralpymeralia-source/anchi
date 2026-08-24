@@ -75,7 +75,7 @@ def canonical_email_status(email: Email | None = None, *, raw_status: str | None
         raw_status = raw_status or (email.status or "")
         agent_status = agent_status or (email.agent_status or "")
         detected_type = detected_type or email.detected_type
-        archived = archived if archived is not None else bool(email.archived)
+        archived = archived if archived is not None else bool(getattr(email, "archived", False))
 
     if archived is True:
         return "archived"

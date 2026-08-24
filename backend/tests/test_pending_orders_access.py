@@ -107,7 +107,7 @@ class PendingOrdersAccessTests(unittest.TestCase):
             response = client.get("/", follow_redirects=False)
 
             self.assertEqual(response.status_code, 200)
-            self.assertIn('href="http://testserver/"', response.text)
+            self.assertIn('href="/"', response.text)
             self.assertNotIn('href="#"', response.text)
             self.assertNotIn('href="http://127.0.0.1:8000/"', response.text)
         finally:
@@ -124,7 +124,7 @@ class PendingOrdersAccessTests(unittest.TestCase):
                 follow_redirects=False,
             )
             self.assertEqual(response.status_code, 303)
-            self.assertEqual(response.headers["location"], "/inicio")
+            self.assertEqual(response.headers["location"], "/")
         finally:
             cleanup()
             fixture.cleanup()
@@ -240,14 +240,14 @@ class PendingOrdersAccessTests(unittest.TestCase):
             db.commit()
 
             client.post("/login", data={"email": fixture.admin_email, "password": fixture.admin_password}, follow_redirects=False)
-            tenant_a = client.get("/inicio", follow_redirects=False)
+            tenant_a = client.get("/", follow_redirects=False)
             self.assertEqual(tenant_a.status_code, 200)
             self.assertIn("Pedido visible tenant A", tenant_a.text)
             self.assertNotIn("Pedido visible tenant B", tenant_a.text)
 
             client.post("/logout", follow_redirects=False)
             client.post("/login", data={"email": "admin@tenant-b.local", "password": "admin123"}, follow_redirects=False)
-            tenant_b = client.get("/inicio", follow_redirects=False)
+            tenant_b = client.get("/", follow_redirects=False)
             self.assertEqual(tenant_b.status_code, 200)
             self.assertIn("Pedido visible tenant B", tenant_b.text)
             self.assertNotIn("Pedido visible tenant A", tenant_b.text)
@@ -271,6 +271,7 @@ class PendingOrdersAccessTests(unittest.TestCase):
             os.environ,
             {
                 "APP_ENV": "production",
+                "SESSION_COOKIE_SECURE": "true",
                 "MASTER_DATABASE_URL": "postgresql://user:pass@localhost/master",
                 "TENANT_DB_MODE": "external",
                 "TENANT_DATABASE_URL": "postgresql://user:pass@localhost/tenant",

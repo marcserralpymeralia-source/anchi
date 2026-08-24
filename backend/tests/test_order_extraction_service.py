@@ -167,7 +167,7 @@ class OrderExtractionServiceTests(unittest.TestCase):
         self.assertEqual(legacy["pedido"]["lineas"][0]["texto_original"], "20 del plato que pedimos la semana pasada")
         self.assertEqual(legacy["pedido"]["lineas"][0]["producto_detectado"], "plato que pedimos la semana pasada")
         self.assertIsNone(legacy["pedido"]["lineas"][0]["unidad"])
-        self.assertNotIn("referencia_detectada", legacy["pedido"]["lineas"][0])
+        self.assertIsNone(legacy["pedido"]["lineas"][0]["referencia_detectada"])
         self.assertEqual(legacy["_extraction_meta"]["schemaVersion"], "1.0")
         self.assertEqual(legacy["_extraction_meta"]["source"], "structured_order_extraction")
 

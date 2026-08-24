@@ -232,12 +232,12 @@ class OrderResolutionWorkflowTests(unittest.TestCase):
 
         inbound_process_response = process_channel_entry("inbound", inbound_message.id, FakeRequest(), db=db, user=SimpleNamespace(id=1, company_id=1))
         self.assertEqual(inbound_process_response.status_code, 303)
-        self.assertEqual(inbound_process_response.headers["location"], f"/entries?focus=inbound-{inbound_message.id}")
+        self.assertEqual(inbound_process_response.headers["location"], f"/?focus=inbound-{inbound_message.id}")
         self.assertEqual(db.scalar(select(func.count()).select_from(BackgroundJob)) or 0, 2)
 
         inbound_response = resolve_channel_entry("inbound", inbound_message.id, FakeRequest(), db=db, user=SimpleNamespace(id=1, company_id=1))
         self.assertEqual(inbound_response.status_code, 303)
-        self.assertEqual(inbound_response.headers["location"], f"/entries?focus=inbound-{inbound_message.id}")
+        self.assertEqual(inbound_response.headers["location"], f"/?focus=inbound-{inbound_message.id}")
         self.assertEqual(db.scalar(select(func.count()).select_from(BackgroundJob)) or 0, 2)
 
         order = Order(company_id=1, conversation_id=inbound_message.conversation_id, status="pedido_confirmado", score=91, customer_detected_name="Cliente Demo")
