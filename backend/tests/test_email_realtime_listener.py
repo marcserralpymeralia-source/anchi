@@ -15,6 +15,7 @@ os.environ.setdefault("ENABLE_DEMO_BOOTSTRAP", "false")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.channels.service import get_or_create_channel
 from app.core.encryption import encrypt_secret  # noqa: E402
 from app.db.database import Base  # noqa: E402
 from app.db.models import Email, EmailSettings  # noqa: E402
@@ -99,6 +100,8 @@ class EmailRealtimeListenerTests(unittest.TestCase):
                         read_limit=10,
                     )
                 )
+                channel = get_or_create_channel(db, company_id, "email")
+                channel.is_active = True
                 db.commit()
 
     def tearDown(self):
