@@ -228,7 +228,12 @@ def _process_job(db, job: BackgroundJob) -> dict:
         email = db.get(Email, email_id)
         if not email or email.company_id != job.company_id:
             raise RuntimeError("No se encontró el correo a procesar.")
-        result = AgentProcessingService().process_email(db, email)
+        force_order = bool(payload.get("force"))
+        result = AgentProcessingService().process_email(
+            db,
+            email,
+            force_order=force_order,
+        )
         return {"ok": True, **result}
     if job.job_type == "process_order":
         order_id = int(payload.get("order_id") or 0)
@@ -236,7 +241,11 @@ def _process_job(db, job: BackgroundJob) -> dict:
         if not order or order.company_id != job.company_id:
             raise RuntimeError("No se encontró el pedido a procesar.")
         if order.email:
-            result = AgentProcessingService().process_email(db, order.email)
+            result = AgentProcessingService().process_email(
+                db,
+                order.email,
+                force_order=True,
+            )
             return {"ok": True, **result}
         return {"ok": False, "message": "El pedido no tiene correo asociado."}
     if job.job_type == "process_inbound_message":

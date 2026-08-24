@@ -1205,10 +1205,45 @@ class UnifiedOrderPipelineService:
                 entity_id=inbound_message.id,
                 message=f"Extraccion: {extraction_meta.get('source') or 'legacy_extraction'}",
             )
-            order = self._create_order(db, inbound_message, email, extraction, normalized)
+            existing_order = None
+            if force_order and inbound_message.order_id:
+                existing_order = db.scalar(
+                    select(Order).where(
+                        Order.id == inbound_message.order_id,
+                        Order.company_id == inbound_message.company_id,
+                    )
+                )
+                if existing_order and (existing_order.confirmed_at or existing_order.exported_at):
+                    return {
+                        "ok": False,
+                        "status": "reprocess_blocked",
+                        "message": "No se puede reprocesar un pedido confirmado o exportado.",
+                        "order_id": existing_order.id,
+                    }
+
+            order = self._create_order(
+                db,
+                inbound_message,
+                email,
+                extraction,
+                normalized,
+                existing_order=existing_order,
+            )
             score_result = self.scoring.score_order(db, order)
             order.score = score_result.total_score
             order.status = self.scoring.status_for_score(db, inbound_message.company_id, order.score)
+            if existing_order:
+                pending_reviews = db.scalars(
+                    select(OrderReview).where(
+                        OrderReview.company_id == order.company_id,
+                        OrderReview.order_id == order.id,
+                        OrderReview.status == "pending",
+                    )
+                ).all()
+                for previous_review in pending_reviews:
+                    previous_review.status = "superseded"
+                    previous_review.reviewed_at = datetime.now(timezone.utc)
+
             review = self.review.open_review(db, order, user=user, comments=inbound_message.processing_error)
             inbound_message.status = "order_detected"
             inbound_message.processing_step = "completed"
@@ -1218,11 +1253,38 @@ class UnifiedOrderPipelineService:
             inbound_message.extraction_json = json.dumps(extraction, ensure_ascii=False)
             inbound_message.last_processed_at = datetime.now(timezone.utc)
             db.commit()
-            log_action(db, company_id=inbound_message.company_id, user=user, action="agent.order_created", entity_type="order", entity_id=order.id, message=f"Pedido creado desde entrada {inbound_message.id}")
+            if existing_order:
+                log_action(
+                    db,
+                    company_id=inbound_message.company_id,
+                    user=user,
+                    action="agent.order_reprocessed",
+                    entity_type="order",
+                    entity_id=order.id,
+                    message=f"Pedido reprocesado desde entrada {inbound_message.id}",
+                )
+            else:
+                log_action(
+                    db,
+                    company_id=inbound_message.company_id,
+                    user=user,
+                    action="agent.order_created",
+                    entity_type="order",
+                    entity_id=order.id,
+                    message=f"Pedido creado desde entrada {inbound_message.id}",
+                )
             if llm_settings.allow_auto_export and order.score >= get_or_create_settings(db, ScoringSettings, inbound_message.company_id).safe_threshold:
                 self.exporter.queue_export(db, company_id=inbound_message.company_id, order_id=order.id, payload_json=None)
                 db.commit()
-            return {"ok": True, "status": "order_detected", "message": f"Pedido {order.id} creado.", "order_id": order.id, "review_id": review.id, "score": order.score}
+            message = f"Pedido {order.id} reprocesado." if existing_order else f"Pedido {order.id} creado."
+            return {
+                "ok": True,
+                "status": "order_detected",
+                "message": message,
+                "order_id": order.id,
+                "review_id": review.id,
+                "score": order.score,
+            }
         except Exception as exc:
             return self._mark_error(db, inbound_message, user, str(exc))
 
@@ -1405,7 +1467,16 @@ class UnifiedOrderPipelineService:
         lines = order_data.get("lineas") or order_data.get("lines") or data.get("lineas") or []
         return lines if isinstance(lines, list) else []
 
-    def _create_order(self, db: Session, inbound_message: InboundMessage, email: Email | None, extracted: dict[str, Any], source_text: str) -> Order:
+    def _create_order(
+        self,
+        db: Session,
+        inbound_message: InboundMessage,
+        email: Email | None,
+        extracted: dict[str, Any],
+        source_text: str,
+        *,
+        existing_order: Order | None = None,
+    ) -> Order:
         customer_data = self._customer_from_extraction(extracted)
         order_data = self._order_from_extraction(extracted)
         sender = inbound_message.sender or (email.sender if email else "") or ""
@@ -1429,22 +1500,39 @@ class UnifiedOrderPipelineService:
                 customer = candidate_customer
                 method = customer_decision["selected"].source
                 customer_score = candidate_confidence
-        order = Order(
-            company_id=inbound_message.company_id,
-            conversation_id=inbound_message.conversation_id,
-            email_id=email.id if email else None,
-            customer_id=customer.id if customer else None,
-            validated_customer_id=customer.id if customer else None,
-            customer_detected_name=detected_name or None,
-            customer_identification_method=method,
-            customer_score=round(customer_score * 100, 2),
-            order_date=order_data.get("fecha_pedido") or order_data.get("order_date"),
-            requested_delivery_date=order_data.get("fecha_entrega_solicitada") or order_data.get("requested_delivery_date"),
-            notes=order_data.get("observaciones") or order_data.get("notes") or "",
-            status="pedido_pendiente_revision",
-        )
-        db.add(order)
-        db.flush()
+        if existing_order:
+            order = existing_order
+            order.lines.clear()
+            db.flush()
+            order.conversation_id = inbound_message.conversation_id
+            order.email_id = email.id if email else order.email_id
+            order.customer_id = customer.id if customer else None
+            order.validated_customer_id = customer.id if customer else None
+            order.customer_detected_name = detected_name or None
+            order.customer_identification_method = method
+            order.customer_score = round(customer_score * 100, 2)
+            order.order_date = order_data.get("fecha_pedido") or order_data.get("order_date")
+            order.requested_delivery_date = order_data.get("fecha_entrega_solicitada") or order_data.get("requested_delivery_date")
+            order.notes = order_data.get("observaciones") or order_data.get("notes") or ""
+            order.status = "pedido_pendiente_revision"
+            order.review_reasons = None
+        else:
+            order = Order(
+                company_id=inbound_message.company_id,
+                conversation_id=inbound_message.conversation_id,
+                email_id=email.id if email else None,
+                customer_id=customer.id if customer else None,
+                validated_customer_id=customer.id if customer else None,
+                customer_detected_name=detected_name or None,
+                customer_identification_method=method,
+                customer_score=round(customer_score * 100, 2),
+                order_date=order_data.get("fecha_pedido") or order_data.get("order_date"),
+                requested_delivery_date=order_data.get("fecha_entrega_solicitada") or order_data.get("requested_delivery_date"),
+                notes=order_data.get("observaciones") or order_data.get("notes") or "",
+                status="pedido_pendiente_revision",
+            )
+            db.add(order)
+            db.flush()
         review_reasons: list[str] = list(extracted.get("motivos_revision") or [])
         if extracted.get("requiere_revision_humana") and not review_reasons:
             review_reasons.append("La extraccion requiere revision humana")

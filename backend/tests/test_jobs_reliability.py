@@ -242,6 +242,129 @@ class JobsReliabilityTests(unittest.TestCase):
         self.assertEqual(customers_after_first, db.scalar(select(func.count()).select_from(Customer)) or 0)
         db.close()
 
+
+    def test_process_email_job_propagates_force_flag(self):
+        self._seed_master()
+        self._seed_llm()
+        upgrade_tenant_schema(self.tenant_engine, company_id=1, application_version="1.2.3")
+
+        db = self.TenantSession()
+        email = Email(
+            company_id=1,
+            external_id="mail-force-worker",
+            sender="cliente@example.com",
+            subject="Pedido",
+            body="3 cajas",
+        )
+        db.add(email)
+        db.commit()
+
+        channel = get_or_create_channel(db, 1, "email")
+        channel.is_active = True
+        db.commit()
+
+        job = enqueue_job(
+            db,
+            company_id=1,
+            job_type="process_email",
+            payload={"email_id": email.id, "force": True},
+            created_by_user_id=1,
+        )
+        db.close()
+
+        captured = {"force_order": None}
+
+        def fake_process_email(_self, session, current_email, user=None, force_order=False):
+            captured["force_order"] = force_order
+            return {
+                "ok": True,
+                "status": "order_detected",
+                "message": "Procesado",
+                "order_id": 1,
+                "score": 90,
+            }
+
+        with patch(
+            "app.workers.jobs_worker.MasterSessionLocal",
+            new=self.MasterSession,
+        ), patch(
+            "app.workers.jobs_worker.AgentProcessingService.process_email",
+            new=fake_process_email,
+        ):
+            summary = run_worker_cycle()
+
+        self.assertEqual(summary["tenants"], 1)
+        self.assertTrue(captured["force_order"])
+
+        db = self.TenantSession()
+        self.assertEqual(db.get(BackgroundJob, job.id).status, "success")
+        db.close()
+
+    def test_process_order_job_forces_reprocessing(self):
+        self._seed_master()
+        self._seed_llm()
+        upgrade_tenant_schema(self.tenant_engine, company_id=1, application_version="1.2.3")
+
+        db = self.TenantSession()
+
+        email = Email(
+            company_id=1,
+            external_id="mail-order-reprocess-worker",
+            sender="cliente@example.com",
+            subject="Pedido",
+            body="3 cajas",
+        )
+        db.add(email)
+        db.flush()
+
+        order = Order(
+            company_id=1,
+            email_id=email.id,
+            customer_detected_name="Cliente demo",
+            status="pedido_pendiente_revision",
+            score=90,
+        )
+        db.add(order)
+        db.commit()
+
+        order_id = order.id
+        job = enqueue_job(
+            db,
+            company_id=1,
+            job_type="process_order",
+            payload={"order_id": order_id},
+            created_by_user_id=1,
+        )
+        db.close()
+
+        captured = {"force_order": None}
+
+        def fake_process_email(_self, session, current_email, user=None, force_order=False):
+            captured["force_order"] = force_order
+            return {
+                "ok": True,
+                "status": "order_detected",
+                "message": "Reprocesado",
+                "order_id": order_id,
+                "score": 90,
+            }
+
+        with patch(
+            "app.workers.jobs_worker.MasterSessionLocal",
+            new=self.MasterSession,
+        ), patch(
+            "app.workers.jobs_worker.AgentProcessingService.process_email",
+            new=fake_process_email,
+        ):
+            summary = run_worker_cycle()
+
+        self.assertEqual(summary["tenants"], 1)
+        self.assertTrue(captured["force_order"])
+
+        db = self.TenantSession()
+        self.assertEqual(db.get(BackgroundJob, job.id).status, "success")
+        db.close()
+
     def test_worker_cycle_processes_job_once(self):
         self._seed_master()
         self._seed_llm()

@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from sqlalchemy import create_engine, func, select
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import selectinload, sessionmaker
 
 os.environ.setdefault("APP_ENV", "development")
 
@@ -21,7 +21,7 @@ from app.agent.services import AgentProcessingService  # noqa: E402
 from app.channels.service import get_or_create_channel  # noqa: E402
 from app.core.encryption import encrypt_secret  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import Conversation, Email, InboundMessage, LLMSettings, Order  # noqa: E402
+from app.db.models import Conversation, Email, InboundMessage, LLMSettings, Order, OrderLine  # noqa: E402
 from app.settings.integrations import (  # noqa: E402
     _existing_email_for_imap,
     _normalized_email_external_id,
@@ -157,6 +157,121 @@ class MessagesAndConversationsTests(unittest.TestCase):
         self.assertEqual(inbound.conversation_id, refreshed_email.conversation_id)
         order = db.get(Order, result_first["order_id"])
         self.assertEqual(order.conversation_id, refreshed_email.conversation_id)
+        db.close()
+
+
+    def test_force_reprocess_reuses_existing_order(self):
+        db = self.Session()
+
+        email = Email(
+            company_id=1,
+            external_id="mail-reprocess-1",
+            sender="cliente@example.com",
+            subject="Pedido",
+            body="Pedido inicial",
+        )
+        db.add(email)
+        db.commit()
+
+        channel = get_or_create_channel(db, 1, "email")
+        channel.is_active = True
+        db.commit()
+
+        calls = {"count": 0}
+
+        def fake_process(_self, session, inbound_message, user=None, force_order=False, email=None):
+            calls["count"] += 1
+
+            if not force_order and inbound_message.order_id:
+                order = session.get(Order, inbound_message.order_id)
+                return {
+                    "ok": True,
+                    "status": "order_detected",
+                    "message": f"Pedido {order.id} ya habia sido creado.",
+                    "order_id": order.id,
+                    "score": order.score,
+                }
+
+            existing_order = session.get(Order, inbound_message.order_id) if inbound_message.order_id else None
+
+            if existing_order:
+                order = existing_order
+                order.lines.clear()
+                session.flush()
+            else:
+                order = Order(
+                    company_id=inbound_message.company_id,
+                    email_id=email.id if email else None,
+                    customer_detected_name="Cliente demo",
+                    status="pedido_pendiente_revision",
+                    score=91,
+                )
+                session.add(order)
+                session.flush()
+
+            session.add(
+                OrderLine(
+                    company_id=inbound_message.company_id,
+                    order_id=order.id,
+                    original_text="Linea reprocesada" if force_order else "Linea inicial",
+                    quantity=2 if force_order else 1,
+                    unit="cajas",
+                    extraction_confidence=0.95,
+                    validation_status="validated",
+                )
+            )
+
+            inbound_message.order_id = order.id
+            inbound_message.status = "order_detected"
+            inbound_message.processing_step = "completed"
+            session.commit()
+
+            return {
+                "ok": True,
+                "status": "order_detected",
+                "message": f"Pedido {order.id} procesado.",
+                "order_id": order.id,
+                "score": 91,
+            }
+
+        with patch(
+            "app.agent.platform.UnifiedOrderPipelineService.process_inbound_message",
+            new=fake_process,
+        ):
+            first = AgentProcessingService().process_email(db, email)
+            original_order_id = first["order_id"]
+
+            second = AgentProcessingService().process_email(
+                db,
+                email,
+                force_order=True,
+            )
+
+        self.assertEqual(original_order_id, second["order_id"])
+        self.assertEqual(
+            db.scalar(select(func.count()).select_from(Order)),
+            1,
+        )
+
+        order = db.scalar(
+            select(Order)
+            .where(Order.id == original_order_id)
+            .options(selectinload(Order.lines))
+        )
+
+        self.assertEqual(len(order.lines), 1)
+        self.assertEqual(order.lines[0].original_text, "Linea reprocesada")
+        self.assertEqual(order.lines[0].quantity, 2)
+        self.assertEqual(calls["count"], 2)
+
+        inbound = db.scalar(
+            select(InboundMessage).where(
+                InboundMessage.company_id == 1,
+                InboundMessage.source_external_id == "mail-reprocess-1",
+            )
+        )
+        self.assertEqual(inbound.order_id, original_order_id)
+
         db.close()
 
     def test_messages_without_thread_use_stable_fallback(self):
