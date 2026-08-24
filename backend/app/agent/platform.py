@@ -272,9 +272,26 @@ class CustomerMatchingService:
 class ProductMatchingService:
     def match(self, db: Session, company_id: int, *, reference: str | None = None, detected_name: str | None = None) -> tuple[Product | None, str, float]:
         if reference:
-            product = db.scalar(select(Product).where(Product.company_id == company_id, Product.reference == reference))
+            product = db.scalar(
+                select(Product).where(
+                    Product.company_id == company_id,
+                    Product.reference == reference,
+                )
+            )
             if product:
                 return product, "referencia_exacta", 1.0
+
+            normalized_reference = reference.strip()
+            if len(normalized_reference) >= 6:
+                partial_matches = db.scalars(
+                    select(Product).where(
+                        Product.company_id == company_id,
+                        Product.reference.ilike(f"{normalized_reference}%"),
+                    )
+                ).all()
+
+                if len(partial_matches) == 1:
+                    return partial_matches[0], "referencia_parcial_unica", 0.95
         if detected_name:
             learned = db.scalar(
                 select(LearnedAlias).where(
@@ -1496,10 +1513,19 @@ class UnifiedOrderPipelineService:
         if customer_decision["selected"] and customer_decision["selected"].customer_id:
             candidate_customer = db.get(Customer, customer_decision["selected"].customer_id)
             candidate_confidence = customer_decision["selected"].confidence
-            if candidate_customer and (not customer or candidate_confidence >= customer_score):
+            if (
+                candidate_customer
+                and not customer_decision["requires_review"]
+                and (not customer or candidate_confidence >= customer_score)
+            ):
                 customer = candidate_customer
                 method = customer_decision["selected"].source
                 customer_score = candidate_confidence
+
+        if customer_decision["requires_review"]:
+            customer = None
+            method = customer_decision["selected"].source if customer_decision["selected"] else method
+            customer_score = customer_decision["selected"].confidence if customer_decision["selected"] else customer_score
         if existing_order:
             order = existing_order
             order.lines.clear()
@@ -1538,6 +1564,11 @@ class UnifiedOrderPipelineService:
             review_reasons.append("La extraccion requiere revision humana")
         if not customer:
             review_reasons.append("Cliente no identificado")
+            if customer_decision["selected"]:
+                review_reasons.append(
+                    f"Cliente candidato por {customer_decision['selected'].source}: "
+                    f"{customer_decision['selected'].reason}. Requiere validacion humana"
+                )
         elif customer_decision["selected"]:
             review_reasons.append(f"Cliente elegido por {customer_decision['selected'].source}: {customer_decision['selected'].reason}")
         elif customer_decision["evidence"]:

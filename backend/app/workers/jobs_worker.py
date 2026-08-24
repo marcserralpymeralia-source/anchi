@@ -21,7 +21,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import record_job
 from app.core.observability import observability_scope
-from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, FTPSettings, ImportJob, InboundMessage, Order, ScoringSettings
+from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, ExportSettings, FTPSettings, ImportJob, InboundMessage, Order, ScoringSettings
 from app.exports.service import ExportService, FTPService
 from app.logs.service import log_action
 from app.orders.state import ORDER_STATE
@@ -366,11 +366,44 @@ def _process_export_job(db, job: BackgroundJob, payload: dict) -> dict:
         export = ExportService().generate_csv(db, order)
     ftp_settings = get_or_create_settings(db, FTPSettings, job.company_id)
     send_via_ftp = job.job_type == "export_order_ftp"
-    ok = True
-    if send_via_ftp:
-        ok = FTPService().send(export) if ftp_settings.host else False
+
+    if not send_via_ftp:
+        export.status = "generated"
+        return {
+            "ok": True,
+            "message": "Archivo de exportacion generado",
+            "export": _serialize_export(export),
+            "order_id": order.id,
+        }
+
+    if order.status not in {"pedido_confirmado", "pedido_validado", "error_exportacion"}:
+        raise RuntimeError("El pedido debe estar confirmado antes de enviarse.")
+
+    if not ftp_settings.host:
+        raise RuntimeError("La conexion de exportacion no esta configurada.")
+
+    export_settings = get_or_create_settings(
+        db,
+        ExportSettings,
+        job.company_id,
+    )
+    ok = FTPService().send(
+        export,
+        ftp_settings,
+        encoding=export_settings.encoding or "utf-8",
+    )
+
     ORDER_STATE.export(order, ok=ok, when=_now())
     export.status = "sent" if ok else "error"
+
+    if not ok:
+        return {
+            "ok": False,
+            "message": "Exportacion fallida",
+            "export": _serialize_export(export),
+            "order_id": order.id,
+        }
+
     if ok:
         order.exported_at = order.exported_at or _now()
         for line in order.lines or []:
@@ -474,15 +507,45 @@ def _process_bulk_action(db, job: BackgroundJob, payload: dict) -> dict:
                 db.commit()
                 processed += 1
             elif action == "export":
-                export = ExportService().generate_csv(db, order)
+                if order.status not in {"pedido_confirmado", "pedido_validado", "error_exportacion"}:
+                    skipped += 1
+                    update_job_progress(db, job, int(((processed + skipped) / total) * 100))
+                    continue
+
                 ftp_settings = get_or_create_settings(db, FTPSettings, job.company_id)
-                ok = FTPService().send(export) if ftp_settings.host else False
+                if not ftp_settings.host:
+                    skipped += 1
+                    update_job_progress(db, job, int(((processed + skipped) / total) * 100))
+                    continue
+
+                export = db.scalar(
+                    select(ExportFile)
+                    .where(
+                        ExportFile.order_id == order.id,
+                        ExportFile.company_id == job.company_id,
+                    )
+                    .order_by(ExportFile.created_at.desc())
+                )
+                if not export:
+                    export = ExportService().generate_csv(db, order)
+
+                export_settings = get_or_create_settings(
+                    db,
+                    ExportSettings,
+                    job.company_id,
+                )
+                ok = FTPService().send(
+                    export,
+                    ftp_settings,
+                    encoding=export_settings.encoding or "utf-8",
+                )
                 ORDER_STATE.export(order, ok=ok, when=_now())
-                if ok:
-                    order.exported_at = _now()
-                    export.status = "sent"
-                else:
-                    export.status = "error"
+                export.status = "sent" if ok else "error"
+
+                if not ok:
+                    raise RuntimeError(f"Exportacion fallida para pedido {order.id}")
+
+                order.exported_at = order.exported_at or _now()
                 db.commit()
                 processed += 1
             elif action in {"delete", "discard"}:

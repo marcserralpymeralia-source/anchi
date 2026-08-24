@@ -979,14 +979,20 @@
 <dialog id="settings-ftp" class="settings-drawer">
   <div class="drawer-head">
     <div>
-      <h3>FTP / SFTP</h3>
+      <h3>FTP / FTPS</h3>
       <p class="muted">Destino de exportación y credenciales.</p>
     </div>
     <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
   </div>
   <form class="drawer-body stack js-loading-form" method="post" action="/settings/ftp">
     <div class="form-grid">
-      <label>Tipo<select name="connection_type"><option value="sftp" {% if ftp.connection_type == "sftp" %}selected{% endif %}>SFTP</option><option value="ftp" {% if ftp.connection_type == "ftp" %}selected{% endif %}>FTP</option></select></label>
+      <label>Tipo
+        <select name="connection_type">
+          <option value="ftp" {% if ftp.connection_type == "ftp" %}selected{% endif %}>FTP</option>
+          <option value="ftps_explicit" {% if ftp.connection_type == "ftps_explicit" %}selected{% endif %}>FTPS explícito</option>
+          <option value="ftps_implicit" {% if ftp.connection_type == "ftps_implicit" %}selected{% endif %}>FTPS implícito</option>
+        </select>
+      </label>
       <label>Host<input name="host" value="{{ ftp.host or '' }}"></label>
       <label>Puerto<input name="port" type="number" value="{{ ftp.port }}"></label>
       <label>Usuario<input name="username" value="{{ ftp.username or '' }}"></label>
