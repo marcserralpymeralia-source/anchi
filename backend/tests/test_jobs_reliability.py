@@ -21,13 +21,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.agent.services import AgentProcessingService  # noqa: E402
 from app.channels.service import get_or_create_channel  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import BackgroundJob, Customer, Email, ImportJob, JobAttempt, LLMSettings, Order, OrderLine  # noqa: E402
+from app.db.models import BackgroundJob, Customer, Email, EmailSettings, ImportJob, InputChannel, JobAttempt, LLMSettings, Order, OrderLine  # noqa: E402
 from app.imports.service import create_preview  # noqa: E402
 from app.jobs.service import claim_next_job, enqueue_job, fail_job, finish_job, recover_stale_jobs, retry_job, get_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.tenancy.migrations import upgrade_tenant_schema  # noqa: E402
-from app.workers.jobs_worker import _process_import_job, run_worker_cycle  # noqa: E402
+from app.workers.jobs_worker import _process_import_job, _process_job, run_worker_cycle  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 
 
@@ -64,6 +64,52 @@ class JobsReliabilityTests(unittest.TestCase):
         db.add(LLMSettings(company_id=1, api_key_encrypted="encrypted-token"))
         db.commit()
         db.close()
+
+    def test_email_sync_job_skips_when_email_channel_is_disabled(self):
+        db = self.TenantSession()
+        try:
+            db.add(
+                InputChannel(
+                    company_id=1,
+                    key="email",
+                    name="Email",
+                    channel_type="message",
+                    is_active=False,
+                    is_default=True,
+                    supports_text=True,
+                    supports_attachments=True,
+                    supports_documents=True,
+                    supports_audio=False,
+                    supports_images=False,
+                )
+            )
+            db.add(
+                EmailSettings(
+                    company_id=1,
+                    auto_sync_enabled=True,
+                )
+            )
+            db.commit()
+
+            job = enqueue_job(
+                db,
+                company_id=1,
+                job_type="email_sync",
+                payload={"auto_process": False},
+                created_by_user_id=None,
+            )
+
+            with patch(
+                "app.workers.jobs_worker.read_latest_imap_emails"
+            ) as read_imap:
+                result = _process_job(db, job)
+
+            self.assertTrue(result.get("ok"))
+            self.assertTrue(result.get("skipped"))
+            self.assertIn("desactivado", result.get("message", "").lower())
+            read_imap.assert_not_called()
+        finally:
+            db.close()
 
     def test_enqueue_job_is_idempotent_and_rejects_secrets(self):
         db = self.TenantSession()

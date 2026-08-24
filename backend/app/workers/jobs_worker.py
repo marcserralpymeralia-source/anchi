@@ -14,6 +14,7 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from app.channels.service import is_channel_enabled
 from app.agent.platform import LearningService
 from app.agent.services import AgentProcessingService, ScoringService
 from app.core.config import get_settings
@@ -105,6 +106,12 @@ def _process_job(db, job: BackgroundJob) -> dict:
     if job.job_type == "bulk_order_action":
         return _process_bulk_action(db, job, payload)
     if job.job_type == "email_sync":
+        if not is_channel_enabled(db, job.company_id, "email"):
+            return {
+                "ok": True,
+                "skipped": True,
+                "message": "Canal Email desactivado para este tenant",
+            }
         settings = get_or_create_settings(db, EmailSettings, job.company_id)
         master_db = MasterSessionLocal()
         try:
@@ -138,6 +145,12 @@ def _process_job(db, job: BackgroundJob) -> dict:
         finally:
             master_db.close()
     if job.job_type == "process_recent_emails":
+        if not is_channel_enabled(db, job.company_id, "email"):
+            return {
+                "ok": True,
+                "skipped": True,
+                "message": "Canal Email desactivado para este tenant",
+            }
         settings = get_or_create_settings(db, EmailSettings, job.company_id)
         limit = max(min(int(payload.get("limit", 3) or 3), 10), 1)
         master_db = MasterSessionLocal()
@@ -172,6 +185,12 @@ def _process_job(db, job: BackgroundJob) -> dict:
         finally:
             master_db.close()
     if job.job_type == "backfill_imap":
+        if not is_channel_enabled(db, job.company_id, "email"):
+            return {
+                "ok": True,
+                "skipped": True,
+                "message": "Canal Email desactivado para este tenant",
+            }
         settings = get_or_create_settings(db, EmailSettings, job.company_id)
         master_db = MasterSessionLocal()
         try:
