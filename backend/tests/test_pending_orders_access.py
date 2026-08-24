@@ -77,22 +77,21 @@ class PendingOrdersAccessTests(unittest.TestCase):
             self.assertIn(f"{get_settings().session_cookie}=", login_response.headers.get("set-cookie", ""))
 
             pending_response = client.get("/inicio", follow_redirects=False)
-            self.assertEqual(pending_response.status_code, 200)
-            self.assertIn("Pedidos pendientes", pending_response.text)
+            self.assertEqual(pending_response.status_code, 303)
+            self.assertEqual(pending_response.headers["location"], "/")
         finally:
             cleanup()
             fixture.cleanup()
 
-    def test_authenticated_pending_orders_does_not_redirect_to_login_or_inicio(self):
+    def test_authenticated_pending_orders_redirects_to_root_bandeja(self):
         fixture = build_performance_fixture("small")
         client, cleanup = self._client_for(fixture)
         try:
             client.post("/login", data={"email": fixture.admin_email, "password": fixture.admin_password}, follow_redirects=False)
             response = client.get("/inicio", follow_redirects=False)
 
-            self.assertEqual(response.status_code, 200)
-            self.assertNotIn("location", response.headers)
-            self.assertIn("Pedidos pendientes", response.text)
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(response.headers["location"], "/")
         finally:
             cleanup()
             fixture.cleanup()
@@ -105,12 +104,12 @@ class PendingOrdersAccessTests(unittest.TestCase):
             self.assertIn("dashboard", app_route_names)
 
             client.post("/login", data={"email": fixture.admin_email, "password": fixture.admin_password}, follow_redirects=False)
-            response = client.get("/inicio", follow_redirects=False)
+            response = client.get("/", follow_redirects=False)
 
             self.assertEqual(response.status_code, 200)
-            self.assertIn('href="http://testserver/inicio"', response.text)
+            self.assertIn('href="http://testserver/"', response.text)
             self.assertNotIn('href="#"', response.text)
-            self.assertNotIn('href="http://127.0.0.1:8000/inicio"', response.text)
+            self.assertNotIn('href="http://127.0.0.1:8000/"', response.text)
         finally:
             cleanup()
             fixture.cleanup()

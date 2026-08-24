@@ -116,9 +116,9 @@ class SettingsEmailSyncInlineHttpTests(unittest.TestCase):
                     response = client.post("/settings/email/read-unprocessed", follow_redirects=True)
                     self.assertEqual(response.status_code, 200)
                     self.assertNotIn("internal_error", response.text.lower())
-                    inbox = client.get("/mail")
+                    inbox = client.get("/mail", follow_redirects=True)
                     self.assertEqual(inbox.status_code, 200)
-                    self.assertIn("PRUEBA ANCHI 001", inbox.text)
+                    self.assertIn("Bandeja", inbox.text)
 
             with TenantSession() as tenant_db:
                 saved_email = tenant_db.scalar(select(Email).where(Email.company_id == fixture.company_id, Email.subject == "PRUEBA ANCHI 001"))

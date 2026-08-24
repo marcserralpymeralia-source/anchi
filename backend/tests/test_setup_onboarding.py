@@ -187,7 +187,7 @@ class SetupOnboardingTests(unittest.TestCase):
             self.assertEqual(response.headers["location"], "/setup")
             setup_page = client.get("/setup/company")
             self.assertEqual(setup_page.status_code, 200)
-            self.assertIn("Pedidos pendientes", setup_page.text)
+            self.assertIn("Bandeja", setup_page.text)
             self.assertIn("Configura Anchi", setup_page.text)
             self.assertIn("Configuración completada", setup_page.text)
         finally:
@@ -199,11 +199,13 @@ class SetupOnboardingTests(unittest.TestCase):
         client, cleanup = fixture.client()
         try:
             self._login(client)
-            response = client.get("/inicio")
-            self.assertEqual(response.status_code, 200)
-            self.assertIn("Anchi todavía no está lista", response.text)
-            self.assertIn("Continuar configuración", response.text)
-            self.assertIn("Pedidos pendientes", response.text)
+            response = client.get("/inicio", follow_redirects=False)
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(response.headers["location"], "/")
+            follow_up = client.get("/", follow_redirects=True)
+            self.assertEqual(follow_up.status_code, 200)
+            self.assertIn("Anchi todavía no está lista", follow_up.text)
+            self.assertIn("Continuar configuración", follow_up.text)
             self.assertNotIn("/login", response.headers.get("location", ""))
         finally:
             cleanup()

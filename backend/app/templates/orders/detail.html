@@ -44,7 +44,7 @@
     </div>
     <div class="review-header-actions review-header-actions-tight">
       {% if order.email_id %}
-        <a class="button secondary compact-button" href="/entries?focus=email-{{ order.email_id }}">Ver origen</a>
+        <a class="button secondary compact-button" href="/?focus=email-{{ order.email_id }}">Ver origen</a>
       {% endif %}
       <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/reprocess">
         <button class="secondary compact-button" data-loading-text="Reprocesando...">Reprocesar</button>

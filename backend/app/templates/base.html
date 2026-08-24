@@ -22,19 +22,21 @@
         </div>
         <button class="sidebar-toggle secondary" type="button" title="Contraer menu" aria-label="Contraer menu" onclick="toggleSidebar()">☰</button>
       </div>
-      {% set href_dashboard = request.url_for('dashboard') if request.url_for is defined else '/inicio' %}
-      {% set href_entries = request.url_for('channels_page') if request.url_for is defined else '/entries' %}
-      {% set href_customers = request.url_for('list_customers') if request.url_for is defined else '/customers' %}
-      {% set href_products = request.url_for('list_products') if request.url_for is defined else '/products' %}
-      {% set href_settings = request.url_for('settings_page') if request.url_for is defined else '/settings' %}
+      {% set href_dashboard = '/' %}
+      {% set href_orders = '/orders' %}
+      {% set href_history = '/history' %}
+      {% set href_customers = '/customers' %}
+      {% set href_products = '/products' %}
+      {% set href_settings = '/settings' %}
       {% set href_import_manual = request.url_for('manual_import_page') if request.url_for is defined else '/imports/manual' %}
       <nav class="nav">
-        <a href="{{ href_dashboard }}" title="Pedidos pendientes" class="{% if request.url.path in ['/', '/inicio'] %}active{% endif %}"><span class="nav-icon">▦</span><span class="nav-label">Pedidos pendientes</span></a>
-        <a href="{{ href_entries }}" title="Entradas" class="{% if request.url.path.startswith('/entries') or request.url.path.startswith('/mail') or request.url.path.startswith('/channels') or request.url.path.startswith('/history') %}active{% endif %}"><span class="nav-icon">✉</span><span class="nav-label">Entradas</span></a>
+        <a href="{{ href_dashboard }}" title="Bandeja" class="{% if request.url.path in ['/', '/inicio', '/workbench'] %}active{% endif %}"><span class="nav-icon">▦</span><span class="nav-label">Bandeja</span></a>
+        <a href="{{ href_orders }}" title="Pedidos" class="{% if request.url.path.startswith('/orders') %}active{% endif %}"><span class="nav-icon">▤</span><span class="nav-label">Pedidos</span></a>
+        <a href="{{ href_history }}" title="Histórico" class="{% if request.url.path.startswith('/history') or request.url.path.startswith('/pedidos') %}active{% endif %}"><span class="nav-icon">◫</span><span class="nav-label">Histórico</span></a>
         <a href="{{ href_customers }}" title="Clientes" class="{% if request.url.path.startswith('/customers') %}active{% endif %}"><span class="nav-icon">◫</span><span class="nav-label">Clientes</span></a>
         <a href="{{ href_products }}" title="Productos" class="{% if request.url.path.startswith('/products') %}active{% endif %}"><span class="nav-icon">▣</span><span class="nav-label">Productos</span></a>
         {% if user.role.name in ["Administrador", "Superadmin"] %}
-          <a href="{{ href_settings }}" title="Configuracion" class="{% if request.url.path.startswith('/settings') or request.url.path.startswith('/setup') %}active{% endif %}"><span class="nav-icon">⚙</span><span class="nav-label">Configuracion</span></a>
+          <a href="{{ href_settings }}" title="Configuración" class="{% if request.url.path.startswith('/settings') or request.url.path.startswith('/setup') %}active{% endif %}"><span class="nav-icon">⚙</span><span class="nav-label">Configuración</span></a>
         {% endif %}
       </nav>
     </aside>

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.agent.extraction.diagnostics import extraction_diagnostics_from_messages, extraction_diagnostics_from_payload
 from app.agent.services import AgentProcessingService, ScoringService
 from app.auth.dependencies import current_user
+from app.core.entry_workflow import close_email, discard_email, mark_email_no_order, queue_email_processing
 from app.core.templating import templates
 from app.core.timezones import format_local_datetime
 from app.dashboard.service import workbench_summary
@@ -375,18 +376,14 @@ def workbench_bulk_action(
 def workbench_mark_email_no_order(email_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     email = db.get(Email, email_id)
     if email and email.company_id == user.company_id:
-        email.status = "no_pedido"
-        email.agent_status = "processed_no_order"
-        email.detected_type = "no_pedido"
-        email.processing_error = None
-        db.commit()
+        mark_email_no_order(db, company_id=user.company_id, user_id=user.id, email_id=email.id)
         log_action(db, company_id=user.company_id, user=user, action="workbench.email.mark_no_order", entity_type="email", entity_id=email.id, message="Correo marcado como no pedido desde Bandeja")
     return RedirectResponse("/?mode=no_order", status_code=303)
 
 
 @router.post("/workbench/email/{email_id}/process")
 def workbench_process_email(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
-    job = enqueue_job(db, company_id=user.company_id, job_type="process_email", payload={"email_id": email_id}, created_by_user_id=user.id)
+    job = queue_email_processing(db, company_id=user.company_id, user_id=user.id, email_id=email_id)
     log_action(db, company_id=user.company_id, user=user, action="workbench.email.process", entity_type="job", entity_id=job.id, message=f"Correo encolado para procesar: {email_id}")
     return _queued_job_response(request, job.id)
 
@@ -395,9 +392,7 @@ def workbench_process_email(email_id: int, request: Request, db: Session = Depen
 def workbench_close_email(email_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     email = db.get(Email, email_id)
     if email and email.company_id == user.company_id:
-        email.status = "cerrado"
-        email.agent_status = "processed_no_order" if email.detected_type == "no_pedido" else email.agent_status
-        db.commit()
+        close_email(db, company_id=user.company_id, user_id=user.id, email_id=email.id)
         log_action(db, company_id=user.company_id, user=user, action="workbench.email.close", entity_type="email", entity_id=email.id, message="Correo cerrado desde Bandeja")
     return RedirectResponse("/", status_code=303)
 
@@ -406,9 +401,7 @@ def workbench_close_email(email_id: int, db: Session = Depends(get_tenant_db), u
 def workbench_discard_email(email_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     email = db.get(Email, email_id)
     if email and email.company_id == user.company_id:
-        email.status = "descartado"
-        email.agent_status = "discarded"
-        db.commit()
+        discard_email(db, company_id=user.company_id, user_id=user.id, email_id=email.id)
         log_action(db, company_id=user.company_id, user=user, action="workbench.email.discard", entity_type="email", entity_id=email.id, message="Correo descartado desde Bandeja")
     return RedirectResponse("/?mode=no_order", status_code=303)
 

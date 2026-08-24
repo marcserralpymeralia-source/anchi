@@ -57,7 +57,7 @@ def _normalize_featured_process_item(item: dict) -> dict:
     normalized["category_label"] = normalized.get("category_label") or normalized.get("category") or "Sin analizar"
     normalized["subject"] = normalized.get("subject") or "Pedido compra"
     normalized["detail_url"] = normalized.get("detail_url") or (
-        f"/orders/{normalized['order_id']}" if normalized.get("order_id") else f"/entries?focus=email-{normalized['email_id']}" if normalized.get("email_id") else "/"
+        f"/orders/{normalized['order_id']}" if normalized.get("order_id") else f"/?focus=email-{normalized['email_id']}" if normalized.get("email_id") else "/"
     )
     return normalized
 
@@ -280,8 +280,68 @@ def _history_email_rows_stmt(
 
 
 @router.get("/")
-def root_page():
-    return RedirectResponse("/inicio", status_code=303)
+def root_page(
+    request: Request,
+    date_from: str = "",
+    date_to: str = "",
+    customer_id: str = "",
+    status: str = "",
+    email_type: str = "",
+    score_min: str = "",
+    score_max: str = "",
+    scoring_category: str = "",
+    agent_status: str = "",
+    date_range: str = "7d",
+    customer_or_sender: str = "",
+    has_attachments: str = "",
+    order_status: str = "",
+    mode: str = "",
+    tab: str = "",
+    work_status: str = "",
+    quick_range: str = "today",
+    has_pdf: str = "",
+    requires_review: str = "",
+    issue_type: str = "",
+    origin: str = "",
+    sender: str = "",
+    search: str = "",
+    reason: str = "",
+    page: int = 1,
+    page_size: int = 25,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    return dashboard(
+        request,
+        date_from=date_from,
+        date_to=date_to,
+        customer_id=customer_id,
+        status=status,
+        email_type=email_type,
+        score_min=score_min,
+        score_max=score_max,
+        scoring_category=scoring_category,
+        agent_status=agent_status,
+        date_range=date_range,
+        customer_or_sender=customer_or_sender,
+        has_attachments=has_attachments,
+        order_status=order_status,
+        mode=mode,
+        tab=tab,
+        work_status=work_status,
+        quick_range=quick_range,
+        has_pdf=has_pdf,
+        requires_review=requires_review,
+        issue_type=issue_type,
+        origin=origin,
+        sender=sender,
+        search=search,
+        reason=reason,
+        page=page,
+        page_size=page_size,
+        db=db,
+        user=user,
+    )
 
 
 @router.get("/inicio")
@@ -316,6 +376,10 @@ def dashboard(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
+    if request.url.path == "/inicio":
+        redirect_target = "/" if not request.url.query else f"/?{request.url.query}"
+        return RedirectResponse(redirect_target, status_code=303)
+
     if not is_setup_operational(db, user.company_id):
         setup_status = get_setup_status(db, user.company_id)
         missing = [
@@ -358,8 +422,34 @@ def dashboard(
         },
     )
 @router.get("/history")
-def history_redirect():
-    return RedirectResponse("/entries?tab=processed&date_range=30d", status_code=303)
+def history_page(
+    request: Request,
+    date_range: str = "90d",
+    date_from: str = "",
+    date_to: str = "",
+    kind: str = "all",
+    state: str = "all",
+    customer_id: str = "",
+    search: str = "",
+    page: int = 1,
+    page_size: int = 50,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    return pedidos_page(
+        request=request,
+        date_range=date_range,
+        date_from=date_from,
+        date_to=date_to,
+        kind=kind,
+        state=state,
+        customer_id=customer_id,
+        search=search,
+        page=page,
+        page_size=page_size,
+        db=db,
+        user=user,
+    )
 
 
 @router.get("/pedidos")
@@ -666,7 +756,7 @@ def pedidos_page(
                         "kind_label": "Pedido",
                         "date": _aware(order.created_at),
                         "url": f"/orders/{order.id}",
-                        "secondary_url": f"/entries?tab=processed&date_range=30d&search={quote_plus(order.email.subject or order.email.sender or order.customer_detected_name or '')}" if order.email else "/orders",
+                        "secondary_url": f"/?tab=processed&date_range=30d&search={quote_plus(order.email.subject or order.email.sender or order.customer_detected_name or '')}" if order.email else "/orders",
                         "title": item["customer_name"] or order.customer_detected_name or "Pedido",
                         "subtitle": order.email.subject if order.email else "",
                     }
@@ -683,8 +773,8 @@ def pedidos_page(
                     {
                         "kind_label": "Correo",
                         "date": _aware(email.received_at),
-                        "url": f"/entries?tab=processed&date_range=30d&search={quote_plus(email.subject or email.sender or '')}",
-                        "secondary_url": f"/entries?tab=email&date_range=30d&search={quote_plus(email.sender or email.subject or '')}",
+                        "url": f"/?tab=processed&date_range=30d&search={quote_plus(email.subject or email.sender or '')}",
+                        "secondary_url": f"/?tab=email&date_range=30d&search={quote_plus(email.sender or email.subject or '')}",
                         "title": email.subject or "Correo sin asunto",
                         "subtitle": email.sender,
                         "customer_name": suggest_customer_for_email(db, user.company_id, email, suggestion_maps=suggestion_maps) or item["customer_name"],

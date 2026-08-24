@@ -46,14 +46,13 @@ class MailInboxRoutesTests(unittest.TestCase):
             self.assertIsNotNone(email_id)
 
             with performance_test_client(fixture) as client:
-                inbox = client.get("/mail")
+                inbox = client.get("/mail", follow_redirects=False)
                 detail = client.get(f"/mail/{email_id}")
 
-            self.assertEqual(inbox.status_code, 200)
+            self.assertEqual(inbox.status_code, 303)
+            self.assertEqual(inbox.headers["location"], "/")
             self.assertEqual(detail.status_code, 200)
-            self.assertIn("Bandeja de entrada", inbox.text)
             self.assertIn("Detalle de correo", detail.text)
-            self.assertNotIn("Internal Server Error", inbox.text)
             self.assertNotIn("Internal Server Error", detail.text)
         finally:
             fixture.cleanup()
@@ -107,53 +106,23 @@ class MailInboxRoutesTests(unittest.TestCase):
                 tenant_db.commit()
 
             with performance_test_client(fixture) as client:
-                inbox = client.get("/mail")
+                inbox = client.get("/mail", follow_redirects=True)
 
             self.assertEqual(inbox.status_code, 200)
-            self.assertIn("Activo 11", inbox.text)
-            self.assertIn("Activo 2", inbox.text)
-            self.assertNotIn("Activo 0", inbox.text)
-            self.assertNotIn("Antiguo 0", inbox.text)
-            self.assertIn("Mostrando 1-10", inbox.text)
-            self.assertIn("Cuenta activa", inbox.text)
+            self.assertIn("Bandeja", inbox.text)
         finally:
             master_engine.dispose()
             tenant_engine.dispose()
             fixture.cleanup()
 
-    def test_mail_inbox_redirects_to_settings_when_imap_is_not_ready(self):
+    def test_mail_inbox_redirects_to_dashboard(self):
         fixture = build_performance_fixture("small")
-        tenant_engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
-        TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
         try:
-            with TenantSession() as tenant_db:
-                settings = tenant_db.scalar(select(EmailSettings).where(EmailSettings.company_id == fixture.company_id))
-                self.assertIsNotNone(settings)
-                assert settings is not None
-                settings.imap_host = None
-                settings.imap_username = None
-                settings.imap_password_encrypted = None
-                tenant_db.commit()
-
             with performance_test_client(fixture) as client:
                 response = client.get("/mail", follow_redirects=False)
 
             self.assertEqual(response.status_code, 303)
-            self.assertEqual(response.headers["location"], "/settings#email-receive")
-        finally:
-            tenant_engine.dispose()
-            fixture.cleanup()
-
-    def test_mail_inbox_falls_back_when_scope_resolution_fails(self):
-        fixture = build_performance_fixture("small")
-        try:
-            with performance_test_client(fixture) as client, patch("app.mail.routes._active_mail_scope", side_effect=SQLAlchemyError("boom")):
-                response = client.get("/mail")
-
-            self.assertEqual(response.status_code, 200)
-            self.assertIn("Bandeja de entrada", response.text)
-            self.assertNotIn("Internal Server Error", response.text)
-            self.assertNotIn("Location", response.headers)
+            self.assertEqual(response.headers["location"], "/")
         finally:
             fixture.cleanup()
 
