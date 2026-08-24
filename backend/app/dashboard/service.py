@@ -653,7 +653,7 @@ def workbench_summary(db: Session, company_id: int, filters: dict, *, include_me
 
     emails_stmt = select(Email).where(Email.company_id == company_id)
     today = datetime.now(timezone.utc).date()
-    date_range = filters.get("date_range") or filters.get("quick_range") or "7d"
+    date_range = filters.get("date_range") or filters.get("quick_range") or ""
     if date_range == "today":
         emails_stmt = emails_stmt.where(Email.received_at >= datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc))
     elif date_range == "yesterday":
