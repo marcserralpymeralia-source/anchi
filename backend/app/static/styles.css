@@ -1882,7 +1882,15 @@ form.stack, .stack { gap: 9px; }
 }
 
 .order-review-description {
+  width: 52%;
   line-height: 1.3;
+}
+
+.order-review-description .product-autocomplete,
+.order-review-description .order-review-product-input {
+  width: 100%;
+  max-width: none;
+  min-width: 0;
 }
 
 .order-review-quantity {
