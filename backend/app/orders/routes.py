@@ -323,23 +323,51 @@ def customer_search(
     if len(query) < 2:
         return []
 
-    like = f"%{query}%"
+    exact = query
+    starts = f"{query}%"
+    contains = f"%{query}%"
+
+    match = or_(
+        Customer.code.ilike(contains),
+        Customer.fiscal_name.ilike(contains),
+        Customer.commercial_name.ilike(contains),
+        Customer.tax_id.ilike(contains),
+        Customer.primary_email.ilike(contains),
+    )
+
+    relevance = case(
+        (
+            or_(
+                Customer.code.ilike(exact),
+                Customer.fiscal_name.ilike(exact),
+                Customer.commercial_name.ilike(exact),
+                Customer.tax_id.ilike(exact),
+                Customer.primary_email.ilike(exact),
+            ),
+            0,
+        ),
+        (
+            or_(
+                Customer.code.ilike(starts),
+                Customer.fiscal_name.ilike(starts),
+                Customer.commercial_name.ilike(starts),
+                Customer.tax_id.ilike(starts),
+                Customer.primary_email.ilike(starts),
+            ),
+            1,
+        ),
+        else_=2,
+    )
+
     customers = db.scalars(
         select(Customer)
         .where(
             Customer.company_id == user.company_id,
             Customer.deleted_at.is_(None),
-            or_(
-                Customer.code.ilike(like),
-                Customer.fiscal_name.ilike(like),
-                Customer.commercial_name.ilike(like),
-                Customer.tax_id.ilike(like),
-                Customer.primary_email.ilike(like),
-                Customer.phone.ilike(like),
-            ),
+            match,
         )
-        .order_by(Customer.fiscal_name.asc())
-        .limit(12)
+        .order_by(relevance, Customer.fiscal_name.asc())
+        .limit(15)
     ).all()
 
     return [
