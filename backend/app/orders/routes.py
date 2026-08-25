@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timezone
 from email.utils import parseaddr
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
@@ -31,7 +32,7 @@ from app.orders.service import (
     validate_confirmation,
 )
 from app.orders.state import ORDER_STATE
-from app.settings.service import get_or_create_settings
+from app.settings.service import get_or_create_settings, resolve_updated_by_id
 from app.tenancy.database import get_tenant_db
 
 router = APIRouter(prefix="/orders", tags=["orders"])
@@ -547,7 +548,7 @@ def update_order_customer(order_id: int, validated_customer_id: int = Form(...),
                     corrected_entity_id=new_customer.id,
                     reason="Validacion manual de cliente",
                     should_learn=True,
-                    created_by_user_id=user.id,
+                    created_by_user_id=resolve_updated_by_id(db, user),
                 )
             )
         if new_customer:
@@ -610,7 +611,7 @@ def update_order(
                         corrected_entity_id=new_customer.id,
                         reason="Cambio manual desde detalle de pedido",
                         should_learn=True,
-                        created_by_user_id=user.id,
+                        created_by_user_id=resolve_updated_by_id(db, user),
                     )
                 )
             if new_customer:
@@ -678,7 +679,7 @@ def update_order_line(
                     corrected_entity_id=new_product.id,
                     reason="Validacion manual de producto",
                     should_learn=True,
-                    created_by_user_id=user.id,
+                    created_by_user_id=resolve_updated_by_id(db, user),
                 )
             )
             if old_product and (order.validated_customer_id or order.customer_id):
@@ -704,7 +705,7 @@ def update_order_line(
                     corrected_entity_id=line.id,
                     reason="Correccion manual de cantidad",
                     should_learn=True,
-                    created_by_user_id=user.id,
+                    created_by_user_id=resolve_updated_by_id(db, user),
                 )
             )
         if old_unit != unit:
@@ -721,7 +722,7 @@ def update_order_line(
                     corrected_entity_id=line.id,
                     reason="Correccion manual de unidad",
                     should_learn=True,
-                    created_by_user_id=user.id,
+                    created_by_user_id=resolve_updated_by_id(db, user),
                 )
             )
         _sync_customer_product_knowledge(
@@ -873,7 +874,7 @@ def recalculate_score(order_id: int, db: Session = Depends(get_tenant_db), user:
 def reprocess_order(order_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     order = db.get(Order, order_id)
     if order and order.company_id == user.company_id:
-        job = enqueue_job(db, company_id=user.company_id, job_type="process_order", payload={"order_id": order.id}, created_by_user_id=user.id)
+        job = enqueue_job(db, company_id=user.company_id, job_type="process_order", payload={"order_id": order.id}, created_by_user_id=resolve_updated_by_id(db, user))
         log_action(db, company_id=user.company_id, user=user, action="order.reprocess", entity_type="job", entity_id=job.id, message="Reprocesamiento de pedido encolado")
         db.commit()
     return RedirectResponse(f"/orders/{order_id}", status_code=303)
@@ -945,7 +946,7 @@ def export_order(order_id: int, db: Session = Depends(get_tenant_db), user: Tena
     order = db.get(Order, order_id)
     if order:
         if order.company_id == user.company_id:
-            job = enqueue_job(db, company_id=user.company_id, job_type="export_order", payload={"order_id": order.id}, created_by_user_id=user.id)
+            job = enqueue_job(db, company_id=user.company_id, job_type="export_order", payload={"order_id": order.id}, created_by_user_id=resolve_updated_by_id(db, user))
             log_action(db, company_id=user.company_id, user=user, action="order.export", entity_type="job", entity_id=job.id, message="Exportacion encolada")
     return RedirectResponse("/orders", status_code=303)
 
@@ -959,7 +960,7 @@ def generate_export(order_id: int, db: Session = Depends(get_tenant_db), user: T
 def export_preview(order_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     export = db.scalar(select(ExportFile).where(ExportFile.order_id == order_id, ExportFile.company_id == user.company_id).order_by(ExportFile.created_at.desc()))
     if not export:
-        job = enqueue_job(db, company_id=user.company_id, job_type="export_order", payload={"order_id": order_id}, created_by_user_id=user.id)
+        job = enqueue_job(db, company_id=user.company_id, job_type="export_order", payload={"order_id": order_id}, created_by_user_id=resolve_updated_by_id(db, user))
         log_action(db, company_id=user.company_id, user=user, action="order.export_preview_queued", entity_type="job", entity_id=job.id, message="Vista previa de exportacion encolada")
         return RedirectResponse(f"/jobs/{job.id}/detail", status_code=303)
     return PlainTextResponse(export.content, media_type="text/plain")
@@ -969,7 +970,7 @@ def export_preview(order_id: int, db: Session = Depends(get_tenant_db), user: Te
 def export_ftp(order_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     order = db.get(Order, order_id)
     if order and order.company_id == user.company_id:
-        job = enqueue_job(db, company_id=user.company_id, job_type="export_order_ftp", payload={"order_id": order.id}, created_by_user_id=user.id)
+        job = enqueue_job(db, company_id=user.company_id, job_type="export_order_ftp", payload={"order_id": order.id}, created_by_user_id=resolve_updated_by_id(db, user))
         log_action(db, company_id=user.company_id, user=user, action="order.export_ftp", entity_type="job", entity_id=job.id, message="Exportacion FTP encolada")
     return RedirectResponse("/orders", status_code=303)
 
