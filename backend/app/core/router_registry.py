@@ -21,6 +21,7 @@ from app.settings.routes import router as settings_router
 from app.setup.routes import router as setup_router
 from app.users.routes import router as users_router
 from app.workbench.routes import router as workbench_router
+from app.blob_check_routes import router as blob_check_router
 
 try:  # pragma: no cover - optional during phased extraction
     from app.health.routes import router as health_router
@@ -57,6 +58,7 @@ def get_registered_routers() -> list:
         settings_router,
         users_router,
         logs_router,
+        blob_check_router,
     ]
     if health_router is not None:
         routers.append(health_router)
