@@ -161,7 +161,15 @@ def get_setup_status(db: Session, company_id: int) -> SetupStatus:
     active_channels_count = db.scalar(select(func.count(InputChannel.id)).where(InputChannel.company_id == company_id, InputChannel.is_active.is_(True))) or 0
     company_ready = _company_configured(db, company_id)
     email_connected = bool(email_status.get("imap_ready"))
-    whatsapp_connected = bool(whatsapp.enabled and whatsapp.webhook_enabled and whatsapp.phone_number_id and whatsapp.verify_token and whatsapp.app_secret and whatsapp.access_token)
+    whatsapp_connected = bool(
+        whatsapp.enabled
+        and whatsapp.connection_status == "connected"
+        and whatsapp.webhook_enabled
+        and whatsapp.phone_number_id
+        and whatsapp.business_account_id
+        and whatsapp.verify_token
+        and whatsapp.access_token
+    )
     has_input_channel = email_connected or whatsapp_connected or bool(active_channels_count)
     has_products = product_count > 0
     has_customers = customer_count > 0

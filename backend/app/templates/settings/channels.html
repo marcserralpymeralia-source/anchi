@@ -170,6 +170,11 @@
             </div>
           </section>
         {% endif %}
+      {% elif channel.key == "whatsapp" %}
+        <section class="drawer-card">
+          {% set whatsapp_return_to = "settings" %}
+          {% include "components/whatsapp_embedded_signup.html" %}
+        </section>
       {% else %}
         <form class="drawer-card stack js-loading-form" method="post" action="/settings/channels/{{ channel.key }}/settings">
           <div class="section-title-row">

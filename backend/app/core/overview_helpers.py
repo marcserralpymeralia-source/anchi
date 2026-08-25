@@ -212,22 +212,10 @@ CHANNEL_CONFIG_SPECS = {
         "configure_href": "/settings#email",
     },
     "whatsapp": {
-        "summary": "Preparado para conectarse con un proveedor de mensajería.",
-        "config_title": "WhatsApp",
-        "fields": [
-            {"key": "enabled", "label": "Activo"},
-            {"key": "provider", "label": "Proveedor"},
-            {"key": "phone_number_id", "label": "Phone number ID"},
-            {"key": "business_account_id", "label": "Business account ID"},
-            {"key": "access_token", "label": "Token de acceso", "secret": True},
-            {"key": "verify_token", "label": "Verify token", "secret": True},
-            {"key": "app_secret", "label": "App secret", "secret": True},
-            {"key": "webhook_enabled", "label": "Webhook activo"},
-            {"key": "bot_enabled", "label": "Bot activo"},
-            {"key": "default_language", "label": "Idioma"},
-            {"key": "timezone", "label": "Zona horaria"},
-        ],
-        "required_keys": ["phone_number_id", "business_account_id", "access_token", "verify_token", "app_secret"],
+        "summary": "Conecta WhatsApp Business mediante el acceso seguro de Meta.",
+        "config_title": "WhatsApp Business Platform",
+        "fields": [],
+        "required_keys": ["phone_number_id", "business_account_id", "access_token", "verify_token"],
     },
     "voice": {
         "summary": "Pensado para voz y transcripción posterior.",
@@ -301,6 +289,27 @@ def channel_status_payload(db: Session, company_id: int, channel: InputChannel) 
                 details = "Faltan datos para empezar a recibir mensajes."
                 activity_label = "Pendiente"
                 activity_value = "Completa los datos mínimos del correo."
+        elif channel.key == "whatsapp":
+            connection_status = (settings_map.get("connection_status") or "not_connected").strip().lower()
+            required_ready = all(settings_map.get(key) for key in spec.get("required_keys", []))
+            if connection_status == "error":
+                state = "error"
+                status_label = "Activo · error de conexión"
+                details = settings_map.get("last_error") or "Meta no pudo completar la conexión. Vuelve a iniciar sesión."
+                activity_label = "Conexión"
+                activity_value = "Requiere atención"
+            elif connection_status == "connected" and required_ready and settings_map.get("webhook_enabled") == "true":
+                state = "ready"
+                status_label = "Activo · conectado con Meta"
+                details = "WhatsApp Business está suscrito al webhook de este tenant."
+                activity_label = "Número conectado"
+                activity_value = settings_map.get("display_phone_number") or settings_map.get("phone_number_id") or "Conectado"
+            else:
+                state = "pending"
+                status_label = "Activo · pendiente de conectar"
+                details = "Inicia sesión con Meta para autorizar el WABA y registrar el número."
+                activity_label = "Pendiente"
+                activity_value = "Completa Embedded Signup"
         else:
             missing = [field["label"] for field in spec.get("fields", []) if field["key"] in spec.get("required_keys", []) and not settings_map.get(field["key"])]
             if missing:
