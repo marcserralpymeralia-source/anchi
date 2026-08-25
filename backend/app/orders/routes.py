@@ -383,6 +383,69 @@ def customer_search(
     ]
 
 
+@router.get("/product-search")
+def product_search(
+    q: str = "",
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    query = q.strip()
+    if len(query) < 2:
+        return []
+
+    exact = query
+    starts = f"{query}%"
+    contains = f"%{query}%"
+
+    match = or_(
+        Product.reference.ilike(contains),
+        Product.alternative_code.ilike(contains),
+        Product.name.ilike(contains),
+        Product.description.ilike(contains),
+    )
+
+    relevance = case(
+        (
+            or_(
+                Product.reference.ilike(exact),
+                Product.alternative_code.ilike(exact),
+                Product.name.ilike(exact),
+            ),
+            0,
+        ),
+        (
+            or_(
+                Product.reference.ilike(starts),
+                Product.alternative_code.ilike(starts),
+                Product.name.ilike(starts),
+            ),
+            1,
+        ),
+        else_=2,
+    )
+
+    products = db.scalars(
+        select(Product)
+        .where(
+            Product.company_id == user.company_id,
+            Product.deleted_at.is_(None),
+            match,
+        )
+        .order_by(relevance, Product.name.asc())
+        .limit(15)
+    ).all()
+
+    return [
+        {
+            "id": product.id,
+            "reference": product.reference or "",
+            "name": product.name or product.description or "",
+            "sale_price": product.sale_price or 0,
+        }
+        for product in products
+    ]
+
+
 @router.get("/{order_id}")
 def order_detail(
     order_id: int,
@@ -607,7 +670,18 @@ def update_order(
         previous_customer_id = order.validated_customer_id or order.customer_id
         order.validated_customer_id = new_customer.id if new_customer else None
         order.customer_id = new_customer.id if new_customer else order.customer_id
-        order.order_date = order_date
+
+        normalized_order_date = order_date.strip()
+        if normalized_order_date:
+            try:
+                normalized_order_date = datetime.strptime(
+                    normalized_order_date,
+                    "%d-%m-%Y",
+                ).strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+
+        order.order_date = normalized_order_date
         order.requested_delivery_date = requested_delivery_date
         order.notes = notes
         if status:
@@ -754,7 +828,7 @@ def update_order_line(
         ORDER_STATE.apply_score(db, order, user.company_id, order.score)
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.line.update", entity_type="order_line", entity_id=line.id, message="Linea de pedido actualizada")
-    return RedirectResponse("/orders", status_code=303)
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
 @router.post("/{order_id}/lines")
@@ -804,7 +878,7 @@ def add_order_line(
         order.score = ScoringService().score_order(db, order)
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.line.add", entity_type="order_line", entity_id=line.id, message="Linea de pedido anadida")
-    return RedirectResponse("/orders", status_code=303)
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
 @router.post("/{order_id}/lines/{line_id}/duplicate")
@@ -838,7 +912,7 @@ def duplicate_order_line(order_id: int, line_id: int, db: Session = Depends(get_
         order.score = ScoringService().score_order(db, order)
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.line.duplicate", entity_type="order_line", entity_id=new_line.id, message="Linea duplicada")
-    return RedirectResponse("/orders", status_code=303)
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
 @router.post("/{order_id}/lines/{line_id}/delete")
@@ -872,7 +946,7 @@ def delete_order_line(order_id: int, line_id: int, db: Session = Depends(get_ten
         order.score = ScoringService().score_order(db, order)
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.line.delete", entity_type="order_line", entity_id=line_id, message="Linea eliminada")
-    return RedirectResponse("/orders", status_code=303)
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
 @router.post("/{order_id}/recalculate-score")
@@ -883,7 +957,7 @@ def recalculate_score(order_id: int, db: Session = Depends(get_tenant_db), user:
         ORDER_STATE.apply_score(db, order, user.company_id, order.score)
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.recalculate_score", entity_type="order", entity_id=order.id, message=f"Scoring recalculado: {order.score}")
-    return RedirectResponse("/orders", status_code=303)
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
 @router.post("/{order_id}/reprocess")

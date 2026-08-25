@@ -86,12 +86,14 @@
 
       <div class="order-review-confidence-copy">
         <strong>Confianza del pedido</strong>
-        {% if order.review_reasons %}
-          <p>{{ order.review_reasons }}</p>
-        {% elif score_value >= 80 %}
+        {% if score_value >= 80 %}
           <p>Pedido listo para validar.</p>
+        {% elif not selected_customer_id %}
+          <p>Falta identificar correctamente el cliente.</p>
+        {% elif order.lines|selectattr("validated_product_id", "none")|list|length %}
+          <p>Hay productos pendientes de identificar o validar.</p>
         {% else %}
-          <p>Revisa los datos antes de validar el pedido.</p>
+          <p>Revisa los datos marcados antes de validar el pedido.</p>
         {% endif %}
       </div>
     </div>
@@ -130,8 +132,8 @@
         <span>Fecha pedido</span>
         <input
           name="order_date"
-          value="{{ order.order_date or '' }}"
-          placeholder="AAAA-MM-DD"
+          value="{% if order.order_date %}{{ order.order_date[8:10] }}-{{ order.order_date[5:7] }}-{{ order.order_date[0:4] }}{% elif order.email and order.email.received_at %}{{ order.email.received_at | local_dt(tenant_timezone, "%d-%m-%Y", "") }}{% endif %}"
+          placeholder="DD-MM-YYYY"
         >
       </label>
     </form>
@@ -253,6 +255,73 @@
     if (!root.contains(event.target)) closeResults();
   });
 })();
+
+
+document.querySelectorAll("[data-product-autocomplete]").forEach((root) => {
+  const input = root.querySelector("[data-product-input]");
+  const productId = root.querySelector("[data-product-id]");
+  const results = root.querySelector("[data-product-results]");
+  let timer;
+
+  function closeResults() {
+    results.hidden = true;
+    results.replaceChildren();
+  }
+
+  input.addEventListener("input", () => {
+    productId.value = "0";
+    clearTimeout(timer);
+
+    const query = input.value.trim();
+
+    if (query.length < 2) {
+      closeResults();
+      return;
+    }
+
+    timer = setTimeout(async () => {
+      const response = await fetch(
+        `/orders/product-search?q=${encodeURIComponent(query)}`
+      );
+
+      if (!response.ok) return;
+
+      const products = await response.json();
+      results.replaceChildren();
+
+      products.forEach((product) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "product-autocomplete-option";
+
+        const title = document.createElement("strong");
+        title.textContent = product.name;
+        button.appendChild(title);
+
+        const meta = document.createElement("span");
+        meta.textContent = product.reference;
+        button.appendChild(meta);
+
+        button.addEventListener("click", () => {
+          input.value = product.name;
+          productId.value = String(product.id);
+          closeResults();
+
+          const form = productId.form;
+          if (form) form.requestSubmit();
+        });
+
+        results.appendChild(button);
+      });
+
+      results.hidden = products.length === 0;
+    }, 160);
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!root.contains(event.target)) closeResults();
+  });
+});
 
 function switchOrderPdf(select, frameId) {
   const frame = document.getElementById(frameId);
