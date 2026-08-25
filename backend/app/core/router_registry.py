@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.auth.routes import router as auth_router
+from app.blob_check_routes import router as blob_check_router
 from app.admin.routes import router as admin_router
 from app.dashboard.routes import router as dashboard_router
 from app.alerts.routes import router as alerts_router
@@ -36,6 +37,7 @@ except Exception:  # noqa: BLE001
 def get_registered_routers() -> list:
     routers = [
         auth_router,
+        blob_check_router,
         admin_router,
         dashboard_router,
         pages_router,
