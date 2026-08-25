@@ -43,7 +43,7 @@
             {{ selected_product.reference if selected_product else line.detected_reference or "—" }}
           </td>
 
-          <td>
+          <td class="order-review-description">
             <form
               id="line-form-{{ line.id }}"
               class="js-loading-form"
@@ -61,6 +61,7 @@
                 class="order-review-product-input"
                 data-product-input
                 value="{{ selected_product.name if selected_product else line.detected_product or line.original_text or '' }}"
+                title="{{ selected_product.name if selected_product else line.detected_product or line.original_text or '' }}"
                 placeholder="Buscar producto"
                 autocomplete="off"
               >
