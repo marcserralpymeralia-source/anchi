@@ -504,7 +504,7 @@ def order_detail(
         )
     customer_context = _review_customer_snapshot(db, order, customer_source) if order else {"identified": False}
     line_suggestions = {line.id: _product_suggestions_for_line(products, line) for line in (order.lines or [])}
-    conversation_preview = _conversation_preview(order)
+    conversation_preview = _conversation_preview(order) if order and not order.email_id else None
     extraction_diagnostics = extraction_diagnostics_from_messages(order.conversation.messages if order and order.conversation else [])
     return templates.TemplateResponse(
         "orders/detail.html",

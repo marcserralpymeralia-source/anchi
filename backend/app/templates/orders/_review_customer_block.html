@@ -5,7 +5,6 @@
   </div>
   <div class="customer-quick-meta">
     <span><strong>Confianza</strong>{{ "%.0f"|format(customer_context.customer.confidence or 0) }}%</span>
-    <span><strong>Canal</strong>{{ customer_context.customer.habitual_channel or "—" }}</span>
     <span><strong>Último pedido</strong>{{ customer_context.customer.last_order_at or "—" }}</span>
   </div>
   <div class="customer-quick-actions">

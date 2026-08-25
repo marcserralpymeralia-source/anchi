@@ -175,7 +175,7 @@ class OperationalNavigationTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             self.assertIn("Propuesta del agente", response.text)
-            self.assertIn("Pedido / correo / documento recibido", response.text)
+            self.assertIn("Correo electrónico recibido", response.text)
         finally:
             engine.dispose()
             fixture.cleanup()

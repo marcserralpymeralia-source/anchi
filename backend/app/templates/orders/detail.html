@@ -7,9 +7,10 @@
 {% set customer_title = customer_context.customer.name if customer_context and customer_context.identified else order.customer_detected_name or "Cliente sin identificar" %}
 {% set incoming_title = "Pedido / correo / documento recibido" %}
 {% set has_email = order.email is not none %}
-{% set has_conversation = conversation_preview is not none %}
-{% set active_source = "conversation" if has_conversation else "email" %}
-{% if conversation_preview %}
+{% set has_conversation = conversation_preview is not none and not has_email %}
+{% if has_email %}
+  {% set incoming_title = "Correo electrónico recibido" %}
+{% elif conversation_preview %}
   {% set provider_label_lower = (conversation_preview.provider_label or "")|lower %}
   {% if "whatsapp" in provider_label_lower %}
     {% set incoming_title = "Conversación de WhatsApp recibida" %}
@@ -61,15 +62,8 @@
       <span class="badge">{% if has_email %}{{ attachments|length }} adjuntos{% elif has_conversation %}{{ conversation_preview.messages|length }} mensajes{% else %}0 mensajes{% endif %}</span>
     </div>
 
-    {% if has_email and has_conversation %}
-      <div class="source-tabs" data-source-tabs>
-        <button type="button" class="source-tab {% if active_source == 'email' %}active{% endif %}" data-source-tab="email">Correo electrónico</button>
-        <button type="button" class="source-tab {% if active_source == 'conversation' %}active{% endif %}" data-source-tab="conversation">WhatsApp</button>
-      </div>
-    {% endif %}
-
     {% if has_email %}
-      <article class="subpanel source-panel" data-source-panel="email" {% if has_email and has_conversation and active_source != 'email' %}hidden{% endif %}>
+      <article class="subpanel source-panel" data-source-panel="email">
         <div class="section-title-row">
           <div>
             <h4>{{ order.email.subject if order.email else "Entrada recibida" }}</h4>
@@ -83,20 +77,20 @@
           <span><strong>Estado</strong>{{ order.status|status_label }}</span>
         </div>
       </article>
-      <article class="subpanel source-panel" data-source-panel="email-body" {% if has_email and has_conversation and active_source != 'email' %}hidden{% endif %}>
+      <article class="subpanel source-panel" data-source-panel="email-body">
         <div class="section-title-row">
           <h4>Correo recibido</h4>
           <button type="button" class="secondary compact-button" onclick="copyText('order-email-body-{{ order.id }}')">Copiar</button>
         </div>
         <pre id="order-email-body-{{ order.id }}" class="doc-text">{{ order.email.body if order.email else "" }}</pre>
       </article>
-      <div class="source-panel" data-source-panel="email-attachments" {% if has_email and has_conversation and active_source != 'email' %}hidden{% endif %}>
+      <div class="source-panel" data-source-panel="email-attachments">
         {% include "orders/_review_attachments_block.html" %}
       </div>
     {% endif %}
 
     {% if has_conversation %}
-      <article class="subpanel stack source-panel" data-source-panel="conversation" {% if has_email and has_conversation and active_source != 'conversation' %}hidden{% endif %}>
+      <article class="subpanel stack source-panel" data-source-panel="conversation">
         <div class="section-title-row">
           <div>
             <h4>{{ incoming_title }}</h4>
@@ -282,21 +276,6 @@
     });
   })();
 
-  (function() {
-    document.querySelectorAll("[data-source-tabs]").forEach((tabs) => {
-      const container = tabs.closest(".review-pane") || document;
-      const panels = Array.from(container.querySelectorAll("[data-source-panel]"));
-      tabs.querySelectorAll("[data-source-tab]").forEach((button) => {
-        button.addEventListener("click", () => {
-          const target = button.dataset.sourceTab;
-          tabs.querySelectorAll("[data-source-tab]").forEach((tab) => tab.classList.toggle("active", tab === button));
-          panels.forEach((panel) => {
-            panel.hidden = panel.dataset.sourcePanel !== target && panel.dataset.sourcePanel !== `${target}-body`;
-          });
-        });
-      });
-    });
-  })();
   function copyText(id) {
     const node = document.getElementById(id);
     if (node) navigator.clipboard.writeText(node.textContent || "");
