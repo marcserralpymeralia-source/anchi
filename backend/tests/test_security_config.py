@@ -104,7 +104,6 @@ class SecurityConfigurationTests(unittest.TestCase):
                 "META_APP_ID": "12345000000",
                 "META_APP_SECRET": meta_app_secret,
                 "META_EMBEDDED_SIGNUP_CONFIG_ID": "22345000000",
-                "META_WHATSAPP_REGISTRATION_PIN": "123456",
                 "META_WHATSAPP_VERIFY_TOKEN": verify_token,
             }
         )

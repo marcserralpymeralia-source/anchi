@@ -7,6 +7,7 @@
   data-meta-config-id="{{ whatsapp_embedded_signup.config_id }}"
   data-meta-api-version="{{ whatsapp_embedded_signup.graph_api_version }}"
   data-meta-flow-version="{{ whatsapp_embedded_signup.embedded_signup_version }}"
+  data-meta-feature-type="{{ whatsapp_embedded_signup.feature_type }}"
   data-complete-url="/settings/channels/whatsapp/embedded-signup/complete"
   data-signup-state="{{ whatsapp_signup_state }}"
   data-return-to="{{ whatsapp_return_to }}">
@@ -14,7 +15,7 @@
     <div class="whatsapp-signup-mark" aria-hidden="true">W</div>
     <div>
       <h4>{{ "WhatsApp conectado" if whatsapp_connection_ready else "Conecta WhatsApp Business" }}</h4>
-      <p class="muted">Meta abrirá una ventana segura para elegir el negocio, el WABA y el número. Anchi no verá tu contraseña de Meta.</p>
+      <p class="muted">Conecta el número que ya utilizas en WhatsApp Business App sin desconectarlo. Meta abrirá una ventana segura y Anchi no verá tu contraseña.</p>
     </div>
   </div>
 
@@ -23,6 +24,7 @@
       <div><span>Número</span><strong>{{ whatsapp.display_phone_number or whatsapp.phone_number_id }}</strong></div>
       <div><span>Nombre verificado</span><strong>{{ whatsapp.verified_name or "Pendiente en Meta" }}</strong></div>
       <div><span>WABA ID</span><strong>{{ whatsapp.business_account_id }}</strong></div>
+      <div><span>Modo</span><strong>{{ "Coexistencia con la app" if whatsapp.is_on_biz_app else "Cloud API" }}</strong></div>
       <div><span>Webhook</span><strong>Suscrito</strong></div>
     </div>
   {% endif %}
@@ -40,7 +42,7 @@
       {% if whatsapp_connection_ready %}
         Conexión activa. Puedes repetir el acceso para cambiar de cuenta o número.
       {% elif whatsapp_embedded_signup.configured %}
-        Listo para iniciar Embedded Signup.
+        Listo para conectar tu WhatsApp Business App manteniendo la aplicación activa.
       {% else %}
         Falta preparar la aplicación de Meta en el servidor.
       {% endif %}

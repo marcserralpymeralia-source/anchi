@@ -268,6 +268,8 @@ class SetupOnboardingTests(unittest.TestCase):
             self.assertEqual(page.status_code, 200)
             self.assertIn("Iniciar sesión con Meta", page.text)
             self.assertIn('data-testid="whatsapp-embedded-signup-button"', page.text)
+            self.assertIn('data-meta-feature-type="whatsapp_business_app_onboarding"', page.text)
+            self.assertIn("sin desconectarlo", page.text)
             self.assertNotIn('name="phone_number_id"', page.text)
             self.assertNotIn('name="access_token"', page.text)
             self.assertNotIn('name="app_secret"', page.text)
@@ -281,6 +283,8 @@ class SetupOnboardingTests(unittest.TestCase):
                 phone_number_id="10987654321",
                 display_phone_number="+34 600 000 000",
                 verified_name="Anchi Demo",
+                onboarding_mode="coexistence",
+                is_on_biz_app=True,
             )
             with patch(
                 "app.settings.channels_routes.complete_embedded_signup",
@@ -291,8 +295,9 @@ class SetupOnboardingTests(unittest.TestCase):
                     json={
                         "code": "temporary-auth-code",
                         "waba_id": "12345678901",
-                        "phone_number_id": "10987654321",
+                        "phone_number_id": "",
                         "business_id": "11223344556",
+                        "onboarding_mode": "coexistence",
                         "state": state,
                         "return_to": "setup",
                     },
@@ -301,6 +306,7 @@ class SetupOnboardingTests(unittest.TestCase):
             self.assertTrue(response.json()["ok"])
             self.assertEqual(response.json()["redirect_url"], "/setup/channels?whatsapp=connected")
             complete_mock.assert_awaited_once()
+            self.assertEqual(complete_mock.await_args.kwargs["onboarding_mode"], "coexistence")
 
             with fixture.TenantSession() as db:
                 channel = db.scalar(

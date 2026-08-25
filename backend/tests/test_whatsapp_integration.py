@@ -338,6 +338,192 @@ class WhatsAppIntegrationTests(unittest.TestCase):
             self.assertNotEqual(token_setting.value, "tenant-access-token")
             self.assertEqual(decrypt_secret(token_setting.value), "tenant-access-token")
 
+    def test_coexistence_signup_discovers_business_app_phone_without_registering_it(self):
+        settings = SimpleNamespace(
+            meta_whatsapp_embedded_signup_ready=True,
+            meta_app_id="12345000000",
+            meta_app_secret="server-only-app-secret",
+            meta_embedded_signup_config_id="22345000000",
+            meta_graph_api_version="v24.0",
+            meta_embedded_signup_version="v4",
+            meta_whatsapp_registration_pin="",
+            meta_whatsapp_verify_token="global-verify-token",
+            meta_oauth_redirect_uri="",
+            meta_request_timeout_seconds=5,
+            app_url="https://anchi.example.com",
+        )
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            path = request.url.path
+            if path.endswith("/oauth/access_token"):
+                return httpx.Response(200, json={"access_token": "coexistence-access-token"})
+            if path.endswith("/12345678901/phone_numbers"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {
+                                "id": "10987654321",
+                                "display_phone_number": "+34 600 000 000",
+                                "verified_name": "Anchi Demo",
+                            }
+                        ]
+                    },
+                )
+            if path.endswith("/10987654321"):
+                self.assertIn("is_on_biz_app", request.url.params["fields"])
+                return httpx.Response(
+                    200,
+                    json={
+                        "id": "10987654321",
+                        "status": "CONNECTED",
+                        "account_mode": "LIVE",
+                        "is_on_biz_app": True,
+                        "display_phone_number": "+34 600 000 000",
+                        "verified_name": "Anchi Demo",
+                        "code_verification_status": "VERIFIED",
+                    },
+                )
+            if path.endswith("/12345678901/subscribed_apps"):
+                return httpx.Response(200, json={"success": True})
+            if path.endswith("/12345678901"):
+                return httpx.Response(200, json={"id": "12345678901", "name": "Anchi WABA"})
+            return httpx.Response(404, json={"error": {"message": "unexpected test request"}})
+
+        async def execute_signup():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                with self.TenantSession() as db:
+                    return await complete_embedded_signup(
+                        db,
+                        company_id=1,
+                        company_slug="whatsapp-demo",
+                        code="temporary-auth-code",
+                        business_account_id="12345678901",
+                        phone_number_id="",
+                        business_id="11223344556",
+                        onboarding_mode="coexistence",
+                        client=client,
+                    )
+
+        with patch("app.whatsapp.service.get_settings", return_value=settings):
+            result = asyncio.run(execute_signup())
+
+        self.assertEqual(result.onboarding_mode, "coexistence")
+        self.assertTrue(result.is_on_biz_app)
+        self.assertEqual(result.phone_number_id, "10987654321")
+        self.assertFalse(any(request.url.path.endswith("/register") for request in calls))
+        with self.TenantSession() as db:
+            config = whatsapp_config(db, 1)
+            self.assertEqual(config.onboarding_mode, "coexistence")
+            self.assertTrue(config.is_on_biz_app)
+            self.assertEqual(config.phone_status, "CONNECTED")
+            self.assertEqual(config.account_mode, "LIVE")
+
+    def test_coexistence_webhooks_separate_live_echo_history_and_contact_sync(self):
+        payload = {
+            "entry": [
+                {
+                    "id": "ba-123",
+                    "changes": [
+                        {
+                            "field": "smb_message_echoes",
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123", "display_phone_number": "+34610000000"},
+                                "contacts": [{"wa_id": "+34600000000"}],
+                                "message_echoes": [
+                                    {
+                                        "id": "wa-echo-1",
+                                        "from": "+34610000000",
+                                        "to": "+34600000000",
+                                        "timestamp": "1787600000",
+                                        "type": "text",
+                                        "text": {"body": "Te confirmo el pedido desde el móvil"},
+                                    }
+                                ],
+                            },
+                        },
+                        {
+                            "field": "history",
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123", "display_phone_number": "+34610000000"},
+                                "history": [
+                                    {
+                                        "metadata": {"phase": 0, "chunk_order": 1, "progress": 100},
+                                        "threads": [
+                                            {
+                                                "id": "+34600000000",
+                                                "messages": [
+                                                    {
+                                                        "id": "wa-history-in-1",
+                                                        "from": "+34600000000",
+                                                        "timestamp": "1787500000",
+                                                        "type": "text",
+                                                        "text": {"body": "Necesito diez unidades"},
+                                                        "history_context": {"status": "READ"},
+                                                    },
+                                                    {
+                                                        "id": "wa-history-out-1",
+                                                        "from": "+34610000000",
+                                                        "to": "+34600000000",
+                                                        "timestamp": "1787500100",
+                                                        "type": "text",
+                                                        "text": {"body": "Pedido recibido"},
+                                                        "history_context": {"status": "DELIVERED"},
+                                                    },
+                                                ],
+                                            }
+                                        ],
+                                    }
+                                ],
+                            },
+                        },
+                        {
+                            "field": "smb_app_state_sync",
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123"},
+                                "state_sync": [
+                                    {
+                                        "type": "contact",
+                                        "action": "add",
+                                        "contact": {"full_name": "Cliente", "phone_number": "+34600000000"},
+                                        "metadata": {"timestamp": "1787600100"},
+                                    }
+                                ],
+                            },
+                        },
+                    ],
+                }
+            ]
+        }
+
+        events = parse_payload_events(payload)
+        self.assertEqual(
+            [event["kind"] for event in events],
+            ["message_echo", "history_sync", "history_message", "history_message", "contact_sync"],
+        )
+        with self.TenantSession() as db:
+            stored = [persist_event(db, 1, event) for event in events]
+            self.assertIsNone(stored[1])
+            self.assertIsNone(stored[4])
+            echo = db.scalar(select(InboundMessage).where(InboundMessage.source_external_id == "wa-echo-1"))
+            history_in = db.scalar(select(InboundMessage).where(InboundMessage.source_external_id == "wa-history-in-1"))
+            history_out = db.scalar(select(InboundMessage).where(InboundMessage.source_external_id == "wa-history-out-1"))
+            self.assertEqual(echo.direction, "outbound")
+            self.assertEqual(echo.processing_step, "echoed_from_business_app")
+            self.assertEqual(history_in.direction, "inbound")
+            self.assertEqual(history_in.processing_step, "history_synced")
+            self.assertEqual(history_in.status, "read")
+            self.assertEqual(history_out.direction, "outbound")
+            self.assertEqual(history_out.status, "delivered")
+            settings = {
+                item.key: item.value
+                for item in db.scalars(select(ChannelSetting).where(ChannelSetting.company_id == 1)).all()
+            }
+            self.assertEqual(settings["last_history_sync_progress"], "100")
+            self.assertEqual(settings["last_contact_sync_action"], "add")
+
     def test_webhook_tenant_resolution_by_slug_and_meta_identifiers(self):
         master_db = self.MasterSession()
         company, tenant = resolve_company_from_slug(master_db, "whatsapp-demo")

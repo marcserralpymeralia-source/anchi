@@ -36,8 +36,11 @@
     if (!activeFlow || activeFlow.completing || !activeFlow.code || !activeFlow.sessionInfo) return;
     const root = activeFlow.root;
     const sessionData = activeFlow.sessionInfo.data || {};
-    if (!sessionData.waba_id || !sessionData.phone_number_id) {
-      setStatus(root, "Meta no devolvió el WABA y el número seleccionados. Repite el proceso.", "error");
+    const onboardingMode = activeFlow.sessionInfo.event === "FINISH_WHATSAPP_BUSINESS_APP_ONBOARDING"
+      ? "coexistence"
+      : "cloud_api";
+    if (!sessionData.waba_id || (onboardingMode !== "coexistence" && !sessionData.phone_number_id)) {
+      setStatus(root, "Meta no devolvió los datos necesarios de la cuenta. Repite el proceso.", "error");
       setButtonBusy(root, false);
       activeFlow = null;
       return;
@@ -52,8 +55,9 @@
         body: JSON.stringify({
           code: activeFlow.code,
           waba_id: String(sessionData.waba_id),
-          phone_number_id: String(sessionData.phone_number_id),
+          phone_number_id: String(sessionData.phone_number_id || ""),
           business_id: String(sessionData.business_id || ""),
+          onboarding_mode: onboardingMode,
           state: root.dataset.signupState,
           return_to: root.dataset.returnTo,
         }),
@@ -111,7 +115,11 @@
     setButtonBusy(root, true);
     setStatus(root, "Abriendo el acceso seguro de Meta…", "loading");
     activeFlow = { root, code: null, sessionInfo: null, completing: false };
-    const extras = { sessionInfoVersion: "3" };
+    const extras = {
+      setup: {},
+      featureType: root.dataset.metaFeatureType,
+      sessionInfoVersion: "3",
+    };
     if (root.dataset.metaFlowVersion) extras.version = root.dataset.metaFlowVersion;
     window.FB.login(
       (response) => {

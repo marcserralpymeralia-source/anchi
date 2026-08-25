@@ -25,6 +25,9 @@ from app.master.models import MasterCompany, MasterTenantDatabase
 
 WHATSAPP_CHANNEL_KEY = "whatsapp"
 WHATSAPP_PROVIDER = "meta"
+WHATSAPP_ONBOARDING_CLOUD_API = "cloud_api"
+WHATSAPP_ONBOARDING_COEXISTENCE = "coexistence"
+WHATSAPP_COEXISTENCE_FEATURE_TYPE = "whatsapp_business_app_onboarding"
 META_ID_PATTERN = re.compile(r"^\d{5,32}$")
 
 @dataclass(slots=True)
@@ -36,6 +39,11 @@ class WhatsAppTenantConfig:
     business_id: str = ""
     display_phone_number: str = ""
     verified_name: str = ""
+    onboarding_mode: str = WHATSAPP_ONBOARDING_CLOUD_API
+    is_on_biz_app: bool = False
+    account_mode: str = ""
+    phone_status: str = ""
+    code_verification_status: str = ""
     access_token: str = ""
     verify_token: str = ""
     webhook_enabled: bool = False
@@ -94,6 +102,11 @@ def whatsapp_config(db: Session, company_id: int) -> WhatsAppTenantConfig:
         business_id=(settings_map.get("business_id") or "").strip(),
         display_phone_number=(settings_map.get("display_phone_number") or "").strip(),
         verified_name=(settings_map.get("verified_name") or "").strip(),
+        onboarding_mode=(settings_map.get("onboarding_mode") or WHATSAPP_ONBOARDING_CLOUD_API).strip().lower(),
+        is_on_biz_app=_as_bool(settings_map.get("is_on_biz_app")),
+        account_mode=(settings_map.get("account_mode") or "").strip(),
+        phone_status=(settings_map.get("phone_status") or "").strip(),
+        code_verification_status=(settings_map.get("code_verification_status") or "").strip(),
         access_token=_secret_value(settings_map.get("access_token")).strip(),
         verify_token=_secret_value(settings_map.get("verify_token")).strip(),
         webhook_enabled=_as_bool(settings_map.get("webhook_enabled")),
@@ -118,6 +131,11 @@ def redact_whatsapp_config(config: WhatsAppTenantConfig) -> dict[str, Any]:
         "business_id": config.business_id,
         "display_phone_number": config.display_phone_number,
         "verified_name": config.verified_name,
+        "onboarding_mode": config.onboarding_mode,
+        "is_on_biz_app": config.is_on_biz_app,
+        "account_mode": config.account_mode,
+        "phone_status": config.phone_status,
+        "code_verification_status": config.code_verification_status,
         "access_token": "••••••••" if config.access_token else "",
         "verify_token": "••••••••" if config.verify_token else "",
         "webhook_enabled": config.webhook_enabled,
@@ -141,6 +159,8 @@ class WhatsAppEmbeddedSignupResult:
     display_phone_number: str
     verified_name: str
     webhook_url: str
+    onboarding_mode: str = WHATSAPP_ONBOARDING_CLOUD_API
+    is_on_biz_app: bool = False
     connection_status: str = "connected"
 
 
@@ -158,6 +178,7 @@ def embedded_signup_public_config(settings: Settings | None = None) -> dict[str,
         "config_id": settings.meta_embedded_signup_config_id,
         "graph_api_version": settings.meta_graph_api_version,
         "embedded_signup_version": settings.meta_embedded_signup_version,
+        "feature_type": WHATSAPP_COEXISTENCE_FEATURE_TYPE,
         "missing": settings.meta_whatsapp_missing_configuration,
     }
 
@@ -250,6 +271,11 @@ def _store_embedded_signup_state(
     display_phone_number: str,
     verified_name: str,
     waba_name: str,
+    onboarding_mode: str,
+    is_on_biz_app: bool,
+    account_mode: str,
+    phone_status: str,
+    code_verification_status: str,
     connection_status: str,
     webhook_enabled: bool,
     last_error: str = "",
@@ -266,6 +292,11 @@ def _store_embedded_signup_state(
         "display_phone_number": display_phone_number,
         "verified_name": verified_name,
         "waba_name": waba_name,
+        "onboarding_mode": onboarding_mode,
+        "is_on_biz_app": "true" if is_on_biz_app else "false",
+        "account_mode": account_mode,
+        "phone_status": phone_status,
+        "code_verification_status": code_verification_status,
         "connection_status": connection_status,
         "connected_at": datetime.now(timezone.utc).isoformat() if connection_status == "connected" else "",
         "webhook_enabled": "true" if webhook_enabled else "false",
@@ -287,8 +318,9 @@ async def complete_embedded_signup(
     company_slug: str,
     code: str,
     business_account_id: str,
-    phone_number_id: str,
+    phone_number_id: str = "",
     business_id: str = "",
+    onboarding_mode: str = WHATSAPP_ONBOARDING_CLOUD_API,
     client: httpx.AsyncClient | None = None,
 ) -> WhatsAppEmbeddedSignupResult:
     settings = get_settings()
@@ -297,8 +329,20 @@ async def complete_embedded_signup(
     code = str(code or "").strip()
     if not code or len(code) > 2048:
         raise WhatsAppEmbeddedSignupError("Meta no devolvió un código de autorización válido.", error_type="invalid_signup_payload")
+    onboarding_mode = str(onboarding_mode or "").strip().lower()
+    if onboarding_mode not in {WHATSAPP_ONBOARDING_CLOUD_API, WHATSAPP_ONBOARDING_COEXISTENCE}:
+        raise WhatsAppEmbeddedSignupError("El tipo de alta de WhatsApp no es válido.", error_type="invalid_signup_payload")
+    if onboarding_mode == WHATSAPP_ONBOARDING_CLOUD_API and not settings.meta_whatsapp_registration_pin:
+        raise WhatsAppEmbeddedSignupError(
+            "Falta META_WHATSAPP_REGISTRATION_PIN para registrar un número nuevo de Cloud API.",
+            error_type="server_not_configured",
+        )
     business_account_id = _validate_meta_id(business_account_id, "WABA ID")
-    phone_number_id = _validate_meta_id(phone_number_id, "Phone Number ID")
+    phone_number_id = _validate_meta_id(
+        phone_number_id,
+        "Phone Number ID",
+        required=onboarding_mode != WHATSAPP_ONBOARDING_COEXISTENCE,
+    )
     business_id = _validate_meta_id(business_id, "Business ID", required=False)
     callback_url = whatsapp_webhook_url(company_slug, settings)
     verify_token = secrets.token_urlsafe(32)
@@ -342,9 +386,44 @@ async def complete_embedded_signup(
             params={"fields": "id,display_phone_number,verified_name,quality_rating,code_verification_status"},
         )
         phones = phone_payload.get("data") if isinstance(phone_payload.get("data"), list) else []
-        phone = next((item for item in phones if str(item.get("id") or "") == phone_number_id), None)
+        phone = next((item for item in phones if str(item.get("id") or "") == phone_number_id), None) if phone_number_id else None
+        if phone_number_id and not phone:
+            raise WhatsAppEmbeddedSignupError(
+                "El teléfono seleccionado no pertenece al WABA autorizado.",
+                error_type="asset_mismatch",
+            )
+        phone_details: dict[str, Any] = {}
+        if onboarding_mode == WHATSAPP_ONBOARDING_COEXISTENCE:
+            candidates = [phone] if phone else [item for item in phones if isinstance(item, dict)]
+            coexistence_candidates: list[tuple[dict[str, Any], dict[str, Any]]] = []
+            for candidate in candidates:
+                candidate_id = str(candidate.get("id") or "")
+                if not META_ID_PATTERN.fullmatch(candidate_id):
+                    continue
+                details = await _meta_request(
+                    graph_client,
+                    settings,
+                    "GET",
+                    candidate_id,
+                    access_token=access_token,
+                    params={
+                        "fields": "status,account_mode,is_on_biz_app,display_phone_number,verified_name,code_verification_status"
+                    },
+                )
+                if details.get("is_on_biz_app") is True:
+                    coexistence_candidates.append((candidate, details))
+            if len(coexistence_candidates) != 1:
+                raise WhatsAppEmbeddedSignupError(
+                    "No se pudo identificar de forma segura el número de WhatsApp Business App autorizado.",
+                    error_type="asset_mismatch",
+                )
+            phone, phone_details = coexistence_candidates[0]
+            phone_number_id = str(phone.get("id") or "")
         if not phone:
             raise WhatsAppEmbeddedSignupError("El teléfono seleccionado no pertenece al WABA autorizado.", error_type="asset_mismatch")
+
+        phone = {**phone, **phone_details}
+        is_on_biz_app = onboarding_mode == WHATSAPP_ONBOARDING_COEXISTENCE or phone.get("is_on_biz_app") is True
 
         state_payload = {
             "company_id": company_id,
@@ -356,17 +435,23 @@ async def complete_embedded_signup(
             "display_phone_number": str(phone.get("display_phone_number") or ""),
             "verified_name": str(phone.get("verified_name") or ""),
             "waba_name": str(waba.get("name") or ""),
+            "onboarding_mode": onboarding_mode,
+            "is_on_biz_app": is_on_biz_app,
+            "account_mode": str(phone.get("account_mode") or ""),
+            "phone_status": str(phone.get("status") or ""),
+            "code_verification_status": str(phone.get("code_verification_status") or ""),
         }
         _store_embedded_signup_state(db, **state_payload, connection_status="provisioning", webhook_enabled=False)
         try:
-            await _meta_request(
-                graph_client,
-                settings,
-                "POST",
-                f"{phone_number_id}/register",
-                access_token=access_token,
-                json_body={"messaging_product": "whatsapp", "pin": settings.meta_whatsapp_registration_pin},
-            )
+            if onboarding_mode == WHATSAPP_ONBOARDING_CLOUD_API:
+                await _meta_request(
+                    graph_client,
+                    settings,
+                    "POST",
+                    f"{phone_number_id}/register",
+                    access_token=access_token,
+                    json_body={"messaging_product": "whatsapp", "pin": settings.meta_whatsapp_registration_pin},
+                )
             await _meta_request(
                 graph_client,
                 settings,
@@ -393,6 +478,8 @@ async def complete_embedded_signup(
             display_phone_number=str(phone.get("display_phone_number") or ""),
             verified_name=str(phone.get("verified_name") or ""),
             webhook_url=callback_url,
+            onboarding_mode=onboarding_mode,
+            is_on_biz_app=is_on_biz_app,
         )
     finally:
         if owns_client:
@@ -459,6 +546,60 @@ def verify_signature(app_secret: str, raw_body: bytes, signature_header: str | N
     return hmac.compare_digest(signature_header.removeprefix("sha256="), expected)
 
 
+def _event_timestamp(value: Any) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(int(str(value)), tz=timezone.utc)
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+
+
+def _message_event(
+    *,
+    kind: str,
+    webhook_field: str,
+    message: dict[str, Any],
+    metadata: dict[str, Any],
+    business_account_id: str | None,
+    phone_number_id: str | None,
+    display_phone_number: str | None,
+    contacts: list[dict[str, Any]],
+    direction: str,
+    thread_id: str | None = None,
+    sync_metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    fallback_contact = contacts[0].get("wa_id") if contacts else None
+    sender = message.get("from") or (display_phone_number if direction == "outbound" else fallback_contact)
+    remote_recipient = message.get("to") or thread_id or fallback_contact
+    recipients = (
+        [remote_recipient] if direction == "outbound" and remote_recipient else [display_phone_number] if display_phone_number else []
+    )
+    external_thread_id = remote_recipient if direction == "outbound" else (thread_id or sender)
+    history_context = message.get("history_context") if isinstance(message.get("history_context"), dict) else {}
+    event_metadata: dict[str, Any] = {
+        "payload": message,
+        "metadata": metadata,
+        "webhook_field": webhook_field,
+    }
+    if sync_metadata:
+        event_metadata["sync"] = sync_metadata
+    return {
+        "kind": kind,
+        "direction": direction,
+        "external_id": message.get("id"),
+        "external_thread_id": external_thread_id or message.get("id"),
+        "sender": sender,
+        "recipients": recipients,
+        "phone_number_id": phone_number_id,
+        "business_account_id": business_account_id,
+        "text_content": _extract_message_text(message),
+        "message_type": message.get("type"),
+        "message_status": str(history_context.get("status") or "").strip().lower(),
+        "occurred_at": _event_timestamp(message.get("timestamp")),
+        "metadata": event_metadata,
+        "attachments": _message_attachments(message),
+    }
+
+
 def parse_payload_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     for entry in payload.get("entry", []) if isinstance(payload.get("entry"), list) else []:
@@ -466,32 +607,35 @@ def parse_payload_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
         changes = entry.get("changes", []) if isinstance(entry, dict) else []
         for change in changes:
             value = change.get("value", {}) if isinstance(change, dict) else {}
+            if not isinstance(value, dict):
+                continue
+            webhook_field = str(change.get("field") or "messages").strip().lower()
             metadata = value.get("metadata", {}) if isinstance(value, dict) else {}
+            metadata = metadata if isinstance(metadata, dict) else {}
             phone_number_id = metadata.get("phone_number_id")
             business_account_id = entry_waba_id or metadata.get("business_account_id")
             display_phone_number = metadata.get("display_phone_number")
-            contacts = value.get("contacts", []) if isinstance(value, dict) else []
-            statuses = value.get("statuses", []) if isinstance(value, dict) else []
-            messages = value.get("messages", []) if isinstance(value, dict) else []
+            contacts = [item for item in value.get("contacts", []) if isinstance(item, dict)] if isinstance(value.get("contacts"), list) else []
+            statuses = value.get("statuses", []) if isinstance(value.get("statuses"), list) else []
+            messages = value.get("messages", []) if isinstance(value.get("messages"), list) else []
             for message in messages:
-                sender = message.get("from") or (contacts[0].get("wa_id") if contacts else None)
-                text_content = _extract_message_text(message)
-                events.append(
-                    {
-                        "kind": "message",
-                        "external_id": message.get("id"),
-                        "external_thread_id": message.get("context", {}).get("id") if isinstance(message.get("context"), dict) else message.get("id"),
-                        "sender": sender,
-                        "recipients": [display_phone_number] if display_phone_number else [],
-                        "phone_number_id": phone_number_id,
-                        "business_account_id": business_account_id,
-                        "text_content": text_content,
-                        "message_type": message.get("type"),
-                        "metadata": {"payload": message, "metadata": metadata},
-                        "attachments": _message_attachments(message),
-                    }
-                )
+                if isinstance(message, dict):
+                    events.append(
+                        _message_event(
+                            kind="message",
+                            webhook_field=webhook_field,
+                            message=message,
+                            metadata=metadata,
+                            business_account_id=business_account_id,
+                            phone_number_id=phone_number_id,
+                            display_phone_number=display_phone_number,
+                            contacts=contacts,
+                            direction="inbound",
+                        )
+                    )
             for status in statuses:
+                if not isinstance(status, dict):
+                    continue
                 events.append(
                     {
                         "kind": "status",
@@ -503,8 +647,91 @@ def parse_payload_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
                         "business_account_id": business_account_id,
                         "text_content": None,
                         "message_type": status.get("status"),
-                        "metadata": {"payload": status, "metadata": metadata},
+                        "occurred_at": _event_timestamp(status.get("timestamp")),
+                        "metadata": {"payload": status, "metadata": metadata, "webhook_field": webhook_field},
                         "attachments": [],
+                    }
+                )
+            message_echoes = value.get("message_echoes", []) if isinstance(value.get("message_echoes"), list) else []
+            for message in message_echoes:
+                if isinstance(message, dict):
+                    events.append(
+                        _message_event(
+                            kind="message_echo",
+                            webhook_field=webhook_field,
+                            message=message,
+                            metadata=metadata,
+                            business_account_id=business_account_id,
+                            phone_number_id=phone_number_id,
+                            display_phone_number=display_phone_number,
+                            contacts=contacts,
+                            direction="outbound",
+                        )
+                    )
+            history_chunks = value.get("history", []) if isinstance(value.get("history"), list) else []
+            for history_chunk in history_chunks:
+                if not isinstance(history_chunk, dict):
+                    continue
+                sync_metadata = history_chunk.get("metadata") if isinstance(history_chunk.get("metadata"), dict) else {}
+                errors = history_chunk.get("errors") if isinstance(history_chunk.get("errors"), list) else []
+                events.append(
+                    {
+                        "kind": "history_sync",
+                        "phone_number_id": phone_number_id,
+                        "business_account_id": business_account_id,
+                        "metadata": {
+                            "payload": {"errors": errors},
+                            "metadata": metadata,
+                            "sync": sync_metadata,
+                            "webhook_field": webhook_field,
+                        },
+                    }
+                )
+                threads = history_chunk.get("threads") if isinstance(history_chunk.get("threads"), list) else []
+                for thread in threads:
+                    if not isinstance(thread, dict):
+                        continue
+                    thread_id = str(thread.get("id") or "").strip() or None
+                    history_messages = thread.get("messages") if isinstance(thread.get("messages"), list) else []
+                    for message in history_messages:
+                        if not isinstance(message, dict):
+                            continue
+                        events.append(
+                            _message_event(
+                                kind="history_message",
+                                webhook_field=webhook_field,
+                                message=message,
+                                metadata=metadata,
+                                business_account_id=business_account_id,
+                                phone_number_id=phone_number_id,
+                                display_phone_number=display_phone_number,
+                                contacts=contacts,
+                                direction="outbound" if message.get("to") else "inbound",
+                                thread_id=thread_id,
+                                sync_metadata=sync_metadata,
+                            )
+                        )
+            state_sync = value.get("state_sync", []) if isinstance(value.get("state_sync"), list) else []
+            for state_item in state_sync:
+                if not isinstance(state_item, dict):
+                    continue
+                item_metadata = state_item.get("metadata") if isinstance(state_item.get("metadata"), dict) else {}
+                events.append(
+                    {
+                        "kind": "contact_sync",
+                        "phone_number_id": phone_number_id,
+                        "business_account_id": business_account_id,
+                        "occurred_at": _event_timestamp(item_metadata.get("timestamp")),
+                        "metadata": {"payload": state_item, "metadata": metadata, "webhook_field": webhook_field},
+                    }
+                )
+            if webhook_field == "account_update" and value.get("event"):
+                events.append(
+                    {
+                        "kind": "account_update",
+                        "phone_number_id": phone_number_id,
+                        "business_account_id": business_account_id,
+                        "metadata": {"payload": value, "metadata": metadata, "webhook_field": webhook_field},
                     }
                 )
     return events
@@ -514,7 +741,51 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
     channel = get_or_create_whatsapp_channel(db, company_id)
     metadata = dict(event.get("metadata") or {})
     metadata.setdefault("whatsapp", True)
-    if event.get("kind") == "status":
+    event_kind = str(event.get("kind") or "")
+    if event_kind in {"contact_sync", "history_sync", "account_update"}:
+        now = datetime.now(timezone.utc)
+        payload = metadata.get("payload") if isinstance(metadata.get("payload"), dict) else {}
+        setting_values: dict[str, str] = {}
+        if event_kind == "contact_sync":
+            setting_values = {
+                "last_contact_sync_at": (event.get("occurred_at") or now).isoformat(),
+                "last_contact_sync_action": str(payload.get("action") or "sync")[:80],
+            }
+        elif event_kind == "history_sync":
+            errors = payload.get("errors") if isinstance(payload.get("errors"), list) else []
+            first_error = errors[0] if errors and isinstance(errors[0], dict) else {}
+            sync = metadata.get("sync") if isinstance(metadata.get("sync"), dict) else {}
+            setting_values = {
+                "last_history_sync_at": now.isoformat(),
+                "last_history_sync_progress": str(sync.get("progress") or ""),
+                "last_history_sync_error": str(first_error.get("message") or first_error.get("title") or "")[:500],
+            }
+        else:
+            account_event = str(payload.get("event") or "").strip().upper()
+            setting_values = {
+                "last_account_update_at": now.isoformat(),
+                "last_account_update_event": account_event[:120],
+            }
+            if account_event == "ACCOUNT_OFFBOARDED":
+                channel.is_active = False
+                setting_values.update({"connection_status": "disconnected", "webhook_enabled": "false"})
+            elif account_event == "ACCOUNT_RECONNECTED":
+                channel.is_active = True
+                setting_values.update({"connection_status": "connected", "webhook_enabled": "true"})
+        for key, value in setting_values.items():
+            _upsert_whatsapp_setting(db, company_id=company_id, channel_id=channel.id, key=key, value=value)
+        db.commit()
+        log_action(
+            db,
+            company_id=company_id,
+            user=user,
+            action=f"whatsapp.{event_kind}",
+            entity_type="input_channel",
+            entity_id=channel.id,
+            message=f"Evento de coexistencia procesado: {event_kind}",
+        )
+        return None
+    if event_kind == "status":
         message = upsert_inbound_message(
             db,
             company_id=company_id,
@@ -529,6 +800,7 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
             metadata=metadata,
             content_type="whatsapp_status",
             direction="outbound",
+            received_at=event.get("occurred_at"),
         )[0]
         status_value = str((metadata.get("payload") or {}).get("status") or "sent").lower()
         message.status = status_value
@@ -551,13 +823,23 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
         external_thread_id=event.get("external_thread_id"),
         metadata=metadata,
         content_type=event.get("message_type") or "whatsapp",
+        direction=str(event.get("direction") or "inbound"),
+        received_at=event.get("occurred_at"),
+        sent_at=event.get("occurred_at") if event.get("direction") == "outbound" else None,
         has_attachments=bool(event.get("attachments")),
         has_pdf=any(attachment.get("is_pdf") for attachment in event.get("attachments", [])),
         has_audio=any(attachment.get("is_audio") for attachment in event.get("attachments", [])),
     )
     message.channel_id = channel.id
-    message.processing_step = "received_whatsapp"
-    message.status = "received"
+    if event_kind == "message_echo":
+        message.processing_step = "echoed_from_business_app"
+        message.status = event.get("message_status") or "sent"
+    elif event_kind == "history_message":
+        message.processing_step = "history_synced"
+        message.status = event.get("message_status") or "received"
+    else:
+        message.processing_step = "received_whatsapp"
+        message.status = "received"
     message.last_processed_at = datetime.now(timezone.utc)
     for attachment in event.get("attachments", []):
         db.add(
@@ -578,7 +860,19 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
             )
         )
     db.commit()
-    log_action(db, company_id=company_id, user=user, action="whatsapp.message_received", entity_type="inbound_message", entity_id=message.id, message=f"WhatsApp recibido: {event.get('external_id')}")
+    action = {
+        "message_echo": "whatsapp.message_echoed",
+        "history_message": "whatsapp.history_message_synced",
+    }.get(event_kind, "whatsapp.message_received")
+    log_action(
+        db,
+        company_id=company_id,
+        user=user,
+        action=action,
+        entity_type="inbound_message",
+        entity_id=message.id,
+        message=f"Evento WhatsApp procesado: {event.get('external_id')}",
+    )
     return message
 
 
@@ -641,6 +935,15 @@ def _extract_message_text(message: dict[str, Any]) -> str | None:
         return image.get("caption") or "Imagen adjunta"
     if message.get("type") == "audio":
         return "Audio adjunto"
+    if message.get("type") == "video":
+        video = message.get("video") or {}
+        return video.get("caption") or "Vídeo adjunto"
+    if message.get("type") == "revoke":
+        return "Mensaje eliminado desde WhatsApp Business App"
+    if message.get("type") == "edit":
+        edit = message.get("edit") if isinstance(message.get("edit"), dict) else {}
+        edited_message = edit.get("message") if isinstance(edit.get("message"), dict) else {}
+        return _extract_message_text(edited_message) or "Mensaje editado desde WhatsApp Business App"
     return message.get("text", {}).get("body") if isinstance(message.get("text"), dict) else None
 
 
@@ -677,6 +980,16 @@ def _message_attachments(message: dict[str, Any]) -> list[dict[str, Any]]:
                 "content_type": audio.get("mime_type"),
                 "size_bytes": audio.get("file_size"),
                 "is_audio": True,
+            }
+        )
+    elif message.get("type") == "video":
+        video = message.get("video") or {}
+        attachments.append(
+            {
+                "media_id": video.get("id"),
+                "filename": video.get("filename") or "video.mp4",
+                "content_type": video.get("mime_type"),
+                "size_bytes": video.get("file_size"),
             }
         )
     return attachments

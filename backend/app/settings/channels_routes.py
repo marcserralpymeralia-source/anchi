@@ -254,6 +254,7 @@ async def complete_whatsapp_embedded_signup(
             business_account_id=str(payload.get("waba_id") or ""),
             phone_number_id=str(payload.get("phone_number_id") or ""),
             business_id=str(payload.get("business_id") or ""),
+            onboarding_mode=str(payload.get("onboarding_mode") or "cloud_api"),
         )
     except WhatsAppEmbeddedSignupError as exc:
         log_action(
@@ -290,6 +291,8 @@ async def complete_whatsapp_embedded_signup(
                 "phone_number_id": result.phone_number_id,
                 "display_phone_number": result.display_phone_number,
                 "verified_name": result.verified_name,
+                "onboarding_mode": result.onboarding_mode,
+                "is_on_biz_app": result.is_on_biz_app,
             },
             "redirect_url": redirect_url,
         }

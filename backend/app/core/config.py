@@ -304,7 +304,6 @@ class Settings(BaseSettings):
             "META_APP_ID": self.meta_app_id,
             "META_APP_SECRET": self.meta_app_secret,
             "META_EMBEDDED_SIGNUP_CONFIG_ID": self.meta_embedded_signup_config_id,
-            "META_WHATSAPP_REGISTRATION_PIN": self.meta_whatsapp_registration_pin,
             "META_WHATSAPP_VERIFY_TOKEN": self.meta_whatsapp_verify_token,
         }
         missing = [name for name, value in required.items() if not str(value or "").strip()]
