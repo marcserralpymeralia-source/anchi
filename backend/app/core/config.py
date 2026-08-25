@@ -4,6 +4,7 @@ import base64
 import hashlib
 import logging
 import os
+import re
 from functools import lru_cache
 
 from cryptography.fernet import Fernet
@@ -120,6 +121,24 @@ class Settings(BaseSettings):
     job_retry_max_seconds: int = Field(default=300, validation_alias="JOB_RETRY_MAX_SECONDS")
     job_stale_after_seconds: int = Field(default=900, validation_alias="JOB_STALE_AFTER_SECONDS")
     app_url: str = "http://127.0.0.1:8000"
+    meta_app_id: str = Field(default="", validation_alias=AliasChoices("META_APP_ID", "FB_APP_ID"))
+    meta_app_secret: str = Field(default="", validation_alias=AliasChoices("META_APP_SECRET", "FB_APP_SECRET"))
+    meta_embedded_signup_config_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("META_EMBEDDED_SIGNUP_CONFIG_ID", "FB_EMBEDDED_SIGNUP_CONFIG_ID"),
+    )
+    meta_graph_api_version: str = Field(default="v24.0", validation_alias=AliasChoices("META_GRAPH_API_VERSION", "FB_GRAPH_API_VERSION"))
+    meta_embedded_signup_version: str = Field(default="v4", validation_alias="META_EMBEDDED_SIGNUP_VERSION")
+    meta_whatsapp_registration_pin: str = Field(
+        default="",
+        validation_alias=AliasChoices("META_WHATSAPP_REGISTRATION_PIN", "FB_REG_PIN"),
+    )
+    meta_whatsapp_verify_token: str = Field(
+        default="",
+        validation_alias=AliasChoices("META_WHATSAPP_VERIFY_TOKEN", "FB_VERIFY_TOKEN"),
+    )
+    meta_oauth_redirect_uri: str = Field(default="", validation_alias="META_OAUTH_REDIRECT_URI")
+    meta_request_timeout_seconds: int = Field(default=20, validation_alias="META_REQUEST_TIMEOUT_SECONDS")
     session_cookie: str = "anchi_session"
     session_cookie_secure: bool | None = Field(default=None, validation_alias="SESSION_COOKIE_SECURE")
     session_cookie_samesite: str | None = Field(default=None, validation_alias="SESSION_COOKIE_SAMESITE")
@@ -194,6 +213,17 @@ class Settings(BaseSettings):
             raise ValueError("JOB_RETRY_MAX_SECONDS must be greater than or equal to JOB_RETRY_BASE_SECONDS")
         if self.job_stale_after_seconds <= 0:
             raise ValueError("JOB_STALE_AFTER_SECONDS must be greater than zero")
+        self.meta_graph_api_version = (self.meta_graph_api_version or "v24.0").strip().lower()
+        if not re.fullmatch(r"v\d+\.\d+", self.meta_graph_api_version):
+            raise ValueError("META_GRAPH_API_VERSION must use the vNN.N format")
+        self.meta_embedded_signup_version = (self.meta_embedded_signup_version or "v4").strip().lower()
+        if not re.fullmatch(r"v\d+(?:-[a-z0-9-]+)?", self.meta_embedded_signup_version):
+            raise ValueError("META_EMBEDDED_SIGNUP_VERSION is invalid")
+        self.meta_whatsapp_registration_pin = (self.meta_whatsapp_registration_pin or "").strip()
+        if self.meta_whatsapp_registration_pin and not re.fullmatch(r"\d{6}", self.meta_whatsapp_registration_pin):
+            raise ValueError("META_WHATSAPP_REGISTRATION_PIN must contain exactly 6 digits")
+        if self.meta_request_timeout_seconds <= 0:
+            raise ValueError("META_REQUEST_TIMEOUT_SECONDS must be greater than zero")
         self.log_format = (self.log_format or "json").strip().lower()
         if self.log_format not in {"json", "text"}:
             raise ValueError("LOG_FORMAT must be json or text")
@@ -268,6 +298,24 @@ class Settings(BaseSettings):
             return self.tenant_db_encryption_key
         return _derive_fernet_key(self.app_secret_key)
 
+    @property
+    def meta_whatsapp_missing_configuration(self) -> list[str]:
+        required = {
+            "META_APP_ID": self.meta_app_id,
+            "META_APP_SECRET": self.meta_app_secret,
+            "META_EMBEDDED_SIGNUP_CONFIG_ID": self.meta_embedded_signup_config_id,
+            "META_WHATSAPP_REGISTRATION_PIN": self.meta_whatsapp_registration_pin,
+            "META_WHATSAPP_VERIFY_TOKEN": self.meta_whatsapp_verify_token,
+        }
+        missing = [name for name, value in required.items() if not str(value or "").strip()]
+        if not (self.app_url or "").strip().lower().startswith("https://"):
+            missing.append("APP_URL (HTTPS)")
+        return missing
+
+    @property
+    def meta_whatsapp_embedded_signup_ready(self) -> bool:
+        return not self.meta_whatsapp_missing_configuration
+
     def __repr__(self) -> str:
         parts = {
             "app_name": self.app_name,
@@ -289,6 +337,14 @@ class Settings(BaseSettings):
             "tenant_db_encryption_key": "[redacted]" if self.tenant_db_encryption_key else "",
             "auth_secret": "[redacted]" if self.auth_secret else "",
             "cron_secret": "[redacted]" if self.cron_secret else "",
+            "meta_app_id": self.meta_app_id,
+            "meta_app_secret": "[redacted]" if self.meta_app_secret else "",
+            "meta_embedded_signup_config_id": self.meta_embedded_signup_config_id,
+            "meta_graph_api_version": self.meta_graph_api_version,
+            "meta_embedded_signup_version": self.meta_embedded_signup_version,
+            "meta_whatsapp_registration_pin": "[redacted]" if self.meta_whatsapp_registration_pin else "",
+            "meta_whatsapp_verify_token": "[redacted]" if self.meta_whatsapp_verify_token else "",
+            "meta_oauth_redirect_uri": self.meta_oauth_redirect_uri,
             "default_company_name": self.default_company_name,
             "default_admin_email": self.default_admin_email,
             "default_admin_password": "[redacted]" if self.default_admin_password else "",

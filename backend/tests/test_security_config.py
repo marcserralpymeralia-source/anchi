@@ -94,6 +94,31 @@ class SecurityConfigurationTests(unittest.TestCase):
         self.assertTrue(settings.cors_allowed_origins)
         self.assertTrue(settings.seed_demo_data)
 
+    def test_meta_embedded_signup_requires_https_and_keeps_server_secrets_redacted(self):
+        meta_app_secret = "meta-server-secret-for-test"
+        verify_token = "meta-global-verify-token-for-test"
+        settings = _load_settings(
+            {
+                "APP_ENV": "development",
+                "APP_URL": "https://anchi.example.com",
+                "META_APP_ID": "12345000000",
+                "META_APP_SECRET": meta_app_secret,
+                "META_EMBEDDED_SIGNUP_CONFIG_ID": "22345000000",
+                "META_WHATSAPP_REGISTRATION_PIN": "123456",
+                "META_WHATSAPP_VERIFY_TOKEN": verify_token,
+            }
+        )
+        self.assertTrue(settings.meta_whatsapp_embedded_signup_ready)
+        self.assertEqual(settings.meta_whatsapp_missing_configuration, [])
+        rendered = repr(settings)
+        self.assertNotIn(meta_app_secret, rendered)
+        self.assertNotIn(verify_token, rendered)
+        self.assertIn("[redacted]", rendered)
+
+        local_settings = _load_settings({"APP_ENV": "development"})
+        self.assertFalse(local_settings.meta_whatsapp_embedded_signup_ready)
+        self.assertIn("APP_URL (HTTPS)", local_settings.meta_whatsapp_missing_configuration)
+
     def test_demo_environment_keeps_demo_bootstrap(self):
         settings = _load_settings({"APP_ENV": "demo"})
         self.assertEqual(settings.environment, "demo")

@@ -126,17 +126,8 @@
             </div>
             <strong>{{ "Conectado" if setup_status.whatsapp_connected else "No conectado" }}</strong>
           </div>
-          {% if setup_status.whatsapp_connected %}<p class="setup-channel-value">{{ whatsapp.phone_number_id }}</p>{% endif %}
-          <button class="secondary compact-button" type="button" data-toggle-target="whatsapp-form">{{ "Editar" if setup_status.whatsapp_connected else "Configurar WhatsApp" }}</button>
-          <form id="whatsapp-form" class="setup-form setup-collapsible js-loading-form {% if setup_status.whatsapp_connected %}is-collapsed{% endif %}" method="post" action="/setup/whatsapp">
-            <label>Phone Number ID<input name="phone_number_id" value="{{ whatsapp.phone_number_id or '' }}"></label>
-            <label>Business Account ID<input name="business_account_id" value="{{ whatsapp.business_account_id or '' }}"></label>
-            <label>Access Token<input type="password" name="access_token" placeholder="{% if whatsapp.access_token %}••••••••{% endif %}"></label>
-            <label>App Secret<input type="password" name="app_secret" placeholder="{% if whatsapp.app_secret %}••••••••{% endif %}"></label>
-            <label>Verify Token<input type="password" name="verify_token" placeholder="{% if whatsapp.verify_token %}••••••••{% endif %}"></label>
-            <label>Webhook<input value="{{ webhook_url }}" readonly></label>
-            <button class="primary" data-loading-text="Comprobando conexión...">Probar conexión</button>
-          </form>
+          {% set whatsapp_return_to = "setup" %}
+          {% include "components/whatsapp_embedded_signup.html" %}
         </article>
       </div>
       <div class="setup-actions">

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +15,7 @@ from app.auth.dependencies import current_user
 from app.channels.service import get_or_create_channel
 from app.core.encryption import encrypt_secret
 from app.core.templating import templates
-from app.db.models import ChannelSetting, Company, Customer, EmailSettings, InputChannel, LLMSettings, Setting
+from app.db.models import Company, Customer, EmailSettings, InputChannel, LLMSettings, Setting
 from app.imports.service import create_preview, read_preview, validate_import, confirm_import
 from app.jobs.service import enqueue_job, execute_job_inline
 from app.logs.service import log_action
@@ -26,7 +27,7 @@ from app.settings.integrations import test_imap_connection
 from app.settings.service import get_or_create_settings, resolve_updated_by_id, update_with_form
 from app.setup.service import get_setup_status, next_setup_url
 from app.tenancy.database import get_tenant_db
-from app.whatsapp.service import get_or_create_whatsapp_channel, redact_whatsapp_config, whatsapp_config
+from app.whatsapp.service import embedded_signup_public_config, redact_whatsapp_config, whatsapp_config, whatsapp_webhook_url
 
 
 router = APIRouter(prefix="/setup", tags=["setup"])
@@ -55,6 +56,10 @@ def _setup_context(request: Request, db: Session, user: TenantUser, step: str, *
     email = get_or_create_settings(db, EmailSettings, user.company_id)
     llm = get_or_create_settings(db, LLMSettings, user.company_id)
     whatsapp = whatsapp_config(db, user.company_id)
+    whatsapp_signup_state = ""
+    if step == "channels":
+        whatsapp_signup_state = secrets.token_urlsafe(32)
+        request.session["whatsapp_embedded_signup_state"] = whatsapp_signup_state
     context = {
         "request": request,
         "user": user,
@@ -70,7 +75,9 @@ def _setup_context(request: Request, db: Session, user: TenantUser, step: str, *
         "email": email,
         "llm": llm,
         "whatsapp": redact_whatsapp_config(whatsapp),
-        "webhook_url": str(request.url_for("receive_webhook", company_slug=user.company_slug)),
+        "whatsapp_embedded_signup": embedded_signup_public_config(),
+        "whatsapp_signup_state": whatsapp_signup_state,
+        "webhook_url": whatsapp_webhook_url(user.company_slug),
         "message": request.query_params.get("message", ""),
         "error": request.query_params.get("error", ""),
     }
@@ -261,62 +268,6 @@ def setup_email_sync(db: Session = Depends(get_tenant_db), user: TenantUser = De
     job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": False}, created_by_user_id=user.id)
     result = execute_job_inline(db, job)
     return _redirect_step("channels", message=result.get("message") or "Sincronización completada")
-
-
-@router.post("/whatsapp")
-def setup_whatsapp_connect(
-    request: Request,
-    phone_number_id: str = Form(""),
-    business_account_id: str = Form(""),
-    access_token: str = Form(""),
-    app_secret: str = Form(""),
-    verify_token: str = Form(""),
-    db: Session = Depends(get_tenant_db),
-    user: TenantUser = Depends(current_user),
-):
-    required = {
-        "Phone Number ID": phone_number_id.strip(),
-        "Access Token": access_token.strip(),
-        "App Secret": app_secret.strip(),
-        "Verify Token": verify_token.strip(),
-    }
-    missing = [label for label, value in required.items() if not value or value in {"********", "••••••••"}]
-    if missing:
-        return _redirect_step("channels", error=f"Faltan campos de WhatsApp: {', '.join(missing)}")
-    if len(access_token.strip()) < 12:
-        return _redirect_step("channels", error="El Access Token de WhatsApp no parece válido.")
-    channel = get_or_create_whatsapp_channel(db, user.company_id)
-    channel.is_active = True
-    values = {
-        "enabled": "true",
-        "provider": "meta",
-        "phone_number_id": phone_number_id.strip(),
-        "business_account_id": business_account_id.strip(),
-        "access_token": encrypt_secret(access_token.strip()),
-        "app_secret": encrypt_secret(app_secret.strip()),
-        "verify_token": encrypt_secret(verify_token.strip()),
-        "webhook_enabled": "true",
-        "bot_enabled": "true",
-    }
-    for key, value in values.items():
-        setting = db.scalar(select(ChannelSetting).where(ChannelSetting.company_id == user.company_id, ChannelSetting.channel_id == channel.id, ChannelSetting.key == key))
-        if not setting:
-            setting = ChannelSetting(company_id=user.company_id, channel_id=channel.id, key=key, value=value, value_type="secret" if key in {"access_token", "app_secret", "verify_token"} else "string", is_secret=key in {"access_token", "app_secret", "verify_token"})
-            db.add(setting)
-        else:
-            setting.value = value
-            setting.is_secret = key in {"access_token", "app_secret", "verify_token"}
-    db.commit()
-    log_action(db, company_id=user.company_id, user=user, action="setup.whatsapp.save", entity_type="channel", entity_id=channel.id, message="WhatsApp configurado desde onboarding")
-    return _redirect_step("channels", message="WhatsApp configurado correctamente")
-
-
-@router.post("/whatsapp/test")
-def setup_whatsapp_test(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
-    config = whatsapp_config(db, user.company_id)
-    if config.enabled and config.phone_number_id and config.access_token and config.verify_token and config.app_secret:
-        return _redirect_step("channels", message="WhatsApp configurado correctamente")
-    return _redirect_step("channels", error="WhatsApp no está completo. Revisa los campos principales.")
 
 
 @router.get("/products")

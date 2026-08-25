@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hmac
+import secrets
 
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -17,7 +19,15 @@ from app.master.service import TenantUser
 from app.settings.email_config import email_config_status
 from app.settings.service import get_or_create_settings
 from app.tenancy.database import get_tenant_db
-from app.workbench.routes import _redirect_back
+from app.whatsapp.service import (
+    WhatsAppEmbeddedSignupError,
+    complete_embedded_signup,
+    embedded_signup_public_config,
+    get_or_create_whatsapp_channel,
+    redact_whatsapp_config,
+    whatsapp_config,
+    whatsapp_webhook_url,
+)
 
 router = APIRouter()
 
@@ -32,22 +42,10 @@ CHANNEL_CONFIG_SPECS = {
         "configure_href": "/settings#email",
     },
     "whatsapp": {
-        "summary": "Preparado para conectarse con un proveedor de mensajería.",
-        "config_title": "WhatsApp",
-        "fields": [
-            {"key": "enabled", "label": "Activo"},
-            {"key": "provider", "label": "Proveedor"},
-            {"key": "phone_number_id", "label": "Phone number ID"},
-            {"key": "business_account_id", "label": "Business account ID"},
-            {"key": "access_token", "label": "Token de acceso", "secret": True},
-            {"key": "verify_token", "label": "Verify token", "secret": True},
-            {"key": "app_secret", "label": "App secret", "secret": True},
-            {"key": "webhook_enabled", "label": "Webhook activo"},
-            {"key": "bot_enabled", "label": "Bot activo"},
-            {"key": "default_language", "label": "Idioma"},
-            {"key": "timezone", "label": "Zona horaria"},
-        ],
-        "required_keys": ["phone_number_id", "business_account_id", "access_token", "verify_token", "app_secret"],
+        "summary": "Conecta WhatsApp Business mediante el acceso seguro de Meta.",
+        "config_title": "WhatsApp Business Platform",
+        "fields": [],
+        "required_keys": ["phone_number_id", "business_account_id", "access_token", "verify_token"],
     },
     "voice": {
         "summary": "Pensado para voz y transcripción posterior.",
@@ -144,6 +142,27 @@ def channel_status_payload(db: Session, company_id: int, channel: InputChannel) 
                 details = "Faltan datos para empezar a recibir mensajes."
                 activity_label = "Pendiente"
                 activity_value = "Completa los datos mínimos del correo."
+        elif channel.key == "whatsapp":
+            connection_status = (settings_map.get("connection_status") or "not_connected").strip().lower()
+            required_ready = all(settings_map.get(key) for key in spec.get("required_keys", []))
+            if connection_status == "error":
+                state = "error"
+                status_label = "Activo · error de conexión"
+                details = settings_map.get("last_error") or "Meta no pudo completar la conexión. Vuelve a iniciar sesión."
+                activity_label = "Conexión"
+                activity_value = "Requiere atención"
+            elif connection_status == "connected" and required_ready and settings_map.get("webhook_enabled") == "true":
+                state = "ready"
+                status_label = "Activo · conectado con Meta"
+                details = "WhatsApp Business está suscrito al webhook de este tenant."
+                activity_label = "Número conectado"
+                activity_value = settings_map.get("display_phone_number") or settings_map.get("phone_number_id") or "Conectado"
+            else:
+                state = "pending"
+                status_label = "Activo · pendiente de conectar"
+                details = "Inicia sesión con Meta para autorizar el WABA y registrar el número."
+                activity_label = "Pendiente"
+                activity_value = "Completa Embedded Signup"
         else:
             missing = [field["label"] for field in spec.get("fields", []) if field["key"] in spec.get("required_keys", []) and not settings_map.get(field["key"])]
             if missing:
@@ -179,6 +198,7 @@ def channel_settings_overview_fallback(db: Session, company_id: int) -> list[dic
 def channels_settings_page(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not has_admin_access(user):
         return RedirectResponse("/", status_code=303)
+    get_or_create_whatsapp_channel(db, user.company_id)
     try:
         overview = channel_settings_overview(db, user.company_id)
     except Exception as exc:
@@ -186,7 +206,94 @@ def channels_settings_page(request: Request, db: Session = Depends(get_tenant_db
         overview = channel_settings_overview_fallback(db, user.company_id)
     technical_access = user.role.name == "Superadmin"
     focus_key = request.query_params.get("focus")
-    return templates.TemplateResponse("settings/channels.html", {"request": request, "user": user, "channels": overview, "recent_processed_emails": recent_processed_emails_overview(db, user.company_id, days=30, limit=8), "email": get_or_create_settings(db, EmailSettings, user.company_id), "technical_access": technical_access, "active_channels": [channel for channel in overview if channel["channel"].is_active], "focus_key": focus_key})
+    whatsapp_signup_state = secrets.token_urlsafe(32)
+    request.session["whatsapp_embedded_signup_state"] = whatsapp_signup_state
+    return templates.TemplateResponse(
+        "settings/channels.html",
+        {
+            "request": request,
+            "user": user,
+            "channels": overview,
+            "recent_processed_emails": recent_processed_emails_overview(db, user.company_id, days=30, limit=8),
+            "email": get_or_create_settings(db, EmailSettings, user.company_id),
+            "whatsapp": redact_whatsapp_config(whatsapp_config(db, user.company_id)),
+            "whatsapp_embedded_signup": embedded_signup_public_config(),
+            "whatsapp_signup_state": whatsapp_signup_state,
+            "webhook_url": whatsapp_webhook_url(user.company_slug),
+            "technical_access": technical_access,
+            "active_channels": [channel for channel in overview if channel["channel"].is_active],
+            "focus_key": focus_key,
+        },
+    )
+
+
+@router.post("/settings/channels/whatsapp/embedded-signup/complete")
+async def complete_whatsapp_embedded_signup(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    if not has_admin_access(user):
+        return JSONResponse({"ok": False, "message": "Solo un administrador puede conectar WhatsApp."}, status_code=403)
+    try:
+        payload = await request.json()
+    except Exception:  # noqa: BLE001
+        return JSONResponse({"ok": False, "message": "La respuesta de Meta no es válida."}, status_code=400)
+    if not isinstance(payload, dict):
+        return JSONResponse({"ok": False, "message": "La respuesta de Meta no es válida."}, status_code=400)
+    expected_state = str(request.session.get("whatsapp_embedded_signup_state") or "")
+    received_state = str(payload.get("state") or "")
+    if not expected_state or not received_state or not hmac.compare_digest(expected_state, received_state):
+        return JSONResponse({"ok": False, "message": "La sesión de conexión ha caducado. Recarga la página."}, status_code=403)
+    try:
+        result = await complete_embedded_signup(
+            db,
+            company_id=user.company_id,
+            company_slug=user.company_slug,
+            code=str(payload.get("code") or ""),
+            business_account_id=str(payload.get("waba_id") or ""),
+            phone_number_id=str(payload.get("phone_number_id") or ""),
+            business_id=str(payload.get("business_id") or ""),
+        )
+    except WhatsAppEmbeddedSignupError as exc:
+        log_action(
+            db,
+            company_id=user.company_id,
+            user=user,
+            action="whatsapp.embedded_signup.failed",
+            entity_type="input_channel",
+            message=f"Embedded Signup falló: {exc.error_type}",
+        )
+        status_code = 502
+        if exc.error_type == "server_not_configured":
+            status_code = 503
+        elif exc.error_type in {"invalid_signup_payload", "asset_mismatch"}:
+            status_code = 400
+        return JSONResponse({"ok": False, "message": str(exc), "error_type": exc.error_type}, status_code=status_code)
+    request.session.pop("whatsapp_embedded_signup_state", None)
+    log_action(
+        db,
+        company_id=user.company_id,
+        user=user,
+        action="whatsapp.embedded_signup.connected",
+        entity_type="input_channel",
+        message="WhatsApp conectado mediante Embedded Signup",
+    )
+    return_to = "setup" if payload.get("return_to") == "setup" else "settings"
+    redirect_url = "/setup/channels?whatsapp=connected" if return_to == "setup" else "/settings/channels?focus=whatsapp&whatsapp=connected"
+    return JSONResponse(
+        {
+            "ok": True,
+            "message": "WhatsApp se ha conectado correctamente.",
+            "connection": {
+                "waba_id": result.business_account_id,
+                "phone_number_id": result.phone_number_id,
+                "display_phone_number": result.display_phone_number,
+                "verified_name": result.verified_name,
+            },
+            "redirect_url": redirect_url,
+        }
+    )
 
 
 @router.post("/settings/channels/{channel_key}/activate")
@@ -224,6 +331,8 @@ async def update_channel_settings(channel_key: str, request: Request, db: Sessio
     channel = _get_channel_or_404(db, user.company_id, channel_key)
     if not channel:
         return RedirectResponse("/settings/channels", status_code=303)
+    if channel.key == "whatsapp":
+        return RedirectResponse("/settings/channels?focus=whatsapp", status_code=303)
     form = dict(await request.form())
     spec = CHANNEL_CONFIG_SPECS.get(channel.key, {})
     if channel.key == "email":

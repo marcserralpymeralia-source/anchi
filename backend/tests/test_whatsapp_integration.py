@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
@@ -9,12 +10,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import httpx
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
 from app.agent.platform import UnifiedOrderPipelineService
-from app.core.encryption import encrypt_secret
+from app.core.encryption import decrypt_secret, encrypt_secret
 from app.db.database import Base
 from app.db.models import BackgroundJob, ChannelSetting, Conversation, Customer, CustomerContactPoint, InboundMessage, InputChannel, LLMSettings, Order, Product, ProductAlias, ScoringSettings
 from app.jobs.service import enqueue_job
@@ -22,8 +24,20 @@ from app.master.database import MasterBase
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser
 from app.master.service import TenantRole, TenantUser
 from app.messages.service import upsert_inbound_message
+from app.tenancy.database import get_tenant_engine
 from app.tenancy.migrations import upgrade_tenant_schema
-from app.whatsapp.service import enqueue_whatsapp_processing, parse_payload_events, persist_event, redact_whatsapp_config, resolve_company_from_slug, verify_signature, verify_webhook_token, whatsapp_config
+from app.whatsapp.service import (
+    complete_embedded_signup,
+    enqueue_whatsapp_processing,
+    parse_payload_events,
+    persist_event,
+    redact_whatsapp_config,
+    resolve_company_from_slug,
+    resolve_company_from_whatsapp_identifiers,
+    verify_signature,
+    verify_webhook_token,
+    whatsapp_config,
+)
 from app.workers.jobs_worker import run_worker_cycle
 
 
@@ -45,6 +59,8 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self._seed_agent_data()
 
     def tearDown(self):
+        get_tenant_engine(f"sqlite:///{self.tenant_path.as_posix()}").dispose()
+        get_tenant_engine.cache_clear()
         self.master_engine.dispose()
         self.tenant_engine.dispose()
         self.tempdir.cleanup()
@@ -93,13 +109,12 @@ class WhatsAppIntegrationTests(unittest.TestCase):
             "business_account_id": "ba-123",
             "access_token": "token-123",
             "verify_token": "verify-123",
-            "app_secret": "secret-123",
             "webhook_enabled": "true",
             "bot_enabled": "true",
             "default_language": "es",
             "timezone": "Europe/Madrid",
         }.items():
-            db.add(ChannelSetting(company_id=1, channel_id=channel.id, key=key, value=value, value_type="string", is_secret=key in {"access_token", "verify_token", "app_secret"}))
+            db.add(ChannelSetting(company_id=1, channel_id=channel.id, key=key, value=value, value_type="string", is_secret=key in {"access_token", "verify_token"}))
         db.commit()
         db.close()
 
@@ -131,12 +146,13 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         redacted = redact_whatsapp_config(config)
         self.assertEqual(redacted["access_token"], "••••••••")
         self.assertEqual(redacted["verify_token"], "••••••••")
-        self.assertEqual(redacted["app_secret"], "••••••••")
+        self.assertNotIn("app_secret", redacted)
 
     def test_text_message_dedupes_and_queues_job(self):
         payload = {
             "entry": [
                 {
+                    "id": "12345678901",
                     "changes": [
                         {
                             "value": {
@@ -157,6 +173,7 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         }
         events = parse_payload_events(payload)
         self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["business_account_id"], "12345678901")
         db = self.TenantSession()
         message = persist_event(db, 1, events[0])
         enqueue_whatsapp_processing(db, 1, message.id)
@@ -325,9 +342,106 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         db.close()
 
 
-    def test_webhook_tenant_resolution_by_slug(self):
+    def test_embedded_signup_exchanges_code_registers_phone_and_subscribes_webhook(self):
+        settings = SimpleNamespace(
+            meta_whatsapp_embedded_signup_ready=True,
+            meta_app_id="12345000000",
+            meta_app_secret="server-only-app-secret",
+            meta_embedded_signup_config_id="22345000000",
+            meta_graph_api_version="v24.0",
+            meta_embedded_signup_version="v4",
+            meta_whatsapp_registration_pin="123456",
+            meta_whatsapp_verify_token="global-verify-token",
+            meta_oauth_redirect_uri="",
+            meta_request_timeout_seconds=5,
+            app_url="https://anchi.example.com",
+        )
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            path = request.url.path
+            if path.endswith("/oauth/access_token"):
+                self.assertEqual(request.url.params["client_id"], settings.meta_app_id)
+                self.assertEqual(request.url.params["code"], "temporary-auth-code")
+                self.assertNotIn("redirect_uri", request.url.params)
+                return httpx.Response(200, json={"access_token": "tenant-access-token"})
+            if path.endswith("/12345678901/phone_numbers"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {
+                                "id": "10987654321",
+                                "display_phone_number": "+34 600 000 000",
+                                "verified_name": "Anchi Demo",
+                            }
+                        ]
+                    },
+                )
+            if path.endswith("/10987654321/register"):
+                self.assertEqual(json.loads(request.content)["pin"], settings.meta_whatsapp_registration_pin)
+                self.assertEqual(request.headers["Authorization"], "Bearer tenant-access-token")
+                return httpx.Response(200, json={"success": True})
+            if path.endswith("/12345678901/subscribed_apps"):
+                payload = json.loads(request.content)
+                self.assertEqual(payload["override_callback_uri"], "https://anchi.example.com/webhooks/whatsapp/whatsapp-demo")
+                self.assertTrue(payload["verify_token"])
+                return httpx.Response(200, json={"success": True})
+            if path.endswith("/12345678901"):
+                return httpx.Response(200, json={"id": "12345678901", "name": "Anchi WABA"})
+            return httpx.Response(404, json={"error": {"message": "unexpected test request"}})
+
+        async def execute_signup():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                db = self.TenantSession()
+                try:
+                    return await complete_embedded_signup(
+                        db,
+                        company_id=1,
+                        company_slug="whatsapp-demo",
+                        code="temporary-auth-code",
+                        business_account_id="12345678901",
+                        phone_number_id="10987654321",
+                        business_id="11223344556",
+                        client=client,
+                    )
+                finally:
+                    db.close()
+
+        with patch("app.whatsapp.service.get_settings", return_value=settings):
+            result = asyncio.run(execute_signup())
+
+        self.assertEqual(result.connection_status, "connected")
+        self.assertEqual(result.phone_number_id, "10987654321")
+        self.assertEqual(len(calls), 5)
+        with self.TenantSession() as db:
+            config = whatsapp_config(db, 1)
+            self.assertTrue(config.enabled)
+            self.assertTrue(config.webhook_enabled)
+            self.assertEqual(config.connection_status, "connected")
+            self.assertEqual(config.access_token, "tenant-access-token")
+            self.assertEqual(config.display_phone_number, "+34 600 000 000")
+            token_setting = db.scalar(
+                select(ChannelSetting).where(
+                    ChannelSetting.company_id == 1,
+                    ChannelSetting.key == "access_token",
+                )
+            )
+            self.assertNotEqual(token_setting.value, "tenant-access-token")
+            self.assertEqual(decrypt_secret(token_setting.value), "tenant-access-token")
+
+    def test_webhook_tenant_resolution_by_slug_and_meta_identifiers(self):
         master_db = self.MasterSession()
         company, tenant = resolve_company_from_slug(master_db, "whatsapp-demo")
+        self.assertIsNotNone(company)
+        self.assertIsNotNone(tenant)
+        self.assertEqual(company.id, 1)
+        company, tenant = resolve_company_from_whatsapp_identifiers(
+            master_db,
+            business_account_id="ba-123",
+            phone_number_id="pn-123",
+        )
         self.assertIsNotNone(company)
         self.assertIsNotNone(tenant)
         self.assertEqual(company.id, 1)
