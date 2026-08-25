@@ -35,6 +35,7 @@ def build_env(args: argparse.Namespace) -> str:
     app_name = args.app_name or "Anchi"
     db_name = args.database_name or f"{slug}.db"
     is_production = args.environment == "production"
+    app_url = args.app_url or ("" if is_production else "http://127.0.0.1:8000")
     allowed_hosts = "localhost,127.0.0.1,testserver" if not is_production else ""
     cors_origins = "http://localhost:8000,http://127.0.0.1:8000,http://localhost:8001,http://127.0.0.1:8001" if not is_production else ""
     return "\n".join(
@@ -45,6 +46,7 @@ def build_env(args: argparse.Namespace) -> str:
             f"APP_ENV={quote(args.environment)}",
             f"APP_NAME={quote(app_name)}",
             f"APP_SLUG={quote(slug)}",
+            f"APP_URL={quote(app_url)}",
             f"SECRET_KEY={quote(secrets.token_urlsafe(48))}",
             f"ENCRYPTION_KEY={quote(fernet_key())}",
             f"SESSION_COOKIE={quote(slug + '_session')}",
@@ -71,6 +73,17 @@ def build_env(args: argparse.Namespace) -> str:
             "",
             f"EMAIL_SIGNATURE_TEXT={quote(args.email_signature or 'Equipo de pedidos')}",
             "",
+            "# Meta WhatsApp Embedded Signup. Completar en el gestor de secretos del entorno.",
+            "META_APP_ID=\"\"",
+            "META_APP_SECRET=\"\"",
+            "META_EMBEDDED_SIGNUP_CONFIG_ID=\"\"",
+            "META_GRAPH_API_VERSION=\"v24.0\"",
+            "META_EMBEDDED_SIGNUP_VERSION=\"v4\"",
+            f"META_WHATSAPP_REGISTRATION_PIN={quote(f'{secrets.randbelow(1_000_000):06d}')}",
+            f"META_WHATSAPP_VERIFY_TOKEN={quote(secrets.token_urlsafe(32))}",
+            "META_OAUTH_REDIRECT_URI=\"\"",
+            "META_REQUEST_TIMEOUT_SECONDS=20",
+            "",
         ]
     )
 
@@ -82,6 +95,7 @@ def main() -> None:
     parser.add_argument("--admin-email", required=True, help="Email del administrador inicial.")
     parser.add_argument("--admin-password", help="Password inicial. Si se omite, se genera una segura.")
     parser.add_argument("--app-name", help="Nombre visible de la app para este cliente.")
+    parser.add_argument("--app-url", default="", help="URL publica HTTPS de la instancia.")
     parser.add_argument("--primary-claim", default="Gestion inteligente de pedidos")
     parser.add_argument("--secondary-claim", default="")
     parser.add_argument("--logo-url", default="")

@@ -1,0 +1,66 @@
+{% set whatsapp_connection_ready = whatsapp.connection_status == "connected" and whatsapp.webhook_enabled %}
+<div
+  class="whatsapp-signup"
+  data-whatsapp-embedded-signup
+  data-meta-configured="{{ 'true' if whatsapp_embedded_signup.configured else 'false' }}"
+  data-meta-app-id="{{ whatsapp_embedded_signup.app_id }}"
+  data-meta-config-id="{{ whatsapp_embedded_signup.config_id }}"
+  data-meta-api-version="{{ whatsapp_embedded_signup.graph_api_version }}"
+  data-meta-flow-version="{{ whatsapp_embedded_signup.embedded_signup_version }}"
+  data-complete-url="/settings/channels/whatsapp/embedded-signup/complete"
+  data-signup-state="{{ whatsapp_signup_state }}"
+  data-return-to="{{ whatsapp_return_to }}">
+  <div class="whatsapp-signup-head">
+    <div class="whatsapp-signup-mark" aria-hidden="true">W</div>
+    <div>
+      <h4>{{ "WhatsApp conectado" if whatsapp_connection_ready else "Conecta WhatsApp Business" }}</h4>
+      <p class="muted">Meta abrirá una ventana segura para elegir el negocio, el WABA y el número. Anchi no verá tu contraseña de Meta.</p>
+    </div>
+  </div>
+
+  {% if whatsapp_connection_ready %}
+    <div class="whatsapp-signup-summary">
+      <div><span>Número</span><strong>{{ whatsapp.display_phone_number or whatsapp.phone_number_id }}</strong></div>
+      <div><span>Nombre verificado</span><strong>{{ whatsapp.verified_name or "Pendiente en Meta" }}</strong></div>
+      <div><span>WABA ID</span><strong>{{ whatsapp.business_account_id }}</strong></div>
+      <div><span>Webhook</span><strong>Suscrito</strong></div>
+    </div>
+  {% endif %}
+
+  <div class="whatsapp-signup-actions">
+    <button
+      type="button"
+      class="meta-login-button"
+      data-whatsapp-signup-button
+      data-testid="whatsapp-embedded-signup-button"
+      {% if not whatsapp_embedded_signup.configured %}disabled{% endif %}>
+      {{ "Volver a conectar con Meta" if whatsapp_connection_ready else "Iniciar sesión con Meta" }}
+    </button>
+    <p class="whatsapp-signup-status muted" role="status" aria-live="polite" data-whatsapp-signup-status>
+      {% if whatsapp_connection_ready %}
+        Conexión activa. Puedes repetir el acceso para cambiar de cuenta o número.
+      {% elif whatsapp_embedded_signup.configured %}
+        Listo para iniciar Embedded Signup.
+      {% else %}
+        Falta preparar la aplicación de Meta en el servidor.
+      {% endif %}
+    </p>
+  </div>
+
+  {% if not whatsapp_embedded_signup.configured %}
+    <details class="drawer-subsection whatsapp-signup-requirements">
+      <summary>Configuración pendiente del servidor</summary>
+      <p class="muted">Añade estas variables al entorno y reinicia Anchi:</p>
+      <div class="whatsapp-signup-env-list">
+        {% for item in whatsapp_embedded_signup.missing %}<code>{{ item }}</code>{% endfor %}
+      </div>
+    </details>
+  {% endif %}
+
+  <details class="drawer-subsection">
+    <summary>Datos técnicos del webhook</summary>
+    <label>Callback asignado<input value="{{ webhook_url }}" readonly></label>
+    <p class="muted">La suscripción y el token de verificación se crean automáticamente al terminar el acceso con Meta.</p>
+  </details>
+</div>
+<script src="/static/js/whatsapp-embedded-signup.js" defer></script>

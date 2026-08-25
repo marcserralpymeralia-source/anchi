@@ -5,7 +5,8 @@ import importlib
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -16,7 +17,7 @@ os.environ.setdefault("ENABLE_DEMO_BOOTSTRAP", "false")
 
 from app.core import lifespan as lifespan_module  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
-from app.core.encryption import decrypt_secret  # noqa: E402
+from app.core.encryption import decrypt_secret, encrypt_secret  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.db.database import Base  # noqa: E402
 from app.db.models import ChannelSetting, Company, Customer, EmailSettings, InputChannel, LLMSettings, Product, Role, User  # noqa: E402
@@ -27,7 +28,7 @@ from app.migrations.helpers import ensure_columns  # noqa: E402
 from app.settings.branding import get_or_create_branding  # noqa: E402
 from app.settings.service import get_or_create_settings  # noqa: E402
 from app.setup.service import get_setup_status  # noqa: E402
-from app.tenancy.database import clear_tenant_schema_cache, ensure_tenant_schema  # noqa: E402
+from app.tenancy.database import clear_tenant_schema_cache, ensure_tenant_schema, get_tenant_engine  # noqa: E402
 from app.whatsapp.service import whatsapp_config  # noqa: E402
 from app.core.app_factory import create_app  # noqa: E402
 
@@ -63,6 +64,8 @@ class SetupFixture:
         )
         Base.metadata.create_all(self.tenant_engine)
         ensure_tenant_schema(self.tenant_url, company_id=1)
+        get_tenant_engine(self.tenant_url).dispose()
+        get_tenant_engine.cache_clear()
         self.MasterSession = sessionmaker(bind=self.master_engine, autoflush=False, autocommit=False)
         self.TenantSession = sessionmaker(bind=self.tenant_engine, autoflush=False, autocommit=False)
         with self.MasterSession() as db:
@@ -124,6 +127,7 @@ class SetupFixture:
             lifespan_module_local.MasterSessionLocal = previous["lifespan_master_session"]
             middleware_module.MasterSessionLocal = previous["middleware_master_session"]
             jobs_worker_module.MasterSessionLocal = previous["jobs_worker_master_session"]
+            tenancy_database_module.get_tenant_engine(self.tenant_url).dispose()
             tenancy_database_module.get_tenant_engine.cache_clear()
 
         return client, cleanup
@@ -254,32 +258,107 @@ class SetupOnboardingTests(unittest.TestCase):
             cleanup()
             fixture.cleanup()
 
-    def test_whatsapp_can_be_the_only_input_channel_and_secrets_are_redacted(self):
+    def test_whatsapp_embedded_signup_replaces_manual_setup_and_can_be_the_only_input_channel(self):
         fixture = SetupFixture()
         client, cleanup = fixture.client()
         try:
             self._login(client)
             client.post("/setup/company", data={"legal_name": "Setup Demo SL", "commercial_name": "Setup Demo", "country": "España", "language": "es", "timezone": "Europe/Madrid", "primary_color": "#157F6E"}, follow_redirects=False)
-            response = client.post(
-                "/setup/whatsapp",
-                data={"phone_number_id": "1234567890", "business_account_id": "999", "access_token": "EAAG-token-demo", "app_secret": "secret-demo-value", "verify_token": "verify-demo-value"},
-                follow_redirects=False,
+            page = client.get("/setup/channels")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn("Iniciar sesión con Meta", page.text)
+            self.assertIn('data-testid="whatsapp-embedded-signup-button"', page.text)
+            self.assertNotIn('name="phone_number_id"', page.text)
+            self.assertNotIn('name="access_token"', page.text)
+            self.assertNotIn('name="app_secret"', page.text)
+            self.assertNotIn('name="verify_token"', page.text)
+            legacy_response = client.post("/setup/whatsapp", data={}, follow_redirects=False)
+            self.assertIn(legacy_response.status_code, {404, 405})
+
+            state = self._extract(page.text, 'data-signup-state="')
+            completed = SimpleNamespace(
+                business_account_id="12345678901",
+                phone_number_id="10987654321",
+                display_phone_number="+34 600 000 000",
+                verified_name="Anchi Demo",
             )
-            self.assertEqual(response.status_code, 303)
+            with patch(
+                "app.settings.channels_routes.complete_embedded_signup",
+                new=AsyncMock(return_value=completed),
+            ) as complete_mock:
+                response = client.post(
+                    "/settings/channels/whatsapp/embedded-signup/complete",
+                    json={
+                        "code": "temporary-auth-code",
+                        "waba_id": "12345678901",
+                        "phone_number_id": "10987654321",
+                        "business_id": "11223344556",
+                        "state": state,
+                        "return_to": "setup",
+                    },
+                )
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.json()["ok"])
+            self.assertEqual(response.json()["redirect_url"], "/setup/channels?whatsapp=connected")
+            complete_mock.assert_awaited_once()
+
             with fixture.TenantSession() as db:
-                config = whatsapp_config(db, 1)
-                self.assertTrue(config.enabled)
-                self.assertEqual(config.access_token, "EAAG-token-demo")
-                stored = db.scalars(select(ChannelSetting).where(ChannelSetting.company_id == 1, ChannelSetting.key == "access_token")).first()
-                self.assertNotEqual(stored.value, "EAAG-token-demo")
+                channel = db.scalar(
+                    select(InputChannel).where(
+                        InputChannel.company_id == 1,
+                        InputChannel.key == "whatsapp",
+                    )
+                )
+                if channel is None:
+                    channel = InputChannel(
+                        company_id=1,
+                        key="whatsapp",
+                        name="WhatsApp",
+                        channel_type="message",
+                    )
+                    db.add(channel)
+                    db.flush()
+                channel.is_active = True
+                values = {
+                    "enabled": "true",
+                    "provider": "meta",
+                    "phone_number_id": "10987654321",
+                    "business_account_id": "12345678901",
+                    "access_token": encrypt_secret("tenant-access-token"),
+                    "verify_token": encrypt_secret("tenant-verify-token"),
+                    "connection_status": "connected",
+                    "webhook_enabled": "true",
+                    "bot_enabled": "true",
+                }
+                for key, value in values.items():
+                    db.add(
+                        ChannelSetting(
+                            company_id=1,
+                            channel_id=channel.id,
+                            key=key,
+                            value=value,
+                            value_type="secret" if key in {"access_token", "verify_token"} else "string",
+                            is_secret=key in {"access_token", "verify_token"},
+                        )
+                    )
                 db.add(Product(company_id=1, reference="P001", name="Producto demo"))
                 db.add(Customer(company_id=1, code="C001", fiscal_name="Cliente Demo SL"))
                 llm = get_or_create_settings(db, LLMSettings, 1)
                 llm.provider = "openai"
-                llm.api_key_encrypted = "encrypted"
+                llm.api_key_encrypted = encrypt_secret("test-api-key")
                 db.commit()
-                with patch("app.setup.service.decrypt_secret", return_value="plain"):
-                    self.assertTrue(get_setup_status(db, 1).is_operational)
+                status = get_setup_status(db, 1)
+                self.assertTrue(status.whatsapp_connected)
+                self.assertTrue(status.is_operational)
+                config = whatsapp_config(db, 1)
+                self.assertEqual(config.access_token, "tenant-access-token")
+                stored = db.scalar(
+                    select(ChannelSetting).where(
+                        ChannelSetting.company_id == 1,
+                        ChannelSetting.key == "access_token",
+                    )
+                )
+                self.assertNotEqual(stored.value, "tenant-access-token")
         finally:
             cleanup()
             fixture.cleanup()

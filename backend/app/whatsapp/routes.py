@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hmac
 import json
 from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import current_user
+from app.core.config import get_settings
 from app.master.database import get_master_db
 from app.master.service import TenantUser
 from app.tenancy.database import tenant_db_session
@@ -15,7 +17,7 @@ from app.whatsapp.service import (
     parse_payload_events,
     persist_event,
     resolve_company_from_slug,
-    redact_whatsapp_config,
+    resolve_company_from_whatsapp_identifiers,
     record_manual_response,
     verify_signature,
     verify_webhook_token,
@@ -23,6 +25,59 @@ from app.whatsapp.service import (
 )
 
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["whatsapp"])
+
+
+@router.get("")
+def verify_default_webhook(request: Request):
+    settings = get_settings()
+    challenge = request.query_params.get("hub.challenge")
+    verify_token = request.query_params.get("hub.verify_token")
+    mode = request.query_params.get("hub.mode")
+    if mode != "subscribe":
+        return PlainTextResponse("forbidden", status_code=403)
+    if not settings.meta_whatsapp_verify_token or not verify_token:
+        return PlainTextResponse("forbidden", status_code=403)
+    if not hmac.compare_digest(settings.meta_whatsapp_verify_token, verify_token):
+        return PlainTextResponse("forbidden", status_code=403)
+    return PlainTextResponse(challenge or "ok")
+
+
+@router.post("")
+async def receive_default_webhook(
+    request: Request,
+    x_hub_signature_256: str | None = Header(default=None, alias="X-Hub-Signature-256"),
+    master_db: Session = Depends(get_master_db),
+):
+    raw_body = await request.body()
+    if not verify_signature(get_settings().meta_app_secret, raw_body, x_hub_signature_256):
+        return JSONResponse({"ok": False, "message": "invalid signature"}, status_code=403)
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except json.JSONDecodeError:
+        return JSONResponse({"ok": False, "message": "invalid json"}, status_code=400)
+    events = parse_payload_events(payload if isinstance(payload, dict) else {})
+    stored: list[int] = []
+    ignored = 0
+    for event in events:
+        company, tenant_db = resolve_company_from_whatsapp_identifiers(
+            master_db,
+            business_account_id=event.get("business_account_id"),
+            phone_number_id=event.get("phone_number_id"),
+        )
+        if not company or not tenant_db:
+            ignored += 1
+            continue
+        config_db = tenant_db_session(tenant_db.database_url)()
+        try:
+            message = persist_event(config_db, company.id, event)
+            if message:
+                stored.append(message.id)
+                if event.get("kind") == "message":
+                    enqueue_whatsapp_processing(config_db, company.id, message.id)
+            config_db.commit()
+        finally:
+            config_db.close()
+    return {"ok": True, "events": len(events), "stored": stored, "ignored": ignored}
 
 
 @router.get("/{company_slug}")
@@ -59,7 +114,7 @@ async def receive_webhook(
     config_db = tenant_db_session(tenant_db.database_url)()
     try:
         config = whatsapp_config(config_db, company.id)
-        if not verify_signature(config.app_secret, raw_body, x_hub_signature_256):
+        if not verify_signature(get_settings().meta_app_secret, raw_body, x_hub_signature_256):
             return JSONResponse({"ok": False, "message": "invalid signature"}, status_code=403)
         try:
             payload = json.loads(raw_body.decode("utf-8"))
@@ -76,19 +131,6 @@ async def receive_webhook(
                 enqueue_whatsapp_processing(config_db, company.id, message.id)
         config_db.commit()
         return {"ok": True, "company_id": company.id, "events": len(events), "stored": [item for item in stored if item is not None]}
-    finally:
-        config_db.close()
-
-
-@router.get("/{company_slug}/config")
-def whatsapp_config_view(company_slug: str, master_db: Session = Depends(get_master_db)):
-    company, tenant_db = resolve_company_from_slug(master_db, company_slug)
-    if not company or not tenant_db:
-        return JSONResponse({"ok": False, "message": "tenant not found"}, status_code=404)
-    config_db = tenant_db_session(tenant_db.database_url)()
-    try:
-        config = whatsapp_config(config_db, company.id)
-        return {"ok": True, "company": {"id": company.id, "slug": company.slug}, "config": redact_whatsapp_config(config)}
     finally:
         config_db.close()
 
