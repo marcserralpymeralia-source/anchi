@@ -74,7 +74,7 @@ class OperationalNavigationTests(unittest.TestCase):
                 customers = client.get("/customers?view=list")
 
             self.assertEqual(products.status_code, 200)
-            self.assertIn("+ Nuevo producto", products.text)
+            self.assertIn("<span>Nuevo producto</span>", products.text)
             self.assertIn("Buscar por código, referencia o nombre", products.text)
             self.assertIn(">Importar<", products.text)
             self.assertIn("Más filtros", products.text)
@@ -85,7 +85,7 @@ class OperationalNavigationTests(unittest.TestCase):
             self.assertNotIn("<h3>Importación</h3>", products.text)
 
             self.assertEqual(customers.status_code, 200)
-            self.assertIn("+ Nuevo cliente", customers.text)
+            self.assertIn("<span>Nuevo cliente</span>", customers.text)
             self.assertIn("Buscar por nombre, código, email o teléfono", customers.text)
             self.assertIn(">Importar<", customers.text)
             self.assertIn("Más filtros", customers.text)
