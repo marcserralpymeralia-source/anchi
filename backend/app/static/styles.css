@@ -1666,3 +1666,12 @@ form.stack, .stack { gap: 9px; }
   font-size: 11px;
   opacity: 0.72;
 }
+
+.customer-autocomplete-option {
+  color: var(--text, #111827);
+}
+
+.customer-autocomplete-option strong,
+.customer-autocomplete-option span {
+  color: inherit;
+}
