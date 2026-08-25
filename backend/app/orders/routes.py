@@ -22,7 +22,6 @@ from app.orders.service import (
     _customer_label,
     _fmt_dt,
     _product_suggestions_for_line,
-    _review_customer_candidates,
     _review_customer_snapshot,
     _review_product_candidates,
     _soft_delete_order,
@@ -314,11 +313,51 @@ def create_mock_order(db: Session = Depends(get_tenant_db), user: TenantUser = D
     return RedirectResponse(f"/orders/{order.id}", status_code=303)
 
 
+@router.get("/customer-search")
+def customer_search(
+    q: str = "",
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    query = q.strip()
+    if len(query) < 2:
+        return []
+
+    like = f"%{query}%"
+    customers = db.scalars(
+        select(Customer)
+        .where(
+            Customer.company_id == user.company_id,
+            Customer.deleted_at.is_(None),
+            or_(
+                Customer.code.ilike(like),
+                Customer.fiscal_name.ilike(like),
+                Customer.commercial_name.ilike(like),
+                Customer.tax_id.ilike(like),
+                Customer.primary_email.ilike(like),
+                Customer.phone.ilike(like),
+            ),
+        )
+        .order_by(Customer.fiscal_name.asc())
+        .limit(12)
+    ).all()
+
+    return [
+        {
+            "id": customer.id,
+            "code": customer.code or "",
+            "name": customer.fiscal_name or customer.commercial_name or "",
+            "tax_id": customer.tax_id or "",
+            "email": customer.primary_email or "",
+        }
+        for customer in customers
+    ]
+
+
 @router.get("/{order_id}")
 def order_detail(
     order_id: int,
     request: Request,
-    customer_q: str = "",
     product_q: str = "",
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
@@ -412,7 +451,6 @@ def order_detail(
         )
     )
     products = _review_product_candidates(db, company_id=user.company_id, order=order, query=product_q) if order else []
-    customers = _review_customer_candidates(db, company_id=user.company_id, order=order, query=customer_q) if order else []
     customer_source = None
     if order:
         customer_source = db.scalar(
@@ -446,10 +484,8 @@ def order_detail(
             "user": user,
             "order": order,
             "products": products,
-            "customers": customers,
             "customer_context": customer_context,
             "line_suggestions": line_suggestions,
-            "customer_q": customer_q,
             "product_q": product_q,
             "conversation_preview": conversation_preview,
             "extraction_diagnostics": extraction_diagnostics,

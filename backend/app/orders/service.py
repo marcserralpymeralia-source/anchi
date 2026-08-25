@@ -117,69 +117,6 @@ def _review_customer_snapshot(db: Session, order: Order, customer: Customer | No
     }
 
 
-def _review_customer_candidates(
-    db: Session,
-    *,
-    company_id: int,
-    order: Order,
-    query: str = "",
-    limit: int = 12,
-) -> list[Customer]:
-    current_ids = {value for value in {order.customer_id, order.validated_customer_id} if value}
-    stmt = select(Customer).where(Customer.company_id == company_id, Customer.deleted_at.is_(None))
-    match_conditions = []
-    if query.strip():
-        like = f"%{query.strip()}%"
-        match_conditions.append(
-            or_(
-                Customer.code.ilike(like),
-                Customer.fiscal_name.ilike(like),
-                Customer.commercial_name.ilike(like),
-                Customer.primary_email.ilike(like),
-                Customer.phone.ilike(like),
-                Customer.tax_id.ilike(like),
-            )
-        )
-    else:
-        terms = _candidate_terms(order.customer_detected_name, order.email.sender if order.email else None, order.email.subject if order.email else None)
-        if terms:
-            for term in terms[:4]:
-                match_conditions.append(
-                    or_(
-                        Customer.code.ilike(f"%{term}%"),
-                        Customer.fiscal_name.ilike(f"%{term}%"),
-                        Customer.commercial_name.ilike(f"%{term}%"),
-                        Customer.primary_email.ilike(f"%{term}%"),
-                        Customer.phone.ilike(f"%{term}%"),
-                        Customer.tax_id.ilike(f"%{term}%"),
-                    )
-                )
-    if current_ids and match_conditions:
-        stmt = stmt.where(or_(Customer.id.in_(list(current_ids)), *match_conditions))
-    elif current_ids:
-        stmt = stmt.where(Customer.id.in_(list(current_ids)))
-    elif match_conditions:
-        stmt = stmt.where(or_(*match_conditions))
-    stmt = stmt.options(
-        load_only(
-            Customer.id,
-            Customer.code,
-            Customer.fiscal_name,
-            Customer.commercial_name,
-            Customer.primary_email,
-            Customer.phone,
-            Customer.delegation,
-            Customer.status,
-        )
-    )
-    order_by_clauses = []
-    if current_ids:
-        order_by_clauses.append(case((Customer.id.in_(list(current_ids)), 0), else_=1))
-    order_by_clauses.append(Customer.fiscal_name.asc())
-    stmt = stmt.order_by(*order_by_clauses).limit(limit)
-    return db.scalars(stmt).all()
-
-
 def _review_product_candidates(
     db: Session,
     *,

@@ -1619,3 +1619,50 @@ form.stack, .stack { gap: 9px; }
   .queue-item-score { font-size: 28px; }
   .workbench-quick-filters, .setup-progress, .setup-grid-2, .setup-grid-3, .setup-company-layout, .setup-channel-grid, .setup-summary-grid { grid-template-columns: 1fr; }
 }
+
+.customer-autocomplete {
+  position: relative;
+}
+
+.customer-autocomplete-results {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #d9dee5);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.10);
+}
+
+.customer-autocomplete-option {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 9px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  border-radius: 0;
+  background: transparent;
+  text-align: left;
+}
+
+.customer-autocomplete-option:last-child {
+  border-bottom: 0;
+}
+
+.customer-autocomplete-option:hover,
+.customer-autocomplete-option:focus-visible {
+  background: rgba(0, 0, 0, 0.04);
+  transform: none;
+}
+
+.customer-autocomplete-option span {
+  font-size: 11px;
+  opacity: 0.72;
+}

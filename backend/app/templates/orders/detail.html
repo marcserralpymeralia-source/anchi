@@ -157,29 +157,25 @@
       {% if customer_context and customer_context.identified %}
         {% include "orders/_review_customer_block.html" %}
       {% endif %}
-      <form method="get" action="/orders/{{ order.id }}" class="customer-search-form">
-        <label>Buscar cliente
-          <div class="inline-search">
-            <input
-              type="search"
-              name="customer_q"
-              value="{{ customer_q or '' }}"
-              placeholder="Nombre, código, CIF, email o teléfono"
-              autocomplete="off"
-            >
-            <button type="submit" class="secondary compact-button">Buscar</button>
-          </div>
-        </label>
-      </form>
-
       <div class="form-grid compact-order-grid">
         <label>Cliente validado
-          <select name="validated_customer_id" form="order-review-form-{{ order.id }}">
-            <option value="0">Sin cliente</option>
-            {% for customer in customers %}
-              <option value="{{ customer.id }}" {% if order.validated_customer_id == customer.id %}selected{% endif %}>{{ customer.code }} - {{ customer.fiscal_name }}</option>
-            {% endfor %}
-          </select>
+          <div class="customer-autocomplete" data-customer-autocomplete>
+            <input
+              type="search"
+              data-customer-input
+              value="{% if customer_context and customer_context.identified %}{{ customer_context.customer.code }} - {{ customer_context.customer.name }}{% endif %}"
+              placeholder="Escribe nombre, código, CIF o email..."
+              autocomplete="off"
+            >
+            <input
+              type="hidden"
+              name="validated_customer_id"
+              form="order-review-form-{{ order.id }}"
+              data-customer-id
+              value="{{ order.validated_customer_id or order.customer_id or 0 }}"
+            >
+            <div class="customer-autocomplete-results" data-customer-results hidden></div>
+          </div>
         </label>
         <label>Fecha pedido<input name="order_date" form="order-review-form-{{ order.id }}" value="{{ order.order_date or '' }}"></label>
         <label>Fecha entrega<input name="requested_delivery_date" form="order-review-form-{{ order.id }}" value="{{ order.requested_delivery_date or '' }}"></label>
@@ -222,6 +218,70 @@
 </div>
 
 <script>
+  (function() {
+    const root = document.querySelector("[data-customer-autocomplete]");
+    if (!root) return;
+
+    const input = root.querySelector("[data-customer-input]");
+    const customerId = root.querySelector("[data-customer-id]");
+    const results = root.querySelector("[data-customer-results]");
+    let timer;
+
+    function closeResults() {
+      results.hidden = true;
+      results.replaceChildren();
+    }
+
+    input.addEventListener("input", () => {
+      customerId.value = "0";
+      clearTimeout(timer);
+
+      const query = input.value.trim();
+      if (query.length < 2) {
+        closeResults();
+        return;
+      }
+
+      timer = setTimeout(async () => {
+        const response = await fetch(`/orders/customer-search?q=${encodeURIComponent(query)}`);
+        if (!response.ok) return;
+
+        const customers = await response.json();
+        results.replaceChildren();
+
+        for (const customer of customers) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "customer-autocomplete-option";
+
+          const title = document.createElement("strong");
+          title.textContent = `${customer.code} · ${customer.name}`;
+          button.appendChild(title);
+
+          if (customer.tax_id || customer.email) {
+            const meta = document.createElement("span");
+            meta.textContent = [customer.tax_id, customer.email].filter(Boolean).join(" · ");
+            button.appendChild(meta);
+          }
+
+          button.addEventListener("click", () => {
+            input.value = `${customer.code} - ${customer.name}`;
+            customerId.value = String(customer.id);
+            closeResults();
+          });
+
+          results.appendChild(button);
+        }
+
+        results.hidden = customers.length === 0;
+      }, 180);
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!root.contains(event.target)) closeResults();
+    });
+  })();
+
   (function() {
     document.querySelectorAll("[data-source-tabs]").forEach((tabs) => {
       const container = tabs.closest(".review-pane") || document;
