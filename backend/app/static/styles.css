@@ -1679,7 +1679,7 @@ form.stack, .stack { gap: 9px; }
 /* Order review */
 .order-review-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(460px, .88fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 14px;
   height: calc(100vh - 118px);
   min-height: 620px;
@@ -1996,13 +1996,14 @@ form.stack, .stack { gap: 9px; }
 }
 
 .order-review-reference {
-  width: 120px;
+  width: 18%;
   white-space: nowrap;
   font-weight: 600;
 }
 
 .order-review-quantity {
-  width: 58px;
+  width: 10%;
+  min-width: 58px;
   padding: 2px 3px;
   height: 24px;
 }
