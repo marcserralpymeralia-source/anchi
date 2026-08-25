@@ -1,3 +1,4 @@
+{% from "components/icons.html" import icon_check, icon_more_horizontal, icon_copy, icon_trash, icon_plus %}
 <article class="subpanel order-lines-card">
   <div class="section-title-row">
     <h4>Productos interpretados</h4>
@@ -69,12 +70,12 @@
         </td>
         <td>
           <div class="line-actions line-actions-v2">
-            <button form="line-form-{{ line.id }}" class="secondary compact-button icon-button" data-loading-text="..." title="Guardar corrección">✓</button>
+            <button form="line-form-{{ line.id }}" class="secondary compact-button icon-button" data-loading-text="..." title="Guardar corrección">{{ icon_check(15) }}</button>
             <details class="line-more-actions">
-              <summary class="secondary compact-button icon-button" title="Más acciones">⋯</summary>
+              <summary class="secondary compact-button icon-button" title="Más acciones">{{ icon_more_horizontal(16) }}</summary>
               <div class="line-more-actions-panel">
-                <form method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}/duplicate"><button class="secondary compact-button">Duplicar</button></form>
-                <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}/delete" data-confirm="Eliminar linea de pedido?"><button class="secondary compact-button danger-soft" data-loading-text="...">Eliminar</button></form>
+                <form method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}/duplicate"><button class="secondary compact-button">{{ icon_copy(14) }} <span>Duplicar</span></button></form>
+                <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}/delete" data-confirm="Eliminar linea de pedido?"><button class="secondary compact-button danger-soft" data-loading-text="...">{{ icon_trash(14) }} <span>Eliminar</span></button></form>
               </div>
             </details>
           </div>
@@ -88,6 +89,6 @@
     <label>Producto<select name="validated_product_id"><option value="0">Sin referencia</option>{% for product in products %}<option value="{{ product.id }}">{{ product.reference }} - {{ product.name }}</option>{% endfor %}</select></label>
     <label>Cantidad<input name="quantity" type="number" step="0.01" value="1"></label>
     <label>Unidad<input name="unit"></label>
-    <label>&nbsp;<button data-loading-text="Añadiendo...">Añadir producto</button></label>
+    <label>&nbsp;<button data-loading-text="Añadiendo...">{{ icon_plus(14) }} <span>Añadir producto</span></button></label>
   </form>
 </article>

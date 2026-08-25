@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "components/icons.html" import icon_plus %}
 {% set title = "Productos" %}
 {% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css">{% endblock %}
 {% block content %}
@@ -17,7 +18,7 @@
 <section class="database-compact-page">
   <header class="database-compact-head">
     <h2>Productos</h2>
-    <button type="button" onclick="document.getElementById('create-product').showModal()">+ Nuevo producto</button>
+    <button type="button" onclick="document.getElementById('create-product').showModal()">{{ icon_plus(14) }} <span>Nuevo producto</span></button>
   </header>
 
   <div class="database-compact-toolbar">

@@ -1,3 +1,4 @@
+{% from "components/icons.html" import icon_arrow_right %}
 {% set customer = customer_context.customer %}
 {% set quality = customer_context.summary.quality_percent or 0 %}
 {% set current_section = section if section in ["summary", "articles", "conditions", "import"] else "summary" %}
@@ -190,7 +191,7 @@
                 <div class="knowledge-row knowledge-row-compact">
                   <div>
                     <strong>{{ correction.field }}</strong>
-                    <p>{{ correction.before }} → {{ correction.after }}</p>
+                    <p>{{ correction.before }} <span class="rule-arrow">{{ icon_arrow_right(12) }}</span> {{ correction.after }}</p>
                   </div>
                   <span class="badge status-doubtful">Ajuste</span>
                 </div>
@@ -333,7 +334,7 @@
           <div class="knowledge-agent-view">
             <div><span>Cliente</span><strong>{{ customer.name }} · {{ customer.code }}</strong></div>
             <div><span>Señales</span><strong>{{ customer_context.summary.emails }} emails · {{ customer_context.summary.phones }} teléfonos · {{ customer_context.summary.aliases }} alias</strong></div>
-            <div><span>Prioridad</span><strong>Artículos habituales → condiciones → validación manual</strong></div>
+            <div><span>Prioridad</span><strong>Artículos habituales <span class="rule-arrow">{{ icon_arrow_right(12) }}</span> condiciones <span class="rule-arrow">{{ icon_arrow_right(12) }}</span> validación manual</strong></div>
             <div><span>Contexto adicional</span><strong>{% if customer.notes %}{{ customer.notes }}{% else %}Sin contexto adicional.{% endif %}</strong></div>
           </div>
         </article>
@@ -465,7 +466,7 @@
               <div class="knowledge-row knowledge-row-compact">
                 <div>
                   <strong>{{ correction.field }}</strong>
-                  <p>{{ correction.before }} → {{ correction.after }}</p>
+                  <p>{{ correction.before }} <span class="rule-arrow">{{ icon_arrow_right(12) }}</span> {{ correction.after }}</p>
                 </div>
                 <span class="badge status-doubtful">Corrección</span>
               </div>

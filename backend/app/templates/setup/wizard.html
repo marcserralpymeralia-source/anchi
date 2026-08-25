@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "components/icons.html" import icon_check_circle, icon_circle_dot, icon_circle, icon_check, icon_entries, icon_whatsapp, icon_arrow_left, icon_arrow_right, icon_upload %}
 {% set step_titles = {
   "company": "Configura tu empresa",
   "channels": "Conecta un canal de entrada",
@@ -18,7 +19,15 @@
   "complete": "La configuración básica está completa. Ya puedes empezar a recibir y procesar pedidos."
 } %}
 {% macro step_url(key) -%}/setup/{{ key|replace('_', '-') }}{%- endmacro %}
-{% macro step_mark(status) -%}{% if status == "Completado" %}✓{% elif status == "Opcional" %}○{% elif status == "En progreso" %}●{% else %}○{% endif %}{%- endmacro %}
+{% macro step_mark(status) -%}
+  {% if status == "Completado" %}
+    {{ icon_check(13) }}
+  {% elif status == "En progreso" %}
+    {{ icon_circle_dot(13) }}
+  {% else %}
+    {{ icon_circle(13) }}
+  {% endif %}
+{%- endmacro %}
 {% block content %}
 <section class="setup-workspace">
   <header class="setup-hero">
@@ -49,7 +58,7 @@
     {% endfor %}
   </nav>
 
-  {% if message %}<div class="setup-flash setup-flash-ok">✓ {{ message }}</div>{% endif %}
+  {% if message %}<div class="setup-flash setup-flash-ok">{{ icon_check(15) }} <span>{{ message }}</span></div>{% endif %}
   {% if error %}<div class="setup-flash setup-flash-error">{{ error }}</div>{% endif %}
 
   <section class="setup-panel setup-step-panel">
@@ -80,15 +89,15 @@
           <span data-color-swatch style="background:#157F6E"></span>
         </aside>
         <div class="setup-actions setup-actions-wide">
-          <a class="button secondary" href="/settings">← Atrás</a>
-          <button class="primary" data-loading-text="Guardando...">Guardar y continuar →</button>
+          <a class="button secondary" href="/settings">{{ icon_arrow_left(14) }} <span>Atrás</span></a>
+          <button class="primary" data-loading-text="Guardando..."><span>Guardar y continuar</span> {{ icon_arrow_right(14) }}</button>
         </div>
       </form>
     {% elif step == "channels" %}
       <div class="setup-channel-grid">
         <article class="setup-channel-card {% if setup_status.email_connected %}is-ready{% endif %}">
           <div class="setup-card-head">
-            <span class="setup-card-icon">E</span>
+            <span class="setup-card-icon">{{ icon_entries(18) }}</span>
             <div>
               <h3>Email</h3>
               <p>Recibe pedidos desde un buzón de correo.</p>
@@ -119,7 +128,7 @@
 
         <article class="setup-channel-card {% if setup_status.whatsapp_connected %}is-ready{% endif %}">
           <div class="setup-card-head">
-            <span class="setup-card-icon">W</span>
+            <span class="setup-card-icon">{{ icon_whatsapp(18) }}</span>
             <div>
               <h3>WhatsApp</h3>
               <p>Recibe pedidos desde WhatsApp Business.</p>
@@ -140,15 +149,15 @@
         </article>
       </div>
       <div class="setup-actions">
-        <a class="button secondary" href="/setup/company">← Atrás</a>
-        {% if setup_status.has_input_channel %}<a class="button primary" href="/setup/products">Continuar →</a>{% else %}<button class="primary" disabled>Continuar →</button>{% endif %}
+        <a class="button secondary" href="/setup/company">{{ icon_arrow_left(14) }} <span>Atrás</span></a>
+        {% if setup_status.has_input_channel %}<a class="button primary" href="/setup/products"><span>Continuar</span> {{ icon_arrow_right(14) }}</a>{% else %}<button class="primary" disabled><span>Continuar</span> {{ icon_arrow_right(14) }}</button>{% endif %}
       </div>
     {% elif step in ["products", "customers"] %}
       {% set entity_label = "productos" if step == "products" else "clientes" %}
       {% set entity_count = setup_status.counts.products if step == "products" else setup_status.counts.customers %}
       {% if entity_count %}
         <div class="setup-result-card">
-          <strong>✓ {{ entity_count }} {{ entity_label }} disponibles</strong>
+          <strong>{{ icon_check(16) }} <span>{{ entity_count }} {{ entity_label }} disponibles</span></strong>
           <span>Puedes volver a importar para actualizar datos existentes.</span>
         </div>
       {% endif %}
@@ -156,12 +165,13 @@
         <form class="setup-form js-loading-form" method="post" action="/setup/{{ step }}/preview" enctype="multipart/form-data">
           <label class="setup-dropzone" data-dropzone>
             <input type="file" name="file" accept=".xlsx,.csv" required data-file-input>
+            {{ icon_upload(26) }}
             <span>Arrastra un archivo aquí</span>
             <strong>Seleccionar archivo</strong>
             <em data-file-name>Excel o CSV</em>
           </label>
           <div class="setup-actions">
-            <a class="button secondary" href="/setup/{% if step == 'products' %}channels{% else %}products{% endif %}">← Atrás</a>
+            <a class="button secondary" href="/setup/{% if step == 'products' %}channels{% else %}products{% endif %}">{{ icon_arrow_left(14) }} <span>Atrás</span></a>
             <button class="primary" data-loading-text="Revisando archivo...">Revisar importación</button>
           </div>
         </form>
@@ -187,8 +197,8 @@
           </div>
           {% if validation.errors %}<p class="setup-warning">{{ validation.errors[0] }}</p>{% endif %}
           <div class="setup-actions">
-            <a class="button secondary" href="/setup/{{ step }}">← Atrás</a>
-            <button class="primary" data-loading-text="Importando...">Confirmar importación →</button>
+            <a class="button secondary" href="/setup/{{ step }}">{{ icon_arrow_left(14) }} <span>Atrás</span></a>
+            <button class="primary" data-loading-text="Importando..."><span>Confirmar importación</span> {{ icon_arrow_right(14) }}</button>
           </div>
         </form>
       {% endif %}
@@ -208,44 +218,45 @@
         </label>
         <label class="setup-dropzone" data-dropzone>
           <input type="file" name="file" accept=".xlsx,.csv" data-file-input>
+          {{ icon_upload(26) }}
           <span>Arrastra un histórico o equivalencias</span>
           <strong>Seleccionar archivo</strong>
           <em data-file-name>Excel o CSV</em>
         </label>
         <div class="setup-actions">
-          <a class="button secondary" href="/setup/customers">← Atrás</a>
+          <a class="button secondary" href="/setup/customers">{{ icon_arrow_left(14) }} <span>Atrás</span></a>
           <button class="secondary" formaction="/setup/customer-knowledge/skip" formmethod="post">Omitir por ahora</button>
-          <button class="primary" data-loading-text="Añadiendo...">Añadir información →</button>
+          <button class="primary" data-loading-text="Añadiendo..."><span>Añadir información</span> {{ icon_arrow_right(14) }}</button>
         </div>
       </form>
     {% elif step == "openai" %}
       <form class="setup-form setup-narrow js-loading-form" method="post" action="/setup/openai">
         {% if setup_status.openai_connected %}
-          <div class="setup-result-card"><strong>✓ OpenAI conectado</strong><span>Puedes guardar una nueva API key si necesitas cambiarla.</span></div>
+          <div class="setup-result-card"><strong>{{ icon_check(16) }} OpenAI conectado</strong><span>Puedes guardar una nueva API key si necesitas cambiarla.</span></div>
         {% endif %}
         <label>API Key<input type="password" name="api_key" placeholder="{% if llm.api_key_encrypted %}••••••••{% endif %}" required></label>
         <div class="setup-actions">
-          <a class="button secondary" href="/setup/customer-knowledge">← Atrás</a>
+          <a class="button secondary" href="/setup/customer-knowledge">{{ icon_arrow_left(14) }} <span>Atrás</span></a>
           <button class="primary" data-loading-text="Comprobando conexión...">Probar conexión</button>
         </div>
       </form>
     {% elif step == "complete" %}
       <div class="setup-complete">
-        <div class="setup-complete-mark">✓</div>
+        <div class="setup-complete-mark">{{ icon_check(28) }}</div>
         <h2>Anchi está lista</h2>
         <p>La configuración básica está completa. Ya puedes empezar a recibir y procesar pedidos.</p>
         <ul class="setup-checklist">
-          <li>✓ Empresa configurada</li>
-          <li>✓ {% if setup_status.email_connected %}Email conectado{% else %}Canal de entrada conectado{% endif %}</li>
-          <li>{% if setup_status.whatsapp_connected %}✓ WhatsApp conectado{% else %}○ WhatsApp opcional{% endif %}</li>
-          <li>✓ {{ setup_status.counts.products }} productos</li>
-          <li>✓ {{ setup_status.counts.customers }} clientes</li>
-          <li>{% if setup_status.optional_customer_knowledge %}✓ Información adicional{% else %}○ Información adicional opcional{% endif %}</li>
-          <li>✓ OpenAI conectado</li>
+          <li>{{ icon_check_circle(16) }} <span>Empresa configurada</span></li>
+          <li>{{ icon_check_circle(16) }} <span>{% if setup_status.email_connected %}Email conectado{% else %}Canal de entrada conectado{% endif %}</span></li>
+          <li>{% if setup_status.whatsapp_connected %}{{ icon_check_circle(16) }} <span>WhatsApp conectado</span>{% else %}{{ icon_circle(16) }} <span>WhatsApp opcional</span>{% endif %}</li>
+          <li>{{ icon_check_circle(16) }} <span>{{ setup_status.counts.products }} productos</span></li>
+          <li>{{ icon_check_circle(16) }} <span>{{ setup_status.counts.customers }} clientes</span></li>
+          <li>{% if setup_status.optional_customer_knowledge %}{{ icon_check_circle(16) }} <span>Información adicional</span>{% else %}{{ icon_circle(16) }} <span>Información adicional opcional</span>{% endif %}</li>
+          <li>{{ icon_check_circle(16) }} <span>OpenAI conectado</span></li>
         </ul>
         <div class="setup-actions">
           <a class="button secondary" href="/settings">Revisar configuración</a>
-          <a class="button primary" href="/inicio">Empezar a gestionar pedidos →</a>
+          <a class="button primary" href="/inicio"><span>Empezar a gestionar pedidos</span> {{ icon_arrow_right(14) }}</a>
         </div>
       </div>
     {% endif %}

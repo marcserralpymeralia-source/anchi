@@ -1,3 +1,4 @@
+{% from "components/icons.html" import icon_arrow_right %}
 <section class="review-pane context-pane">
   <div class="pane-title-row">
     <h3>Contexto cliente</h3>
@@ -136,7 +137,7 @@
           <article class="learning-case-row">
             <div class="learning-case-main">
               <strong>{{ correction.field }}</strong>
-              <p>{{ correction.before }} → {{ correction.after }}</p>
+              <p>{{ correction.before }} <span class="rule-arrow">{{ icon_arrow_right(12) }}</span> {{ correction.after }}</p>
               <p class="muted">{{ correction.reason }}</p>
             </div>
             <div class="learning-case-side"><span class="badge">Cambio</span></div>

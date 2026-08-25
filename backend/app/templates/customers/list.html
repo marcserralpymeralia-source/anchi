@@ -1,11 +1,12 @@
 {% extends "base.html" %}
+{% from "components/icons.html" import icon_folder, icon_plus %}
 {% set title = "Clientes" %}
 {% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css">{% endblock %}
 {% block content %}
 <section class="database-shell {% if view == 'list' %}database-compact-page{% else %}panel stack{% endif %}">
   <header class="database-compact-head">
     <h2>Clientes</h2>
-    <button type="button" onclick="document.getElementById('create-customer').showModal()">+ Nuevo cliente</button>
+    <button type="button" onclick="document.getElementById('create-customer').showModal()">{{ icon_plus(14) }} <span>Nuevo cliente</span></button>
   </header>
 
   <div class="workbench-tabs database-tabs">
@@ -247,7 +248,7 @@
               <article class="folder-card {% if selected_id == card.id %}is-selected{% endif %}">
                 <div class="folder-card-head">
                   <div>
-                    <strong>📁 {{ card.name }}</strong>
+                    <strong class="folder-title">{{ icon_folder(16) }} <span>{{ card.name }}</span></strong>
                     <p>{{ card.code }}</p>
                   </div>
                   <span class="badge {% if card.knowledge_state == 'Actualizado' %}status-confirmed{% elif card.knowledge_state in ['Con sugerencias', 'En construcción'] %}status-doubtful{% elif card.knowledge_state == 'Con errores' %}status-discarded{% else %}status-confirmed{% endif %}">{{ card.knowledge_state }}</span>
