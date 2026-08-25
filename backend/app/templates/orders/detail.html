@@ -157,6 +157,21 @@
       {% if customer_context and customer_context.identified %}
         {% include "orders/_review_customer_block.html" %}
       {% endif %}
+      <form method="get" action="/orders/{{ order.id }}" class="customer-search-form">
+        <label>Buscar cliente
+          <div class="inline-search">
+            <input
+              type="search"
+              name="customer_q"
+              value="{{ customer_q or '' }}"
+              placeholder="Nombre, código, CIF, email o teléfono"
+              autocomplete="off"
+            >
+            <button type="submit" class="secondary compact-button">Buscar</button>
+          </div>
+        </label>
+      </form>
+
       <div class="form-grid compact-order-grid">
         <label>Cliente validado
           <select name="validated_customer_id" form="order-review-form-{{ order.id }}">

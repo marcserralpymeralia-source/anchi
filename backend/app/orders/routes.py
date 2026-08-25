@@ -500,7 +500,7 @@ def update_order_customer(order_id: int, validated_customer_id: int = Form(...),
         order.score = ScoringService().score_order(db, order)
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.customer.update", entity_type="order", entity_id=order.id, message="Cliente validado actualizado")
-    return RedirectResponse("/orders", status_code=303)
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
 @router.post("/{order_id}/save")
@@ -563,7 +563,7 @@ def update_order(
         order.score = ScoringService().score_order(db, order)
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.update", entity_type="order", entity_id=order.id, message="Pedido actualizado")
-    return RedirectResponse("/orders", status_code=303)
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
 @router.post("/{order_id}/lines/{line_id}")
@@ -823,7 +823,7 @@ def confirm_order(order_id: int, db: Session = Depends(get_tenant_db), user: Ten
         errors = validate_confirmation(order, get_or_create_settings(db, ScoringSettings, user.company_id))
         if errors:
             log_action(db, company_id=user.company_id, user=user, action="order.confirm.blocked", entity_type="order", entity_id=order.id, message=" | ".join(errors))
-            return RedirectResponse("/orders", status_code=303)
+            return RedirectResponse(f"/orders/{order_id}", status_code=303)
         ORDER_STATE.confirm(order, when=datetime.now(timezone.utc))
         for line in order.lines or []:
             _sync_customer_product_knowledge(
@@ -863,7 +863,7 @@ def confirm_order(order_id: int, db: Session = Depends(get_tenant_db), user: Ten
                 message="El email remitente ya estaba asociado a otro cliente y no se ha sobrescrito.",
             )
         log_action(db, company_id=user.company_id, user=user, action="order.confirm", entity_type="order", entity_id=order.id, message="Pedido confirmado")
-    return RedirectResponse("/orders", status_code=303)
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
 @router.post("/{order_id}/force-confirm")
