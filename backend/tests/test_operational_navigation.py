@@ -174,8 +174,8 @@ class OperationalNavigationTests(unittest.TestCase):
                 response = client.get(f"/entries/email-{email_id}/resolve", follow_redirects=False)
 
             self.assertEqual(response.status_code, 200)
-            self.assertIn("Propuesta del agente", response.text)
-            self.assertIn("Correo electrónico recibido", response.text)
+            self.assertIn("Confianza del pedido", response.text)
+            self.assertIn("Correo", response.text)
         finally:
             engine.dispose()
             fixture.cleanup()

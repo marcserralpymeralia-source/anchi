@@ -429,6 +429,22 @@ def order_detail(
                 OrderLine.validation_status,
                 OrderLine.doubt_reason,
             ),
+            selectinload(Order.lines)
+            .joinedload(OrderLine.product)
+            .load_only(
+                Product.id,
+                Product.reference,
+                Product.name,
+                Product.sale_price,
+            ),
+            selectinload(Order.lines)
+            .joinedload(OrderLine.validated_product)
+            .load_only(
+                Product.id,
+                Product.reference,
+                Product.name,
+                Product.sale_price,
+            ),
             selectinload(Order.email)
             .load_only(
                 Email.id,

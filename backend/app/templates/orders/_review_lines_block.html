@@ -1,93 +1,78 @@
-<article class="subpanel order-lines-card">
-  <div class="section-title-row">
-    <h4>Productos interpretados</h4>
-    <span class="badge">{{ order.lines|length }} líneas</span>
-  </div>
-  <table class="line-table review-lines-table review-lines-table-v3">
-    <colgroup>
-      <col style="width: 34%;">
-      <col style="width: 28%;">
-      <col style="width: 16%;">
-      <col style="width: 12%;">
-      <col style="width: 10%;">
-    </colgroup>
+<div class="order-review-lines">
+  <table class="order-review-table">
     <thead>
-      <tr><th>Texto fuente</th><th>Producto propuesto</th><th>Cant. / U.</th><th>Estado</th><th>Acciones</th></tr>
+      <tr>
+        <th>Referencia</th>
+        <th>Descripción</th>
+        <th class="order-review-number">Unidades</th>
+        <th class="order-review-number">Precio</th>
+      </tr>
     </thead>
     <tbody>
-    {% for line in order.lines %}
-      {% set line_score = line.line_score or 0 %}
-      {% set suggestions = line_suggestions.get(line.id, []) if line_suggestions else [] %}
-      <tr class="line-{{ 'validated' if line.validation_status == 'validated' and line.validated_product_id else 'pending' }}">
-        <td class="line-source-cell">
-          <strong>{{ loop.index }}.</strong>
-          <span>{{ line.original_text or "" }}</span>
-        </td>
-        <td class="product-detected-cell">
-          <strong>{{ line.detected_product or "Producto no identificado" }}</strong>
-          <span>{{ line.detected_reference or "Sin referencia detectada" }}</span>
-          {% if suggestions %}
-            <div class="line-suggestion-row">
-              <span class="muted">Sugerencias rápidas</span>
-              <div class="line-suggestion-list">
-                {% for suggestion in suggestions %}
-                  <button
-                    type="button"
-                    class="secondary compact-button line-suggestion-chip"
-                    data-line-id="{{ line.id }}"
-                    data-product-id="{{ suggestion.id }}"
-                    onclick="applyOrderLineSuggestion(this)"
-                  >
-                    {{ suggestion.label }} · {{ "%.0f"|format(suggestion.score) }}%
-                  </button>
-                {% endfor %}
-              </div>
-            </div>
-          {% endif %}
-          <details class="line-product-picker-toggle">
-            <summary class="secondary compact-button">Cambiar producto</summary>
-            <div class="line-product-picker-panel">
-              <select form="line-form-{{ line.id }}" name="validated_product_id" class="line-product-select" data-line-product-select="{{ line.id }}" title="Referencia propuesta">
-                <option value="0">Sin referencia</option>
-                {% for product in products %}
-                  <option value="{{ product.id }}" {% if line.validated_product_id == product.id %}selected{% endif %}>{{ product.reference }} - {{ product.name }}</option>
-                {% endfor %}
-              </select>
-            </div>
-          </details>
-        </td>
-        <td>
-          <form id="line-form-{{ line.id }}" class="js-loading-form" method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}"></form>
-          <div class="line-qty-inline">
-            <input form="line-form-{{ line.id }}" name="quantity" type="number" step="0.01" value="{{ line.quantity or 0 }}" aria-label="Cantidad">
-            <input form="line-form-{{ line.id }}" name="unit" value="{{ line.unit or '' }}" placeholder="U." aria-label="Unidad">
-          </div>
-        </td>
-        <td>
-          <span class="score-badge {% if line_score >= 80 %}score-safe{% elif line_score >= 60 %}score-reviewable{% elif line_score >= 40 %}score-doubtful{% else %}score-not-importable{% endif %}">{{ "%.0f"|format(line_score) }}%</span>
-          <span class="badge">{{ line.validation_status }}</span>
-        </td>
-        <td>
-          <div class="line-actions line-actions-v2">
-            <button form="line-form-{{ line.id }}" class="secondary compact-button icon-button" data-loading-text="..." title="Guardar corrección">✓</button>
-            <details class="line-more-actions">
-              <summary class="secondary compact-button icon-button" title="Más acciones">⋯</summary>
-              <div class="line-more-actions-panel">
-                <form method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}/duplicate"><button class="secondary compact-button">Duplicar</button></form>
-                <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}/delete" data-confirm="Eliminar linea de pedido?"><button class="secondary compact-button danger-soft" data-loading-text="...">Eliminar</button></form>
-              </div>
-            </details>
-          </div>
-        </td>
-      </tr>
-    {% endfor %}
+      {% for line in order.lines %}
+        {% set selected_product = line.validated_product or line.product %}
+        {% set unit_price = selected_product.sale_price if selected_product and selected_product.sale_price is not none else 0 %}
+        {% set quantity = line.quantity or 0 %}
+        <tr class="{% if not selected_product %}order-review-line-warning{% endif %}">
+          <td>
+            <form
+              id="line-form-{{ line.id }}"
+              class="js-loading-form"
+              method="post"
+              action="/orders/{{ order.id }}/lines/{{ line.id }}"
+            ></form>
+
+            <select
+              form="line-form-{{ line.id }}"
+              name="validated_product_id"
+              class="order-review-product-select line-product-select"
+              data-line-product-select="{{ line.id }}"
+              aria-label="Referencia interna"
+            >
+              <option value="0">Sin referencia</option>
+              {% for product in products %}
+                <option
+                  value="{{ product.id }}"
+                  {% if selected_product and selected_product.id == product.id %}selected{% endif %}
+                >
+                  {{ product.reference }}
+                </option>
+              {% endfor %}
+            </select>
+          </td>
+
+          <td class="order-review-description">
+            {{ selected_product.name if selected_product else line.detected_product or line.original_text or "Producto sin identificar" }}
+          </td>
+
+          <td class="order-review-number">
+            <input
+              form="line-form-{{ line.id }}"
+              name="quantity"
+              class="order-review-quantity"
+              type="number"
+              step="0.01"
+              value="{{ quantity }}"
+              aria-label="Unidades"
+              onchange="this.form.requestSubmit()"
+            >
+            <input
+              form="line-form-{{ line.id }}"
+              name="unit"
+              type="hidden"
+              value="{{ line.unit or '' }}"
+            >
+          </td>
+
+          <td class="order-review-number order-review-price">
+            {{ "%.2f"|format(unit_price * quantity) }} €
+          </td>
+        </tr>
+      {% else %}
+        <tr>
+          <td colspan="4" class="order-review-empty">No se han detectado productos.</td>
+        </tr>
+      {% endfor %}
     </tbody>
   </table>
-  <form class="form-grid js-loading-form" method="post" action="/orders/{{ order.id }}/lines">
-    <label>Texto original<input name="original_text" value="Linea manual"></label>
-    <label>Producto<select name="validated_product_id"><option value="0">Sin referencia</option>{% for product in products %}<option value="{{ product.id }}">{{ product.reference }} - {{ product.name }}</option>{% endfor %}</select></label>
-    <label>Cantidad<input name="quantity" type="number" step="0.01" value="1"></label>
-    <label>Unidad<input name="unit"></label>
-    <label>&nbsp;<button data-loading-text="Añadiendo...">Añadir producto</button></label>
-  </form>
-</article>
+</div>

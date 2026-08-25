@@ -24,7 +24,12 @@ class OrdersDetailOptimizationTests(unittest.TestCase):
             self.assertLessEqual(int(response.headers["X-Perf-Loaded-Records"]), max_loaded_records)
             self.assertLessEqual(int(response.headers["X-Perf-Response-Size-Bytes"]), max_response_size)
             self.assertNotIn("internal server error", response.text.lower())
-            self.assertIn("Revisión de propuesta", response.text)
+            self.assertIn("Confianza del pedido", response.text)
+            self.assertIn("Correo", response.text)
+            self.assertIn("Referencia", response.text)
+            self.assertIn("Descripción", response.text)
+            self.assertIn("Unidades", response.text)
+            self.assertIn("Precio", response.text)
         finally:
             fixture.cleanup()
 
