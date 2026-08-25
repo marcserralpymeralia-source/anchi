@@ -1,3 +1,4 @@
+{% from "components/icons.html" import icon_copy, icon_trash %}
 {% if kind == "order" %}
   {% set email_attachments = order.email.attachments if order.email else [] %}
   {% set pdfs = email_attachments|selectattr("is_pdf")|list if order.email else [] %}
@@ -183,8 +184,8 @@
                   {% else %}
                     <button form="line-form-{{ line.id }}" class="secondary compact-button" title="Aceptar">Aceptar</button>
                   {% endif %}
-                  <form method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}/duplicate"><button class="secondary compact-button icon-button" title="Duplicar linea">⧉</button></form>
-                  <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}/delete" data-confirm="Eliminar linea de pedido?"><button class="secondary compact-button icon-button" data-loading-text="..." title="Eliminar linea">×</button></form>
+                  <form method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}/duplicate"><button class="secondary compact-button icon-button" title="Duplicar linea">{{ icon_copy(15) }}</button></form>
+                  <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}/delete" data-confirm="Eliminar linea de pedido?"><button class="secondary compact-button icon-button" data-loading-text="..." title="Eliminar linea">{{ icon_trash(15) }}</button></form>
                 </div>
               </td>
             </tr>

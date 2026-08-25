@@ -1,3 +1,4 @@
+{% from "components/icons.html" import icon_menu, icon_dashboard, icon_entries, icon_customers, icon_products, icon_settings, icon_bell, icon_plus, icon_logout %}
 <!doctype html>
 <html lang="es">
 <head>
@@ -20,7 +21,7 @@
           {% if request.state.branding.show_app_name_sidebar %}<span>{{ request.state.branding.app_name }}</span>{% endif %}
           {% if request.state.branding.show_claim_sidebar %}<small>{{ request.state.branding.secondary_claim }}</small>{% endif %}
         </div>
-        <button class="sidebar-toggle secondary" type="button" title="Contraer menu" aria-label="Contraer menu" onclick="toggleSidebar()">☰</button>
+        <button class="sidebar-toggle secondary" type="button" title="Contraer menu" aria-label="Contraer menu" onclick="toggleSidebar()">{{ icon_menu(18) }}</button>
       </div>
       {% set href_dashboard = request.url_for('dashboard') if request.url_for is defined else '/inicio' %}
       {% set href_entries = request.url_for('channels_page') if request.url_for is defined else '/entries' %}
@@ -29,12 +30,12 @@
       {% set href_settings = request.url_for('settings_page') if request.url_for is defined else '/settings' %}
       {% set href_import_manual = request.url_for('manual_import_page') if request.url_for is defined else '/imports/manual' %}
       <nav class="nav">
-        <a href="{{ href_dashboard }}" title="Pedidos pendientes" class="{% if request.url.path in ['/', '/inicio'] %}active{% endif %}"><span class="nav-icon">▦</span><span class="nav-label">Pedidos pendientes</span></a>
-        <a href="{{ href_entries }}" title="Entradas" class="{% if request.url.path.startswith('/entries') or request.url.path.startswith('/mail') or request.url.path.startswith('/channels') or request.url.path.startswith('/history') %}active{% endif %}"><span class="nav-icon">✉</span><span class="nav-label">Entradas</span></a>
-        <a href="{{ href_customers }}" title="Clientes" class="{% if request.url.path.startswith('/customers') %}active{% endif %}"><span class="nav-icon">◫</span><span class="nav-label">Clientes</span></a>
-        <a href="{{ href_products }}" title="Productos" class="{% if request.url.path.startswith('/products') %}active{% endif %}"><span class="nav-icon">▣</span><span class="nav-label">Productos</span></a>
+        <a href="{{ href_dashboard }}" title="Pedidos pendientes" class="{% if request.url.path in ['/', '/inicio'] %}active{% endif %}"><span class="nav-icon">{{ icon_dashboard(18) }}</span><span class="nav-label">Pedidos pendientes</span></a>
+        <a href="{{ href_entries }}" title="Entradas" class="{% if request.url.path.startswith('/entries') or request.url.path.startswith('/mail') or request.url.path.startswith('/channels') or request.url.path.startswith('/history') %}active{% endif %}"><span class="nav-icon">{{ icon_entries(18) }}</span><span class="nav-label">Entradas</span></a>
+        <a href="{{ href_customers }}" title="Clientes" class="{% if request.url.path.startswith('/customers') %}active{% endif %}"><span class="nav-icon">{{ icon_customers(18) }}</span><span class="nav-label">Clientes</span></a>
+        <a href="{{ href_products }}" title="Productos" class="{% if request.url.path.startswith('/products') %}active{% endif %}"><span class="nav-icon">{{ icon_products(18) }}</span><span class="nav-label">Productos</span></a>
         {% if user.role.name in ["Administrador", "Superadmin"] %}
-          <a href="{{ href_settings }}" title="Configuracion" class="{% if request.url.path.startswith('/settings') or request.url.path.startswith('/setup') %}active{% endif %}"><span class="nav-icon">⚙</span><span class="nav-label">Configuracion</span></a>
+          <a href="{{ href_settings }}" title="Configuracion" class="{% if request.url.path.startswith('/settings') or request.url.path.startswith('/setup') %}active{% endif %}"><span class="nav-icon">{{ icon_settings(18) }}</span><span class="nav-label">Configuracion</span></a>
         {% endif %}
       </nav>
     </aside>
@@ -43,14 +44,14 @@
         <h1>{{ title or "Panel" }}</h1>
         <div class="userbar">
           <button type="button" class="alerts-button secondary" onclick="toggleAlertsDrawer()" aria-label="Alertas">
-            <span class="alerts-button-icon">🔔</span>
+            <span class="alerts-button-icon">{{ icon_bell(17) }}</span>
             <span class="alerts-button-badge {% if request.state.alert_center.has_critical %}alerts-badge-critical{% elif request.state.alert_center.high %}alerts-badge-high{% elif request.state.alert_center.medium %}alerts-badge-medium{% else %}alerts-badge-idle{% endif %}" id="alerts-badge">{{ request.state.alert_center.total }}</span>
           </button>
-          <a class="button secondary compact-button" href="{{ href_import_manual }}">Nueva entrada</a>
+          <a class="button secondary compact-button" href="{{ href_import_manual }}">{{ icon_plus(14) }} <span>Nueva entrada</span></a>
           <span class="badge">{{ request.state.branding.company_name }}</span>
           {% if app_settings.environment != "production" %}<span class="badge">Demo</span>{% endif %}
           <span>{{ user.name }}</span>
-          <form method="post" action="/logout"><button class="secondary">Salir</button></form>
+          <form method="post" action="/logout"><button class="secondary compact-button" title="Cerrar sesión">{{ icon_logout(14) }} <span>Salir</span></button></form>
         </div>
       </div>
       {% block content %}{% endblock %}
