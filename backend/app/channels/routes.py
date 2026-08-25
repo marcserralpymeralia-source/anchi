@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from html import escape
-from pathlib import Path
+from io import BytesIO
 
 import pandas as pd
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import current_user
+from app.core.attachment_storage import read_attachment
 from app.master.service import TenantUser
 from app.db.models import Email, EmailAttachment, EmailSettings, InboundMessage, MessageAttachment, Order
 from app.jobs.service import enqueue_job, execute_job_inline
@@ -312,10 +313,6 @@ def channels_page(
 
 
 
-def _attachment_path(attachment) -> Path:
-    return Path(attachment.storage_path or "")
-
-
 def _preview_html(title: str, body: str, download_href: str) -> str:
     return f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -338,88 +335,169 @@ a.button{{display:inline-flex;align-items:center;justify-content:center;padding:
 </div></body></html>"""
 
 
-def _read_csv_preview(path: Path) -> str:
-    for encoding in ("utf-8", "latin-1", "cp1252"):
-        try:
-            frame = pd.read_csv(path, dtype=str, nrows=12, encoding=encoding).fillna("")
-            return frame.to_html(index=False, escape=True)
-        except Exception:
-            continue
-    raise ValueError("CSV no legible")
-
-
-def _read_sheet_preview(path: Path) -> str:
-    frame = pd.read_excel(path, dtype=str, nrows=12).fillna("")
-    if frame.empty:
-        return "<p class='muted'>La hoja está vacía.</p>"
-    return frame.to_html(index=False, escape=True)
-
-
 @router.get("/{source_kind}/{source_id}/attachments/{attachment_id}/preview")
-def preview_attachment(source_kind: str, source_id: int, attachment_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def preview_attachment(
+    source_kind: str,
+    source_id: int,
+    attachment_id: int,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
     attachment = None
     title = "Adjunto"
     download_href = f"/channels/{source_kind}/{source_id}/attachments/{attachment_id}"
+
     if source_kind == "email":
         source = db.get(Email, source_id)
         attachment = db.get(EmailAttachment, attachment_id)
         title = attachment.filename if attachment else title
-        if not source or not attachment or source.company_id != user.company_id or attachment.email_id != source.id:
+        if (
+            not source
+            or not attachment
+            or source.company_id != user.company_id
+            or attachment.email_id != source.id
+        ):
             return PlainTextResponse("No encontrado", status_code=404)
     else:
         source = db.get(InboundMessage, source_id)
         attachment = db.get(MessageAttachment, attachment_id)
         title = attachment.filename if attachment else title
-        if not source or not attachment or source.company_id != user.company_id or attachment.inbound_message_id != source.id:
+        if (
+            not source
+            or not attachment
+            or source.company_id != user.company_id
+            or attachment.inbound_message_id != source.id
+        ):
             return PlainTextResponse("No encontrado", status_code=404)
-    path = _attachment_path(attachment)
-    if not path.exists() or not path.is_file():
-        return HTMLResponse(_preview_html(title, "<p class='muted'>No se puede previsualizar este archivo.</p>", download_href), status_code=404)
 
-    kind = _attachment_kind(attachment.filename, attachment.content_type, is_pdf=getattr(attachment, "is_pdf", False), is_image=getattr(attachment, "is_image", False), is_audio=getattr(attachment, "is_audio", False))
+    try:
+        content = read_attachment(attachment.storage_path or "")
+    except Exception:
+        return HTMLResponse(
+            _preview_html(
+                title,
+                "<p class='muted'>No se puede previsualizar este archivo.</p>",
+                download_href,
+            ),
+            status_code=404,
+        )
+
+    kind = _attachment_kind(
+        attachment.filename,
+        attachment.content_type,
+        is_pdf=getattr(attachment, "is_pdf", False),
+        is_image=getattr(attachment, "is_image", False),
+        is_audio=getattr(attachment, "is_audio", False),
+    )
     media_type = attachment.content_type or "application/octet-stream"
+
     if kind in {"pdf", "image", "audio"}:
-        return FileResponse(path, media_type=media_type, headers={"Content-Disposition": f'inline; filename="{attachment.filename}"'})
+        return Response(
+            content=content,
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f'inline; filename="{attachment.filename}"'
+            },
+        )
+
     if kind == "csv":
         try:
-            table_html = _read_csv_preview(path)
-            return HTMLResponse(_preview_html(title, f"<div class='table-wrap'>{table_html}</div>", download_href))
+            frame = pd.read_csv(BytesIO(content))
+            table_html = frame.to_html(index=False, escape=True)
+            return HTMLResponse(
+                _preview_html(
+                    title,
+                    f"<div class='table-wrap'>{table_html}</div>",
+                    download_href,
+                )
+            )
         except Exception:
             pass
+
     if kind == "sheet":
         try:
-            table_html = _read_sheet_preview(path)
-            return HTMLResponse(_preview_html(title, f"<div class='table-wrap'>{table_html}</div>", download_href))
+            frame = pd.read_excel(BytesIO(content))
+            table_html = frame.to_html(index=False, escape=True)
+            return HTMLResponse(
+                _preview_html(
+                    title,
+                    f"<div class='table-wrap'>{table_html}</div>",
+                    download_href,
+                )
+            )
         except Exception:
             pass
-    text = attachment.extracted_text or attachment.ocr_text or attachment.transcription_text
-    if text is None and kind == "text":
+
+    preview_text = (
+        attachment.extracted_text
+        or attachment.ocr_text
+        or attachment.transcription_text
+    )
+
+    if preview_text is None and kind == "text":
         try:
-            text = path.read_text(encoding="utf-8")
-        except Exception:
-            try:
-                text = path.read_text(encoding="latin-1")
-            except Exception:
-                text = ""
-    if text:
-        return HTMLResponse(_preview_html(title, f"<pre>{escape(text[:12000])}</pre>", download_href))
-    return HTMLResponse(_preview_html(title, "<p class='muted'>No se puede previsualizar este archivo.</p>", download_href))
+            preview_text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            preview_text = content.decode("latin-1", errors="replace")
+
+    if preview_text:
+        return HTMLResponse(
+            _preview_html(
+                title,
+                f"<pre>{escape(preview_text[:12000])}</pre>",
+                download_href,
+            )
+        )
+
+    return HTMLResponse(
+        _preview_html(
+            title,
+            "<p class='muted'>No se puede previsualizar este archivo.</p>",
+            download_href,
+        )
+    )
 
 
 @router.get("/{source_kind}/{source_id}/attachments/{attachment_id}")
-def download_attachment(source_kind: str, source_id: int, attachment_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def download_attachment(
+    source_kind: str,
+    source_id: int,
+    attachment_id: int,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
     attachment = None
+
     if source_kind == "email":
         source = db.get(Email, source_id)
         attachment = db.get(EmailAttachment, attachment_id)
-        if not source or not attachment or source.company_id != user.company_id or attachment.email_id != source.id:
+        if (
+            not source
+            or not attachment
+            or source.company_id != user.company_id
+            or attachment.email_id != source.id
+        ):
             return PlainTextResponse("No encontrado", status_code=404)
     else:
         source = db.get(InboundMessage, source_id)
         attachment = db.get(MessageAttachment, attachment_id)
-        if not source or not attachment or source.company_id != user.company_id or attachment.inbound_message_id != source.id:
+        if (
+            not source
+            or not attachment
+            or source.company_id != user.company_id
+            or attachment.inbound_message_id != source.id
+        ):
             return PlainTextResponse("No encontrado", status_code=404)
-    path = _attachment_path(attachment)
-    if not path.exists() or not path.is_file():
+
+    try:
+        content = read_attachment(attachment.storage_path or "")
+    except Exception:
         return PlainTextResponse("Archivo no disponible", status_code=404)
-    return FileResponse(path, media_type=attachment.content_type or "application/octet-stream", filename=attachment.filename)
+
+    return Response(
+        content=content,
+        media_type=attachment.content_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{attachment.filename}"'
+        },
+    )

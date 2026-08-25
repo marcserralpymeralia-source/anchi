@@ -4,17 +4,17 @@ import logging
 import json
 import os
 from datetime import datetime, timezone
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.agent.extraction.diagnostics import extraction_diagnostics_from_messages, extraction_diagnostics_from_payload
 from app.agent.services import AgentProcessingService, ScoringService
 from app.auth.dependencies import current_user
+from app.core.attachment_storage import read_attachment
 from app.core.entry_workflow import close_email, discard_email, mark_email_no_order, queue_email_processing
 from app.core.templating import templates
 from app.core.timezones import format_local_datetime
@@ -407,11 +407,29 @@ def workbench_discard_email(email_id: int, db: Session = Depends(get_tenant_db),
 
 
 @router.get("/workbench/email/{email_id}/attachments/{attachment_id}")
-def workbench_email_attachment(email_id: int, attachment_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def workbench_email_attachment(
+    email_id: int,
+    attachment_id: int,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
     attachment = db.get(EmailAttachment, attachment_id)
-    if not attachment or attachment.company_id != user.company_id or attachment.email_id != email_id:
+    if (
+        not attachment
+        or attachment.company_id != user.company_id
+        or attachment.email_id != email_id
+    ):
         return PlainTextResponse("No encontrado", status_code=404)
-    path = Path(attachment.storage_path or "")
-    if not path.exists() or not path.is_file():
+
+    try:
+        content = read_attachment(attachment.storage_path or "")
+    except Exception:
         return PlainTextResponse("Archivo no disponible", status_code=404)
-    return FileResponse(path, media_type=attachment.content_type or "application/octet-stream", filename=attachment.filename)
+
+    return Response(
+        content=content,
+        media_type=attachment.content_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{attachment.filename}"'
+        },
+    )

@@ -15,7 +15,6 @@ from email.header import decode_header, make_header
 from email.message import EmailMessage
 from io import BytesIO
 from pathlib import Path
-from uuid import uuid4
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
@@ -30,10 +29,10 @@ from app.messages.service import (
 )
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
+from app.core.attachment_storage import read_attachment, save_attachment
 
 
 logger = logging.getLogger(__name__)
-ATTACHMENTS_DIR = Path(__file__).resolve().parents[1] / "storage" / "attachments"
 IMAP_RECENT_MESSAGES_LIMIT = 3
 IMAP_DEFAULT_INITIAL_LIMIT = 20
 IMAP_MAX_MESSAGES_PER_RUN = 50
@@ -1246,7 +1245,6 @@ def _save_attachments(
     max_attachments: int = IMAP_MAX_ATTACHMENTS_PER_EMAIL,
     max_attachment_size_mb: int = IMAP_MAX_ATTACHMENT_SIZE_MB,
 ) -> int:
-    ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
     count = 0
     for part in msg.walk():
         if not _is_attachment(part):
@@ -1269,9 +1267,11 @@ def _save_attachments(
         filename = _safe_filename(part.get_filename() or f"adjunto-{count + 1}")
         content_type = part.get_content_type() or "application/octet-stream"
         is_pdf = content_type == "application/pdf" or filename.lower().endswith(".pdf")
-        internal_name = f"email-{email.id}-{uuid4().hex[:10]}-{filename}"
-        storage_path = ATTACHMENTS_DIR / internal_name
-        storage_path.write_bytes(payload)
+        storage_path = save_attachment(
+            filename=f"email-{email.id}-{filename}",
+            payload=payload,
+            content_type=content_type,
+        )
         attachment = EmailAttachment(
             company_id=company_id,
             email_id=email.id,
@@ -1280,7 +1280,7 @@ def _save_attachments(
             size_bytes=len(payload),
             is_pdf=is_pdf,
             extraction_status="pending" if is_pdf else "not_applicable",
-            storage_path=str(storage_path),
+            storage_path=storage_path,
         )
         db.add(attachment)
         db.flush()
@@ -1291,7 +1291,7 @@ def _save_attachments(
                 filename=filename,
                 content_type=content_type,
                 size_bytes=len(payload),
-                storage_path=str(storage_path),
+                storage_path=storage_path,
                 extracted_text=attachment.extracted_text,
                 is_pdf=is_pdf,
                 is_image=content_type.startswith("image/"),
@@ -1313,9 +1313,8 @@ def _save_attachments(
 
 
 def _extract_pdf_text(db: Session, attachment: EmailAttachment) -> None:
-    path = Path(attachment.storage_path or "")
     try:
-        data = path.read_bytes()
+        data = read_attachment(attachment.storage_path or "")
         text = _extract_text_from_pdf_bytes(data)
         if text.strip():
             attachment.extracted_text = text.strip()

@@ -17,12 +17,12 @@
       <h4 style="margin: 0;">Vista previa</h4>
       <select onchange="switchOrderPdf(this, 'order-pdf-frame-{{ order.id }}')">
         {% for attachment in pdfs %}
-          <option value="/orders/{{ order.id }}/attachments/{{ attachment.id }}">{{ attachment.filename }}</option>
+          <option value="/orders/{{ order.id }}/attachments/{{ attachment.id }}/preview">{{ attachment.filename }}</option>
         {% endfor %}
       </select>
       <a class="button secondary compact-button" target="_blank" href="/orders/{{ order.id }}/attachments/{{ pdfs[0].id }}">Abrir</a>
     </div>
-    <iframe id="order-pdf-frame-{{ order.id }}" class="review-pdf-frame" src="/orders/{{ order.id }}/attachments/{{ pdfs[0].id }}"></iframe>
+    <iframe id="order-pdf-frame-{{ order.id }}" class="review-pdf-frame" src="/orders/{{ order.id }}/attachments/{{pdfs[0].id }}/preview"></iframe>
     <details class="compact-details" style="margin-top: 8px;">
       <summary>Texto extraído del PDF</summary>
       <div class="section-title-row">

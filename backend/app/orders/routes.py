@@ -1,10 +1,9 @@
 import json
 from datetime import datetime, timezone
 from email.utils import parseaddr
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from sqlalchemy import case, exists, func, or_, select
 from sqlalchemy.orm import Session, load_only, selectinload
 
@@ -34,6 +33,7 @@ from app.orders.service import (
 from app.orders.state import ORDER_STATE
 from app.settings.service import get_or_create_settings, resolve_updated_by_id
 from app.tenancy.database import get_tenant_db
+from app.core.attachment_storage import read_attachment
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
@@ -1086,11 +1086,20 @@ def view_attachment(order_id: int, attachment_id: int, db: Session = Depends(get
     order = db.get(Order, order_id)
     if not attachment or not order or attachment.company_id != user.company_id or order.company_id != user.company_id or order.email_id != attachment.email_id:
         return PlainTextResponse("No encontrado", status_code=404)
-    path = Path(attachment.storage_path or "")
-    if not path.exists() or not path.is_file():
+
+    try:
+        content = read_attachment(attachment.storage_path or "")
+    except Exception:
         return PlainTextResponse("Archivo no disponible", status_code=404)
+
     media_type = attachment.content_type or "application/octet-stream"
-    return FileResponse(path, media_type=media_type, filename=attachment.filename)
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{attachment.filename}"'
+        },
+    )
 
 
 @router.get("/{order_id}/attachments/{attachment_id}/preview")
@@ -1099,8 +1108,17 @@ def preview_attachment(order_id: int, attachment_id: int, db: Session = Depends(
     order = db.get(Order, order_id)
     if not attachment or not order or attachment.company_id != user.company_id or order.company_id != user.company_id or order.email_id != attachment.email_id:
         return PlainTextResponse("No encontrado", status_code=404)
-    path = Path(attachment.storage_path or "")
-    if not path.exists() or not path.is_file():
+
+    try:
+        content = read_attachment(attachment.storage_path or "")
+    except Exception:
         return PlainTextResponse("Archivo no disponible", status_code=404)
+
     media_type = "application/pdf" if attachment.is_pdf else attachment.content_type or "application/octet-stream"
-    return FileResponse(path, media_type=media_type, headers={"Content-Disposition": f'inline; filename="{attachment.filename}"'})
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{attachment.filename}"'
+        },
+    )
