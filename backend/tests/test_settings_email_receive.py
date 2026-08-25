@@ -38,7 +38,9 @@ class SettingsEmailReceiveHttpTests(unittest.TestCase):
             with performance_test_client(fixture) as client:
                 settings_page = client.get("/settings")
                 self.assertEqual(settings_page.status_code, 200)
-                self.assertIn("/setup/channels", settings_page.text)
+                self.assertIn("/settings/channels", settings_page.text)
+                self.assertIn("Confianza y automatización", settings_page.text)
+                self.assertIn('/settings/email/receive', settings_page.text)
                 payload = {
                     "provider": "gmail",
                     "connected_email": "demo.user@example.com",

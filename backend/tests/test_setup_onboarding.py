@@ -307,16 +307,18 @@ class SetupOnboardingTests(unittest.TestCase):
             cleanup()
             fixture.cleanup()
 
-    def test_settings_is_simple_configuration_summary(self):
+    def test_settings_is_permanent_configuration_page(self):
         fixture = SetupFixture()
         client, cleanup = fixture.client()
         try:
             self._login(client)
             response = client.get("/settings")
             self.assertEqual(response.status_code, 200)
-            self.assertIn("Empresa", response.text)
-            self.assertIn("OpenAI", response.text)
-            self.assertIn("Información adicional", response.text)
+            self.assertIn("Configuración", response.text)
+            self.assertIn("Confianza y automatización", response.text)
+            self.assertIn("/settings/channels", response.text)
+            self.assertIn("/settings/email/receive", response.text)
+            self.assertNotIn("Información adicional", response.text)
         finally:
             cleanup()
             fixture.cleanup()
