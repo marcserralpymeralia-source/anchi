@@ -30,30 +30,56 @@
       {% set href_settings = request.url_for('settings_page') if request.url_for is defined else '/settings' %}
       {% set href_import_manual = request.url_for('manual_import_page') if request.url_for is defined else '/imports/manual' %}
       <nav class="nav">
-        <a href="{{ href_dashboard }}" title="Pedidos pendientes" class="{% if request.url.path in ['/', '/inicio'] %}active{% endif %}"><span class="nav-icon">{{ icon_dashboard(18) }}</span><span class="nav-label">Pedidos pendientes</span></a>
-        <a href="{{ href_entries }}" title="Entradas" class="{% if request.url.path.startswith('/entries') or request.url.path.startswith('/mail') or request.url.path.startswith('/channels') or request.url.path.startswith('/history') %}active{% endif %}"><span class="nav-icon">{{ icon_entries(18) }}</span><span class="nav-label">Entradas</span></a>
-        <a href="{{ href_customers }}" title="Clientes" class="{% if request.url.path.startswith('/customers') %}active{% endif %}"><span class="nav-icon">{{ icon_customers(18) }}</span><span class="nav-label">Clientes</span></a>
-        <a href="{{ href_products }}" title="Productos" class="{% if request.url.path.startswith('/products') %}active{% endif %}"><span class="nav-icon">{{ icon_products(18) }}</span><span class="nav-label">Productos</span></a>
+        <a href="{{ href_dashboard }}" title="Pedidos pendientes" class="{% if request.url.path in ['/', '/inicio'] %}active{% endif %}"><span class="nav-icon">{{ icon_dashboard(20) }}</span><span class="nav-label">Pedidos pendientes</span></a>
+        <a href="{{ href_entries }}" title="Entradas" class="{% if request.url.path.startswith('/entries') or request.url.path.startswith('/mail') or request.url.path.startswith('/channels') or request.url.path.startswith('/history') %}active{% endif %}"><span class="nav-icon">{{ icon_entries(20) }}</span><span class="nav-label">Entradas</span></a>
+        <a href="{{ href_customers }}" title="Clientes" class="{% if request.url.path.startswith('/customers') %}active{% endif %}"><span class="nav-icon">{{ icon_customers(20) }}</span><span class="nav-label">Clientes</span></a>
+        <a href="{{ href_products }}" title="Productos" class="{% if request.url.path.startswith('/products') %}active{% endif %}"><span class="nav-icon">{{ icon_products(20) }}</span><span class="nav-label">Productos</span></a>
         {% if user.role.name in ["Administrador", "Superadmin"] %}
-          <a href="{{ href_settings }}" title="Configuracion" class="{% if request.url.path.startswith('/settings') or request.url.path.startswith('/setup') %}active{% endif %}"><span class="nav-icon">{{ icon_settings(18) }}</span><span class="nav-label">Configuracion</span></a>
+          <a href="{{ href_settings }}" title="Configuracion" class="{% if request.url.path.startswith('/settings') or request.url.path.startswith('/setup') %}active{% endif %}"><span class="nav-icon">{{ icon_settings(20) }}</span><span class="nav-label">Configuracion</span></a>
         {% endif %}
       </nav>
     </aside>
     <main class="main">
-      <div class="topbar">
-        <h1>{{ title or "Panel" }}</h1>
-        <div class="userbar">
-          <button type="button" class="alerts-button secondary" onclick="toggleAlertsDrawer()" aria-label="Alertas">
-            <span class="alerts-button-icon">{{ icon_bell(17) }}</span>
-            <span class="alerts-button-badge {% if request.state.alert_center.has_critical %}alerts-badge-critical{% elif request.state.alert_center.high %}alerts-badge-high{% elif request.state.alert_center.medium %}alerts-badge-medium{% else %}alerts-badge-idle{% endif %}" id="alerts-badge">{{ request.state.alert_center.total }}</span>
-          </button>
-          <a class="button secondary compact-button" href="{{ href_import_manual }}">{{ icon_plus(14) }} <span>Nueva entrada</span></a>
-          <span class="badge">{{ request.state.branding.company_name }}</span>
-          {% if app_settings.environment != "production" %}<span class="badge">Demo</span>{% endif %}
-          <span>{{ user.name }}</span>
-          <form method="post" action="/logout"><button class="secondary compact-button" title="Cerrar sesión">{{ icon_logout(14) }} <span>Salir</span></button></form>
+      <header class="topbar">
+        <div class="topbar-lead">
+          <h1 class="topbar-title">{{ title or "Panel" }}</h1>
         </div>
-      </div>
+        <div class="userbar">
+          <div class="topbar-actions">
+            <button type="button" class="alerts-button" onclick="toggleAlertsDrawer()" aria-label="Alertas" title="Ver alertas">
+              <span class="alerts-button-icon">{{ icon_bell(16) }}</span>
+              <span class="alerts-button-badge {% if request.state.alert_center.has_critical %}alerts-badge-critical{% elif request.state.alert_center.high %}alerts-badge-high{% elif request.state.alert_center.medium %}alerts-badge-medium{% else %}alerts-badge-idle{% endif %}" id="alerts-badge">{{ request.state.alert_center.total }}</span>
+            </button>
+            <a class="topbar-new-entry-btn" href="{{ href_import_manual }}">
+              {{ icon_plus(14) }}
+              <span>Nueva entrada</span>
+            </a>
+          </div>
+
+          <div class="topbar-divider" aria-hidden="true"></div>
+
+          <div class="topbar-context-badge">
+            <span class="topbar-company-name" title="{{ request.state.branding.company_name }}">{{ request.state.branding.company_name }}</span>
+            {% if app_settings.environment != "production" and "demo" not in ((request.state.branding.company_name or "")|lower) %}
+              <span class="topbar-env-tag">Demo</span>
+            {% endif %}
+          </div>
+
+          <div class="topbar-divider" aria-hidden="true"></div>
+
+          <div class="topbar-user-card">
+            <div class="topbar-user-meta">
+              <strong class="topbar-user-name" title="{{ user.name }}">{{ user.name }}</strong>
+              <small class="topbar-user-role">{{ user.role.name if user.role and user.role.name else "Usuario" }}</small>
+            </div>
+            <form method="post" action="/logout" class="topbar-logout-form">
+              <button class="topbar-logout-button" type="submit" title="Cerrar sesión" aria-label="Cerrar sesión">
+                {{ icon_logout(14) }}
+              </button>
+            </form>
+          </div>
+        </div>
+      </header>
       {% block content %}{% endblock %}
     </main>
   </div>
