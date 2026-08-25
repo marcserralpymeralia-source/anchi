@@ -24,11 +24,11 @@ from app.agent.services import AgentProcessingService, MockAgentService  # noqa:
 from app.channels.service import get_or_create_channel  # noqa: E402
 from app.core.encryption import encrypt_secret  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import AuditLog, BackgroundJob, Company, Conversation, Customer, CustomerContactPoint, Email, ExportFile, FTPSettings, InboundMessage, LLMSettings, Order, OrderLine, Product, ProductAlias, ScoringSettings  # noqa: E402
+from app.db.models import AuditLog, BackgroundJob, Company, Conversation, Customer, CustomerContact, CustomerContactPoint, Email, ExportFile, FTPSettings, InboundMessage, LLMSettings, Order, OrderLine, Product, ProductAlias, ScoringSettings  # noqa: E402
 from app.jobs.service import enqueue_job, retry_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import MasterCompany, MasterTenantDatabase  # noqa: E402
-from app.orders.routes import confirm_order  # noqa: E402
+from app.orders.routes import _learn_customer_email_from_confirmed_order, confirm_order  # noqa: E402
 from app.messages.service import upsert_inbound_message  # noqa: E402
 from app.tenancy.migrations import upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import run_worker_cycle  # noqa: E402
@@ -320,6 +320,520 @@ class RegressionFlowsTests(unittest.TestCase):
 
         db.close()
 
+
+    def test_sender_display_name_matches_customer_primary_email(self):
+        self._seed_master()
+        self._seed_tenant_settings()
+        self._upgrade_tenant_schema()
+
+        db = self.TenantSession()
+        db.add(
+            Customer(
+                company_id=1,
+                code="PESAFRI",
+                fiscal_name="PESAFRI, S.L.",
+                primary_email="administracion@pesafri.com",
+                status="active",
+            )
+        )
+        db.commit()
+
+        from app.agent.platform import CustomerMatchingService
+
+        customer, method, score = CustomerMatchingService().match(
+            db,
+            1,
+            sender='"Administración" <administracion@pesafri.com>',
+        )
+
+        self.assertIsNotNone(customer)
+        self.assertEqual(customer.code, "PESAFRI")
+        self.assertEqual(method, "email_principal")
+        self.assertEqual(score, 0.99)
+
+        db.close()
+
+    def test_sender_exact_customer_contact_email_is_matched(self):
+        self._seed_master()
+        self._seed_tenant_settings()
+        self._upgrade_tenant_schema()
+
+        db = self.TenantSession()
+        customer = Customer(
+            company_id=1,
+            code="PESAFRI",
+            fiscal_name="PESAFRI, S.L.",
+            status="active",
+        )
+        db.add(customer)
+        db.flush()
+        db.add(
+            CustomerContact(
+                company_id=1,
+                customer_id=customer.id,
+                contact_type="email",
+                name="Administración",
+                email="administracion@pesafri.com",
+                is_primary=True,
+            )
+        )
+        db.commit()
+
+        from app.agent.platform import CustomerMatchingService
+
+        matched, method, score = CustomerMatchingService().match(
+            db,
+            1,
+            sender='"Administración" <administracion@pesafri.com>',
+        )
+
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched.id, customer.id)
+        self.assertEqual(method, "email_contacto")
+        self.assertEqual(score, 0.99)
+
+        db.close()
+
+    def test_tenant_detected_name_is_excluded_and_sender_customer_wins(self):
+        self._seed_master()
+        self._seed_tenant_settings()
+        self._seed_customer_and_product()
+        self._upgrade_tenant_schema()
+
+        db = self.TenantSession()
+
+        company = Company(
+            id=1,
+            name="GEMAVI",
+            legal_name="Comercial Gemavi Import, S.L.",
+            email="pedidos@gemavi.es",
+        )
+        db.add(company)
+        db.flush()
+
+        customer = Customer(
+            company_id=1,
+            code="PESAFRI",
+            fiscal_name="PESAFRI, S.L.",
+            primary_email="administracion@pesafri.com",
+            status="active",
+        )
+        db.add(customer)
+        db.commit()
+
+        email = Email(
+            company_id=1,
+            external_id="mail-tenant-exclusion-1",
+            sender='"Administración" <administracion@pesafri.com>',
+            subject="Pedido N26/000180",
+            body="Pedido realizado a su empresa Comercial Gemavi Import, S.L.",
+        )
+        db.add(email)
+        db.commit()
+
+        channel = get_or_create_channel(db, 1, "email")
+        channel.is_active = True
+        db.commit()
+
+        classification = json.dumps(
+            {
+                "tipo_correo": "pedido",
+                "confianza": 0.96,
+                "motivo": "Pedido claro",
+            },
+            ensure_ascii=False,
+        )
+
+        extraction = json.dumps(
+            {
+                "cliente": {
+                    "nombre_detectado": "Comercial Gemavi Import, S.L.",
+                },
+                "pedido": {
+                    "lineas": [
+                        {
+                            "texto_original": "1 unidad de P-100",
+                            "referencia_detectada": "P-100",
+                            "producto_detectado": "Producto Demo",
+                            "cantidad": 1,
+                            "unidad": "uds",
+                            "confianza_extraccion": 0.95,
+                        }
+                    ]
+                },
+            },
+            ensure_ascii=False,
+        )
+
+        with patch(
+            "app.agent.platform.classify_sample",
+            return_value={"ok": True, "content": classification},
+        ), patch(
+            "app.agent.platform.extract_sample",
+            return_value={"ok": True, "content": extraction},
+        ):
+            result = AgentProcessingService().process_email(db, email)
+
+        self.assertTrue(result["ok"])
+
+        order = db.scalar(
+            select(Order).where(Order.id == result["order_id"])
+        )
+
+        self.assertIsNotNone(order)
+        self.assertEqual(
+            order.customer_detected_name,
+            "Comercial Gemavi Import, S.L.",
+        )
+        self.assertEqual(order.customer_id, customer.id)
+        self.assertEqual(order.validated_customer_id, customer.id)
+        self.assertEqual(order.customer_identification_method, "exact_email")
+        self.assertGreaterEqual(order.customer_score, 99)
+        self.assertIn(
+            "receptor del pedido",
+            (order.review_reasons or "").lower(),
+        )
+
+        db.close()
+
+    def test_ambiguous_sender_domain_does_not_auto_match_customer(self):
+        self._seed_master()
+        self._seed_tenant_settings()
+        self._upgrade_tenant_schema()
+
+        db = self.TenantSession()
+
+        customer_one = Customer(
+            company_id=1,
+            code="C001",
+            fiscal_name="Cliente Uno, S.L.",
+            status="active",
+        )
+        customer_two = Customer(
+            company_id=1,
+            code="C002",
+            fiscal_name="Cliente Dos, S.L.",
+            status="active",
+        )
+        db.add_all([customer_one, customer_two])
+        db.flush()
+
+        db.add_all(
+            [
+                CustomerContact(
+                    company_id=1,
+                    customer_id=customer_one.id,
+                    contact_type="email",
+                    email="pedidos@grupo.com",
+                ),
+                CustomerContact(
+                    company_id=1,
+                    customer_id=customer_two.id,
+                    contact_type="email",
+                    email="administracion@grupo.com",
+                ),
+            ]
+        )
+        db.commit()
+
+        from app.agent.platform import CustomerMatchingService
+
+        matched, method, score = CustomerMatchingService().match(
+            db,
+            1,
+            sender="compras@grupo.com",
+        )
+
+        self.assertIsNone(matched)
+        self.assertEqual(method, "sin_identificar")
+        self.assertEqual(score, 0.0)
+
+        db.close()
+
+    def test_confirmed_order_learns_sender_email_for_customer(self):
+        self._upgrade_tenant_schema()
+        db = self.TenantSession()
+
+        customer = Customer(
+            company_id=1,
+            code="PESAFRI",
+            fiscal_name="PESAFRI, S.L.",
+            status="active",
+        )
+        db.add(customer)
+        db.flush()
+
+        email = Email(
+            company_id=1,
+            external_id="learn-email-1",
+            sender='"Administración" <administracion@pesafri.com>',
+            subject="Pedido",
+            body="Pedido de prueba",
+        )
+        db.add(email)
+        db.flush()
+
+        order = Order(
+            company_id=1,
+            email_id=email.id,
+            customer_id=customer.id,
+            validated_customer_id=customer.id,
+        )
+        db.add(order)
+        db.flush()
+
+        result = _learn_customer_email_from_confirmed_order(
+            db,
+            order=order,
+            company_id=1,
+        )
+        db.commit()
+
+        self.assertEqual(result, "created")
+
+        points = db.scalars(
+            select(CustomerContactPoint).where(
+                CustomerContactPoint.company_id == 1,
+                CustomerContactPoint.type == "email",
+                CustomerContactPoint.value == "administracion@pesafri.com",
+            )
+        ).all()
+
+        self.assertEqual(len(points), 1)
+        self.assertEqual(points[0].customer_id, customer.id)
+        self.assertEqual(points[0].confidence, 1.0)
+        self.assertEqual(points[0].source, "validated_order")
+        self.assertTrue(points[0].active)
+        self.assertIsNotNone(points[0].first_seen_at)
+        self.assertIsNotNone(points[0].last_seen_at)
+
+        db.close()
+
+    def test_confirmed_order_reuses_existing_sender_email_learning(self):
+        self._upgrade_tenant_schema()
+        db = self.TenantSession()
+
+        customer = Customer(
+            company_id=1,
+            code="PESAFRI",
+            fiscal_name="PESAFRI, S.L.",
+            status="active",
+        )
+        db.add(customer)
+        db.flush()
+
+        email = Email(
+            company_id=1,
+            external_id="learn-email-2",
+            sender="administracion@pesafri.com",
+            subject="Pedido",
+            body="Pedido de prueba",
+        )
+        db.add(email)
+        db.flush()
+
+        point = CustomerContactPoint(
+            company_id=1,
+            customer_id=customer.id,
+            type="email",
+            value="administracion@pesafri.com",
+            active=True,
+            confidence=0.65,
+            source="manual",
+            first_seen_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            last_seen_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+        db.add(point)
+        db.flush()
+        previous_last_seen = point.last_seen_at
+
+        order = Order(
+            company_id=1,
+            email_id=email.id,
+            customer_id=customer.id,
+            validated_customer_id=customer.id,
+        )
+        db.add(order)
+        db.flush()
+
+        result = _learn_customer_email_from_confirmed_order(
+            db,
+            order=order,
+            company_id=1,
+        )
+        db.commit()
+
+        self.assertEqual(result, "updated")
+
+        points = db.scalars(
+            select(CustomerContactPoint).where(
+                CustomerContactPoint.company_id == 1,
+                CustomerContactPoint.type == "email",
+                CustomerContactPoint.value == "administracion@pesafri.com",
+            )
+        ).all()
+
+        self.assertEqual(len(points), 1)
+        self.assertEqual(points[0].customer_id, customer.id)
+        self.assertEqual(points[0].confidence, 1.0)
+        self.assertEqual(points[0].source, "validated_order")
+        current_last_seen = points[0].last_seen_at
+        if current_last_seen.tzinfo is None:
+            current_last_seen = current_last_seen.replace(tzinfo=timezone.utc)
+        if previous_last_seen.tzinfo is None:
+            previous_last_seen = previous_last_seen.replace(tzinfo=timezone.utc)
+        self.assertGreater(current_last_seen, previous_last_seen)
+
+        db.close()
+
+    def test_confirmed_order_does_not_overwrite_email_assigned_to_other_customer(self):
+        self._upgrade_tenant_schema()
+        db = self.TenantSession()
+
+        customer_one = Customer(
+            company_id=1,
+            code="C001",
+            fiscal_name="Cliente Uno, S.L.",
+            status="active",
+        )
+        customer_two = Customer(
+            company_id=1,
+            code="C002",
+            fiscal_name="Cliente Dos, S.L.",
+            status="active",
+        )
+        db.add_all([customer_one, customer_two])
+        db.flush()
+
+        db.add(
+            CustomerContactPoint(
+                company_id=1,
+                customer_id=customer_one.id,
+                type="email",
+                value="administracion@pesafri.com",
+                active=True,
+                confidence=1.0,
+                source="validated_order",
+            )
+        )
+
+        email = Email(
+            company_id=1,
+            external_id="learn-email-conflict",
+            sender="administracion@pesafri.com",
+            subject="Pedido",
+            body="Pedido de prueba",
+        )
+        db.add(email)
+        db.flush()
+
+        order = Order(
+            company_id=1,
+            email_id=email.id,
+            customer_id=customer_two.id,
+            validated_customer_id=customer_two.id,
+        )
+        db.add(order)
+        db.flush()
+
+        result = _learn_customer_email_from_confirmed_order(
+            db,
+            order=order,
+            company_id=1,
+        )
+        db.commit()
+
+        self.assertEqual(result, "conflict")
+
+        points = db.scalars(
+            select(CustomerContactPoint).where(
+                CustomerContactPoint.company_id == 1,
+                CustomerContactPoint.type == "email",
+                CustomerContactPoint.value == "administracion@pesafri.com",
+            )
+        ).all()
+
+        self.assertEqual(len(points), 1)
+        self.assertEqual(points[0].customer_id, customer_one.id)
+
+        db.close()
+
+    def test_confirm_order_learns_sender_email_automatically(self):
+        self._seed_master()
+        self._seed_tenant_settings()
+        self._seed_customer_and_product()
+        self._upgrade_tenant_schema()
+
+        db = self.TenantSession()
+
+        customer = db.scalar(
+            select(Customer).where(
+                Customer.company_id == 1,
+                Customer.code == "C001",
+            )
+        )
+        self.assertIsNotNone(customer)
+
+        email = Email(
+            company_id=1,
+            external_id="confirm-learn-email-1",
+            sender='"Compras Cliente" <nuevo-contacto@cliente-demo.com>',
+            subject="Pedido",
+            body="Pedido de prueba",
+        )
+        db.add(email)
+        db.flush()
+
+        order = Order(
+            company_id=1,
+            email_id=email.id,
+            customer_id=customer.id,
+            validated_customer_id=customer.id,
+            status="pedido_pendiente_revision",
+            score=95,
+        )
+        db.add(order)
+        db.flush()
+
+        db.add(
+            OrderLine(
+                company_id=1,
+                order_id=order.id,
+                product_id=1,
+                validated_product_id=1,
+                original_text="1 unidad P-100",
+                detected_reference="P-100",
+                detected_product="Producto Demo",
+                quantity=1,
+                unit="uds",
+                extraction_confidence=0.95,
+                line_score=95,
+                validation_status="validated",
+            )
+        )
+        db.commit()
+
+        user = self._seed_user()
+        confirm_order(order.id, db=db, user=user)
+
+        db.refresh(order)
+        self.assertEqual(order.status, "pedido_confirmado")
+
+        points = db.scalars(
+            select(CustomerContactPoint).where(
+                CustomerContactPoint.company_id == 1,
+                CustomerContactPoint.customer_id == customer.id,
+                CustomerContactPoint.type == "email",
+                CustomerContactPoint.value == "nuevo-contacto@cliente-demo.com",
+            )
+        ).all()
+
+        self.assertEqual(len(points), 1)
+        self.assertEqual(points[0].confidence, 1.0)
+        self.assertEqual(points[0].source, "validated_order")
+        self.assertTrue(points[0].active)
+
+        db.close()
 
     def test_weak_fuzzy_customer_is_not_auto_validated(self):
         self._seed_master()

@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from email.utils import parseaddr
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
@@ -13,7 +14,7 @@ from app.agent.services import MockAgentService, ScoringService
 from app.auth.dependencies import current_user
 from app.master.service import TenantUser
 from app.core.pagination import paginate
-from app.db.models import Conversation, Customer, Email, EmailAttachment, ExportFile, FTPSettings, InboundMessage, ManualCorrection, Order, OrderLine, Product, RagCase, ScoringSettings, User, utcnow
+from app.db.models import Conversation, Customer, CustomerContactPoint, Email, EmailAttachment, ExportFile, FTPSettings, InboundMessage, ManualCorrection, Order, OrderLine, Product, RagCase, ScoringSettings, User, utcnow
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
 from app.orders.service import (
@@ -35,6 +36,67 @@ from app.settings.service import get_or_create_settings
 from app.tenancy.database import get_tenant_db
 
 router = APIRouter(prefix="/orders", tags=["orders"])
+
+
+def _learn_customer_email_from_confirmed_order(
+    db: Session,
+    *,
+    order: Order,
+    company_id: int,
+) -> str:
+    customer_id = order.validated_customer_id or order.customer_id
+    if not customer_id or not order.email_id:
+        return "skipped"
+
+    email = db.get(Email, order.email_id)
+    if not email:
+        return "skipped"
+
+    sender_email = parseaddr(email.sender or "")[1].strip().lower()
+    if not sender_email or "@" not in sender_email:
+        return "skipped"
+
+    existing_points = db.scalars(
+        select(CustomerContactPoint).where(
+            CustomerContactPoint.company_id == company_id,
+            CustomerContactPoint.type == "email",
+            CustomerContactPoint.value == sender_email,
+            CustomerContactPoint.active == True,  # noqa: E712
+        )
+    ).all()
+
+    existing_customer_ids = {point.customer_id for point in existing_points}
+
+    if existing_customer_ids and existing_customer_ids != {customer_id}:
+        return "conflict"
+
+    now = datetime.now(timezone.utc)
+
+    if existing_points:
+        for point in existing_points:
+            point.confidence = 1.0
+            point.source = "validated_order"
+            point.last_seen_at = now
+            point.updated_at = now
+            point.active = True
+        return "updated"
+
+    db.add(
+        CustomerContactPoint(
+            company_id=company_id,
+            customer_id=customer_id,
+            type="email",
+            value=sender_email,
+            label="Email aprendido desde pedido validado",
+            is_primary=False,
+            active=True,
+            confidence=1.0,
+            source="validated_order",
+            first_seen_at=now,
+            last_seen_at=now,
+        )
+    )
+    return "created"
 
 
 def _conversation_preview(order: Order | None) -> dict | None:
@@ -773,6 +835,13 @@ def confirm_order(order_id: int, db: Session = Depends(get_tenant_db), user: Ten
                 source_context="pedido_confirmado",
                 force_habitual=False,
             )
+
+        email_learning_result = _learn_customer_email_from_confirmed_order(
+            db,
+            order=order,
+            company_id=user.company_id,
+        )
+
         LearningService().record_case(
             db,
             company_id=user.company_id,
@@ -783,6 +852,16 @@ def confirm_order(order_id: int, db: Session = Depends(get_tenant_db), user: Ten
             order_id=order.id,
         )
         db.commit()
+        if email_learning_result == "conflict":
+            log_action(
+                db,
+                company_id=user.company_id,
+                user=user,
+                action="customer.email_learning.conflict",
+                entity_type="order",
+                entity_id=order.id,
+                message="El email remitente ya estaba asociado a otro cliente y no se ha sobrescrito.",
+            )
         log_action(db, company_id=user.company_id, user=user, action="order.confirm", entity_type="order", entity_id=order.id, message="Pedido confirmado")
     return RedirectResponse("/orders", status_code=303)
 
