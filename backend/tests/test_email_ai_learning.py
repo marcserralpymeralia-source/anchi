@@ -70,7 +70,37 @@ class FakeImapClient:
         if command == "search":
             if self.search_result is not None:
                 return "OK", [self.search_result]
-            return "OK", [b"1 2"]
+
+            ids = sorted(self.messages.keys(), key=int)
+
+            for arg in _args:
+                value = arg.decode() if isinstance(arg, bytes) else str(arg)
+                if ":" not in value:
+                    continue
+
+                start_raw, end_raw = value.split(":", 1)
+
+                try:
+                    start_uid = int(start_raw)
+                except ValueError:
+                    start_uid = 1
+
+                end_uid = None
+                if end_raw != "*":
+                    try:
+                        end_uid = int(end_raw)
+                    except ValueError:
+                        end_uid = None
+
+                ids = [
+                    uid
+                    for uid in ids
+                    if int(uid) >= start_uid
+                    and (end_uid is None or int(uid) <= end_uid)
+                ]
+                break
+
+            return "OK", [" ".join(ids).encode()]
         if command == "fetch":
             uid = _args[0].decode() if isinstance(_args[0], bytes) else str(_args[0])
             raw = self.messages[uid]
@@ -238,6 +268,97 @@ class EmailAiLearningTests(unittest.TestCase):
         self.assertEqual(master_db.get(EmailSyncState, state.id).backfill_last_uid, "2")
         self.assertEqual(master_db.get(EmailSyncState, state.id).backfill_created, 2)
         self.assertEqual(tenant_db.scalar(select(func.count()).select_from(Email)) or 0, 2)
+        tenant_db.close()
+        master_db.close()
+
+    def test_backfill_imap_can_resume_in_single_message_batches(self):
+        self._seed_imap()
+        tenant_db = self.TenantSession()
+        master_db = self.MasterSession()
+        settings = tenant_db.scalar(
+            select(EmailSettings).where(EmailSettings.company_id == 1)
+        )
+        state = master_db.scalar(
+            select(EmailSyncState).where(
+                EmailSyncState.company_id == 1,
+                EmailSyncState.channel_key == "email",
+            )
+        )
+
+        messages = {
+            "1": (
+                b"From: compras@example.com\r\n"
+                b"To: pedidos@example.com\r\n"
+                b"Subject: Pedido incremental A\r\n"
+                b"Message-ID: <pedido-incremental-a@example.com>\r\n"
+                b"\r\n"
+                b"Pedido 1"
+            ),
+            "2": (
+                b"From: compras@example.com\r\n"
+                b"To: pedidos@example.com\r\n"
+                b"Subject: Pedido incremental B\r\n"
+                b"Message-ID: <pedido-incremental-b@example.com>\r\n"
+                b"\r\n"
+                b"Pedido 2"
+            ),
+        }
+
+        with patch(
+            "app.settings.integrations._imap_client",
+            side_effect=[
+                FakeImapClient(messages),
+                FakeImapClient(messages),
+            ],
+        ):
+            first = backfill_imap_emails(
+                tenant_db,
+                settings,
+                1,
+                from_date="2026-07-01",
+                to_date="2026-07-16",
+                limit=2,
+                batch_size=1,
+                stop_after_batch=True,
+                sync_state=state,
+                sync_session=master_db,
+            )
+
+            master_db.refresh(state)
+
+            second = backfill_imap_emails(
+                tenant_db,
+                settings,
+                1,
+                from_date="2026-07-01",
+                to_date="2026-07-16",
+                limit=1,
+                batch_size=1,
+                resume=True,
+                stop_after_batch=True,
+                sync_state=state,
+                sync_session=master_db,
+            )
+
+        master_db.refresh(state)
+
+        self.assertTrue(first["ok"])
+        self.assertEqual(first["saved"], 1)
+        self.assertTrue(first["has_more"])
+        self.assertEqual(first["last_uid"], "1")
+
+        self.assertTrue(second["ok"])
+        self.assertEqual(second["saved"], 1)
+        self.assertFalse(second["has_more"])
+        self.assertEqual(second["last_uid"], "2")
+
+        self.assertEqual(state.backfill_status, "idle")
+        self.assertEqual(state.backfill_last_uid, "2")
+        self.assertEqual(
+            tenant_db.scalar(select(func.count()).select_from(Email)) or 0,
+            2,
+        )
+
         tenant_db.close()
         master_db.close()
 

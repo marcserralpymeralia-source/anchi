@@ -9,6 +9,10 @@
     {
       "path": "/cron/email-sync",
       "schedule": "0 0 * * *"
+    },
+    {
+      "path": "/cron/jobs",
+      "schedule": "* * * * *"
     }
   ]
 }

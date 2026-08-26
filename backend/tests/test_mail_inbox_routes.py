@@ -33,9 +33,43 @@ class MailInboxRoutesTests(unittest.TestCase):
             ("/mail/{email_id}", ("GET",)),
             ("/mail/{email_id}/process", ("POST",)),
             ("/cron/email-sync", ("GET", "POST")),
+            ("/cron/jobs", ("GET", "POST")),
         }
         for item in expected:
             self.assertIn(item, routes)
+
+    def test_jobs_cron_requires_auth_and_runs_single_job(self):
+        fixture = build_performance_fixture("small")
+        try:
+            with performance_test_client(fixture) as client:
+                unauthorized = client.get("/cron/jobs")
+
+                with patch(
+                    "app.cron.routes.run_worker_cycle",
+                    return_value={
+                        "tenants": 1,
+                        "recovered": 0,
+                        "attempted": 1,
+                        "processed": 1,
+                        "blocked": 0,
+                    },
+                ) as worker:
+                    authorized = client.get(
+                        "/cron/jobs",
+                        headers={"x-vercel-cron": "1"},
+                    )
+
+            self.assertEqual(unauthorized.status_code, 403)
+            self.assertEqual(authorized.status_code, 200)
+
+            payload = authorized.json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["attempted"], 1)
+            self.assertEqual(payload["processed"], 1)
+
+            worker.assert_called_once_with(max_jobs=1)
+        finally:
+            fixture.cleanup()
 
     def test_mail_inbox_page_and_detail_are_available(self):
         fixture = build_performance_fixture("small")

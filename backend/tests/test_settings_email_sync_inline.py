@@ -151,7 +151,7 @@ class SettingsEmailSyncInlineHttpTests(unittest.TestCase):
             tenant_engine.dispose()
             fixture.cleanup()
 
-    def test_manual_backfill_runs_inline_instead_of_remaining_queued(self):
+    def test_manual_backfill_is_queued_for_worker_processing(self):
         fixture = build_performance_fixture("small")
         master_engine = create_engine(
             f"sqlite:///{fixture.master_path.as_posix()}",
@@ -161,19 +161,16 @@ class SettingsEmailSyncInlineHttpTests(unittest.TestCase):
             f"sqlite:///{fixture.tenant_path.as_posix()}",
             connect_args={"check_same_thread": False},
         )
-        MasterSession = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
-        TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
-
-        raw_message = (
-            b"From: historico@example.com\r\n"
-            b"To: demo@example.com\r\n"
-            b"Subject: PRUEBA BACKFILL ANCHI 001\r\n"
-            b"Message-ID: <prueba-backfill-anchi-001@example.com>\r\n"
-            b"Date: Mon, 24 Aug 2026 10:00:00 +0000\r\n"
-            b"\r\n"
-            b"Pedido historico de prueba"
+        MasterSession = sessionmaker(
+            bind=master_engine,
+            autoflush=False,
+            autocommit=False,
         )
-        fake_client = FakeImapClient({"140": raw_message})
+        TenantSession = sessionmaker(
+            bind=tenant_engine,
+            autoflush=False,
+            autocommit=False,
+        )
 
         try:
             from app.master.models import CompanyMembership
@@ -188,51 +185,19 @@ class SettingsEmailSyncInlineHttpTests(unittest.TestCase):
                 membership.role_key = "Administrador"
                 master_db.commit()
 
-            with TenantSession() as tenant_db:
-                settings = tenant_db.scalar(
-                    select(EmailSettings).where(
-                        EmailSettings.company_id == fixture.company_id
-                    )
+            with performance_test_client(fixture) as client:
+                response = client.post(
+                    "/settings/email/backfill",
+                    data={
+                        "from_date": "2026-08-20",
+                        "to_date": "2026-08-25",
+                        "limit": "5",
+                    },
+                    follow_redirects=True,
                 )
-                assert settings is not None
-                settings.provider = "gmail"
-                settings.imap_host = "imap.gmail.com"
-                settings.imap_port = 993
-                settings.imap_security = "ssl_tls"
-                settings.imap_use_ssl = True
-                settings.imap_username = "demo.user@example.com"
 
-                with patch.dict(
-                    os.environ,
-                    {"ENCRYPTION_KEY": PERFORMANCE_ENCRYPTION_KEY},
-                    clear=False,
-                ):
-                    get_settings.cache_clear()
-                    settings.imap_password_encrypted = encrypt_secret(
-                        "DemoAppPassword123!"
-                    )
-
-                settings.inbox_folder = "INBOX"
-                settings.auto_process_on_fetch = False
-                settings.read_unread_only = False
-                tenant_db.commit()
-
-            with patch(
-                "app.settings.integrations._imap_client",
-                return_value=fake_client,
-            ):
-                with performance_test_client(fixture) as client:
-                    response = client.post(
-                        "/settings/email/backfill",
-                        data={
-                            "from_date": "2026-08-20",
-                            "to_date": "2026-08-25",
-                            "limit": "5",
-                        },
-                        follow_redirects=True,
-                    )
-                    self.assertEqual(response.status_code, 200)
-                    self.assertNotIn("internal_error", response.text.lower())
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn("internal_error", response.text.lower())
 
             with TenantSession() as tenant_db:
                 job = tenant_db.scalar(
@@ -243,26 +208,19 @@ class SettingsEmailSyncInlineHttpTests(unittest.TestCase):
                     )
                     .order_by(BackgroundJob.id.desc())
                 )
+
                 self.assertIsNotNone(job)
                 assert job is not None
-                self.assertEqual(job.status, "success")
-                self.assertIsNotNone(job.started_at)
-                self.assertIsNotNone(job.finished_at)
 
-                result = json.loads(job.result_json or "{}")
-                self.assertEqual(result.get("found"), 1)
-                self.assertEqual(result.get("saved"), 1)
+                self.assertEqual(job.status, "queued")
+                self.assertIsNone(job.started_at)
+                self.assertIsNone(job.finished_at)
+                self.assertEqual(job.attempt_count, 0)
 
-                saved_email = tenant_db.scalar(
-                    select(Email).where(
-                        Email.company_id == fixture.company_id,
-                        Email.subject == "PRUEBA BACKFILL ANCHI 001",
-                    )
-                )
-                self.assertIsNotNone(saved_email)
-
-            self.assertTrue(fake_client.uid_calls)
-            self.assertEqual(fake_client.uid_calls[0][0], "search")
+                payload = json.loads(job.payload_json or "{}")
+                self.assertEqual(payload.get("from_date"), "2026-08-20")
+                self.assertEqual(payload.get("to_date"), "2026-08-25")
+                self.assertEqual(payload.get("limit"), 5)
         finally:
             master_engine.dispose()
             tenant_engine.dispose()

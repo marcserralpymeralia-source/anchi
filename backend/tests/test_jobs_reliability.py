@@ -111,6 +111,99 @@ class JobsReliabilityTests(unittest.TestCase):
         finally:
             db.close()
 
+    def test_backfill_job_enqueues_single_continuation_with_remaining_limit(self):
+        self._seed_master()
+
+        db = self.TenantSession()
+        try:
+            db.add(
+                InputChannel(
+                    company_id=1,
+                    key="email",
+                    name="Email",
+                    channel_type="message",
+                    is_active=True,
+                    is_default=True,
+                    supports_text=True,
+                    supports_attachments=True,
+                    supports_documents=True,
+                    supports_audio=False,
+                    supports_images=False,
+                )
+            )
+            db.add(
+                EmailSettings(
+                    company_id=1,
+                    auto_sync_enabled=True,
+                )
+            )
+            db.commit()
+
+            job = enqueue_job(
+                db,
+                company_id=1,
+                job_type="backfill_imap",
+                payload={
+                    "from_date": "2026-08-20",
+                    "to_date": None,
+                    "limit": 2,
+                },
+                created_by_user_id=None,
+            )
+
+            with patch(
+                "app.workers.jobs_worker.MasterSessionLocal",
+                new=self.MasterSession,
+            ), patch(
+                "app.workers.jobs_worker.backfill_imap_emails",
+                return_value={
+                    "ok": True,
+                    "saved": 1,
+                    "duplicates": 0,
+                    "has_more": True,
+                    "last_uid": "10",
+                    "batch_count": 1,
+                    "message": "1 correo procesado",
+                },
+            ) as backfill:
+                result = _process_job(db, job)
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["remaining"], 1)
+            self.assertIn("continuation_job_id", result)
+
+            backfill.assert_called_once()
+            kwargs = backfill.call_args.kwargs
+            self.assertEqual(kwargs["batch_size"], 1)
+            self.assertTrue(kwargs["stop_after_batch"])
+
+            jobs = db.scalars(
+                select(BackgroundJob)
+                .where(
+                    BackgroundJob.company_id == 1,
+                    BackgroundJob.job_type == "backfill_imap",
+                )
+                .order_by(BackgroundJob.id)
+            ).all()
+
+            self.assertEqual(len(jobs), 2)
+
+            continuation = jobs[1]
+            continuation_payload = __import__(
+                "app.jobs.service",
+                fromlist=["job_payload"],
+            ).job_payload(continuation)
+
+            self.assertEqual(continuation_payload["limit"], 1)
+            self.assertTrue(continuation_payload["resume"])
+            self.assertEqual(
+                continuation_payload["from_date"],
+                "2026-08-20",
+            )
+            self.assertNotIn("from_uid", continuation_payload)
+        finally:
+            db.close()
+
     def test_enqueue_job_is_idempotent_and_rejects_secrets(self):
         db = self.TenantSession()
 

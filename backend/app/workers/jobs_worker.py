@@ -34,7 +34,7 @@ from app.orders.routes import _customer_label, _sync_customer_product_knowledge,
 from app.semantic_retrieval.products import index_products
 from app.settings.integrations import backfill_imap_emails, read_latest_imap_emails
 from app.settings.service import get_or_create_settings
-from app.jobs.service import claim_next_job, fail_job, finish_job, job_payload, job_trace, recover_stale_jobs, update_job_progress
+from app.jobs.service import claim_next_job, enqueue_job, fail_job, finish_job, job_payload, job_trace, recover_stale_jobs, update_job_progress
 from app.tenancy.migrations import tenant_migration_report
 from app.tenancy.database import tenant_db_session
 
@@ -211,20 +211,48 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 )
                 master_db.add(sync_state)
                 master_db.commit()
-            return backfill_imap_emails(
+            requested_limit = max(int(payload.get("limit") or 1), 1)
+
+            result = backfill_imap_emails(
                 db,
                 settings,
                 job.company_id,
                 payload.get("from_date"),
                 payload.get("to_date"),
-                payload.get("limit"),
+                requested_limit,
                 from_uid=payload.get("from_uid"),
                 to_uid=payload.get("to_uid"),
-                batch_size=payload.get("batch_size"),
+                batch_size=1,
                 resume=bool(payload.get("resume", False)),
+                stop_after_batch=True,
                 sync_state=sync_state,
                 sync_session=master_db,
             )
+
+            consumed = max(int(result.get("batch_count") or 0), 0)
+            remaining = max(requested_limit - consumed, 0)
+
+            if result.get("ok") and result.get("has_more") and remaining > 0:
+                continuation_payload = {
+                    "from_date": payload.get("from_date"),
+                    "to_date": payload.get("to_date"),
+                    "limit": remaining,
+                    "resume": True,
+                }
+                if payload.get("to_uid"):
+                    continuation_payload["to_uid"] = payload.get("to_uid")
+
+                continuation = enqueue_job(
+                    db,
+                    company_id=job.company_id,
+                    job_type="backfill_imap",
+                    payload=continuation_payload,
+                    created_by_user_id=job.created_by_user_id,
+                )
+                result["continuation_job_id"] = continuation.id
+                result["remaining"] = remaining
+
+            return result
         finally:
             master_db.close()
     if job.job_type == "process_pending_emails":
@@ -605,12 +633,18 @@ def _process_bulk_action(db, job: BackgroundJob, payload: dict) -> dict:
     return {"ok": True, "message": f"Accion masiva {action}: {processed} aplicadas, {skipped} omitidas.", "processed": processed, "skipped": skipped}
 
 
-def _handle_tenant_jobs(tenant: MasterTenantDatabase, owner: str) -> dict[str, int]:
+def _handle_tenant_jobs(
+    tenant: MasterTenantDatabase,
+    owner: str,
+    *,
+    max_jobs: int | None = None,
+) -> dict[str, int]:
     if not tenant.database_url:
-        return {"recovered": 0, "processed": 0, "blocked": 0}
+        return {"recovered": 0, "attempted": 0, "processed": 0, "blocked": 0}
     session_factory = tenant_db_session(tenant.database_url)
     db = session_factory()
     recovered_jobs = 0
+    attempted_jobs = 0
     processed_jobs = 0
     blocked_jobs = 0
     try:
@@ -623,10 +657,10 @@ def _handle_tenant_jobs(tenant: MasterTenantDatabase, owner: str) -> dict[str, i
                 schema_report.get("version"),
                 schema_report.get("checksum"),
             )
-            return {"recovered": 0, "processed": 0, "blocked": 1}
+            return {"recovered": 0, "attempted": 0, "processed": 0, "blocked": 1}
         recovered = recover_stale_jobs(db, owner=owner, job_types=JOB_TYPES)
         recovered_jobs += len(recovered)
-        while True:
+        while max_jobs is None or attempted_jobs < max_jobs:
             job = claim_next_job(
                 db,
                 owner=owner,
@@ -634,6 +668,7 @@ def _handle_tenant_jobs(tenant: MasterTenantDatabase, owner: str) -> dict[str, i
             )
             if not job:
                 break
+            attempted_jobs += 1
             trace = job_trace(job)
             with observability_scope(
                 request_id=trace.get("request_id"),
@@ -696,12 +731,23 @@ def _handle_tenant_jobs(tenant: MasterTenantDatabase, owner: str) -> dict[str, i
                     )
     finally:
         db.close()
-    return {"recovered": recovered_jobs, "processed": processed_jobs, "blocked": blocked_jobs}
+    return {
+        "recovered": recovered_jobs,
+        "attempted": attempted_jobs,
+        "processed": processed_jobs,
+        "blocked": blocked_jobs,
+    }
 
 
-def run_worker_cycle() -> dict[str, int]:
+def run_worker_cycle(*, max_jobs: int | None = None) -> dict[str, int]:
     configure_logging()
-    summary = {"tenants": 0, "recovered": 0, "processed": 0, "blocked": 0}
+    summary = {
+        "tenants": 0,
+        "recovered": 0,
+        "attempted": 0,
+        "processed": 0,
+        "blocked": 0,
+    }
     master_db = MasterSessionLocal()
     try:
         tenants = master_db.scalars(
@@ -712,8 +758,16 @@ def run_worker_cycle() -> dict[str, int]:
         ).all()
         summary["tenants"] = len(tenants)
         for tenant in tenants:
-            tenant_summary = _handle_tenant_jobs(tenant, owner=_identity())
+            remaining = None if max_jobs is None else max(max_jobs - summary["attempted"], 0)
+            if remaining == 0:
+                break
+            tenant_summary = _handle_tenant_jobs(
+                tenant,
+                owner=_identity(),
+                max_jobs=remaining,
+            )
             summary["recovered"] += tenant_summary["recovered"]
+            summary["attempted"] += tenant_summary.get("attempted", 0)
             summary["processed"] += tenant_summary["processed"]
             summary["blocked"] += tenant_summary.get("blocked", 0)
     finally:

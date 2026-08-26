@@ -647,6 +647,7 @@ def _fetch_imap_emails(
     sync_state: EmailSyncState | None = None,
     sync_session: Session | None = None,
     batch_size: int | None = None,
+    stop_after_batch: bool = False,
 ) -> dict:
     password = decrypt_secret(settings.imap_password_encrypted)
     if not settings.imap_host or not settings.imap_username or not password:
@@ -783,8 +784,11 @@ def _fetch_imap_emails(
             checkpoint_uid = sync_state.last_seen_uid
         processed_since_checkpoint = 0
         last_processed_uid = checkpoint_uid
+        has_more = False
+        batch_count = 0
         for offset in range(0, len(ids), batch_size):
             batch = ids[offset : offset + batch_size]
+            batch_count = len(batch)
             for msg_id in batch:
                 try:
                     status, msg_data = client.uid("fetch", msg_id, "(UID RFC822)")
@@ -929,6 +933,11 @@ def _fetch_imap_emails(
             if sync_state and sync_state.backfill_status in {"paused", "cancelled"}:
                 break
             saved_email_ids.clear()
+
+            if stop_after_batch and offset + batch_size < len(ids):
+                has_more = True
+                break
+
         client.logout()
         final_status = sync_state.backfill_status if sync_state else "idle"
         if sync_state and sync_session:
@@ -967,6 +976,25 @@ def _fetch_imap_emails(
                     attachments_saved=attachments_saved,
                     found=found,
                     status="cancelled",
+                    progress=processed_since_checkpoint,
+                    total=found,
+                )
+            elif has_more:
+                _update_sync_checkpoint(
+                    sync_state,
+                    sync_session,
+                    mailbox=mailbox,
+                    uidvalidity=uidvalidity,
+                    source_provider=current_scope["provider"],
+                    source_host=current_scope["host"],
+                    source_username=current_scope["username"],
+                    source_connected_email=current_scope["connected_email"],
+                    last_uid=last_processed_uid or sync_state.backfill_last_uid,
+                    saved=saved,
+                    duplicates=duplicates,
+                    attachments_saved=attachments_saved,
+                    found=found,
+                    status="running",
                     progress=processed_since_checkpoint,
                     total=found,
                 )
@@ -1023,6 +1051,9 @@ def _fetch_imap_emails(
             "uidvalidity": uidvalidity,
             "last_seen_uid_before": last_seen_uid_before,
             "last_seen_uid_after": last_processed_uid,
+            "last_uid": last_processed_uid,
+            "has_more": has_more,
+            "batch_count": batch_count,
             "message": settings.last_sync_message,
         }
     except (imaplib.IMAP4.error, socket.timeout, OSError) as exc:
@@ -1093,6 +1124,7 @@ def backfill_imap_emails(
     to_uid: str | None = None,
     batch_size: int | None = None,
     resume: bool = False,
+    stop_after_batch: bool = False,
     sync_state: EmailSyncState | None = None,
     sync_session: Session | None = None,
 ) -> dict:
@@ -1105,7 +1137,7 @@ def backfill_imap_emails(
     if not start_date:
         return {"ok": False, "found": 0, "saved": 0, "message": "Indica una fecha valida para el backfill (AAAA-MM-DD)."}
     if resume and sync_state and sync_state.backfill_last_uid:
-        from_uid = sync_state.backfill_last_uid
+        from_uid = _advance_uid(sync_state.backfill_last_uid)
     return _fetch_imap_emails(
         db,
         settings,
@@ -1121,6 +1153,7 @@ def backfill_imap_emails(
         sync_state=sync_state,
         sync_session=sync_session,
         batch_size=batch_size,
+        stop_after_batch=stop_after_batch,
     )
 
 

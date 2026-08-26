@@ -911,19 +911,6 @@ def backfill_email_history(
     if to_date:
         date_label = f"{date_label} a {to_date}"
 
-    result = _run_email_sync_job_if_needed(request, db, user, job)
-    if result is not None:
-        log_action(
-            db,
-            company_id=user.company_id,
-            user=user,
-            action="email.backfill.inline",
-            entity_type="job",
-            entity_id=job.id,
-            message=result.get("message") or f"Backfill IMAP completado desde {date_label}",
-        )
-        return _queued_job_response(request, job.id, "/settings#email-diagnostics", result=result)
-
     log_action(
         db,
         company_id=user.company_id,
