@@ -899,11 +899,21 @@ def backfill_email_history(
     if from_date_value and to_date_value and to_date_value < from_date_value:
         return JSONResponse({"ok": False, "message": "La fecha final no puede ser anterior a la inicial."}, status_code=400)
     safe_limit = max(min(int(limit or 100), 100), 1)
+    run_id = getattr(request.state, "request_id", None)
+
+    payload = {
+        "from_date": from_date or settings.read_from_date,
+        "to_date": to_date or None,
+        "limit": safe_limit,
+    }
+    if run_id:
+        payload["run_id"] = run_id
+
     job = enqueue_job(
         db,
         company_id=user.company_id,
         job_type="backfill_imap",
-        payload={"from_date": (from_date or settings.read_from_date), "to_date": to_date or None, "limit": safe_limit},
+        payload=payload,
         created_by_user_id=user.id,
     )
     db.commit()

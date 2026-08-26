@@ -186,7 +186,16 @@ class SettingsEmailSyncInlineHttpTests(unittest.TestCase):
                 master_db.commit()
 
             with performance_test_client(fixture) as client:
-                response = client.post(
+                first_response = client.post(
+                    "/settings/email/backfill",
+                    data={
+                        "from_date": "2026-08-20",
+                        "to_date": "2026-08-25",
+                        "limit": "5",
+                    },
+                    follow_redirects=True,
+                )
+                second_response = client.post(
                     "/settings/email/backfill",
                     data={
                         "from_date": "2026-08-20",
@@ -196,31 +205,45 @@ class SettingsEmailSyncInlineHttpTests(unittest.TestCase):
                     follow_redirects=True,
                 )
 
-            self.assertEqual(response.status_code, 200)
-            self.assertNotIn("internal_error", response.text.lower())
+            self.assertEqual(first_response.status_code, 200)
+            self.assertEqual(second_response.status_code, 200)
+            self.assertNotIn("internal_error", first_response.text.lower())
+            self.assertNotIn("internal_error", second_response.text.lower())
 
             with TenantSession() as tenant_db:
-                job = tenant_db.scalar(
+                jobs = tenant_db.scalars(
                     select(BackgroundJob)
                     .where(
                         BackgroundJob.company_id == fixture.company_id,
                         BackgroundJob.job_type == "backfill_imap",
                     )
-                    .order_by(BackgroundJob.id.desc())
+                    .order_by(BackgroundJob.id)
+                ).all()
+
+                self.assertEqual(len(jobs), 2)
+
+                first_job, second_job = jobs
+
+                for job in jobs:
+                    self.assertEqual(job.status, "queued")
+                    self.assertIsNone(job.started_at)
+                    self.assertIsNone(job.finished_at)
+                    self.assertEqual(job.attempt_count, 0)
+
+                first_payload = json.loads(first_job.payload_json or "{}")
+                second_payload = json.loads(second_job.payload_json or "{}")
+
+                for payload in (first_payload, second_payload):
+                    self.assertEqual(payload.get("from_date"), "2026-08-20")
+                    self.assertEqual(payload.get("to_date"), "2026-08-25")
+                    self.assertEqual(payload.get("limit"), 5)
+                    self.assertTrue(payload.get("run_id"))
+
+                self.assertNotEqual(
+                    first_payload.get("run_id"),
+                    second_payload.get("run_id"),
                 )
-
-                self.assertIsNotNone(job)
-                assert job is not None
-
-                self.assertEqual(job.status, "queued")
-                self.assertIsNone(job.started_at)
-                self.assertIsNone(job.finished_at)
-                self.assertEqual(job.attempt_count, 0)
-
-                payload = json.loads(job.payload_json or "{}")
-                self.assertEqual(payload.get("from_date"), "2026-08-20")
-                self.assertEqual(payload.get("to_date"), "2026-08-25")
-                self.assertEqual(payload.get("limit"), 5)
+                self.assertNotEqual(first_job.dedupe_key, second_job.dedupe_key)
         finally:
             master_engine.dispose()
             tenant_engine.dispose()
