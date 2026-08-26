@@ -4,13 +4,6 @@
 
 {% macro email_context_panel(source_id, sender, received_label, subject, body, attachments, preview_base, download_base, copy_id, source_panel=False, hidden=False) %}
   <article class="review-source-context{% if source_panel %} source-panel{% endif %}"{% if source_panel %} data-source-panel="email"{% endif %}{% if hidden %} hidden{% endif %}>
-    <header class="review-source-head">
-      <div>
-        <strong>{{ sender or "Sin remitente" }}</strong>
-        <span>{{ received_label or "Sin fecha" }}</span>
-      </div>
-      <p>{{ subject or "Sin asunto" }}</p>
-    </header>
     <div class="review-source-content" data-source-scope>
       <div class="source-tabs review-source-tabs" data-source-tabs>
         <button type="button" class="source-tab active" data-source-tab="mail">Correo</button>
@@ -81,31 +74,55 @@
   {% set has_email = order.email is not none %}
   {% set has_conversation = conversation_preview is not none %}
   {% set active_source = "conversation" if has_conversation else "email" %}
-  <div class="review-modal-header review-modal-header-v3">
-    <div class="review-header-title">
-      <strong>{{ item.customer_name }} · {{ "%.0f"|format(order.score or 0) }}% · {{ item.order_status_label|status_label }}</strong>
-      <div class="review-header-meta">
-        <span class="badge agent-{{ item.agent_status }}">{{ item.agent_status_label }}</span>
-        <span class="badge">{{ item.origin }}</span>
-        {% if extraction_diagnostics is defined and extraction_diagnostics %}
-          <span class="badge {{ extraction_diagnostics.badge_class }}">{{ extraction_diagnostics.label }}</span>
-        {% endif %}
-      </div>
+  <div class="review-modal-header review-modal-header-v3 review-summary-header">
+    <div class="review-summary-item review-summary-sender">
+      <span>Remitente</span>
+      <strong>{{ item.from_email or "Sin remitente" }}</strong>
     </div>
-    <div class="review-header-actions review-header-actions-tight">
+    <div class="review-summary-item">
+      <span>Fecha</span>
+      <strong>{{ item.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M", "—") }}</strong>
+    </div>
+    <div class="review-summary-item">
+      <span>Score</span>
+      <strong>{% if item.score is not none %}{{ "%.0f"|format(item.score) }}%{% else %}Sin score{% endif %}</strong>
+    </div>
+    <div class="review-summary-item review-summary-customer">
+      <span>Cliente</span>
+      <strong>{{ item.customer_name or "Cliente no identificado" }}</strong>
+    </div>
+    <div class="review-summary-item">
+      <span>Productos</span>
+      <strong>{{ item.line_count or 0 }}</strong>
+    </div>
+    <div class="review-summary-actions">
       <button type="submit" form="order-meta-form-{{ order.id }}" class="primary compact-button review-primary-action" data-loading-text="Guardando...">{{ primary_action_label }}</button>
       <details class="review-actions-menu">
-        <summary class="secondary compact-button">Acciones</summary>
+        <summary class="secondary compact-button" title="Más acciones">⋯</summary>
         <div class="review-actions-menu-panel">
-          {% if order.email_id %}<form class="js-loading-form" method="post" action="/entries/email-{{ order.email_id }}/process"><button class="secondary compact-button" data-loading-text="Reprocesando...">Revisar de nuevo</button></form>{% endif %}
-          <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/confirm" data-confirm="Confirmar pedido?"><button class="secondary compact-button" data-loading-text="Confirmando...">Confirmar pedido</button></form>
-          <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/recalculate-score"><button class="secondary compact-button" data-loading-text="Recalculando...">Recalcular confianza</button></form>
-          <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/export-ftp"><button class="secondary compact-button" data-loading-text="Exportando...">Enviar a gestión</button></form>
-          <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/mark-not-order" data-confirm="Marcar como no pedido?"><button class="secondary compact-button" data-loading-text="Marcando...">Marcar como no pedido</button></form>
-          <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/discard" data-confirm="Descartar pedido?"><button class="secondary compact-button" data-loading-text="Descartando...">Descartar</button></form>
+          {% if order.email_id %}
+            <form class="js-loading-form" method="post" action="/entries/email-{{ order.email_id }}/process">
+              <button class="secondary compact-button" data-loading-text="Reprocesando...">Revisar de nuevo</button>
+            </form>
+          {% endif %}
+          <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/confirm" data-confirm="Confirmar pedido?">
+            <button class="secondary compact-button" data-loading-text="Confirmando...">Confirmar pedido</button>
+          </form>
+          <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/recalculate-score">
+            <button class="secondary compact-button" data-loading-text="Recalculando...">Recalcular confianza</button>
+          </form>
+          <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/export-ftp">
+            <button class="secondary compact-button" data-loading-text="Exportando...">Enviar a gestión</button>
+          </form>
+          <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/mark-not-order" data-confirm="Marcar como no pedido?">
+            <button class="secondary compact-button" data-loading-text="Marcando...">Marcar como no pedido</button>
+          </form>
+          <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/discard" data-confirm="Descartar pedido?">
+            <button class="secondary compact-button" data-loading-text="Descartando...">Descartar</button>
+          </form>
         </div>
       </details>
-      <button type="button" class="secondary compact-button" onclick="closeWorkbenchDetailModal()">Cerrar</button>
+      <button type="button" class="secondary compact-button review-summary-close" onclick="closeWorkbenchDetailModal()">Cerrar</button>
     </div>
   </div>
 
@@ -153,6 +170,41 @@
     </section>
 
     <section class="review-pane review-proposal-pane">
+      <div class="review-header-actions review-header-actions-tight">
+        <button
+          type="submit"
+          form="order-meta-form-{{ order.id }}"
+          class="primary compact-button review-primary-action"
+          data-loading-text="Guardando..."
+        >{{ primary_action_label }}</button>
+
+        <details class="review-actions-menu">
+          <summary class="secondary compact-button">Acciones</summary>
+          <div class="review-actions-menu-panel">
+            {% if order.email_id %}
+              <form class="js-loading-form" method="post" action="/entries/email-{{ order.email_id }}/process">
+                <button class="secondary compact-button" data-loading-text="Reprocesando...">Revisar de nuevo</button>
+              </form>
+            {% endif %}
+            <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/confirm" data-confirm="Confirmar pedido?">
+              <button class="secondary compact-button" data-loading-text="Confirmando...">Confirmar pedido</button>
+            </form>
+            <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/recalculate-score">
+              <button class="secondary compact-button" data-loading-text="Recalculando...">Recalcular confianza</button>
+            </form>
+            <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/export-ftp">
+              <button class="secondary compact-button" data-loading-text="Exportando...">Enviar a gestión</button>
+            </form>
+            <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/mark-not-order" data-confirm="Marcar como no pedido?">
+              <button class="secondary compact-button" data-loading-text="Marcando...">Marcar como no pedido</button>
+            </form>
+            <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/discard" data-confirm="Descartar pedido?">
+              <button class="secondary compact-button" data-loading-text="Descartando...">Descartar</button>
+            </form>
+          </div>
+        </details>
+      </div>
+
       <form id="order-meta-form-{{ order.id }}" class="stack js-loading-form dirty-form review-meta-form" method="post" action="/orders/{{ order.id }}/update">
         <input type="hidden" name="order_date" value="{{ order.order_date or '' }}">
         <input type="hidden" name="requested_delivery_date" value="{{ order.requested_delivery_date or '' }}">
@@ -221,18 +273,30 @@
   </div>
 {% elif kind == "email" %}
   {% set email_attachments = email.attachments or [] %}
-  <div class="review-modal-header review-modal-header-v3">
-    <div class="review-header-title">
-      <strong>{{ email.sender }} · {{ "%.0f"|format(item.score or 0) if item.score is not none else "Sin score" }}</strong>
-      <div class="review-header-meta">
-        <span class="badge agent-{{ item.agent_status }}">{{ item.agent_status_label }}</span>
-        <span class="badge">{{ item.origin }}</span>
-      </div>
+  <div class="review-modal-header review-modal-header-v3 review-summary-header">
+    <div class="review-summary-item review-summary-sender">
+      <span>Remitente</span>
+      <strong>{{ item.from_email or "Sin remitente" }}</strong>
     </div>
-    <div class="review-header-actions review-header-actions-tight">
-      <button type="button" class="secondary compact-button" onclick="closeWorkbenchDetailModal()">Cerrar</button>
+    <div class="review-summary-item">
+      <span>Fecha</span>
+      <strong>{{ item.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M", "—") }}</strong>
     </div>
+    <div class="review-summary-item">
+      <span>Score</span>
+      <strong>{% if item.score is not none %}{{ "%.0f"|format(item.score) }}%{% else %}Sin score{% endif %}</strong>
+    </div>
+    <div class="review-summary-item review-summary-customer">
+      <span>Cliente</span>
+      <strong>{{ item.customer_name or "Cliente no identificado" }}</strong>
+    </div>
+    <div class="review-summary-item">
+      <span>Productos</span>
+      <strong>{{ item.line_count or 0 }}</strong>
+    </div>
+    <button type="button" class="secondary compact-button review-summary-close" onclick="closeWorkbenchDetailModal()">Cerrar</button>
   </div>
+
   <div class="review-grid review-grid-v3">
     <section class="review-pane review-entry-pane">
       {{ email_context_panel(email.id, email.sender, email.received_at | local_dt(tenant_timezone, "%Y-%m-%d %H:%M"), email.subject, email.body, email_attachments, "/workbench/email/" ~ email.id ~ "/attachments", "/workbench/email/" ~ email.id ~ "/attachments", "pending-email-body-" ~ email.id) }}

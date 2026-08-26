@@ -293,6 +293,7 @@ def order_workbench_item(order: Order, settings: ScoringSettings, *, include_lin
         "available_actions": [action_type, "review", "reply"],
         "action_label": action_label,
         "priority_rank": item["priority_rank"],
+        "line_count": item["line_count"],
         "detail_url": f"/workbench/item/order/{order.id}/detail",
         "modal_id": f"dashboard-order-modal-{order.id}",
     }
@@ -333,6 +334,7 @@ def email_workbench_item(email: Email) -> dict:
         "action_label": action,
         "priority_rank": priority_rank,
         "priority": priority,
+        "line_count": 0,
         "modal_id": f"email-modal-{email.id}",
         "detail_url": f"/workbench/item/email/{email.id}/detail",
     }

@@ -8,33 +8,33 @@
   onclick="selectWorkbenchItem(this)"
   tabindex="0"
 >
-  <div class="queue-item-main">
-    <div class="queue-item-main-head">
-      <span class="badge queue-item-priority">{{ item.priority or item.priority_label or "Pendiente" }}</span>
-    </div>
-    <strong class="queue-item-name">{{ item.customer_name or item.from_email or "Sin cliente" }}</strong>
-    <div class="queue-item-tags">
-      <a class="queue-item-tag queue-item-tag-channel" href="/?origin={{ channel_label|urlencode }}" onclick="event.stopPropagation();">{{ channel_label }}</a>
-      <a class="queue-item-tag queue-item-tag-confidence queue-item-confidence-{{ confidence_key }}" href="/?mode={% if confidence_key == 'without' %}not_processed{% else %}attention{% endif %}" onclick="event.stopPropagation();">{{ confidence_label }}</a>
-      {% if status_chip %}
-        <a class="queue-item-tag queue-item-tag-status" href="/?mode={% if status_chip == 'Pendiente' %}not_processed{% elif status_chip == 'Revisión' %}attention{% elif status_chip == 'Sin pedido' %}no_order{% else %}processed{% endif %}" onclick="event.stopPropagation();">{{ status_chip }}</a>
-      {% endif %}
-    </div>
+  <div class="queue-item-summary queue-item-summary-sender">
+    <span>Remitente</span>
+    <strong>{{ item.from_email or "Sin remitente" }}</strong>
+  </div>
+  <div class="queue-item-summary">
+    <span>Fecha</span>
+    <strong>{{ item.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M", "—") }}</strong>
+  </div>
+  <div class="queue-item-summary">
+    <span>Score</span>
+    <strong>{% if item.score is not none %}{{ "%.0f"|format(item.score) }}%{% else %}Sin score{% endif %}</strong>
+  </div>
+  <div class="queue-item-summary queue-item-summary-customer">
+    <span>Cliente</span>
+    <strong>{{ item.customer_name or "Cliente no identificado" }}</strong>
+  </div>
+  <div class="queue-item-summary">
+    <span>Productos</span>
+    <strong>{{ item.line_count or 0 }}</strong>
   </div>
   <div class="queue-item-actions">
     {% if item.kind == "email" and item.agent_status == "not_processed" %}
       <form class="js-loading-form" method="post" action="/entries/email-{{ item.email_id }}/process"><button class="primary compact-button" data-loading-text="Procesando..." onclick="event.stopPropagation();">Procesar</button></form>
-    {% elif item.kind == "order" and item.order_status_label == "Listo para confirmar" %}
+    {% elif item.kind == "order" %}
       <a class="button primary compact-button" href="/orders/{{ item.order_id }}" onclick="event.stopPropagation();">Revisar</a>
     {% else %}
-      {% if item.kind == "order" %}
-        <a class="button primary compact-button" href="/orders/{{ item.order_id }}" onclick="event.stopPropagation();">Revisar</a>
-      {% else %}
-        <a class="button primary compact-button" href="/entries/email-{{ item.email_id }}/resolve" onclick="event.stopPropagation();">Revisar</a>
-      {% endif %}
+      <a class="button primary compact-button" href="/entries/email-{{ item.email_id }}/resolve" onclick="event.stopPropagation();">Revisar</a>
     {% endif %}
-  </div>
-  <div class="queue-item-confidence-col queue-item-confidence-{{ confidence_key }}">
-    <span class="queue-item-score queue-item-confidence-{{ confidence_key }}">{% if item.score is not none %}{{ "%.0f"|format(item.score) }}%{% else %}--{% endif %}</span>
   </div>
 </article>
