@@ -230,7 +230,11 @@ async def _meta_request(
     except ValueError as exc:
         raise WhatsAppEmbeddedSignupError("Meta devolvió una respuesta no válida.", error_type="invalid_response") from exc
     if response.status_code >= 400 or (isinstance(payload, dict) and payload.get("error")):
-        raise WhatsAppEmbeddedSignupError(_meta_error_message(payload, "Meta rechazó la operación."), error_type="meta_api_error")
+        detail = _meta_error_message(payload, "Meta rechazó la operación.")
+        raise WhatsAppEmbeddedSignupError(
+            f"Meta rechazó {method.upper()} /{path.lstrip('/')}: {detail}",
+            error_type="meta_api_error",
+        )
     return payload if isinstance(payload, dict) else {}
 
 
@@ -332,11 +336,6 @@ async def complete_embedded_signup(
     onboarding_mode = str(onboarding_mode or "").strip().lower()
     if onboarding_mode not in {WHATSAPP_ONBOARDING_CLOUD_API, WHATSAPP_ONBOARDING_COEXISTENCE}:
         raise WhatsAppEmbeddedSignupError("El tipo de alta de WhatsApp no es válido.", error_type="invalid_signup_payload")
-    if onboarding_mode == WHATSAPP_ONBOARDING_CLOUD_API and not settings.meta_whatsapp_registration_pin:
-        raise WhatsAppEmbeddedSignupError(
-            "Falta META_WHATSAPP_REGISTRATION_PIN para registrar un número nuevo de Cloud API.",
-            error_type="server_not_configured",
-        )
     business_account_id = _validate_meta_id(business_account_id, "WABA ID")
     phone_number_id = _validate_meta_id(
         phone_number_id,
@@ -419,6 +418,17 @@ async def complete_embedded_signup(
                 )
             phone, phone_details = coexistence_candidates[0]
             phone_number_id = str(phone.get("id") or "")
+        elif phone:
+            phone_details = await _meta_request(
+                graph_client,
+                settings,
+                "GET",
+                phone_number_id,
+                access_token=access_token,
+                params={
+                    "fields": "status,platform_type"
+                },
+            )
         if not phone:
             raise WhatsAppEmbeddedSignupError("El teléfono seleccionado no pertenece al WABA autorizado.", error_type="asset_mismatch")
 
@@ -443,7 +453,14 @@ async def complete_embedded_signup(
         }
         _store_embedded_signup_state(db, **state_payload, connection_status="provisioning", webhook_enabled=False)
         try:
-            if onboarding_mode == WHATSAPP_ONBOARDING_CLOUD_API:
+            phone_status = str(phone.get("status") or "").strip().upper()
+            already_registered = phone_status in {"CONNECTED", "ACTIVE"}
+            if onboarding_mode == WHATSAPP_ONBOARDING_CLOUD_API and not already_registered:
+                if not settings.meta_whatsapp_registration_pin:
+                    raise WhatsAppEmbeddedSignupError(
+                        "Falta META_WHATSAPP_REGISTRATION_PIN para registrar un número nuevo de Cloud API.",
+                        error_type="server_not_configured",
+                    )
                 await _meta_request(
                     graph_client,
                     settings,
@@ -452,6 +469,13 @@ async def complete_embedded_signup(
                     access_token=access_token,
                     json_body={"messaging_product": "whatsapp", "pin": settings.meta_whatsapp_registration_pin},
                 )
+            await _meta_request(
+                graph_client,
+                settings,
+                "POST",
+                f"{business_account_id}/subscribed_apps",
+                access_token=access_token,
+            )
             await _meta_request(
                 graph_client,
                 settings,

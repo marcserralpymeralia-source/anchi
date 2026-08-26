@@ -290,7 +290,20 @@ class WhatsAppIntegrationTests(unittest.TestCase):
                 self.assertEqual(json.loads(request.content)["pin"], settings.meta_whatsapp_registration_pin)
                 self.assertEqual(request.headers["Authorization"], "Bearer tenant-access-token")
                 return httpx.Response(200, json={"success": True})
+            if path.endswith("/10987654321"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "id": "10987654321",
+                        "status": "PENDING",
+                        "account_mode": "LIVE",
+                        "platform_type": "CLOUD_API",
+                        "is_on_biz_app": False,
+                    },
+                )
             if path.endswith("/12345678901/subscribed_apps"):
+                if not request.content:
+                    return httpx.Response(200, json={"success": True})
                 payload = json.loads(request.content)
                 self.assertEqual(payload["override_callback_uri"], "https://anchi.example.com/webhooks/whatsapp/whatsapp-demo")
                 self.assertTrue(payload["verify_token"])
@@ -321,7 +334,7 @@ class WhatsAppIntegrationTests(unittest.TestCase):
 
         self.assertEqual(result.connection_status, "connected")
         self.assertEqual(result.phone_number_id, "10987654321")
-        self.assertEqual(len(calls), 5)
+        self.assertEqual(len(calls), 7)
         with self.TenantSession() as db:
             config = whatsapp_config(db, 1)
             self.assertTrue(config.enabled)
@@ -380,6 +393,7 @@ class WhatsAppIntegrationTests(unittest.TestCase):
                         "id": "10987654321",
                         "status": "CONNECTED",
                         "account_mode": "LIVE",
+                        "platform_type": "CLOUD_API",
                         "is_on_biz_app": True,
                         "display_phone_number": "+34 600 000 000",
                         "verified_name": "Anchi Demo",
@@ -387,6 +401,11 @@ class WhatsAppIntegrationTests(unittest.TestCase):
                     },
                 )
             if path.endswith("/12345678901/subscribed_apps"):
+                if not request.content:
+                    return httpx.Response(200, json={"success": True})
+                payload = json.loads(request.content)
+                self.assertTrue(payload["override_callback_uri"])
+                self.assertTrue(payload["verify_token"])
                 return httpx.Response(200, json={"success": True})
             if path.endswith("/12345678901"):
                 return httpx.Response(200, json={"id": "12345678901", "name": "Anchi WABA"})
@@ -414,12 +433,68 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertTrue(result.is_on_biz_app)
         self.assertEqual(result.phone_number_id, "10987654321")
         self.assertFalse(any(request.url.path.endswith("/register") for request in calls))
+        self.assertEqual(len(calls), 6)
         with self.TenantSession() as db:
             config = whatsapp_config(db, 1)
             self.assertEqual(config.onboarding_mode, "coexistence")
             self.assertTrue(config.is_on_biz_app)
             self.assertEqual(config.phone_status, "CONNECTED")
             self.assertEqual(config.account_mode, "LIVE")
+
+    def test_cloud_signup_does_not_reregister_an_already_connected_test_phone(self):
+        settings = SimpleNamespace(
+            meta_whatsapp_embedded_signup_ready=True,
+            meta_app_id="12345000000",
+            meta_app_secret="server-only-app-secret",
+            meta_embedded_signup_config_id="22345000000",
+            meta_graph_api_version="v24.0",
+            meta_embedded_signup_version="v4",
+            meta_whatsapp_registration_pin="",
+            meta_whatsapp_verify_token="global-verify-token",
+            meta_oauth_redirect_uri="",
+            meta_request_timeout_seconds=5,
+            app_url="https://anchi.example.com",
+        )
+        calls: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            calls.append(request)
+            path = request.url.path
+            if path.endswith("/oauth/access_token"):
+                return httpx.Response(200, json={"access_token": "connected-test-token"})
+            if path.endswith("/12345678901/phone_numbers"):
+                return httpx.Response(200, json={"data": [{"id": "10987654321", "display_phone_number": "+34 600 000 000"}]})
+            if path.endswith("/10987654321"):
+                return httpx.Response(200, json={"id": "10987654321", "status": "CONNECTED", "platform_type": "CLOUD_API"})
+            if path.endswith("/12345678901/subscribed_apps"):
+                if request.content:
+                    payload = json.loads(request.content)
+                    self.assertIn("override_callback_uri", payload)
+                    self.assertIn("verify_token", payload)
+                return httpx.Response(200, json={"success": True})
+            if path.endswith("/12345678901"):
+                return httpx.Response(200, json={"id": "12345678901", "name": "Anchi WABA"})
+            return httpx.Response(404, json={"error": {"message": "unexpected test request"}})
+
+        async def execute_signup():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                with self.TenantSession() as db:
+                    return await complete_embedded_signup(
+                        db,
+                        company_id=1,
+                        company_slug="whatsapp-demo",
+                        code="temporary-auth-code",
+                        business_account_id="12345678901",
+                        phone_number_id="10987654321",
+                        client=client,
+                    )
+
+        with patch("app.whatsapp.service.get_settings", return_value=settings):
+            result = asyncio.run(execute_signup())
+
+        self.assertEqual(result.phone_number_id, "10987654321")
+        self.assertEqual(len(calls), 6)
+        self.assertFalse(any(request.url.path.endswith("/register") for request in calls))
 
     def test_coexistence_webhooks_separate_live_echo_history_and_contact_sync(self):
         payload = {
