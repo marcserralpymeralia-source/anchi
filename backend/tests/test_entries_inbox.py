@@ -188,6 +188,77 @@ class EntriesInboxTests(unittest.TestCase):
             tenant_engine.dispose()
             fixture.cleanup()
 
+    def test_pending_email_pdf_attachment_preview_is_inline_and_download_stays_attachment(self):
+        fixture = build_performance_fixture("small")
+        tenant_engine, TenantSession = _session_factory(fixture.tenant_database_url)
+        now = utcnow()
+        try:
+            with TenantSession() as db:
+                email = Email(
+                    company_id=1,
+                    sender="compras@example.com",
+                    subject="Pedido con PDF pendiente",
+                    body="Adjunto pedido en PDF.",
+                    status="pending",
+                    agent_status="not_processed",
+                    detected_type="pedido",
+                    received_at=now,
+                    has_attachments=True,
+                    has_pdf=True,
+                )
+                other_email = Email(
+                    company_id=1,
+                    sender="otro@example.com",
+                    subject="Otro correo",
+                    body="Otro contenido.",
+                    status="pending",
+                    agent_status="not_processed",
+                    received_at=now,
+                )
+                db.add_all([email, other_email])
+                db.flush()
+                attachment = EmailAttachment(
+                    company_id=1,
+                    email_id=email.id,
+                    filename="pedido.pdf",
+                    content_type="application/pdf",
+                    size_bytes=2048,
+                    is_pdf=True,
+                    storage_path="mock://pedido.pdf",
+                )
+                db.add(attachment)
+                db.commit()
+                email_id = email.id
+                other_email_id = other_email.id
+                attachment_id = attachment.id
+
+            client, cleanup = self._client_for(fixture)
+            try:
+                self._login(client, fixture)
+                with patch("app.workbench.routes.read_attachment", return_value=b"%PDF-1.4\n%%EOF"):
+                    download = client.get(f"/workbench/email/{email_id}/attachments/{attachment_id}")
+                    preview = client.get(f"/workbench/email/{email_id}/attachments/{attachment_id}/preview")
+                    wrong_email = client.get(f"/workbench/email/{other_email_id}/attachments/{attachment_id}/preview")
+                detail = client.get(f"/workbench/item/email/{email_id}/detail")
+            finally:
+                cleanup()
+
+            self.assertEqual(download.status_code, 200)
+            self.assertIn("attachment", download.headers.get("content-disposition", ""))
+
+            self.assertEqual(preview.status_code, 200)
+            self.assertIn("inline", preview.headers.get("content-disposition", ""))
+            self.assertIn("application/pdf", preview.headers.get("content-type", ""))
+
+            self.assertEqual(wrong_email.status_code, 404)
+
+            self.assertEqual(detail.status_code, 200)
+            self.assertIn(f'data-preview-url="/workbench/email/{email_id}/attachments/{attachment_id}/preview"', detail.text)
+            self.assertIn(f'data-download-url="/workbench/email/{email_id}/attachments/{attachment_id}"', detail.text)
+        finally:
+            tenant_engine.dispose()
+            fixture.cleanup()
+
     def test_entries_filters_and_pagination_are_stable(self):
         fixture = build_performance_fixture("small")
         tenant_engine, TenantSession = _session_factory(fixture.tenant_database_url)

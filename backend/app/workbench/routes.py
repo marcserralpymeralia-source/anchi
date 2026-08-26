@@ -406,17 +406,17 @@ def workbench_discard_email(email_id: int, db: Session = Depends(get_tenant_db),
     return RedirectResponse("/?mode=no_order", status_code=303)
 
 
-@router.get("/workbench/email/{email_id}/attachments/{attachment_id}")
-def workbench_email_attachment(
+def _workbench_email_attachment_payload(
+    db: Session,
+    *,
     email_id: int,
     attachment_id: int,
-    db: Session = Depends(get_tenant_db),
-    user: TenantUser = Depends(current_user),
-):
+    company_id: int,
+) -> tuple[EmailAttachment, bytes] | PlainTextResponse:
     attachment = db.get(EmailAttachment, attachment_id)
     if (
         not attachment
-        or attachment.company_id != user.company_id
+        or attachment.company_id != company_id
         or attachment.email_id != email_id
     ):
         return PlainTextResponse("No encontrado", status_code=404)
@@ -426,10 +426,62 @@ def workbench_email_attachment(
     except Exception:
         return PlainTextResponse("Archivo no disponible", status_code=404)
 
+    return attachment, content
+
+
+@router.get("/workbench/email/{email_id}/attachments/{attachment_id}")
+def workbench_email_attachment(
+    email_id: int,
+    attachment_id: int,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    payload = _workbench_email_attachment_payload(
+        db,
+        email_id=email_id,
+        attachment_id=attachment_id,
+        company_id=user.company_id,
+    )
+    if isinstance(payload, PlainTextResponse):
+        return payload
+    attachment, content = payload
+
     return Response(
         content=content,
         media_type=attachment.content_type or "application/octet-stream",
         headers={
             "Content-Disposition": f'attachment; filename="{attachment.filename}"'
+        },
+    )
+
+
+@router.get("/workbench/email/{email_id}/attachments/{attachment_id}/preview")
+def workbench_email_attachment_preview(
+    email_id: int,
+    attachment_id: int,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    payload = _workbench_email_attachment_payload(
+        db,
+        email_id=email_id,
+        attachment_id=attachment_id,
+        company_id=user.company_id,
+    )
+    if isinstance(payload, PlainTextResponse):
+        return payload
+    attachment, content = payload
+
+    media_type = (
+        "application/pdf"
+        if attachment.is_pdf
+        else attachment.content_type or "application/octet-stream"
+    )
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{attachment.filename}"'
         },
     )
