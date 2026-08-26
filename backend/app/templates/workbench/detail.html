@@ -1,3 +1,77 @@
+{% macro attachment_kind(attachment) -%}
+  {{- "pdf" if attachment.is_pdf or attachment.content_type == "application/pdf" else "image" if attachment.content_type and attachment.content_type.startswith("image/") else "csv" if attachment.filename.lower().endswith(".csv") or attachment.content_type in ["text/csv", "application/csv"] else "text" if attachment.content_type and attachment.content_type.startswith("text/") or attachment.filename.lower().endswith((".txt", ".log", ".md", ".eml", ".json")) else "doc" if attachment.filename.lower().endswith((".doc", ".docx")) else "sheet" if attachment.filename.lower().endswith((".xls", ".xlsx", ".ods")) else "unsupported" -}}
+{%- endmacro %}
+
+{% macro email_context_panel(source_id, sender, received_label, subject, body, attachments, preview_base, download_base, copy_id, source_panel=False, hidden=False) %}
+  <article class="review-source-context{% if source_panel %} source-panel{% endif %}"{% if source_panel %} data-source-panel="email"{% endif %}{% if hidden %} hidden{% endif %}>
+    <header class="review-source-head">
+      <div>
+        <strong>{{ sender or "Sin remitente" }}</strong>
+        <span>{{ received_label or "Sin fecha" }}</span>
+      </div>
+      <p>{{ subject or "Sin asunto" }}</p>
+    </header>
+    <div class="review-source-content" data-source-scope>
+      <div class="source-tabs review-source-tabs" data-source-tabs>
+        <button type="button" class="source-tab active" data-source-tab="mail">Correo</button>
+        {% if attachments %}
+          <button type="button" class="source-tab" data-source-tab="attachment">Adjunto</button>
+        {% endif %}
+      </div>
+      <section class="review-source-view" data-source-panel="mail">
+        <div class="review-source-toolbar">
+          <button type="button" class="secondary compact-button" onclick="copyText('{{ copy_id }}')">Copiar</button>
+        </div>
+        <pre id="{{ copy_id }}" class="review-source-body">{{ body or "" }}</pre>
+      </section>
+      {% if attachments %}
+        <section class="review-source-view review-source-attachment-view" data-source-panel="attachment" hidden>
+          {% if attachments|length > 1 %}
+            <label class="review-attachment-select-label">Adjunto
+              <select class="review-attachment-select" data-attachment-select>
+                {% for attachment in attachments %}
+                  {% set kind = attachment_kind(attachment) %}
+                  <option
+                    value="{{ attachment.id }}"
+                    data-order-id="{{ source_id }}"
+                    data-attachment-id="{{ attachment.id }}"
+                    data-preview-kind="{{ kind }}"
+                    data-preview-url="{{ preview_base }}/{{ attachment.id }}/preview"
+                    data-download-url="{{ download_base }}/{{ attachment.id }}"
+                    data-filename="{{ attachment.filename }}"
+                    data-content-type="{{ attachment.content_type or '' }}"
+                    data-size-bytes="{{ attachment.size_bytes or 0 }}"
+                    data-extracted-text="{{ attachment.extracted_text or '' }}"
+                  >{{ attachment.filename }}</option>
+                {% endfor %}
+              </select>
+            </label>
+          {% else %}
+            {% set attachment = attachments[0] %}
+            {% set kind = attachment_kind(attachment) %}
+            <div
+              class="review-attachment-direct"
+              data-attachment-select
+              data-order-id="{{ source_id }}"
+              data-attachment-id="{{ attachment.id }}"
+              data-preview-kind="{{ kind }}"
+              data-preview-url="{{ preview_base }}/{{ attachment.id }}/preview"
+              data-download-url="{{ download_base }}/{{ attachment.id }}"
+              data-filename="{{ attachment.filename }}"
+              data-content-type="{{ attachment.content_type or '' }}"
+              data-size-bytes="{{ attachment.size_bytes or 0 }}"
+              data-extracted-text="{{ attachment.extracted_text or '' }}"
+            ></div>
+          {% endif %}
+          <div class="review-attachment-preview review-attachment-preview-fill" id="review-attachment-preview-{{ source_id }}">
+            <div class="review-attachment-preview-empty">Selecciona un adjunto para verlo aquí.</div>
+          </div>
+        </section>
+      {% endif %}
+    </div>
+  </article>
+{% endmacro %}
+
 {% if kind == "order" %}
   {% set email_attachments = order.email.attachments if order.email else [] %}
   {% set pdfs = email_attachments|selectattr("is_pdf")|list if order.email else [] %}
@@ -37,9 +111,6 @@
 
   <div class="review-grid review-grid-v3">
     <section class="review-pane review-entry-pane">
-      <div class="review-inline-summary review-inline-summary-tight">
-        <span>{{ (order.email.sender if order.email else item.customer_name) }} · {{ item.origin }} · {{ item.order_status_label|status_label }}{% if has_email and order.email.attachments %} · {{ order.email.attachments|length }} adjuntos{% endif %}{% if has_conversation %} · {{ conversation_preview.messages|length }} mensajes{% endif %}</span>
-      </div>
       {% if has_email and has_conversation %}
         <div class="source-tabs" data-source-tabs>
           <button type="button" class="source-tab {% if active_source == 'email' %}active{% endif %}" data-source-tab="email">Correo electrónico</button>
@@ -47,53 +118,7 @@
         </div>
       {% endif %}
       {% if has_email %}
-        <details class="review-mail-card review-mail-toggle source-panel" data-source-panel="email" {% if has_conversation and active_source != 'email' %}hidden{% endif %} open>
-          <summary>Correo recibido</summary>
-          <div class="review-mail-body-head">
-            <span class="muted review-mail-snippet">{{ (order.email.body if order.email else "")[:120] }}</span>
-            <button type="button" class="secondary compact-button" onclick="const box=this.closest('details'); const expanded=box.classList.toggle('is-expanded'); this.textContent=expanded ? 'Ocultar' : 'Ver completo';">Ver completo</button>
-          </div>
-          <pre id="dash-email-body-{{ order.id }}" class="doc-text review-email-body">{{ order.email.body if order.email else "" }}</pre>
-        </details>
-        {% if order.email and email_attachments %}
-          <details class="review-attachments-toggle source-panel" id="review-attachments-toggle-{{ order.id }}" data-source-panel="email-attachments" {% if has_conversation and active_source != 'email' %}hidden{% endif %}>
-            <summary>
-              <span>Adjuntos</span>
-              <strong>{{ email_attachments|length }}</strong>
-            </summary>
-            <div class="review-attachments-body">
-              <div class="review-attachment-list" role="list">
-                {% for attachment in email_attachments %}
-                  {% set attachment_kind = "pdf" if attachment.is_pdf or attachment.content_type == "application/pdf" else "image" if attachment.content_type and attachment.content_type.startswith("image/") else "csv" if attachment.filename.lower().endswith(".csv") or attachment.content_type in ["text/csv", "application/csv"] else "text" if attachment.content_type and attachment.content_type.startswith("text/") or attachment.filename.lower().endswith((".txt", ".log", ".md", ".eml", ".json")) else "doc" if attachment.filename.lower().endswith((".doc", ".docx")) else "sheet" if attachment.filename.lower().endswith((".xls", ".xlsx", ".ods")) else "unsupported" %}
-                  <button
-                    type="button"
-                    class="review-attachment-item"
-                    role="listitem"
-                    data-order-id="{{ order.id }}"
-                    data-attachment-id="{{ attachment.id }}"
-                    data-preview-kind="{{ attachment_kind }}"
-                    data-preview-url="/orders/{{ order.id }}/attachments/{{ attachment.id }}/preview"
-                    data-download-url="/orders/{{ order.id }}/attachments/{{ attachment.id }}"
-                    data-filename="{{ attachment.filename }}"
-                    data-content-type="{{ attachment.content_type or '' }}"
-                    data-size-bytes="{{ attachment.size_bytes or 0 }}"
-                    data-extracted-text="{{ attachment.extracted_text or '' }}"
-                    onclick="selectOrderAttachmentPreview(event, this)"
-                  >
-                    <span class="review-attachment-item-main">
-                      <strong>{{ attachment.filename }}</strong>
-                      <span>{{ "PDF" if attachment_kind == "pdf" else "Imagen" if attachment_kind == "image" else "CSV" if attachment_kind == "csv" else "Texto" if attachment_kind == "text" else "DOC" if attachment_kind == "doc" else "Hoja" if attachment_kind == "sheet" else "Adjunto" }}</span>
-                    </span>
-                    <span class="review-attachment-item-action">Previsualizar</span>
-                  </button>
-                {% endfor %}
-              </div>
-              <div class="review-attachment-preview" id="review-attachment-preview-{{ order.id }}">
-                <div class="review-attachment-preview-empty">Selecciona un adjunto para verlo aquí.</div>
-              </div>
-            </div>
-          </details>
-        {% endif %}
+        {{ email_context_panel(order.id, order.email.sender, order.email.received_at | local_dt(tenant_timezone, "%Y-%m-%d %H:%M"), order.email.subject, order.email.body, email_attachments, "/orders/" ~ order.id ~ "/attachments", "/orders/" ~ order.id ~ "/attachments", "dash-email-body-" ~ order.id, True, has_conversation and active_source != 'email') }}
       {% endif %}
       {% if has_conversation %}
         <article class="subpanel stack source-panel" data-source-panel="conversation" {% if has_conversation and active_source != 'conversation' %}hidden{% endif %}>
@@ -195,6 +220,7 @@
     </section>
   </div>
 {% elif kind == "email" %}
+  {% set email_attachments = email.attachments or [] %}
   <div class="review-modal-header review-modal-header-v3">
     <div class="review-header-title">
       <strong>{{ email.sender }} · {{ "%.0f"|format(item.score or 0) if item.score is not none else "Sin score" }}</strong>
@@ -209,58 +235,7 @@
   </div>
   <div class="review-grid review-grid-v3">
     <section class="review-pane review-entry-pane">
-      <div class="review-inline-summary review-inline-summary-tight">
-        <span>{{ email.sender }} · {{ email.received_at | local_dt(tenant_timezone, "%Y-%m-%d %H:%M") }} · {{ item.agent_status_label }}</span>
-      </div>
-      <article class="subpanel">
-        <p><strong>Asunto:</strong> {{ email.subject }}</p>
-        <p><strong>Adjuntos:</strong> {{ email.attachments|length }}</p>
-      </article>
-      <article class="subpanel">
-        <div class="section-title-row"><h4>Cuerpo del correo</h4><button type="button" class="secondary" onclick="copyText('pending-email-body-{{ email.id }}')">Copiar</button></div>
-        <pre id="pending-email-body-{{ email.id }}" class="doc-text">{{ email.body or "" }}</pre>
-      </article>
-      {% if email.attachments %}
-        <details class="review-attachments-toggle" id="review-attachments-toggle-{{ email.id }}" open>
-          <summary>
-            <span>Adjuntos</span>
-            <strong>{{ email.attachments|length }}</strong>
-          </summary>
-          <div class="review-attachments-body">
-            <div class="review-attachment-list" role="list">
-              {% for attachment in email.attachments %}
-                {% set attachment_kind = "pdf" if attachment.is_pdf or attachment.content_type == "application/pdf" else "image" if attachment.content_type and attachment.content_type.startswith("image/") else "csv" if attachment.filename.lower().endswith(".csv") or attachment.content_type in ["text/csv", "application/csv"] else "text" if attachment.content_type and attachment.content_type.startswith("text/") or attachment.filename.lower().endswith((".txt", ".log", ".md", ".eml", ".json")) else "doc" if attachment.filename.lower().endswith((".doc", ".docx")) else "sheet" if attachment.filename.lower().endswith((".xls", ".xlsx", ".ods")) else "unsupported" %}
-                <button
-                  type="button"
-                  class="review-attachment-item"
-                  role="listitem"
-                  data-order-id="{{ email.id }}"
-                  data-attachment-id="{{ attachment.id }}"
-                  data-preview-kind="{{ attachment_kind }}"
-                  data-preview-url="/workbench/email/{{ email.id }}/attachments/{{ attachment.id }}/preview"
-                  data-download-url="/workbench/email/{{ email.id }}/attachments/{{ attachment.id }}"
-                  data-filename="{{ attachment.filename }}"
-                  data-content-type="{{ attachment.content_type or '' }}"
-                  data-size-bytes="{{ attachment.size_bytes or 0 }}"
-                  data-extracted-text="{{ attachment.extracted_text or '' }}"
-                  onclick="selectOrderAttachmentPreview(event, this)"
-                >
-                  <span class="review-attachment-item-main">
-                    <strong>{{ attachment.filename }}</strong>
-                    <span>
-                      {{ "PDF" if attachment_kind == "pdf" else "Imagen" if attachment_kind == "image" else "CSV" if attachment_kind == "csv" else "Texto" if attachment_kind == "text" else "DOC" if attachment_kind == "doc" else "Hoja" if attachment_kind == "sheet" else "Adjunto" }}
-                    </span>
-                  </span>
-                  <span class="review-attachment-item-action">Previsualizar</span>
-                </button>
-              {% endfor %}
-            </div>
-            <div class="review-attachment-preview" id="review-attachment-preview-{{ email.id }}">
-              <div class="review-attachment-preview-empty">Selecciona un adjunto para verlo aquí.</div>
-            </div>
-          </div>
-        </details>
-      {% endif %}
+      {{ email_context_panel(email.id, email.sender, email.received_at | local_dt(tenant_timezone, "%Y-%m-%d %H:%M"), email.subject, email.body, email_attachments, "/workbench/email/" ~ email.id ~ "/attachments", "/workbench/email/" ~ email.id ~ "/attachments", "pending-email-body-" ~ email.id) }}
     </section>
     <section class="review-pane">
       <article class="review-score-card score-without">
