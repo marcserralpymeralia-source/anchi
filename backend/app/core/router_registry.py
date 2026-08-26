@@ -9,6 +9,7 @@ from app.customers.routes import router as customers_router
 from app.databases.routes import router as databases_router
 from app.imports.routes import router as imports_router
 from app.jobs.routes import router as jobs_router
+from app.legal.routes import router as legal_router
 from app.logs.routes import router as logs_router
 from app.mail.routes import router as mail_router
 from app.learning.routes import router as learning_router
@@ -54,6 +55,7 @@ def get_registered_routers() -> list:
         products_router,
         imports_router,
         jobs_router,
+        legal_router,
         settings_router,
         users_router,
         logs_router,

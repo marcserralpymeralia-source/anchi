@@ -19,6 +19,7 @@ Nota importante: el flujo `seed-base` sigue existiendo para desarrollo local, pe
 - `requirements.txt` en la raíz para instalar dependencias del backend.
 - `vercel.json` con configuración mínima de función.
 - `.vercelignore` para excluir tests, scripts y artefactos locales.
+- La política pública de privacidad está disponible en `/privacy`; para esta demo, la URL de Meta es `https://anchi-tan.vercel.app/privacy`.
 - `scripts/demo_ops.py` con comandos separados de migración, provisioning, seed y health.
 - `backend/app/core/lifespan.py` ya evita arrancar workers en Vercel.
 - `backend/app/core/config.py` y `backend/app/demo_seed.py` ya usan la contraseña demo acordada.
