@@ -222,7 +222,7 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 requested_limit,
                 from_uid=payload.get("from_uid"),
                 to_uid=payload.get("to_uid"),
-                batch_size=1,
+                batch_size=5,
                 resume=bool(payload.get("resume", False)),
                 stop_after_batch=True,
                 sync_state=sync_state,

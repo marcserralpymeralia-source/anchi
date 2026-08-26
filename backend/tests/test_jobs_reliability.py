@@ -146,7 +146,7 @@ class JobsReliabilityTests(unittest.TestCase):
                 payload={
                     "from_date": "2026-08-20",
                     "to_date": None,
-                    "limit": 2,
+                    "limit": 7,
                 },
                 created_by_user_id=None,
             )
@@ -162,19 +162,19 @@ class JobsReliabilityTests(unittest.TestCase):
                     "duplicates": 0,
                     "has_more": True,
                     "last_uid": "10",
-                    "batch_count": 1,
-                    "message": "1 correo procesado",
+                    "batch_count": 5,
+                    "message": "5 correos procesados",
                 },
             ) as backfill:
                 result = _process_job(db, job)
 
             self.assertTrue(result["ok"])
-            self.assertEqual(result["remaining"], 1)
+            self.assertEqual(result["remaining"], 2)
             self.assertIn("continuation_job_id", result)
 
             backfill.assert_called_once()
             kwargs = backfill.call_args.kwargs
-            self.assertEqual(kwargs["batch_size"], 1)
+            self.assertEqual(kwargs["batch_size"], 5)
             self.assertTrue(kwargs["stop_after_batch"])
 
             jobs = db.scalars(
@@ -194,7 +194,7 @@ class JobsReliabilityTests(unittest.TestCase):
                 fromlist=["job_payload"],
             ).job_payload(continuation)
 
-            self.assertEqual(continuation_payload["limit"], 1)
+            self.assertEqual(continuation_payload["limit"], 2)
             self.assertTrue(continuation_payload["resume"])
             self.assertEqual(
                 continuation_payload["from_date"],
