@@ -264,7 +264,7 @@ def _imap_search_criteria(
         criteria.extend(["BEFORE", (end_date + timedelta(days=1)).strftime("%d-%b-%Y")])
     if start_uid or end_uid:
         uid_range = f"{start_uid or '1'}:{end_uid or '*'}"
-        criteria.append(uid_range)
+        criteria.extend(["UID", uid_range])
     if unread_only:
         criteria.append("UNSEEN")
     return criteria or ["ALL"]

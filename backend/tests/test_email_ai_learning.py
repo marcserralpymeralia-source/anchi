@@ -73,32 +73,35 @@ class FakeImapClient:
 
             ids = sorted(self.messages.keys(), key=int)
 
-            for arg in _args:
-                value = arg.decode() if isinstance(arg, bytes) else str(arg)
-                if ":" not in value:
-                    continue
+            args = [
+                arg.decode() if isinstance(arg, bytes) else str(arg)
+                for arg in _args
+            ]
 
-                start_raw, end_raw = value.split(":", 1)
+            if "UID" in args:
+                uid_index = args.index("UID")
+                if uid_index + 1 < len(args):
+                    uid_range = args[uid_index + 1]
+                    start_raw, end_raw = uid_range.split(":", 1)
 
-                try:
-                    start_uid = int(start_raw)
-                except ValueError:
-                    start_uid = 1
-
-                end_uid = None
-                if end_raw != "*":
                     try:
-                        end_uid = int(end_raw)
+                        start_uid = int(start_raw)
                     except ValueError:
-                        end_uid = None
+                        start_uid = 1
 
-                ids = [
-                    uid
-                    for uid in ids
-                    if int(uid) >= start_uid
-                    and (end_uid is None or int(uid) <= end_uid)
-                ]
-                break
+                    end_uid = None
+                    if end_raw != "*":
+                        try:
+                            end_uid = int(end_raw)
+                        except ValueError:
+                            end_uid = None
+
+                    ids = [
+                        uid
+                        for uid in ids
+                        if int(uid) >= start_uid
+                        and (end_uid is None or int(uid) <= end_uid)
+                    ]
 
             return "OK", [" ".join(ids).encode()]
         if command == "fetch":
@@ -351,6 +354,16 @@ class EmailAiLearningTests(unittest.TestCase):
         self.assertEqual(second["saved"], 1)
         self.assertFalse(second["has_more"])
         self.assertEqual(second["last_uid"], "2")
+
+        self.assertEqual(
+            integrations._imap_search_criteria(
+                start_date=None,
+                end_date=None,
+                unread_only=False,
+                start_uid="2",
+            ),
+            ["UID", "2:*"],
+        )
 
         self.assertEqual(state.backfill_status, "idle")
         self.assertEqual(state.backfill_last_uid, "2")
