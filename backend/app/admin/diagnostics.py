@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import BackgroundJob, Company, Conversation, Customer, Email, EmailSettings, InboundMessage, InputChannel, LLMSettings, Order, Product
+from app.db.models import BackgroundJob, Company, Conversation, Customer, Email, EmailSettings, InboundMessage, InputChannel, LLMSettings, Order, Product, PromptExecution
 from app.core.metrics import snapshot_metrics
 from app.master.models import MasterCompany, MasterTenantDatabase
 from app.settings.email_config import email_config_status
@@ -72,6 +72,15 @@ def company_diagnostics(master_db: Session, company_id: int) -> dict:
         email_settings = get_or_create_settings(db, EmailSettings, company_id)
         llm_settings = get_or_create_settings(db, LLMSettings, company_id)
         schema_report = tenant_migration_report(db, company_id)
+        prompt_executions = db.scalars(
+            select(PromptExecution)
+            .where(
+                PromptExecution.company_id == company_id,
+                PromptExecution.prompt_purpose.in_(["classification", "extraction"]),
+            )
+            .order_by(PromptExecution.id.desc())
+            .limit(6)
+        ).all()
         return {
             **base,
             "customers_total": db.scalar(select(func.count()).select_from(Customer).where(Customer.company_id == company_id)) or 0,
@@ -96,6 +105,19 @@ def company_diagnostics(master_db: Session, company_id: int) -> dict:
             "last_sync_message": email_settings.last_sync_message,
             "email_status": email_config_status(email_settings),
             "schema_report": schema_report,
+            "prompt_executions": [
+                {
+                    "id": execution.id,
+                    "purpose": execution.prompt_purpose,
+                    "status": execution.output_status,
+                    "model": execution.model,
+                    "validation_errors": execution.validation_errors_json,
+                    "duration_ms": execution.duration_ms,
+                    "response_excerpt": execution.response_excerpt,
+                    "created_at": execution.created_at,
+                }
+                for execution in prompt_executions
+            ],
             "observability": snapshot_metrics(),
         }
     finally:
