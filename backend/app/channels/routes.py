@@ -188,8 +188,16 @@ def _process_channel_entry_response(db: Session, user: TenantUser, source_kind: 
         if order:
             return RedirectResponse(f"/orders/{order.id}", status_code=303)
         job = enqueue_job(db, company_id=user.company_id, job_type="process_email", payload={"email_id": source.id}, created_by_user_id=user.id)
-        log_action(db, company_id=user.company_id, user=user, action="channel.process.email", entity_type="job", entity_id=job.id, message=f"Procesamiento encolado para email {source.id}")
-        db.commit()
+        result = execute_job_inline(db, job)
+        log_action(
+            db,
+            company_id=user.company_id,
+            user=user,
+            action="channel.process.email",
+            entity_type="job",
+            entity_id=job.id,
+            message=result.get("message") or f"Procesamiento completado para email {source.id}",
+        )
         return RedirectResponse(destination.redirect_url, status_code=303)
 
     source = db.get(InboundMessage, source_id)

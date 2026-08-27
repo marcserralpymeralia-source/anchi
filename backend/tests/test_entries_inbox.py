@@ -402,6 +402,7 @@ class EntriesInboxTests(unittest.TestCase):
                 process_jobs = db.scalars(select(BackgroundJob).where(BackgroundJob.company_id == 1, BackgroundJob.job_type == "process_email")).all()
                 sync_jobs = db.scalars(select(BackgroundJob).where(BackgroundJob.company_id == 1, BackgroundJob.job_type == "email_sync")).all()
             self.assertEqual(len(process_jobs), 1)
+            self.assertIn(process_jobs[0].status, {"completed", "failed"})
             self.assertEqual(len(sync_jobs), 1)
             self.assertTrue(all(job.status == "failed" for job in sync_jobs))
         finally:
