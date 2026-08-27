@@ -311,6 +311,87 @@ Gracias."""
         finally:
             fixture.cleanup()
 
+
+    def test_manual_process_shows_ai_classification_and_omits_empty_mismatch(self):
+        fixture = build_performance_fixture("small")
+
+        try:
+            with performance_test_client(fixture) as client:
+                with patch(
+                    "app.imports.routes.analysis_context",
+                    return_value={
+                        "classification": {
+                            "ok": True,
+                            "validated_content": {
+                                "tipo_correo": "pedido",
+                                "confianza": 0.95,
+                                "motivo": "Pedido",
+                            },
+                        },
+                        "classification_type": "pedido",
+                        "classification_confidence": 0.95,
+                        "customer": {
+                            "name": "desconocido",
+                            "method": "sin_cliente",
+                            "score": 0.0,
+                            "matched": False,
+                        },
+                        "lines": [
+                            {
+                                "original_text": "2 cajas de Vaso Cartón Personalizable 12 oz BLANCO",
+                                "reference": "",
+                                "product_name": "Vaso Cartón Personalizable 12 oz BLANCO",
+                                "matched_product": "G2VASOPB12OZ · Vaso Cartón Personalizable 12 oz BLANCO",
+                                "match_method": "alias",
+                                "quantity": 2.0,
+                                "unit": "cajas",
+                                "confidence": 95.0,
+                                "score": 95.0,
+                                "has_match": True,
+                            }
+                        ],
+                        "score": 74.8,
+                        "category": "doubtful",
+                        "category_label": "Dudoso",
+                        "status": "pedido_pendiente_revision",
+                        "source_text": "Pedido de prueba",
+                        "source_label": "Importación manual de correo",
+                        "expected": {
+                            "customer": "",
+                            "score": None,
+                            "status": "",
+                        },
+                        "comparison": {
+                            "customer_match": False,
+                            "score_delta": None,
+                            "status_match": False,
+                        },
+                        "suggested_action": "Revisar",
+                    },
+                ):
+                    response = client.post(
+                        "/imports/manual/process",
+                        data={
+                            "channel": "email",
+                            "sender": "uat@example.com",
+                            "subject": "Pedido prueba",
+                            "raw_text": "2 cajas de Vaso Cartón Personalizable 12 oz BLANCO",
+                            "expected_customer": "",
+                            "expected_score": "",
+                            "expected_status": "",
+                        },
+                    )
+
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("Pedido", response.text)
+                self.assertIn("95%", response.text)
+                self.assertIn("Dudoso", response.text)
+                self.assertIn("Revisar", response.text)
+                self.assertNotIn("Cliente no coincide", response.text)
+                self.assertNotIn("Estado no coincide", response.text)
+        finally:
+            fixture.cleanup()
+
     def test_channel_buttons_use_real_routes(self):
         fixture = build_performance_fixture("small")
         SessionLocal = _tenant_session(fixture.tenant_database_url)
