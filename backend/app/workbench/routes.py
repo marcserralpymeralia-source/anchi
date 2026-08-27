@@ -4,17 +4,18 @@ import logging
 import json
 import os
 from datetime import datetime, timezone
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.agent.extraction.diagnostics import extraction_diagnostics_from_messages, extraction_diagnostics_from_payload
 from app.agent.services import AgentProcessingService, ScoringService
 from app.auth.dependencies import current_user
+from app.core.attachment_storage import read_attachment
+from app.core.entry_workflow import close_email, discard_email, mark_email_no_order, queue_email_processing
 from app.core.templating import templates
 from app.core.timezones import format_local_datetime
 from app.dashboard.service import workbench_summary
@@ -375,18 +376,14 @@ def workbench_bulk_action(
 def workbench_mark_email_no_order(email_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     email = db.get(Email, email_id)
     if email and email.company_id == user.company_id:
-        email.status = "no_pedido"
-        email.agent_status = "processed_no_order"
-        email.detected_type = "no_pedido"
-        email.processing_error = None
-        db.commit()
+        mark_email_no_order(db, company_id=user.company_id, user_id=user.id, email_id=email.id)
         log_action(db, company_id=user.company_id, user=user, action="workbench.email.mark_no_order", entity_type="email", entity_id=email.id, message="Correo marcado como no pedido desde Bandeja")
     return RedirectResponse("/?mode=no_order", status_code=303)
 
 
 @router.post("/workbench/email/{email_id}/process")
 def workbench_process_email(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
-    job = enqueue_job(db, company_id=user.company_id, job_type="process_email", payload={"email_id": email_id}, created_by_user_id=user.id)
+    job = queue_email_processing(db, company_id=user.company_id, user_id=user.id, email_id=email_id)
     log_action(db, company_id=user.company_id, user=user, action="workbench.email.process", entity_type="job", entity_id=job.id, message=f"Correo encolado para procesar: {email_id}")
     return _queued_job_response(request, job.id)
 
@@ -395,9 +392,7 @@ def workbench_process_email(email_id: int, request: Request, db: Session = Depen
 def workbench_close_email(email_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     email = db.get(Email, email_id)
     if email and email.company_id == user.company_id:
-        email.status = "cerrado"
-        email.agent_status = "processed_no_order" if email.detected_type == "no_pedido" else email.agent_status
-        db.commit()
+        close_email(db, company_id=user.company_id, user_id=user.id, email_id=email.id)
         log_action(db, company_id=user.company_id, user=user, action="workbench.email.close", entity_type="email", entity_id=email.id, message="Correo cerrado desde Bandeja")
     return RedirectResponse("/", status_code=303)
 
@@ -406,19 +401,87 @@ def workbench_close_email(email_id: int, db: Session = Depends(get_tenant_db), u
 def workbench_discard_email(email_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     email = db.get(Email, email_id)
     if email and email.company_id == user.company_id:
-        email.status = "descartado"
-        email.agent_status = "discarded"
-        db.commit()
+        discard_email(db, company_id=user.company_id, user_id=user.id, email_id=email.id)
         log_action(db, company_id=user.company_id, user=user, action="workbench.email.discard", entity_type="email", entity_id=email.id, message="Correo descartado desde Bandeja")
     return RedirectResponse("/?mode=no_order", status_code=303)
 
 
-@router.get("/workbench/email/{email_id}/attachments/{attachment_id}")
-def workbench_email_attachment(email_id: int, attachment_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def _workbench_email_attachment_payload(
+    db: Session,
+    *,
+    email_id: int,
+    attachment_id: int,
+    company_id: int,
+) -> tuple[EmailAttachment, bytes] | PlainTextResponse:
     attachment = db.get(EmailAttachment, attachment_id)
-    if not attachment or attachment.company_id != user.company_id or attachment.email_id != email_id:
+    if (
+        not attachment
+        or attachment.company_id != company_id
+        or attachment.email_id != email_id
+    ):
         return PlainTextResponse("No encontrado", status_code=404)
-    path = Path(attachment.storage_path or "")
-    if not path.exists() or not path.is_file():
+
+    try:
+        content = read_attachment(attachment.storage_path or "")
+    except Exception:
         return PlainTextResponse("Archivo no disponible", status_code=404)
-    return FileResponse(path, media_type=attachment.content_type or "application/octet-stream", filename=attachment.filename)
+
+    return attachment, content
+
+
+@router.get("/workbench/email/{email_id}/attachments/{attachment_id}")
+def workbench_email_attachment(
+    email_id: int,
+    attachment_id: int,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    payload = _workbench_email_attachment_payload(
+        db,
+        email_id=email_id,
+        attachment_id=attachment_id,
+        company_id=user.company_id,
+    )
+    if isinstance(payload, PlainTextResponse):
+        return payload
+    attachment, content = payload
+
+    return Response(
+        content=content,
+        media_type=attachment.content_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{attachment.filename}"'
+        },
+    )
+
+
+@router.get("/workbench/email/{email_id}/attachments/{attachment_id}/preview")
+def workbench_email_attachment_preview(
+    email_id: int,
+    attachment_id: int,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    payload = _workbench_email_attachment_payload(
+        db,
+        email_id=email_id,
+        attachment_id=attachment_id,
+        company_id=user.company_id,
+    )
+    if isinstance(payload, PlainTextResponse):
+        return payload
+    attachment, content = payload
+
+    media_type = (
+        "application/pdf"
+        if attachment.is_pdf
+        else attachment.content_type or "application/octet-stream"
+    )
+
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{attachment.filename}"'
+        },
+    )

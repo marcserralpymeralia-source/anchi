@@ -1,8 +1,9 @@
 import json
 from datetime import datetime, timezone
+from email.utils import parseaddr
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
 from sqlalchemy import case, exists, func, or_, select
 from sqlalchemy.orm import Session, load_only, selectinload
 
@@ -13,7 +14,7 @@ from app.agent.services import MockAgentService, ScoringService
 from app.auth.dependencies import current_user
 from app.master.service import TenantUser
 from app.core.pagination import paginate
-from app.db.models import Conversation, Customer, Email, EmailAttachment, ExportFile, FTPSettings, InboundMessage, ManualCorrection, Order, OrderLine, Product, RagCase, ScoringSettings, User, utcnow
+from app.db.models import Conversation, Customer, CustomerContactPoint, Email, EmailAttachment, ExportFile, FTPSettings, InboundMessage, ManualCorrection, Order, OrderLine, Product, RagCase, ScoringSettings, User, utcnow
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
 from app.orders.service import (
@@ -21,7 +22,6 @@ from app.orders.service import (
     _customer_label,
     _fmt_dt,
     _product_suggestions_for_line,
-    _review_customer_candidates,
     _review_customer_snapshot,
     _review_product_candidates,
     _soft_delete_order,
@@ -31,10 +31,72 @@ from app.orders.service import (
     validate_confirmation,
 )
 from app.orders.state import ORDER_STATE
-from app.settings.service import get_or_create_settings
+from app.settings.service import get_or_create_settings, resolve_updated_by_id
 from app.tenancy.database import get_tenant_db
+from app.core.attachment_storage import read_attachment
 
 router = APIRouter(prefix="/orders", tags=["orders"])
+
+
+def _learn_customer_email_from_confirmed_order(
+    db: Session,
+    *,
+    order: Order,
+    company_id: int,
+) -> str:
+    customer_id = order.validated_customer_id or order.customer_id
+    if not customer_id or not order.email_id:
+        return "skipped"
+
+    email = db.get(Email, order.email_id)
+    if not email:
+        return "skipped"
+
+    sender_email = parseaddr(email.sender or "")[1].strip().lower()
+    if not sender_email or "@" not in sender_email:
+        return "skipped"
+
+    existing_points = db.scalars(
+        select(CustomerContactPoint).where(
+            CustomerContactPoint.company_id == company_id,
+            CustomerContactPoint.type == "email",
+            CustomerContactPoint.value == sender_email,
+            CustomerContactPoint.active == True,  # noqa: E712
+        )
+    ).all()
+
+    existing_customer_ids = {point.customer_id for point in existing_points}
+
+    if existing_customer_ids and existing_customer_ids != {customer_id}:
+        return "conflict"
+
+    now = datetime.now(timezone.utc)
+
+    if existing_points:
+        for point in existing_points:
+            point.confidence = 1.0
+            point.source = "validated_order"
+            point.last_seen_at = now
+            point.updated_at = now
+            point.active = True
+        return "updated"
+
+    db.add(
+        CustomerContactPoint(
+            company_id=company_id,
+            customer_id=customer_id,
+            type="email",
+            value=sender_email,
+            label="Email aprendido desde pedido validado",
+            is_primary=False,
+            active=True,
+            confidence=1.0,
+            source="validated_order",
+            first_seen_at=now,
+            last_seen_at=now,
+        )
+    )
+    return "created"
 
 
 def _conversation_preview(order: Order | None) -> dict | None:
@@ -252,11 +314,142 @@ def create_mock_order(db: Session = Depends(get_tenant_db), user: TenantUser = D
     return RedirectResponse(f"/orders/{order.id}", status_code=303)
 
 
+@router.get("/customer-search")
+def customer_search(
+    q: str = "",
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    query = q.strip()
+    if len(query) < 2:
+        return []
+
+    exact = query
+    starts = f"{query}%"
+    contains = f"%{query}%"
+
+    match = or_(
+        Customer.code.ilike(contains),
+        Customer.fiscal_name.ilike(contains),
+        Customer.commercial_name.ilike(contains),
+        Customer.tax_id.ilike(contains),
+        Customer.primary_email.ilike(contains),
+    )
+
+    relevance = case(
+        (
+            or_(
+                Customer.code.ilike(exact),
+                Customer.fiscal_name.ilike(exact),
+                Customer.commercial_name.ilike(exact),
+                Customer.tax_id.ilike(exact),
+                Customer.primary_email.ilike(exact),
+            ),
+            0,
+        ),
+        (
+            or_(
+                Customer.code.ilike(starts),
+                Customer.fiscal_name.ilike(starts),
+                Customer.commercial_name.ilike(starts),
+                Customer.tax_id.ilike(starts),
+                Customer.primary_email.ilike(starts),
+            ),
+            1,
+        ),
+        else_=2,
+    )
+
+    customers = db.scalars(
+        select(Customer)
+        .where(
+            Customer.company_id == user.company_id,
+            Customer.deleted_at.is_(None),
+            match,
+        )
+        .order_by(relevance, Customer.fiscal_name.asc())
+        .limit(15)
+    ).all()
+
+    return [
+        {
+            "id": customer.id,
+            "code": customer.code or "",
+            "name": customer.fiscal_name or customer.commercial_name or "",
+            "tax_id": customer.tax_id or "",
+            "email": customer.primary_email or "",
+        }
+        for customer in customers
+    ]
+
+
+@router.get("/product-search")
+def product_search(
+    q: str = "",
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    query = q.strip()
+    if len(query) < 2:
+        return []
+
+    exact = query
+    starts = f"{query}%"
+    contains = f"%{query}%"
+
+    match = or_(
+        Product.reference.ilike(contains),
+        Product.alternative_code.ilike(contains),
+        Product.name.ilike(contains),
+        Product.description.ilike(contains),
+    )
+
+    relevance = case(
+        (
+            or_(
+                Product.reference.ilike(exact),
+                Product.alternative_code.ilike(exact),
+                Product.name.ilike(exact),
+            ),
+            0,
+        ),
+        (
+            or_(
+                Product.reference.ilike(starts),
+                Product.alternative_code.ilike(starts),
+                Product.name.ilike(starts),
+            ),
+            1,
+        ),
+        else_=2,
+    )
+
+    products = db.scalars(
+        select(Product)
+        .where(
+            Product.company_id == user.company_id,
+            Product.deleted_at.is_(None),
+            match,
+        )
+        .order_by(relevance, Product.name.asc())
+        .limit(15)
+    ).all()
+
+    return [
+        {
+            "id": product.id,
+            "reference": product.reference or "",
+            "name": product.name or product.description or "",
+            "sale_price": product.sale_price or 0,
+        }
+        for product in products
+    ]
+
+
 @router.get("/{order_id}")
 def order_detail(
     order_id: int,
     request: Request,
-    customer_q: str = "",
     product_q: str = "",
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
@@ -298,6 +491,22 @@ def order_detail(
                 OrderLine.line_score,
                 OrderLine.validation_status,
                 OrderLine.doubt_reason,
+            ),
+            selectinload(Order.lines)
+            .joinedload(OrderLine.product)
+            .load_only(
+                Product.id,
+                Product.reference,
+                Product.name,
+                Product.sale_price,
+            ),
+            selectinload(Order.lines)
+            .joinedload(OrderLine.validated_product)
+            .load_only(
+                Product.id,
+                Product.reference,
+                Product.name,
+                Product.sale_price,
             ),
             selectinload(Order.email)
             .load_only(
@@ -350,7 +559,6 @@ def order_detail(
         )
     )
     products = _review_product_candidates(db, company_id=user.company_id, order=order, query=product_q) if order else []
-    customers = _review_customer_candidates(db, company_id=user.company_id, order=order, query=customer_q) if order else []
     customer_source = None
     if order:
         customer_source = db.scalar(
@@ -375,7 +583,7 @@ def order_detail(
         )
     customer_context = _review_customer_snapshot(db, order, customer_source) if order else {"identified": False}
     line_suggestions = {line.id: _product_suggestions_for_line(products, line) for line in (order.lines or [])}
-    conversation_preview = _conversation_preview(order)
+    conversation_preview = _conversation_preview(order) if order and not order.email_id else None
     extraction_diagnostics = extraction_diagnostics_from_messages(order.conversation.messages if order and order.conversation else [])
     return templates.TemplateResponse(
         "orders/detail.html",
@@ -384,10 +592,8 @@ def order_detail(
             "user": user,
             "order": order,
             "products": products,
-            "customers": customers,
             "customer_context": customer_context,
             "line_suggestions": line_suggestions,
-            "customer_q": customer_q,
             "product_q": product_q,
             "conversation_preview": conversation_preview,
             "extraction_diagnostics": extraction_diagnostics,
@@ -398,12 +604,17 @@ def order_detail(
 @router.post("/{order_id}/customer")
 def update_order_customer(order_id: int, validated_customer_id: int = Form(...), db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     order = db.get(Order, order_id)
-    if order and order.company_id == user.company_id:
+    new_customer = db.get(Customer, validated_customer_id)
+    if (
+        order
+        and order.company_id == user.company_id
+        and new_customer
+        and new_customer.company_id == user.company_id
+    ):
         previous_customer = order.validated_customer or order.customer
-        order.validated_customer_id = validated_customer_id
-        order.customer_id = validated_customer_id
-        new_customer = db.get(Customer, validated_customer_id)
-        if new_customer and (not previous_customer or previous_customer.id != new_customer.id):
+        order.validated_customer_id = new_customer.id
+        order.customer_id = new_customer.id
+        if not previous_customer or previous_customer.id != new_customer.id:
             db.add(
                 ManualCorrection(
                     company_id=user.company_id,
@@ -416,7 +627,7 @@ def update_order_customer(order_id: int, validated_customer_id: int = Form(...),
                     corrected_entity_id=new_customer.id,
                     reason="Validacion manual de cliente",
                     should_learn=True,
-                    created_by_user_id=user.id,
+                    created_by_user_id=resolve_updated_by_id(db, user),
                 )
             )
         if new_customer:
@@ -433,7 +644,7 @@ def update_order_customer(order_id: int, validated_customer_id: int = Form(...),
         order.score = ScoringService().score_order(db, order)
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.customer.update", entity_type="order", entity_id=order.id, message="Cliente validado actualizado")
-    return RedirectResponse("/orders", status_code=303)
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
 @router.post("/{order_id}/save")
@@ -449,18 +660,33 @@ def update_order(
     user: TenantUser = Depends(current_user),
 ):
     order = db.get(Order, order_id)
-    if order and order.company_id == user.company_id:
+    new_customer = db.get(Customer, validated_customer_id) if validated_customer_id else None
+    customer_is_valid = (
+        not validated_customer_id
+        or (new_customer is not None and new_customer.company_id == user.company_id)
+    )
+    if order and order.company_id == user.company_id and customer_is_valid:
         previous_notes = order.notes or ""
         previous_customer_id = order.validated_customer_id or order.customer_id
-        order.validated_customer_id = validated_customer_id or None
-        order.customer_id = validated_customer_id or order.customer_id
-        order.order_date = order_date
+        order.validated_customer_id = new_customer.id if new_customer else None
+        order.customer_id = new_customer.id if new_customer else order.customer_id
+
+        normalized_order_date = order_date.strip()
+        if normalized_order_date:
+            try:
+                normalized_order_date = datetime.strptime(
+                    normalized_order_date,
+                    "%d-%m-%Y",
+                ).strftime("%Y-%m-%d")
+            except ValueError:
+                pass
+
+        order.order_date = normalized_order_date
         order.requested_delivery_date = requested_delivery_date
         order.notes = notes
         if status:
             ORDER_STATE.change_state(order, status)
-        if validated_customer_id and validated_customer_id != previous_customer_id:
-            new_customer = db.get(Customer, validated_customer_id)
+        if new_customer and new_customer.id != previous_customer_id:
             old_customer = db.get(Customer, previous_customer_id) if previous_customer_id else None
             if new_customer:
                 db.add(
@@ -475,7 +701,7 @@ def update_order(
                         corrected_entity_id=new_customer.id,
                         reason="Cambio manual desde detalle de pedido",
                         should_learn=True,
-                        created_by_user_id=user.id,
+                        created_by_user_id=resolve_updated_by_id(db, user),
                     )
                 )
             if new_customer:
@@ -492,7 +718,7 @@ def update_order(
         order.score = ScoringService().score_order(db, order)
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.update", entity_type="order", entity_id=order.id, message="Pedido actualizado")
-    return RedirectResponse("/orders", status_code=303)
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
 @router.post("/{order_id}/lines/{line_id}")
@@ -507,17 +733,28 @@ def update_order_line(
 ):
     line = db.get(OrderLine, line_id)
     order = db.get(Order, order_id)
-    if line and order and line.company_id == user.company_id and order.company_id == user.company_id:
+    new_product = db.get(Product, validated_product_id) if validated_product_id else None
+    product_is_valid = (
+        not validated_product_id
+        or (new_product is not None and new_product.company_id == user.company_id)
+    )
+    if (
+        line
+        and order
+        and line.company_id == user.company_id
+        and order.company_id == user.company_id
+        and line.order_id == order.id
+        and product_is_valid
+    ):
         old_product = line.validated_product or line.product
         old_quantity = line.quantity
         old_unit = line.unit
-        line.validated_product_id = validated_product_id or None
-        line.product_id = validated_product_id or line.product_id
+        line.validated_product_id = new_product.id if new_product else None
+        line.product_id = new_product.id if new_product else line.product_id
         line.quantity = quantity
         line.unit = unit
         line.validation_status = "validated" if line.validated_product_id and quantity else "pending"
         line.doubt_reason = "" if line.validation_status == "validated" else "Linea pendiente de validar"
-        new_product = db.get(Product, validated_product_id) if validated_product_id else None
         if new_product and (not old_product or old_product.id != new_product.id):
             db.add(
                 ManualCorrection(
@@ -532,7 +769,7 @@ def update_order_line(
                     corrected_entity_id=new_product.id,
                     reason="Validacion manual de producto",
                     should_learn=True,
-                    created_by_user_id=user.id,
+                    created_by_user_id=resolve_updated_by_id(db, user),
                 )
             )
             if old_product and (order.validated_customer_id or order.customer_id):
@@ -558,7 +795,7 @@ def update_order_line(
                     corrected_entity_id=line.id,
                     reason="Correccion manual de cantidad",
                     should_learn=True,
-                    created_by_user_id=user.id,
+                    created_by_user_id=resolve_updated_by_id(db, user),
                 )
             )
         if old_unit != unit:
@@ -575,7 +812,7 @@ def update_order_line(
                     corrected_entity_id=line.id,
                     reason="Correccion manual de unidad",
                     should_learn=True,
-                    created_by_user_id=user.id,
+                    created_by_user_id=resolve_updated_by_id(db, user),
                 )
             )
         _sync_customer_product_knowledge(
@@ -591,7 +828,7 @@ def update_order_line(
         ORDER_STATE.apply_score(db, order, user.company_id, order.score)
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.line.update", entity_type="order_line", entity_id=line.id, message="Linea de pedido actualizada")
-    return RedirectResponse("/orders", status_code=303)
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
 @router.post("/{order_id}/lines")
@@ -606,7 +843,11 @@ def add_order_line(
 ):
     order = db.get(Order, order_id)
     product = db.get(Product, validated_product_id) if validated_product_id else None
-    if order and order.company_id == user.company_id:
+    product_is_valid = (
+        not validated_product_id
+        or (product is not None and product.company_id == user.company_id)
+    )
+    if order and order.company_id == user.company_id and product_is_valid:
         line = OrderLine(
             company_id=user.company_id,
             order_id=order.id,
@@ -637,14 +878,20 @@ def add_order_line(
         order.score = ScoringService().score_order(db, order)
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.line.add", entity_type="order_line", entity_id=line.id, message="Linea de pedido anadida")
-    return RedirectResponse("/orders", status_code=303)
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
 @router.post("/{order_id}/lines/{line_id}/duplicate")
 def duplicate_order_line(order_id: int, line_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     line = db.get(OrderLine, line_id)
     order = db.get(Order, order_id)
-    if line and order and line.company_id == user.company_id and order.company_id == user.company_id:
+    if (
+        line
+        and order
+        and line.company_id == user.company_id
+        and order.company_id == user.company_id
+        and line.order_id == order.id
+    ):
         new_line = OrderLine(
             company_id=user.company_id,
             order_id=order.id,
@@ -665,7 +912,7 @@ def duplicate_order_line(order_id: int, line_id: int, db: Session = Depends(get_
         order.score = ScoringService().score_order(db, order)
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.line.duplicate", entity_type="order_line", entity_id=new_line.id, message="Linea duplicada")
-    return RedirectResponse("/orders", status_code=303)
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
 @router.post("/{order_id}/lines/{line_id}/delete")
@@ -677,7 +924,13 @@ def delete_order_line_post(order_id: int, line_id: int, db: Session = Depends(ge
 def delete_order_line(order_id: int, line_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     line = db.get(OrderLine, line_id)
     order = db.get(Order, order_id)
-    if line and order and line.company_id == user.company_id and order.company_id == user.company_id:
+    if (
+        line
+        and order
+        and line.company_id == user.company_id
+        and order.company_id == user.company_id
+        and line.order_id == order.id
+    ):
         old_product = line.validated_product or line.product
         if old_product:
             LearningService().penalize_customer_product_knowledge(
@@ -693,7 +946,7 @@ def delete_order_line(order_id: int, line_id: int, db: Session = Depends(get_ten
         order.score = ScoringService().score_order(db, order)
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.line.delete", entity_type="order_line", entity_id=line_id, message="Linea eliminada")
-    return RedirectResponse("/orders", status_code=303)
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
 @router.post("/{order_id}/recalculate-score")
@@ -704,14 +957,14 @@ def recalculate_score(order_id: int, db: Session = Depends(get_tenant_db), user:
         ORDER_STATE.apply_score(db, order, user.company_id, order.score)
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.recalculate_score", entity_type="order", entity_id=order.id, message=f"Scoring recalculado: {order.score}")
-    return RedirectResponse("/orders", status_code=303)
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
 @router.post("/{order_id}/reprocess")
 def reprocess_order(order_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     order = db.get(Order, order_id)
     if order and order.company_id == user.company_id:
-        job = enqueue_job(db, company_id=user.company_id, job_type="process_order", payload={"order_id": order.id}, created_by_user_id=user.id)
+        job = enqueue_job(db, company_id=user.company_id, job_type="process_order", payload={"order_id": order.id}, created_by_user_id=resolve_updated_by_id(db, user))
         log_action(db, company_id=user.company_id, user=user, action="order.reprocess", entity_type="job", entity_id=job.id, message="Reprocesamiento de pedido encolado")
         db.commit()
     return RedirectResponse(f"/orders/{order_id}", status_code=303)
@@ -725,7 +978,7 @@ def confirm_order(order_id: int, db: Session = Depends(get_tenant_db), user: Ten
         errors = validate_confirmation(order, get_or_create_settings(db, ScoringSettings, user.company_id))
         if errors:
             log_action(db, company_id=user.company_id, user=user, action="order.confirm.blocked", entity_type="order", entity_id=order.id, message=" | ".join(errors))
-            return RedirectResponse("/orders", status_code=303)
+            return RedirectResponse(f"/orders/{order_id}", status_code=303)
         ORDER_STATE.confirm(order, when=datetime.now(timezone.utc))
         for line in order.lines or []:
             _sync_customer_product_knowledge(
@@ -737,6 +990,13 @@ def confirm_order(order_id: int, db: Session = Depends(get_tenant_db), user: Ten
                 source_context="pedido_confirmado",
                 force_habitual=False,
             )
+
+        email_learning_result = _learn_customer_email_from_confirmed_order(
+            db,
+            order=order,
+            company_id=user.company_id,
+        )
+
         LearningService().record_case(
             db,
             company_id=user.company_id,
@@ -747,8 +1007,18 @@ def confirm_order(order_id: int, db: Session = Depends(get_tenant_db), user: Ten
             order_id=order.id,
         )
         db.commit()
+        if email_learning_result == "conflict":
+            log_action(
+                db,
+                company_id=user.company_id,
+                user=user,
+                action="customer.email_learning.conflict",
+                entity_type="order",
+                entity_id=order.id,
+                message="El email remitente ya estaba asociado a otro cliente y no se ha sobrescrito.",
+            )
         log_action(db, company_id=user.company_id, user=user, action="order.confirm", entity_type="order", entity_id=order.id, message="Pedido confirmado")
-    return RedirectResponse("/orders", status_code=303)
+    return RedirectResponse(f"/orders/{order_id}", status_code=303)
 
 
 @router.post("/{order_id}/force-confirm")
@@ -766,7 +1036,7 @@ def export_order(order_id: int, db: Session = Depends(get_tenant_db), user: Tena
     order = db.get(Order, order_id)
     if order:
         if order.company_id == user.company_id:
-            job = enqueue_job(db, company_id=user.company_id, job_type="export_order", payload={"order_id": order.id}, created_by_user_id=user.id)
+            job = enqueue_job(db, company_id=user.company_id, job_type="export_order", payload={"order_id": order.id}, created_by_user_id=resolve_updated_by_id(db, user))
             log_action(db, company_id=user.company_id, user=user, action="order.export", entity_type="job", entity_id=job.id, message="Exportacion encolada")
     return RedirectResponse("/orders", status_code=303)
 
@@ -780,7 +1050,7 @@ def generate_export(order_id: int, db: Session = Depends(get_tenant_db), user: T
 def export_preview(order_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     export = db.scalar(select(ExportFile).where(ExportFile.order_id == order_id, ExportFile.company_id == user.company_id).order_by(ExportFile.created_at.desc()))
     if not export:
-        job = enqueue_job(db, company_id=user.company_id, job_type="export_order", payload={"order_id": order_id}, created_by_user_id=user.id)
+        job = enqueue_job(db, company_id=user.company_id, job_type="export_order", payload={"order_id": order_id}, created_by_user_id=resolve_updated_by_id(db, user))
         log_action(db, company_id=user.company_id, user=user, action="order.export_preview_queued", entity_type="job", entity_id=job.id, message="Vista previa de exportacion encolada")
         return RedirectResponse(f"/jobs/{job.id}/detail", status_code=303)
     return PlainTextResponse(export.content, media_type="text/plain")
@@ -790,7 +1060,7 @@ def export_preview(order_id: int, db: Session = Depends(get_tenant_db), user: Te
 def export_ftp(order_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     order = db.get(Order, order_id)
     if order and order.company_id == user.company_id:
-        job = enqueue_job(db, company_id=user.company_id, job_type="export_order_ftp", payload={"order_id": order.id}, created_by_user_id=user.id)
+        job = enqueue_job(db, company_id=user.company_id, job_type="export_order_ftp", payload={"order_id": order.id}, created_by_user_id=resolve_updated_by_id(db, user))
         log_action(db, company_id=user.company_id, user=user, action="order.export_ftp", entity_type="job", entity_id=job.id, message="Exportacion FTP encolada")
     return RedirectResponse("/orders", status_code=303)
 
@@ -906,11 +1176,20 @@ def view_attachment(order_id: int, attachment_id: int, db: Session = Depends(get
     order = db.get(Order, order_id)
     if not attachment or not order or attachment.company_id != user.company_id or order.company_id != user.company_id or order.email_id != attachment.email_id:
         return PlainTextResponse("No encontrado", status_code=404)
-    path = Path(attachment.storage_path or "")
-    if not path.exists() or not path.is_file():
+
+    try:
+        content = read_attachment(attachment.storage_path or "")
+    except Exception:
         return PlainTextResponse("Archivo no disponible", status_code=404)
+
     media_type = attachment.content_type or "application/octet-stream"
-    return FileResponse(path, media_type=media_type, filename=attachment.filename)
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'attachment; filename="{attachment.filename}"'
+        },
+    )
 
 
 @router.get("/{order_id}/attachments/{attachment_id}/preview")
@@ -919,8 +1198,17 @@ def preview_attachment(order_id: int, attachment_id: int, db: Session = Depends(
     order = db.get(Order, order_id)
     if not attachment or not order or attachment.company_id != user.company_id or order.company_id != user.company_id or order.email_id != attachment.email_id:
         return PlainTextResponse("No encontrado", status_code=404)
-    path = Path(attachment.storage_path or "")
-    if not path.exists() or not path.is_file():
+
+    try:
+        content = read_attachment(attachment.storage_path or "")
+    except Exception:
         return PlainTextResponse("Archivo no disponible", status_code=404)
+
     media_type = "application/pdf" if attachment.is_pdf else attachment.content_type or "application/octet-stream"
-    return FileResponse(path, media_type=media_type, headers={"Content-Disposition": f'inline; filename="{attachment.filename}"'})
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{attachment.filename}"'
+        },
+    )

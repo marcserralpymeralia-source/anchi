@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import date, datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -8,8 +9,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import select
 
 from app.agent.platform import UnifiedOrderPipelineService
-from app.db.models import Customer, CustomerAlias, CustomerContactPoint, CustomerDomain, Email, EmailAttachment, EmailSettings, InboundMessage, InputChannel, LLMSettings, Order, OrderLine, Product, ProductAlias, PromptTemplate, PromptVersion, ScoringSettings
-from app.messages.service import get_or_create_conversation
+from app.channels.service import get_or_create_channel
+from app.db.models import Company, Customer, CustomerAlias, CustomerContactPoint, CustomerDomain, Email, EmailAttachment, EmailSettings, InboundMessage, InputChannel, LLMSettings, Order, OrderLine, Product, ProductAlias, PromptTemplate, PromptVersion, ScoringSettings
+from app.messages.service import NormalizedMessage, persist_normalized_message
 from app.orders.state import ORDER_STATE
 from app.logs.service import log_action
 from app.settings.integrations import classify_sample, extract_sample
@@ -159,9 +161,14 @@ def _json_from_content(content: str) -> dict:
     if not text:
         raise ValueError("Respuesta vacia del proveedor IA.")
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else {"value": parsed}
     except json.JSONDecodeError:
-        raise ValueError("OpenAI ha devuelto una respuesta no valida: no es JSON.")
+        match = re.search(r"\{.*\}", text, flags=re.S)
+        if match:
+            parsed = json.loads(match.group(0))
+            return parsed if isinstance(parsed, dict) else {"value": parsed}
+    raise ValueError("OpenAI ha devuelto una respuesta no valida: no es JSON.")
 
 
 def _active_prompt(db: Session, company_id: int, purpose: str, fallback: str) -> str:
@@ -185,52 +192,42 @@ class AgentProcessingService:
         self.pipeline = UnifiedOrderPipelineService()
 
     def process_email(self, db: Session, email: Email, user=None, force_order: bool = False) -> dict:
-        inbound_message = db.scalar(
-            select(InboundMessage).where(
-                InboundMessage.company_id == email.company_id,
-                InboundMessage.source_external_id == email.external_id,
-            )
+        channel = get_or_create_channel(
+            db,
+            email.company_id,
+            "email",
         )
-        if not inbound_message:
-            channel = db.scalar(select(InputChannel).where(InputChannel.company_id == email.company_id, InputChannel.key == "email"))
-            if not channel:
-                channel = InputChannel(company_id=email.company_id, key="email", name="Email", channel_type="message", is_active=True, is_default=True, supports_text=True, supports_attachments=True, supports_documents=True)
-                db.add(channel)
-                db.flush()
-            inbound_message = InboundMessage(
-                company_id=email.company_id,
-                channel_id=channel.id if channel else None,
-                provider="imap",
-                source_external_id=email.external_id,
-                sender=email.sender,
-                subject=email.subject,
-                original_content=email.body or email.extracted_text or "",
-                raw_payload_json=json.dumps({"email_id": email.id}, ensure_ascii=False),
-                content_type="email",
-                status="received",
-                processing_step="received",
-                has_attachments=bool(email.attachments),
-                has_pdf=bool(email.has_pdf),
-            )
-            db.add(inbound_message)
-            db.flush()
-        if not inbound_message.conversation_id:
-            conversation = get_or_create_conversation(
-                db,
-                company_id=inbound_message.company_id,
-                channel_id=inbound_message.channel_id,
-                provider=inbound_message.provider,
-                external_thread_id=inbound_message.source_thread_id or inbound_message.source_external_id,
-                subject=inbound_message.subject,
-                customer_id=inbound_message.customer_id,
-                last_activity_at=inbound_message.received_at,
-            )
-            inbound_message.conversation_id = conversation.id
-            email.conversation_id = conversation.id
-            db.flush()
+        if not channel.is_active:
+            raise ValueError("Email channel is disabled for this tenant")
+
+        normalized_message = NormalizedMessage(
+            company_id=email.company_id,
+            channel_key="email",
+            provider="imap",
+            external_id=email.external_id,
+            sender=email.sender,
+            subject=email.subject,
+            text_content=email.body or email.extracted_text or "",
+            received_at=getattr(email, "received_at", None),
+            metadata={"email_id": email.id},
+        )
+        inbound_message, conversation = persist_normalized_message(
+            db,
+            normalized_message,
+            content_type="email",
+            has_attachments=bool(email.attachments),
+            has_pdf=bool(email.has_pdf),
+        )
+        email.conversation_id = conversation.id
+        db.flush()
         if not force_order:
             if inbound_message.order_id:
-                order = db.get(Order, inbound_message.order_id)
+                order = db.scalar(
+                    select(Order).where(
+                        Order.id == inbound_message.order_id,
+                        Order.company_id == inbound_message.company_id,
+                    )
+                )
                 if order:
                     return {
                         "ok": True,
@@ -446,14 +443,16 @@ startxref
         return path
 
     def create_mock_order(self, db: Session, company_id: int) -> Order:
+        company = db.scalar(select(Company).where(Company.id == company_id))
+        company_name = company.name if company else f"Tenant {company_id}"
         order_key = f"mock-{company_id}-{date.today().isoformat()}"
         email = Email(
             company_id=company_id,
             external_id=order_key,
-            sender="compras@anchi-demo.local",
+            sender=f"compras+{company_id}@example.local",
             subject="Pedido de prueba",
             body="Adjuntamos pedido de prueba.",
-            extracted_text="10 unidades producto demo para Anchi Demo SL",
+            extracted_text=f"10 unidades producto demo para {company_name}",
             status="pedido_detectado",
             detected_type="pedido",
         )

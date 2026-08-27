@@ -140,8 +140,11 @@ function openLineProductPicker(lineId) {
 
 function bindSourceTabs(root) {
   root.querySelectorAll("[data-source-tabs]").forEach((tabs) => {
-    const container = tabs.closest(".review-pane") || root;
-    const panels = Array.from(container.querySelectorAll("[data-source-panel]"));
+    const container = tabs.closest("[data-source-scope]") || tabs.closest(".review-pane") || root;
+    const panels = Array.from(container.querySelectorAll("[data-source-panel]")).filter((panel) => {
+      const nestedScope = panel.closest("[data-source-scope]");
+      return !nestedScope || nestedScope === container;
+    });
     tabs.querySelectorAll("[data-source-tab]").forEach((button) => {
       button.addEventListener("click", () => {
         const target = button.dataset.sourceTab;
@@ -155,20 +158,23 @@ function bindSourceTabs(root) {
   });
 }
 
+function bindAttachmentSelects(root) {
+  root.querySelectorAll("[data-attachment-select]").forEach((control) => {
+    if (control.tagName === "SELECT") {
+      control.addEventListener("change", () => selectAttachmentPreviewFromSelect(control));
+      if (control.value) selectAttachmentPreviewFromSelect(control);
+      return;
+    }
+    renderAttachmentPreviewContent(control.dataset.orderId, control);
+  });
+}
+
 function bindWorkbenchDetailContent(root, dialog) {
   bindSourceTabs(root);
+  bindAttachmentSelects(root);
   root.querySelectorAll("input, textarea, select").forEach((field) => {
     field.addEventListener("change", () => {
       if (dialog) dialog.dataset.dirty = "true";
-    });
-  });
-  root.querySelectorAll(".review-attachments-toggle").forEach((details) => {
-    details.addEventListener("toggle", () => {
-      if (!details.open) return;
-      const list = details.querySelector(".review-attachment-list");
-      const first = list ? list.querySelector(".review-attachment-item") : null;
-      const selected = list ? list.querySelector(".review-attachment-item.is-selected") : null;
-      if (!selected && first) first.click();
     });
   });
   root.querySelectorAll("[data-line-product-select]").forEach((select) => {
@@ -246,6 +252,20 @@ function renderAttachmentPreviewLoading(orderId, filename) {
   `;
 }
 
+function attachmentActions(previewUrl, downloadUrl) {
+  return `
+    <div class="review-channel-actions">
+      <a class="button secondary compact-button" target="_blank" href="${escapeHtml(previewUrl)}">Abrir</a>
+      <a class="button secondary compact-button" href="${escapeHtml(downloadUrl)}">Descargar</a>
+    </div>
+  `;
+}
+
+function pdfFrameUrl(url) {
+  if (!url) return "";
+  return url.includes("#") ? url : `${url}#view=FitH&navpanes=0`;
+}
+
 async function renderAttachmentPreviewContent(orderId, attachmentNode) {
   const preview = document.getElementById(`review-attachment-preview-${orderId}`);
   if (!preview) return;
@@ -261,15 +281,16 @@ async function renderAttachmentPreviewContent(orderId, attachmentNode) {
     return;
   }
   if (kind === "pdf") {
+    const frameUrl = pdfFrameUrl(previewUrl);
     preview.innerHTML = `
       <div class="review-attachment-preview-head">
         <div>
           <strong>${escapeHtml(filename)}</strong>
           <span>${escapeHtml(sizeLabel)}</span>
         </div>
-        <a class="button secondary compact-button" target="_blank" href="${escapeHtml(previewUrl)}">Abrir</a>
+        ${attachmentActions(previewUrl, downloadUrl)}
       </div>
-      <iframe class="review-attachment-frame" src="${escapeHtml(previewUrl)}"></iframe>
+      <iframe class="review-attachment-frame" src="${escapeHtml(frameUrl)}"></iframe>
     `;
     return;
   }
@@ -280,7 +301,7 @@ async function renderAttachmentPreviewContent(orderId, attachmentNode) {
           <strong>${escapeHtml(filename)}</strong>
           <span>${escapeHtml(sizeLabel)}</span>
         </div>
-        <a class="button secondary compact-button" target="_blank" href="${escapeHtml(previewUrl)}">Abrir</a>
+        ${attachmentActions(previewUrl, downloadUrl)}
       </div>
       <div class="review-attachment-image-wrap">
         <img class="review-attachment-image" src="${escapeHtml(previewUrl)}" alt="${escapeHtml(filename)}">
@@ -317,7 +338,7 @@ async function renderAttachmentPreviewContent(orderId, attachmentNode) {
               <strong>${escapeHtml(filename)}</strong>
               <span>${escapeHtml(sizeLabel)}</span>
             </div>
-            <a class="button secondary compact-button" target="_blank" href="${escapeHtml(previewUrl)}">Abrir</a>
+            ${attachmentActions(previewUrl, downloadUrl)}
           </div>
           <div class="review-attachment-table-wrap">
             <table class="review-attachment-table">
@@ -337,7 +358,7 @@ async function renderAttachmentPreviewContent(orderId, attachmentNode) {
           <strong>${escapeHtml(filename)}</strong>
           <span>${escapeHtml(sizeLabel)}</span>
         </div>
-        <a class="button secondary compact-button" target="_blank" href="${escapeHtml(previewUrl)}">Abrir</a>
+        ${attachmentActions(previewUrl, downloadUrl)}
       </div>
       <pre class="review-attachment-text">${escapeHtml(text)}</pre>
     `;
@@ -346,16 +367,10 @@ async function renderAttachmentPreviewContent(orderId, attachmentNode) {
   renderAttachmentPreviewEmpty(orderId, "No se puede previsualizar este archivo.", downloadUrl);
 }
 
-function selectOrderAttachmentPreview(event, button) {
-  event.preventDefault();
-  event.stopPropagation();
-  const orderId = button.dataset.orderId;
-  const details = document.getElementById(`review-attachments-toggle-${orderId}`);
-  if (details && !details.open) details.open = true;
-  const list = button.closest(".review-attachment-list");
-  if (list) list.querySelectorAll(".is-selected").forEach((node) => node.classList.remove("is-selected"));
-  button.classList.add("is-selected");
-  renderAttachmentPreviewContent(orderId, button);
+function selectAttachmentPreviewFromSelect(select) {
+  const option = select.selectedOptions ? select.selectedOptions[0] : null;
+  if (!option) return;
+  renderAttachmentPreviewContent(option.dataset.orderId, option);
 }
 
 function anyWorkbenchModalOpen() {

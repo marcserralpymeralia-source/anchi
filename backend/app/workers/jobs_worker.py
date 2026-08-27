@@ -14,13 +14,14 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
+from app.channels.service import is_channel_enabled
 from app.agent.platform import LearningService
 from app.agent.services import AgentProcessingService, ScoringService
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import record_job
 from app.core.observability import observability_scope
-from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, FTPSettings, ImportJob, InboundMessage, Order, ScoringSettings
+from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, ExportSettings, FTPSettings, ImportJob, InboundMessage, Order, ScoringSettings
 from app.exports.service import ExportService, FTPService
 from app.logs.service import log_action
 from app.orders.state import ORDER_STATE
@@ -33,7 +34,7 @@ from app.orders.routes import _customer_label, _sync_customer_product_knowledge,
 from app.semantic_retrieval.products import index_products
 from app.settings.integrations import backfill_imap_emails, read_latest_imap_emails
 from app.settings.service import get_or_create_settings
-from app.jobs.service import claim_next_job, fail_job, finish_job, job_payload, job_trace, recover_stale_jobs, update_job_progress
+from app.jobs.service import claim_next_job, enqueue_job, fail_job, finish_job, job_payload, job_trace, recover_stale_jobs, update_job_progress
 from app.tenancy.migrations import tenant_migration_report
 from app.tenancy.database import tenant_db_session
 
@@ -105,6 +106,12 @@ def _process_job(db, job: BackgroundJob) -> dict:
     if job.job_type == "bulk_order_action":
         return _process_bulk_action(db, job, payload)
     if job.job_type == "email_sync":
+        if not is_channel_enabled(db, job.company_id, "email"):
+            return {
+                "ok": True,
+                "skipped": True,
+                "message": "Canal Email desactivado para este tenant",
+            }
         settings = get_or_create_settings(db, EmailSettings, job.company_id)
         master_db = MasterSessionLocal()
         try:
@@ -138,6 +145,12 @@ def _process_job(db, job: BackgroundJob) -> dict:
         finally:
             master_db.close()
     if job.job_type == "process_recent_emails":
+        if not is_channel_enabled(db, job.company_id, "email"):
+            return {
+                "ok": True,
+                "skipped": True,
+                "message": "Canal Email desactivado para este tenant",
+            }
         settings = get_or_create_settings(db, EmailSettings, job.company_id)
         limit = max(min(int(payload.get("limit", 3) or 3), 10), 1)
         master_db = MasterSessionLocal()
@@ -172,6 +185,12 @@ def _process_job(db, job: BackgroundJob) -> dict:
         finally:
             master_db.close()
     if job.job_type == "backfill_imap":
+        if not is_channel_enabled(db, job.company_id, "email"):
+            return {
+                "ok": True,
+                "skipped": True,
+                "message": "Canal Email desactivado para este tenant",
+            }
         settings = get_or_create_settings(db, EmailSettings, job.company_id)
         master_db = MasterSessionLocal()
         try:
@@ -192,20 +211,48 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 )
                 master_db.add(sync_state)
                 master_db.commit()
-            return backfill_imap_emails(
+            requested_limit = max(int(payload.get("limit") or 1), 1)
+
+            result = backfill_imap_emails(
                 db,
                 settings,
                 job.company_id,
                 payload.get("from_date"),
                 payload.get("to_date"),
-                payload.get("limit"),
+                requested_limit,
                 from_uid=payload.get("from_uid"),
                 to_uid=payload.get("to_uid"),
-                batch_size=payload.get("batch_size"),
+                batch_size=5,
                 resume=bool(payload.get("resume", False)),
+                stop_after_batch=True,
                 sync_state=sync_state,
                 sync_session=master_db,
             )
+
+            consumed = max(int(result.get("batch_count") or 0), 0)
+            remaining = max(requested_limit - consumed, 0)
+
+            if result.get("ok") and result.get("has_more") and remaining > 0:
+                continuation_payload = {
+                    "from_date": payload.get("from_date"),
+                    "to_date": payload.get("to_date"),
+                    "limit": remaining,
+                    "resume": True,
+                }
+                if payload.get("to_uid"):
+                    continuation_payload["to_uid"] = payload.get("to_uid")
+
+                continuation = enqueue_job(
+                    db,
+                    company_id=job.company_id,
+                    job_type="backfill_imap",
+                    payload=continuation_payload,
+                    created_by_user_id=job.created_by_user_id,
+                )
+                result["continuation_job_id"] = continuation.id
+                result["remaining"] = remaining
+
+            return result
         finally:
             master_db.close()
     if job.job_type == "process_pending_emails":
@@ -228,7 +275,12 @@ def _process_job(db, job: BackgroundJob) -> dict:
         email = db.get(Email, email_id)
         if not email or email.company_id != job.company_id:
             raise RuntimeError("No se encontró el correo a procesar.")
-        result = AgentProcessingService().process_email(db, email)
+        force_order = bool(payload.get("force"))
+        result = AgentProcessingService().process_email(
+            db,
+            email,
+            force_order=force_order,
+        )
         return {"ok": True, **result}
     if job.job_type == "process_order":
         order_id = int(payload.get("order_id") or 0)
@@ -236,7 +288,11 @@ def _process_job(db, job: BackgroundJob) -> dict:
         if not order or order.company_id != job.company_id:
             raise RuntimeError("No se encontró el pedido a procesar.")
         if order.email:
-            result = AgentProcessingService().process_email(db, order.email)
+            result = AgentProcessingService().process_email(
+                db,
+                order.email,
+                force_order=True,
+            )
             return {"ok": True, **result}
         return {"ok": False, "message": "El pedido no tiene correo asociado."}
     if job.job_type == "process_inbound_message":
@@ -338,11 +394,44 @@ def _process_export_job(db, job: BackgroundJob, payload: dict) -> dict:
         export = ExportService().generate_csv(db, order)
     ftp_settings = get_or_create_settings(db, FTPSettings, job.company_id)
     send_via_ftp = job.job_type == "export_order_ftp"
-    ok = True
-    if send_via_ftp:
-        ok = FTPService().send(export) if ftp_settings.host else False
+
+    if not send_via_ftp:
+        export.status = "generated"
+        return {
+            "ok": True,
+            "message": "Archivo de exportacion generado",
+            "export": _serialize_export(export),
+            "order_id": order.id,
+        }
+
+    if order.status not in {"pedido_confirmado", "pedido_validado", "error_exportacion"}:
+        raise RuntimeError("El pedido debe estar confirmado antes de enviarse.")
+
+    if not ftp_settings.host:
+        raise RuntimeError("La conexion de exportacion no esta configurada.")
+
+    export_settings = get_or_create_settings(
+        db,
+        ExportSettings,
+        job.company_id,
+    )
+    ok = FTPService().send(
+        export,
+        ftp_settings,
+        encoding=export_settings.encoding or "utf-8",
+    )
+
     ORDER_STATE.export(order, ok=ok, when=_now())
     export.status = "sent" if ok else "error"
+
+    if not ok:
+        return {
+            "ok": False,
+            "message": "Exportacion fallida",
+            "export": _serialize_export(export),
+            "order_id": order.id,
+        }
+
     if ok:
         order.exported_at = order.exported_at or _now()
         for line in order.lines or []:
@@ -446,15 +535,45 @@ def _process_bulk_action(db, job: BackgroundJob, payload: dict) -> dict:
                 db.commit()
                 processed += 1
             elif action == "export":
-                export = ExportService().generate_csv(db, order)
+                if order.status not in {"pedido_confirmado", "pedido_validado", "error_exportacion"}:
+                    skipped += 1
+                    update_job_progress(db, job, int(((processed + skipped) / total) * 100))
+                    continue
+
                 ftp_settings = get_or_create_settings(db, FTPSettings, job.company_id)
-                ok = FTPService().send(export) if ftp_settings.host else False
+                if not ftp_settings.host:
+                    skipped += 1
+                    update_job_progress(db, job, int(((processed + skipped) / total) * 100))
+                    continue
+
+                export = db.scalar(
+                    select(ExportFile)
+                    .where(
+                        ExportFile.order_id == order.id,
+                        ExportFile.company_id == job.company_id,
+                    )
+                    .order_by(ExportFile.created_at.desc())
+                )
+                if not export:
+                    export = ExportService().generate_csv(db, order)
+
+                export_settings = get_or_create_settings(
+                    db,
+                    ExportSettings,
+                    job.company_id,
+                )
+                ok = FTPService().send(
+                    export,
+                    ftp_settings,
+                    encoding=export_settings.encoding or "utf-8",
+                )
                 ORDER_STATE.export(order, ok=ok, when=_now())
-                if ok:
-                    order.exported_at = _now()
-                    export.status = "sent"
-                else:
-                    export.status = "error"
+                export.status = "sent" if ok else "error"
+
+                if not ok:
+                    raise RuntimeError(f"Exportacion fallida para pedido {order.id}")
+
+                order.exported_at = order.exported_at or _now()
                 db.commit()
                 processed += 1
             elif action in {"delete", "discard"}:
@@ -514,12 +633,18 @@ def _process_bulk_action(db, job: BackgroundJob, payload: dict) -> dict:
     return {"ok": True, "message": f"Accion masiva {action}: {processed} aplicadas, {skipped} omitidas.", "processed": processed, "skipped": skipped}
 
 
-def _handle_tenant_jobs(tenant: MasterTenantDatabase, owner: str) -> dict[str, int]:
+def _handle_tenant_jobs(
+    tenant: MasterTenantDatabase,
+    owner: str,
+    *,
+    max_jobs: int | None = None,
+) -> dict[str, int]:
     if not tenant.database_url:
-        return {"recovered": 0, "processed": 0, "blocked": 0}
+        return {"recovered": 0, "attempted": 0, "processed": 0, "blocked": 0}
     session_factory = tenant_db_session(tenant.database_url)
     db = session_factory()
     recovered_jobs = 0
+    attempted_jobs = 0
     processed_jobs = 0
     blocked_jobs = 0
     try:
@@ -532,10 +657,10 @@ def _handle_tenant_jobs(tenant: MasterTenantDatabase, owner: str) -> dict[str, i
                 schema_report.get("version"),
                 schema_report.get("checksum"),
             )
-            return {"recovered": 0, "processed": 0, "blocked": 1}
+            return {"recovered": 0, "attempted": 0, "processed": 0, "blocked": 1}
         recovered = recover_stale_jobs(db, owner=owner, job_types=JOB_TYPES)
         recovered_jobs += len(recovered)
-        while True:
+        while max_jobs is None or attempted_jobs < max_jobs:
             job = claim_next_job(
                 db,
                 owner=owner,
@@ -543,6 +668,7 @@ def _handle_tenant_jobs(tenant: MasterTenantDatabase, owner: str) -> dict[str, i
             )
             if not job:
                 break
+            attempted_jobs += 1
             trace = job_trace(job)
             with observability_scope(
                 request_id=trace.get("request_id"),
@@ -605,12 +731,23 @@ def _handle_tenant_jobs(tenant: MasterTenantDatabase, owner: str) -> dict[str, i
                     )
     finally:
         db.close()
-    return {"recovered": recovered_jobs, "processed": processed_jobs, "blocked": blocked_jobs}
+    return {
+        "recovered": recovered_jobs,
+        "attempted": attempted_jobs,
+        "processed": processed_jobs,
+        "blocked": blocked_jobs,
+    }
 
 
-def run_worker_cycle() -> dict[str, int]:
+def run_worker_cycle(*, max_jobs: int | None = None) -> dict[str, int]:
     configure_logging()
-    summary = {"tenants": 0, "recovered": 0, "processed": 0, "blocked": 0}
+    summary = {
+        "tenants": 0,
+        "recovered": 0,
+        "attempted": 0,
+        "processed": 0,
+        "blocked": 0,
+    }
     master_db = MasterSessionLocal()
     try:
         tenants = master_db.scalars(
@@ -621,8 +758,16 @@ def run_worker_cycle() -> dict[str, int]:
         ).all()
         summary["tenants"] = len(tenants)
         for tenant in tenants:
-            tenant_summary = _handle_tenant_jobs(tenant, owner=_identity())
+            remaining = None if max_jobs is None else max(max_jobs - summary["attempted"], 0)
+            if remaining == 0:
+                break
+            tenant_summary = _handle_tenant_jobs(
+                tenant,
+                owner=_identity(),
+                max_jobs=remaining,
+            )
             summary["recovered"] += tenant_summary["recovered"]
+            summary["attempted"] += tenant_summary.get("attempted", 0)
             summary["processed"] += tenant_summary["processed"]
             summary["blocked"] += tenant_summary.get("blocked", 0)
     finally:

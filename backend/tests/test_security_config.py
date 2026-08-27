@@ -357,6 +357,7 @@ class SecurityConfigurationTests(unittest.TestCase):
                 "ENABLE_DEMO_BOOTSTRAP": "false",
                 "DEBUG": "false",
                 "SESSION_COOKIE_SECURE": "true",
+                "ALLOWED_HOSTS": "",
                 "DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi",
                 "MASTER_DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/anchi_master",
                 "DEFAULT_ADMIN_EMAIL": "ops@example.com",

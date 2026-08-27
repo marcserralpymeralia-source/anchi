@@ -25,7 +25,6 @@ from app.settings.email_config import TEMPLATE_VARIABLES, email_config_status, e
 from app.settings.integrations import classify_sample, extract_sample, preview_initial_imap_sync, run_initial_imap_sync, send_test_email, test_imap_connection, test_smtp_connection
 from app.settings.application import run_connection_test, update_settings_section_async
 from app.settings.service import get_or_create_settings, resolve_updated_by_id, update_with_form
-from app.setup.service import get_setup_status
 from app.dashboard.service import recent_processed_emails_overview
 from app.jobs.service import enqueue_job, execute_job_inline
 from app.tenancy.database import get_tenant_db
@@ -138,23 +137,7 @@ def _clone_email_settings_for_preview(db: Session, company_id: int, data: dict) 
 
 
 @router.get("")
-def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
-    setup_status = get_setup_status(db, user.company_id)
-    email = get_or_create_settings(db, EmailSettings, user.company_id)
-    email_sync_state = master_db.scalar(select(EmailSyncState).where(EmailSyncState.company_id == user.company_id, EmailSyncState.channel_key == "email"))
-    company = db.get(Company, user.company_id)
-    return templates.TemplateResponse(
-        "setup/settings_summary.html",
-        {
-            "request": request,
-            "user": user,
-            "setup_status": setup_status,
-            "company": company,
-            "email": email,
-            "email_sync_state": email_sync_state,
-            "title": "Configuración",
-        },
-    )
+def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     llm_settings = get_or_create_settings(db, LLMSettings, user.company_id)
     scoring_settings = get_or_create_settings(db, ScoringSettings, user.company_id)
     decision_settings = get_or_create_settings(db, DecisionSettings, user.company_id)
@@ -916,18 +899,37 @@ def backfill_email_history(
     if from_date_value and to_date_value and to_date_value < from_date_value:
         return JSONResponse({"ok": False, "message": "La fecha final no puede ser anterior a la inicial."}, status_code=400)
     safe_limit = max(min(int(limit or 100), 100), 1)
+    run_id = getattr(request.state, "request_id", None)
+
+    payload = {
+        "from_date": from_date or settings.read_from_date,
+        "to_date": to_date or None,
+        "limit": safe_limit,
+    }
+    if run_id:
+        payload["run_id"] = run_id
+
     job = enqueue_job(
         db,
         company_id=user.company_id,
         job_type="backfill_imap",
-        payload={"from_date": (from_date or settings.read_from_date), "to_date": to_date or None, "limit": safe_limit},
+        payload=payload,
         created_by_user_id=user.id,
     )
     db.commit()
     date_label = from_date or settings.read_from_date or "configuración"
     if to_date:
         date_label = f"{date_label} a {to_date}"
-    log_action(db, company_id=user.company_id, user=user, action="email.backfill", entity_type="job", entity_id=job.id, message=f"Backfill IMAP encolado desde {date_label} (límite {safe_limit})")
+
+    log_action(
+        db,
+        company_id=user.company_id,
+        user=user,
+        action="email.backfill",
+        entity_type="job",
+        entity_id=job.id,
+        message=f"Backfill IMAP encolado desde {date_label} (límite {safe_limit})",
+    )
     return _queued_job_response(request, job.id, "/settings#email-diagnostics")
 
 

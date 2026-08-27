@@ -428,7 +428,7 @@
             <h4>Procesados recientes</h4>
             <p class="muted">Correos ya analizados en los últimos 30 días para comparar de un vistazo con el original.</p>
           </div>
-          <a class="button secondary compact-button" href="/entries?tab=processed&date_range=30d&sort=date_desc">Abrir entradas</a>
+          <a class="button secondary compact-button" href="/?tab=processed&date_range=30d&sort=date_desc">Abrir bandeja</a>
         </div>
         <div class="recent-email-list">
           {% for email in recent_processed_emails %}
@@ -656,7 +656,7 @@
         <div><span>Errores recientes</span><strong>{% if email_status.last_sync.error %}1{% else %}0{% endif %}</strong></div>
       </div>
       <div class="drawer-actions">
-        <a class="button secondary compact-button" href="/mail">Ver bandeja de entrada</a>
+        <a class="button secondary compact-button" href="/">Ver bandeja de entrada</a>
         {% if can_test_email %}<form class="js-loading-form" method="post" action="/settings/email/imap/test"><button class="secondary compact-button" data-loading-text="Probando...">Probar IMAP</button></form>{% endif %}
         {% if can_test_email %}<form class="js-loading-form" method="post" action="/settings/email/smtp/test"><button class="secondary compact-button" data-loading-text="Probando...">Probar SMTP</button></form>{% endif %}
         <form class="js-loading-form" method="post" action="/settings/email/read-unprocessed"><button class="secondary compact-button" data-loading-text="Sincronizando...">Sincronizar ahora</button></form>
@@ -979,14 +979,20 @@
 <dialog id="settings-ftp" class="settings-drawer">
   <div class="drawer-head">
     <div>
-      <h3>FTP / SFTP</h3>
+      <h3>FTP / FTPS</h3>
       <p class="muted">Destino de exportación y credenciales.</p>
     </div>
     <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
   </div>
   <form class="drawer-body stack js-loading-form" method="post" action="/settings/ftp">
     <div class="form-grid">
-      <label>Tipo<select name="connection_type"><option value="sftp" {% if ftp.connection_type == "sftp" %}selected{% endif %}>SFTP</option><option value="ftp" {% if ftp.connection_type == "ftp" %}selected{% endif %}>FTP</option></select></label>
+      <label>Tipo
+        <select name="connection_type">
+          <option value="ftp" {% if ftp.connection_type == "ftp" %}selected{% endif %}>FTP</option>
+          <option value="ftps_explicit" {% if ftp.connection_type == "ftps_explicit" %}selected{% endif %}>FTPS explícito</option>
+          <option value="ftps_implicit" {% if ftp.connection_type == "ftps_implicit" %}selected{% endif %}>FTPS implícito</option>
+        </select>
+      </label>
       <label>Host<input name="host" value="{{ ftp.host or '' }}"></label>
       <label>Puerto<input name="port" type="number" value="{{ ftp.port }}"></label>
       <label>Usuario<input name="username" value="{{ ftp.username or '' }}"></label>

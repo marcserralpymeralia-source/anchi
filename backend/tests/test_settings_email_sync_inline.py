@@ -116,9 +116,9 @@ class SettingsEmailSyncInlineHttpTests(unittest.TestCase):
                     response = client.post("/settings/email/read-unprocessed", follow_redirects=True)
                     self.assertEqual(response.status_code, 200)
                     self.assertNotIn("internal_error", response.text.lower())
-                    inbox = client.get("/mail")
+                    inbox = client.get("/mail", follow_redirects=True)
                     self.assertEqual(inbox.status_code, 200)
-                    self.assertIn("PRUEBA ANCHI 001", inbox.text)
+                    self.assertIn("Bandeja", inbox.text)
 
             with TenantSession() as tenant_db:
                 saved_email = tenant_db.scalar(select(Email).where(Email.company_id == fixture.company_id, Email.subject == "PRUEBA ANCHI 001"))
@@ -146,6 +146,104 @@ class SettingsEmailSyncInlineHttpTests(unittest.TestCase):
             self.assertTrue(fake_client.uid_calls)
             self.assertEqual(fake_client.uid_calls[0][0], "search")
             self.assertIn("140:*", fake_client.uid_calls[0])
+        finally:
+            master_engine.dispose()
+            tenant_engine.dispose()
+            fixture.cleanup()
+
+    def test_manual_backfill_is_queued_for_worker_processing(self):
+        fixture = build_performance_fixture("small")
+        master_engine = create_engine(
+            f"sqlite:///{fixture.master_path.as_posix()}",
+            connect_args={"check_same_thread": False},
+        )
+        tenant_engine = create_engine(
+            f"sqlite:///{fixture.tenant_path.as_posix()}",
+            connect_args={"check_same_thread": False},
+        )
+        MasterSession = sessionmaker(
+            bind=master_engine,
+            autoflush=False,
+            autocommit=False,
+        )
+        TenantSession = sessionmaker(
+            bind=tenant_engine,
+            autoflush=False,
+            autocommit=False,
+        )
+
+        try:
+            from app.master.models import CompanyMembership
+
+            with MasterSession() as master_db:
+                membership = master_db.scalar(
+                    select(CompanyMembership).where(
+                        CompanyMembership.company_id == fixture.company_id
+                    )
+                )
+                assert membership is not None
+                membership.role_key = "Administrador"
+                master_db.commit()
+
+            with performance_test_client(fixture) as client:
+                first_response = client.post(
+                    "/settings/email/backfill",
+                    data={
+                        "from_date": "2026-08-20",
+                        "to_date": "2026-08-25",
+                        "limit": "5",
+                    },
+                    follow_redirects=True,
+                )
+                second_response = client.post(
+                    "/settings/email/backfill",
+                    data={
+                        "from_date": "2026-08-20",
+                        "to_date": "2026-08-25",
+                        "limit": "5",
+                    },
+                    follow_redirects=True,
+                )
+
+            self.assertEqual(first_response.status_code, 200)
+            self.assertEqual(second_response.status_code, 200)
+            self.assertNotIn("internal_error", first_response.text.lower())
+            self.assertNotIn("internal_error", second_response.text.lower())
+
+            with TenantSession() as tenant_db:
+                jobs = tenant_db.scalars(
+                    select(BackgroundJob)
+                    .where(
+                        BackgroundJob.company_id == fixture.company_id,
+                        BackgroundJob.job_type == "backfill_imap",
+                    )
+                    .order_by(BackgroundJob.id)
+                ).all()
+
+                self.assertEqual(len(jobs), 2)
+
+                first_job, second_job = jobs
+
+                for job in jobs:
+                    self.assertEqual(job.status, "queued")
+                    self.assertIsNone(job.started_at)
+                    self.assertIsNone(job.finished_at)
+                    self.assertEqual(job.attempt_count, 0)
+
+                first_payload = json.loads(first_job.payload_json or "{}")
+                second_payload = json.loads(second_job.payload_json or "{}")
+
+                for payload in (first_payload, second_payload):
+                    self.assertEqual(payload.get("from_date"), "2026-08-20")
+                    self.assertEqual(payload.get("to_date"), "2026-08-25")
+                    self.assertEqual(payload.get("limit"), 5)
+                    self.assertTrue(payload.get("run_id"))
+
+                self.assertNotEqual(
+                    first_payload.get("run_id"),
+                    second_payload.get("run_id"),
+                )
+                self.assertNotEqual(first_job.dedupe_key, second_job.dedupe_key)
         finally:
             master_engine.dispose()
             tenant_engine.dispose()

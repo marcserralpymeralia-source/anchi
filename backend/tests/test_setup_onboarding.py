@@ -191,7 +191,7 @@ class SetupOnboardingTests(unittest.TestCase):
             self.assertEqual(response.headers["location"], "/setup")
             setup_page = client.get("/setup/company")
             self.assertEqual(setup_page.status_code, 200)
-            self.assertIn("Pedidos pendientes", setup_page.text)
+            self.assertIn("Bandeja", setup_page.text)
             self.assertIn("Configura Anchi", setup_page.text)
             self.assertIn("Configuración completada", setup_page.text)
         finally:
@@ -203,11 +203,13 @@ class SetupOnboardingTests(unittest.TestCase):
         client, cleanup = fixture.client()
         try:
             self._login(client)
-            response = client.get("/inicio")
-            self.assertEqual(response.status_code, 200)
-            self.assertIn("Anchi todavía no está lista", response.text)
-            self.assertIn("Continuar configuración", response.text)
-            self.assertIn("Pedidos pendientes", response.text)
+            response = client.get("/inicio", follow_redirects=False)
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(response.headers["location"], "/")
+            follow_up = client.get("/", follow_redirects=True)
+            self.assertEqual(follow_up.status_code, 200)
+            self.assertIn("Anchi todavía no está lista", follow_up.text)
+            self.assertIn("Continuar configuración", follow_up.text)
             self.assertNotIn("/login", response.headers.get("location", ""))
         finally:
             cleanup()
@@ -231,6 +233,27 @@ class SetupOnboardingTests(unittest.TestCase):
                     follow_redirects=False,
                 )
             self.assertEqual(email.status_code, 303)
+
+            with fixture.TenantSession() as db:
+                email_channel = db.scalar(
+                    select(InputChannel).where(
+                        InputChannel.company_id == 1,
+                        InputChannel.key == "email",
+                    )
+                )
+                self.assertIsNotNone(email_channel)
+                self.assertTrue(email_channel.is_active)
+
+                whatsapp_channel = db.scalar(
+                    select(InputChannel).where(
+                        InputChannel.company_id == 1,
+                        InputChannel.key == "whatsapp",
+                    )
+                )
+                self.assertTrue(
+                    whatsapp_channel is None or not whatsapp_channel.is_active
+                )
+
             products_csv = b"SKU,Descripcion producto,Unidad,Precio venta\nP001,Producto Demo,uds,12.5\n"
             product_preview = client.post("/setup/products/preview", files={"file": ("products.csv", products_csv, "text/csv")})
             self.assertEqual(product_preview.status_code, 200)
@@ -369,16 +392,18 @@ class SetupOnboardingTests(unittest.TestCase):
             cleanup()
             fixture.cleanup()
 
-    def test_settings_is_simple_configuration_summary(self):
+    def test_settings_is_permanent_configuration_page(self):
         fixture = SetupFixture()
         client, cleanup = fixture.client()
         try:
             self._login(client)
             response = client.get("/settings")
             self.assertEqual(response.status_code, 200)
-            self.assertIn("Empresa", response.text)
-            self.assertIn("OpenAI", response.text)
-            self.assertIn("Información adicional", response.text)
+            self.assertIn("Configuración", response.text)
+            self.assertIn("Confianza y automatización", response.text)
+            self.assertIn("/settings/channels", response.text)
+            self.assertIn("/settings/email/receive", response.text)
+            self.assertNotIn("Información adicional", response.text)
         finally:
             cleanup()
             fixture.cleanup()

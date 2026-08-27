@@ -13,8 +13,8 @@ from email import policy
 from email import message_from_bytes
 from email.header import decode_header, make_header
 from email.message import EmailMessage
+from io import BytesIO
 from pathlib import Path
-from uuid import uuid4
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
@@ -23,13 +23,16 @@ from app.agent.prompt_runtime import run_prompt_execution
 from app.core.encryption import decrypt_secret
 from app.db.models import Email, EmailAttachment, EmailSettings, InboundMessage, LLMSettings, MessageAttachment
 from app.master.models import EmailSyncState
-from app.messages.service import upsert_inbound_message
+from app.messages.service import (
+    NormalizedMessage,
+    persist_normalized_message,
+)
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
+from app.core.attachment_storage import read_attachment, save_attachment
 
 
 logger = logging.getLogger(__name__)
-ATTACHMENTS_DIR = Path(__file__).resolve().parents[1] / "storage" / "attachments"
 IMAP_RECENT_MESSAGES_LIMIT = 3
 IMAP_DEFAULT_INITIAL_LIMIT = 20
 IMAP_MAX_MESSAGES_PER_RUN = 50
@@ -261,7 +264,7 @@ def _imap_search_criteria(
         criteria.extend(["BEFORE", (end_date + timedelta(days=1)).strftime("%d-%b-%Y")])
     if start_uid or end_uid:
         uid_range = f"{start_uid or '1'}:{end_uid or '*'}"
-        criteria.append(uid_range)
+        criteria.extend(["UID", uid_range])
     if unread_only:
         criteria.append("UNSEEN")
     return criteria or ["ALL"]
@@ -644,6 +647,7 @@ def _fetch_imap_emails(
     sync_state: EmailSyncState | None = None,
     sync_session: Session | None = None,
     batch_size: int | None = None,
+    stop_after_batch: bool = False,
 ) -> dict:
     password = decrypt_secret(settings.imap_password_encrypted)
     if not settings.imap_host or not settings.imap_username or not password:
@@ -780,8 +784,11 @@ def _fetch_imap_emails(
             checkpoint_uid = sync_state.last_seen_uid
         processed_since_checkpoint = 0
         last_processed_uid = checkpoint_uid
+        has_more = False
+        batch_count = 0
         for offset in range(0, len(ids), batch_size):
             batch = ids[offset : offset + batch_size]
+            batch_count = len(batch)
             for msg_id in batch:
                 try:
                     status, msg_data = client.uid("fetch", msg_id, "(UID RFC822)")
@@ -926,6 +933,11 @@ def _fetch_imap_emails(
             if sync_state and sync_state.backfill_status in {"paused", "cancelled"}:
                 break
             saved_email_ids.clear()
+
+            if stop_after_batch and offset + batch_size < len(ids):
+                has_more = True
+                break
+
         client.logout()
         final_status = sync_state.backfill_status if sync_state else "idle"
         if sync_state and sync_session:
@@ -964,6 +976,25 @@ def _fetch_imap_emails(
                     attachments_saved=attachments_saved,
                     found=found,
                     status="cancelled",
+                    progress=processed_since_checkpoint,
+                    total=found,
+                )
+            elif has_more:
+                _update_sync_checkpoint(
+                    sync_state,
+                    sync_session,
+                    mailbox=mailbox,
+                    uidvalidity=uidvalidity,
+                    source_provider=current_scope["provider"],
+                    source_host=current_scope["host"],
+                    source_username=current_scope["username"],
+                    source_connected_email=current_scope["connected_email"],
+                    last_uid=last_processed_uid or sync_state.backfill_last_uid,
+                    saved=saved,
+                    duplicates=duplicates,
+                    attachments_saved=attachments_saved,
+                    found=found,
+                    status="running",
                     progress=processed_since_checkpoint,
                     total=found,
                 )
@@ -1020,6 +1051,9 @@ def _fetch_imap_emails(
             "uidvalidity": uidvalidity,
             "last_seen_uid_before": last_seen_uid_before,
             "last_seen_uid_after": last_processed_uid,
+            "last_uid": last_processed_uid,
+            "has_more": has_more,
+            "batch_count": batch_count,
             "message": settings.last_sync_message,
         }
     except (imaplib.IMAP4.error, socket.timeout, OSError) as exc:
@@ -1090,6 +1124,7 @@ def backfill_imap_emails(
     to_uid: str | None = None,
     batch_size: int | None = None,
     resume: bool = False,
+    stop_after_batch: bool = False,
     sync_state: EmailSyncState | None = None,
     sync_session: Session | None = None,
 ) -> dict:
@@ -1102,7 +1137,7 @@ def backfill_imap_emails(
     if not start_date:
         return {"ok": False, "found": 0, "saved": 0, "message": "Indica una fecha valida para el backfill (AAAA-MM-DD)."}
     if resume and sync_state and sync_state.backfill_last_uid:
-        from_uid = sync_state.backfill_last_uid
+        from_uid = _advance_uid(sync_state.backfill_last_uid)
     return _fetch_imap_emails(
         db,
         settings,
@@ -1118,6 +1153,7 @@ def backfill_imap_emails(
         sync_state=sync_state,
         sync_session=sync_session,
         batch_size=batch_size,
+        stop_after_batch=stop_after_batch,
     )
 
 
@@ -1179,48 +1215,55 @@ def _is_attachment(part: EmailMessage) -> bool:
     return bool(filename) or disposition in {"attachment", "inline"} and content_type not in {"text/plain", "text/html"}
 
 
-def _create_inbound_message(db: Session, company_id: int, email: Email, settings: EmailSettings, msg: EmailMessage, body: str) -> InboundMessage:
-    inbound_message, conversation = upsert_inbound_message(
-        db,
+def _create_inbound_message(
+    db: Session,
+    company_id: int,
+    email: Email,
+    settings: EmailSettings,
+    msg: EmailMessage,
+    body: str,
+) -> InboundMessage:
+    metadata = {
+        "message_id": email.message_id or email.external_id,
+        "from": email.sender,
+        "subject": email.subject,
+        "date": msg.get("Date"),
+        "imap_mailbox": email.imap_mailbox or settings.mailbox or settings.inbox_folder,
+        "imap_uidvalidity": email.imap_uidvalidity,
+        "imap_uid": email.imap_uid,
+    }
+
+    normalized = NormalizedMessage(
         company_id=company_id,
         channel_key="email",
         provider=settings.provider or "imap",
         external_id=email.external_id,
         sender=email.sender,
-        recipients=[settings.connected_email or settings.imap_username] if (settings.connected_email or settings.imap_username) else [],
+        recipients=[settings.connected_email or settings.imap_username]
+        if (settings.connected_email or settings.imap_username)
+        else [],
         subject=email.subject,
         text_content=body,
         direction="inbound",
         external_thread_id=msg.get("In-Reply-To") or msg.get("References"),
         received_at=email.received_at,
-        metadata={
-            "message_id": email.message_id or email.external_id,
-            "from": email.sender,
-            "subject": email.subject,
-            "date": msg.get("Date"),
-            "imap_mailbox": email.imap_mailbox or settings.mailbox or settings.inbox_folder,
-            "imap_uidvalidity": email.imap_uidvalidity,
-            "imap_uid": email.imap_uid,
-        },
+        metadata=metadata,
+    )
+
+    inbound_message, conversation = persist_normalized_message(
+        db,
+        normalized,
         content_type="email",
         has_attachments=False,
         has_pdf=False,
         has_audio=False,
     )
+
     email.conversation_id = conversation.id
     inbound_message.conversation_id = conversation.id
-    inbound_message.provider = settings.provider or "imap"
-    inbound_message.raw_payload_json = inbound_message.raw_payload_json or json.dumps(
-        {
-            "message_id": email.message_id or email.external_id,
-            "from": email.sender,
-            "subject": email.subject,
-            "date": msg.get("Date"),
-            "imap_mailbox": email.imap_mailbox or settings.mailbox or settings.inbox_folder,
-            "imap_uidvalidity": email.imap_uidvalidity,
-            "imap_uid": email.imap_uid,
-        },
-        ensure_ascii=False,
+    inbound_message.raw_payload_json = (
+        inbound_message.raw_payload_json
+        or json.dumps(metadata, ensure_ascii=False)
     )
     return inbound_message
 
@@ -1235,7 +1278,6 @@ def _save_attachments(
     max_attachments: int = IMAP_MAX_ATTACHMENTS_PER_EMAIL,
     max_attachment_size_mb: int = IMAP_MAX_ATTACHMENT_SIZE_MB,
 ) -> int:
-    ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
     count = 0
     for part in msg.walk():
         if not _is_attachment(part):
@@ -1258,9 +1300,11 @@ def _save_attachments(
         filename = _safe_filename(part.get_filename() or f"adjunto-{count + 1}")
         content_type = part.get_content_type() or "application/octet-stream"
         is_pdf = content_type == "application/pdf" or filename.lower().endswith(".pdf")
-        internal_name = f"email-{email.id}-{uuid4().hex[:10]}-{filename}"
-        storage_path = ATTACHMENTS_DIR / internal_name
-        storage_path.write_bytes(payload)
+        storage_path = save_attachment(
+            filename=f"email-{email.id}-{filename}",
+            payload=payload,
+            content_type=content_type,
+        )
         attachment = EmailAttachment(
             company_id=company_id,
             email_id=email.id,
@@ -1269,7 +1313,7 @@ def _save_attachments(
             size_bytes=len(payload),
             is_pdf=is_pdf,
             extraction_status="pending" if is_pdf else "not_applicable",
-            storage_path=str(storage_path),
+            storage_path=storage_path,
         )
         db.add(attachment)
         db.flush()
@@ -1280,7 +1324,7 @@ def _save_attachments(
                 filename=filename,
                 content_type=content_type,
                 size_bytes=len(payload),
-                storage_path=str(storage_path),
+                storage_path=storage_path,
                 extracted_text=attachment.extracted_text,
                 is_pdf=is_pdf,
                 is_image=content_type.startswith("image/"),
@@ -1302,9 +1346,8 @@ def _save_attachments(
 
 
 def _extract_pdf_text(db: Session, attachment: EmailAttachment) -> None:
-    path = Path(attachment.storage_path or "")
     try:
-        data = path.read_bytes()
+        data = read_attachment(attachment.storage_path or "")
         text = _extract_text_from_pdf_bytes(data)
         if text.strip():
             attachment.extracted_text = text.strip()
@@ -1321,7 +1364,16 @@ def _extract_pdf_text(db: Session, attachment: EmailAttachment) -> None:
 
 
 def _extract_text_from_pdf_bytes(data: bytes) -> str:
-    # Fallback ligero para PDFs con texto embebido sin depender de librerias externas.
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(BytesIO(data))
+        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        if text.strip():
+            return text.strip()
+    except Exception:
+        logger.exception("Fallo extrayendo PDF con pypdf; usando fallback ligero.")
+
     chunks: list[str] = []
     raw = data.decode("latin-1", errors="ignore")
     for match in re.finditer(r"\((.*?)\)\s*Tj", raw, re.S):

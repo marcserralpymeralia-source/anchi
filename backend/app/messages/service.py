@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Conversation, InboundMessage, InputChannel
@@ -27,6 +28,38 @@ class NormalizedMessage:
     sent_at: datetime | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
+
+
+def persist_normalized_message(
+    db: Session,
+    message: NormalizedMessage,
+    *,
+    content_type: str | None = None,
+    has_attachments: bool = False,
+    has_pdf: bool = False,
+    has_audio: bool = False,
+) -> tuple[InboundMessage, Conversation]:
+    return upsert_inbound_message(
+        db,
+        company_id=message.company_id,
+        channel_key=message.channel_key,
+        provider=message.provider,
+        external_id=message.external_id,
+        sender=message.sender,
+        recipients=message.recipients,
+        subject=message.subject,
+        text_content=message.text_content,
+        html_content=message.html_content,
+        direction=message.direction,
+        external_thread_id=message.external_thread_id,
+        received_at=message.received_at,
+        sent_at=message.sent_at,
+        metadata=message.metadata,
+        content_type=content_type,
+        has_attachments=has_attachments,
+        has_pdf=has_pdf,
+        has_audio=has_audio,
+    )
 
 def normalize_provider(value: str | None) -> str:
     return (value or "imap").strip().lower() or "imap"
@@ -236,7 +269,12 @@ def upsert_inbound_message(
 def link_message_to_order(db: Session, message: InboundMessage, order_id: int | None) -> None:
     message.order_id = order_id
     if message.conversation_id:
-        conversation = db.get(Conversation, message.conversation_id)
+        conversation = db.scalar(
+            select(Conversation).where(
+                Conversation.id == message.conversation_id,
+                Conversation.company_id == message.company_id,
+            )
+        )
         if conversation and order_id and conversation.last_activity_at is None:
             conversation.last_activity_at = message.received_at or datetime.now(timezone.utc)
             conversation.updated_at = datetime.now(timezone.utc)

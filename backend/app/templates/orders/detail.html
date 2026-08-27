@@ -1,263 +1,337 @@
 {% extends "base.html" %}
-{% set title = "Revisión de propuesta #" ~ order.id %}
+{% set title = "Pedido #" ~ order.id %}
+
 {% block content %}
 {% set attachments = order.email.attachments|list if order.email else [] %}
-{% set pdfs = order.email.attachments|selectattr("content_type", "equalto", "application/pdf")|list if order.email else [] %}
+{% set pdfs = attachments|selectattr("is_pdf")|list if attachments else [] %}
 {% set score_value = order.score if order.score is not none else 0 %}
-{% set customer_title = customer_context.customer.name if customer_context and customer_context.identified else order.customer_detected_name or "Cliente sin identificar" %}
-{% set incoming_title = "Pedido / correo / documento recibido" %}
-{% set has_email = order.email is not none %}
-{% set has_conversation = conversation_preview is not none %}
-{% set active_source = "conversation" if has_conversation else "email" %}
-{% if conversation_preview %}
-  {% set provider_label_lower = (conversation_preview.provider_label or "")|lower %}
-  {% if "whatsapp" in provider_label_lower %}
-    {% set incoming_title = "Conversación de WhatsApp recibida" %}
-  {% else %}
-    {% set incoming_title = "Conversación recibida" %}
-  {% endif %}
-{% endif %}
-{% if score_value >= 80 %}
-  {% set score_class = "score-safe" %}
-  {% set score_label = "Alta" %}
-{% elif score_value >= 60 %}
-  {% set score_class = "score-reviewable" %}
-  {% set score_label = "Revisable" %}
-{% elif score_value >= 40 %}
-  {% set score_class = "score-doubtful" %}
-  {% set score_label = "Dudosa" %}
-{% else %}
-  {% set score_class = "score-not-importable" %}
-  {% set score_label = "Bloqueada" %}
-{% endif %}
+{% set selected_customer_id = order.validated_customer_id or order.customer_id or 0 %}
 
-<article class="panel">
-  <div class="review-modal-header review-modal-header-v3 review-modal-header-compact">
-    <div class="review-header-title">
-      <strong>{{ customer_title }}</strong>
-      <div class="review-header-meta">
-        <span class="badge {{ order.status|status_class }}">{{ order.status|status_label }}</span>
-        <span class="score-badge {{ score_class }}">{{ "%.0f"|format(score_value) }}%</span>
-        <span class="badge">{{ score_label }}</span>
-        <span class="badge">{{ order.lines|length }} líneas</span>
-      </div>
-    </div>
-    <div class="review-header-actions review-header-actions-tight">
-      {% if order.email_id %}
-        <a class="button secondary compact-button" href="/entries?focus=email-{{ order.email_id }}">Ver origen</a>
+<div class="order-review-layout">
+
+  <section class="order-review-source">
+    <div class="order-review-tabs">
+      {% if order.email %}
+        <button
+          type="button"
+          class="order-review-tab is-active"
+          data-order-source-tab="email"
+        >
+          Correo
+        </button>
       {% endif %}
-      <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/reprocess">
-        <button class="secondary compact-button" data-loading-text="Reprocesando...">Reprocesar</button>
-      </form>
-      <button type="button" class="secondary compact-button" onclick="window.location.href='/orders'">Volver</button>
-    </div>
-  </div>
-</article>
 
-<div class="review-grid review-grid-v3">
-  <section class="review-pane review-entry-pane">
-    <div class="pane-title-row">
-      <h3>{{ incoming_title }}</h3>
-      <span class="badge">{% if has_email %}{{ attachments|length }} adjuntos{% elif has_conversation %}{{ conversation_preview.messages|length }} mensajes{% else %}0 mensajes{% endif %}</span>
+      {% if pdfs %}
+        <button
+          type="button"
+          class="order-review-tab"
+          data-order-source-tab="pdf"
+        >
+          PDF
+        </button>
+      {% endif %}
     </div>
 
-    {% if has_email and has_conversation %}
-      <div class="source-tabs" data-source-tabs>
-        <button type="button" class="source-tab {% if active_source == 'email' %}active{% endif %}" data-source-tab="email">Correo electrónico</button>
-        <button type="button" class="source-tab {% if active_source == 'conversation' %}active{% endif %}" data-source-tab="conversation">WhatsApp</button>
+    {% if order.email %}
+      <div class="order-review-source-panel is-active" data-order-source-panel="email">
+        <article class="order-review-email">
+          <header class="order-review-email-header">
+            <div>
+              <strong>{{ order.email.subject or "Sin asunto" }}</strong>
+              <span>{{ order.email.sender or "Remitente desconocido" }}</span>
+            </div>
+            <time>
+              {{ order.email.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M", "—") }}
+            </time>
+          </header>
+
+          <div class="order-review-email-body">
+            {{ order.email.body or "" }}
+          </div>
+        </article>
       </div>
     {% endif %}
 
-    {% if has_email %}
-      <article class="subpanel source-panel" data-source-panel="email" {% if has_email and has_conversation and active_source != 'email' %}hidden{% endif %}>
-        <div class="section-title-row">
-          <div>
-            <h4>{{ order.email.subject if order.email else "Entrada recibida" }}</h4>
-            <p class="muted">{{ order.email.sender if order.email else "Sin remitente" }}</p>
-          </div>
-          <span class="badge">{{ order.email.detected_type|status_label if order.email else "Pedido" }}</span>
-        </div>
-        <div class="review-inline-summary review-inline-summary-tight">
-          <span><strong>Fecha</strong>{{ order.email.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M", "—") if order.email else "—" }}</span>
-          <span><strong>Dominio</strong>{{ order.email.sender.split('@')[-1] if order.email and order.email.sender and '@' in order.email.sender else "—" }}</span>
-          <span><strong>Estado</strong>{{ order.status|status_label }}</span>
-        </div>
-      </article>
-      <article class="subpanel source-panel" data-source-panel="email-body" {% if has_email and has_conversation and active_source != 'email' %}hidden{% endif %}>
-        <div class="section-title-row">
-          <h4>Correo recibido</h4>
-          <button type="button" class="secondary compact-button" onclick="copyText('order-email-body-{{ order.id }}')">Copiar</button>
-        </div>
-        <pre id="order-email-body-{{ order.id }}" class="doc-text">{{ order.email.body if order.email else "" }}</pre>
-      </article>
-      <div class="source-panel" data-source-panel="email-attachments" {% if has_email and has_conversation and active_source != 'email' %}hidden{% endif %}>
-        {% include "orders/_review_attachments_block.html" %}
+    {% if pdfs %}
+      <div class="order-review-source-panel" data-order-source-panel="pdf">
+        {% if pdfs|length > 1 %}
+          <select
+            class="order-review-pdf-selector"
+            onchange="switchOrderPdf(this, 'order-pdf-frame-{{ order.id }}')"
+          >
+            {% for attachment in pdfs %}
+              <option value="/orders/{{ order.id }}/attachments/{{ attachment.id }}/preview">
+                {{ attachment.filename }}
+              </option>
+            {% endfor %}
+          </select>
+        {% endif %}
+
+        <iframe
+          id="order-pdf-frame-{{ order.id }}"
+          class="order-review-pdf"
+          src="/orders/{{ order.id }}/attachments/{{ pdfs[0].id }}/preview"
+          title="{{ pdfs[0].filename }}"
+        ></iframe>
       </div>
-    {% endif %}
-
-    {% if has_conversation %}
-      <article class="subpanel stack source-panel" data-source-panel="conversation" {% if has_email and has_conversation and active_source != 'conversation' %}hidden{% endif %}>
-        <div class="section-title-row">
-          <div>
-            <h4>{{ incoming_title }}</h4>
-            <p class="muted">{{ conversation_preview.provider_label }}</p>
-          </div>
-          <span class="badge {% if 'whatsapp' in (conversation_preview.provider_label or '')|lower %}status-confirmed{% endif %}">{{ conversation_preview.provider_label if conversation_preview else "WhatsApp" }}</span>
-        </div>
-        <div class="review-inline-summary review-inline-summary-tight">
-          <span><strong>Fecha</strong>{{ order.conversation.last_activity_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M", "—") if order.conversation else "—" }}</span>
-          <span><strong>Participantes</strong>{{ conversation_preview.messages|length }}</span>
-          <span><strong>Estado</strong>{{ order.status|status_label }}</span>
-        </div>
-      </article>
-
-      <article class="subpanel stack">
-        <div class="section-title-row">
-          <h4>{{ incoming_title }}</h4>
-          <button type="button" class="secondary compact-button" onclick="copyText('order-conversation-body-{{ order.id }}')">Copiar</button>
-        </div>
-        <div id="order-conversation-body-{{ order.id }}" class="whatsapp-chat-stack">
-          {% for message in conversation_preview.messages %}
-            <article class="whatsapp-chat-bubble {{ message.direction }}">
-              <div class="whatsapp-chat-bubble-head">
-                <div class="whatsapp-chat-bubble-speaker">
-                  <span class="badge {% if message.direction == 'outbound' %}status-confirmed{% else %}status-pending{% endif %}">{{ message.role_label or ("Empresa" if message.direction == "outbound" else "Cliente") }}</span>
-                  <strong>{{ message.sender }}</strong>
-                </div>
-                <span>{{ message.timestamp_label or "Sin fecha" }}</span>
-              </div>
-              <pre class="whatsapp-chat-text">{{ message.text }}</pre>
-            </article>
-          {% endfor %}
-        </div>
-      </article>
     {% endif %}
   </section>
 
-  <section class="review-pane review-proposal-pane">
-    <div class="pane-title-row">
-      <h3>Propuesta del agente</h3>
-      <span class="badge">{{ score_label }}</span>
-      {% if extraction_diagnostics %}
-        <span class="badge {{ extraction_diagnostics.badge_class }}">{{ extraction_diagnostics.label }}</span>
-      {% endif %}
+  <section class="order-review-resolution">
+
+    <div class="order-review-confidence">
+      <div class="order-review-confidence-score">
+        {{ "%.0f"|format(score_value) }}%
+      </div>
+
+      <div class="order-review-confidence-copy">
+        <strong>Confianza del pedido</strong>
+        {% if score_value >= 80 %}
+          <p>Pedido listo para validar.</p>
+        {% elif not selected_customer_id %}
+          <p>Falta identificar correctamente el cliente.</p>
+        {% elif order.lines|selectattr("validated_product_id", "none")|list|length %}
+          <p>Hay productos pendientes de identificar o validar.</p>
+        {% else %}
+          <p>Revisa los datos marcados antes de validar el pedido.</p>
+        {% endif %}
+      </div>
     </div>
 
-    <article class="subpanel order-summary-card compact-order-summary-card">
-      <div class="order-kpi-strip">
-        <span><strong>Confianza:</strong> {{ "%.0f"|format(score_value) }}%</span>
-        <span><strong>Estado:</strong> {{ order.status|status_label }}</span>
-        {% if extraction_diagnostics %}
-          <span><strong>Extracción:</strong> {{ extraction_diagnostics.label }}{% if extraction_diagnostics.schema_version %} · v{{ extraction_diagnostics.schema_version }}{% endif %}{% if extraction_diagnostics.uncertainty_count %} · {{ extraction_diagnostics.uncertainty_count }} dudas{% endif %}</span>
-        {% endif %}
-        {% if order.review_reasons %}
-          <span class="truncate-inline" title="{{ order.review_reasons }}"><strong>Motivos:</strong> {{ order.review_reasons }}</span>
-        {% endif %}
-      </div>
-      {% if customer_context and customer_context.identified %}
-        {% include "orders/_review_customer_block.html" %}
-      {% endif %}
-      <div class="form-grid compact-order-grid">
-        <label>Cliente validado
-          <select name="validated_customer_id" form="order-review-form-{{ order.id }}">
-            <option value="0">Sin cliente</option>
-            {% for customer in customers %}
-              <option value="{{ customer.id }}" {% if order.validated_customer_id == customer.id %}selected{% endif %}>{{ customer.code }} - {{ customer.fiscal_name }}</option>
-            {% endfor %}
-          </select>
-        </label>
-        <label>Fecha pedido<input name="order_date" form="order-review-form-{{ order.id }}" value="{{ order.order_date or '' }}"></label>
-        <label>Fecha entrega<input name="requested_delivery_date" form="order-review-form-{{ order.id }}" value="{{ order.requested_delivery_date or '' }}"></label>
-        <label>Estado
-          <select name="status" form="order-review-form-{{ order.id }}">
-            <option value="{{ order.status }}">{{ order.status|status_label }}</option>
-            <option value="pedido_pendiente_revision">Pendiente de revisión</option>
-            <option value="pedido_confirmado">Confirmado</option>
-            <option value="pedido_exportado">Exportado</option>
-            <option value="dudoso">Dudoso</option>
-            <option value="no_importable">No importable</option>
-          </select>
-        </label>
-        <label class="span-2">Observaciones<textarea name="notes" form="order-review-form-{{ order.id }}" rows="2">{{ order.notes or "" }}</textarea></label>
-      </div>
-      <form id="order-review-form-{{ order.id }}" class="js-loading-form" method="post" action="/orders/{{ order.id }}/save">
-        <button class="secondary compact-button" data-loading-text="Guardando...">{{ request.state.branding.microcopy.save_changes }}</button>
-      </form>
-    </article>
+    <form
+      id="order-review-form-{{ order.id }}"
+      class="order-review-order-data js-loading-form"
+      method="post"
+      action="/orders/{{ order.id }}/save"
+    >
+      <label>
+        <span>Cliente</span>
+        <div class="customer-autocomplete" data-customer-autocomplete>
+          <input
+            type="search"
+            data-customer-input
+            value="{% if customer_context and customer_context.identified %}{{ customer_context.customer.code }} - {{ customer_context.customer.name }}{% endif %}"
+            placeholder="Seleccionar cliente"
+            autocomplete="off"
+          >
+          <input
+            type="hidden"
+            name="validated_customer_id"
+            data-customer-id
+            value="{{ selected_customer_id }}"
+          >
+          <div
+            class="customer-autocomplete-results"
+            data-customer-results
+            hidden
+          ></div>
+        </div>
+      </label>
+
+      <label>
+        <span>Fecha pedido</span>
+        <input
+          name="order_date"
+          value="{% if order.order_date %}{{ order.order_date[8:10] }}-{{ order.order_date[5:7] }}-{{ order.order_date[0:4] }}{% elif order.email and order.email.received_at %}{{ order.email.received_at | local_dt(tenant_timezone, "%d-%m-%Y", "") }}{% endif %}"
+          placeholder="DD-MM-YYYY"
+        >
+      </label>
+    </form>
 
     {% include "orders/_review_lines_block.html" %}
 
-    <div class="review-action-bar review-action-bar-v2">
-      <span class="muted review-save-state">Corrige cliente y lineas, revisa el score y procesa en segundos.</span>
-      <div class="footer-actions-primary">
-        <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/validate" data-confirm="Validar pedido?"><button data-loading-text="Validando...">Validar pedido</button></form>
-        <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/export"><button class="secondary" data-loading-text="Exportando...">Enviar / Exportar</button></form>
-      </div>
-      <div class="footer-actions-secondary">
-        <details class="footer-more-actions">
-          <summary>Más acciones</summary>
-          <div>
-            <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/reprocess"><button class="secondary" data-loading-text="Reprocesando...">Reprocesar</button></form>
-            <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/discard" data-confirm="Descartar pedido?"><button class="secondary danger-soft">Descartar</button></form>
-          </div>
-        </details>
-      </div>
+    <div class="order-review-actions">
+      <button
+        type="submit"
+        form="order-review-form-{{ order.id }}"
+        class="secondary"
+        data-loading-text="Guardando..."
+      >
+        Guardar cambios
+      </button>
+
+      <form
+        class="js-loading-form"
+        method="post"
+        action="/orders/{{ order.id }}/validate"
+        data-confirm="Validar pedido?"
+      >
+        <button data-loading-text="Validando...">
+          Validar pedido
+        </button>
+      </form>
     </div>
+
   </section>
 </div>
 
 <script>
-  (function() {
-    document.querySelectorAll("[data-source-tabs]").forEach((tabs) => {
-      const container = tabs.closest(".review-pane") || document;
-      const panels = Array.from(container.querySelectorAll("[data-source-panel]"));
-      tabs.querySelectorAll("[data-source-tab]").forEach((button) => {
-        button.addEventListener("click", () => {
-          const target = button.dataset.sourceTab;
-          tabs.querySelectorAll("[data-source-tab]").forEach((tab) => tab.classList.toggle("active", tab === button));
-          panels.forEach((panel) => {
-            panel.hidden = panel.dataset.sourcePanel !== target && panel.dataset.sourcePanel !== `${target}-body`;
-          });
-        });
-      });
-    });
-  })();
-  function copyText(id) {
-    const node = document.getElementById(id);
-    if (node) navigator.clipboard.writeText(node.textContent || "");
-  }
-  function switchOrderPdf(select, frameId) {
-    const frame = document.getElementById(frameId);
-    if (frame && select.value) frame.src = select.value;
-  }
-  function applyOrderLineSuggestion(button) {
-    const lineId = button.dataset.lineId;
-    const productId = button.dataset.productId;
-    if (!lineId || !productId) return;
-    const select = document.querySelector(`select[data-line-product-select="${lineId}"]`);
-    if (!select) return;
-    select.value = productId;
-    const form = select.form;
-    if (form) {
-      form.dataset.dirty = "true";
-      if (typeof form.requestSubmit === "function") {
-        form.requestSubmit();
-      } else {
-        form.submit();
-      }
-    }
-  }
-  document.querySelectorAll(".line-product-select").forEach((select) => {
-    select.addEventListener("change", () => {
-      const form = select.form;
-      if (!form) return;
-      form.dataset.dirty = "true";
-      if (typeof form.requestSubmit === "function") {
-        form.requestSubmit();
-      } else {
-        form.submit();
-      }
+(function () {
+  const tabs = document.querySelectorAll("[data-order-source-tab]");
+  const panels = document.querySelectorAll("[data-order-source-panel]");
+
+  tabs.forEach((tab) => {
+    tab.addEventListener("click", () => {
+      const target = tab.dataset.orderSourceTab;
+
+      tabs.forEach((item) => item.classList.remove("is-active"));
+      panels.forEach((panel) => panel.classList.remove("is-active"));
+
+      tab.classList.add("is-active");
+
+      const panel = document.querySelector(
+        `[data-order-source-panel="${target}"]`
+      );
+
+      if (panel) panel.classList.add("is-active");
     });
   });
+
+  const root = document.querySelector("[data-customer-autocomplete]");
+  if (!root) return;
+
+  const input = root.querySelector("[data-customer-input]");
+  const customerId = root.querySelector("[data-customer-id]");
+  const results = root.querySelector("[data-customer-results]");
+  let timer;
+
+  function closeResults() {
+    results.hidden = true;
+    results.replaceChildren();
+  }
+
+  input.addEventListener("input", () => {
+    customerId.value = "0";
+    clearTimeout(timer);
+
+    const query = input.value.trim();
+
+    if (query.length < 2) {
+      closeResults();
+      return;
+    }
+
+    timer = setTimeout(async () => {
+      const response = await fetch(
+        `/orders/customer-search?q=${encodeURIComponent(query)}`
+      );
+
+      if (!response.ok) return;
+
+      const customers = await response.json();
+      results.replaceChildren();
+
+      customers.forEach((customer) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "customer-autocomplete-option";
+
+        const title = document.createElement("strong");
+        title.textContent = `${customer.code} · ${customer.name}`;
+        button.appendChild(title);
+
+        if (customer.tax_id || customer.email) {
+          const meta = document.createElement("span");
+          meta.textContent = [customer.tax_id, customer.email]
+            .filter(Boolean)
+            .join(" · ");
+          button.appendChild(meta);
+        }
+
+        button.addEventListener("click", () => {
+          input.value = `${customer.code} - ${customer.name}`;
+          customerId.value = String(customer.id);
+          closeResults();
+        });
+
+        results.appendChild(button);
+      });
+
+      results.hidden = customers.length === 0;
+    }, 180);
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!root.contains(event.target)) closeResults();
+  });
+})();
+
+
+document.querySelectorAll("[data-product-autocomplete]").forEach((root) => {
+  const input = root.querySelector("[data-product-input]");
+  const productId = root.querySelector("[data-product-id]");
+  const results = root.querySelector("[data-product-results]");
+  let timer;
+
+  function closeResults() {
+    results.hidden = true;
+    results.replaceChildren();
+  }
+
+  input.addEventListener("input", () => {
+    productId.value = "0";
+    clearTimeout(timer);
+
+    const query = input.value.trim();
+
+    if (query.length < 2) {
+      closeResults();
+      return;
+    }
+
+    timer = setTimeout(async () => {
+      const response = await fetch(
+        `/orders/product-search?q=${encodeURIComponent(query)}`
+      );
+
+      if (!response.ok) return;
+
+      const products = await response.json();
+      results.replaceChildren();
+
+      products.forEach((product) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "product-autocomplete-option";
+
+        const title = document.createElement("strong");
+        title.textContent = product.name;
+        button.appendChild(title);
+
+        const meta = document.createElement("span");
+        meta.textContent = product.reference;
+        button.appendChild(meta);
+
+        button.addEventListener("click", () => {
+          input.value = product.name;
+          productId.value = String(product.id);
+          closeResults();
+
+          const form = productId.form;
+          if (form) form.requestSubmit();
+        });
+
+        results.appendChild(button);
+      });
+
+      results.hidden = products.length === 0;
+    }, 160);
+  });
+
+  document.addEventListener("click", (event) => {
+    if (!root.contains(event.target)) closeResults();
+  });
+});
+
+function switchOrderPdf(select, frameId) {
+  const frame = document.getElementById(frameId);
+  if (frame && select.value) frame.src = select.value;
+}
+
+document.querySelectorAll(".line-product-select").forEach((select) => {
+  select.addEventListener("change", () => {
+    if (select.form) select.form.requestSubmit();
+  });
+});
 </script>
 {% endblock %}
