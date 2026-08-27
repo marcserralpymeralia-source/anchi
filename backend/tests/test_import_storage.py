@@ -5,6 +5,7 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -38,6 +39,37 @@ class ImportStorageTests(unittest.TestCase):
             sys.modules.pop(module_name, None)
             if previous is not None:
                 sys.modules[module_name] = previous
+
+    def test_read_attachment_uses_blob_client_for_http_urls(self):
+        from app.core.attachment_storage import read_attachment
+
+        calls: dict[str, object] = {}
+
+        class FakeBlobClient:
+            def __init__(self) -> None:
+                calls["init"] = True
+
+            def get(self, storage_ref: str, access: str | None = None):  # noqa: ANN001
+                calls["storage_ref"] = storage_ref
+                calls["access"] = access
+                return SimpleNamespace(content=b"blob-bytes")
+
+            def close(self) -> None:
+                calls["closed"] = True
+
+        vercel_module = ModuleType("vercel")
+        blob_module = ModuleType("vercel.blob")
+        blob_module.BlobClient = FakeBlobClient
+        vercel_module.blob = blob_module
+
+        with patch.dict(sys.modules, {"vercel": vercel_module, "vercel.blob": blob_module}):
+            content = read_attachment("https://blob.example.com/attachments/pedido.pdf")
+
+        self.assertEqual(content, b"blob-bytes")
+        self.assertTrue(calls["init"])
+        self.assertEqual(calls["storage_ref"], "https://blob.example.com/attachments/pedido.pdf")
+        self.assertEqual(calls["access"], "private")
+        self.assertTrue(calls["closed"])
 
 
 if __name__ == "__main__":
