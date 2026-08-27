@@ -13,7 +13,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.encryption import decrypt_secret
-from app.db.models import EmailSettings, InputChannel, User
+from app.db.models import EmailSettings, InputChannel, PromptExecution, User
 from app.master.models import CompanyMembership, EmailSyncState
 from scripts.performance_data import build_performance_fixture, performance_test_client
 
@@ -118,6 +118,71 @@ class SettingsEmailReceiveHttpTests(unittest.TestCase):
                     self.assertEqual(reloaded.imap_username, "demo.user@example.com")
                     self.assertEqual(reloaded.imap_password_encrypted, encrypted_password)
                     self.assertEqual(decrypt_secret(reloaded.imap_password_encrypted), "DemoAppPassword123!")
+        finally:
+            master_engine.dispose()
+            tenant_engine.dispose()
+            fixture.cleanup()
+
+
+    def test_prompt_diagnostics_are_scoped_to_active_tenant(self):
+        fixture = build_performance_fixture("small")
+        master_engine = create_engine(fixture.master_database_url, connect_args={"check_same_thread": False})
+        tenant_engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        MasterSession = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
+        TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
+
+        try:
+            with MasterSession() as db:
+                membership = db.scalar(
+                    select(CompanyMembership).where(
+                        CompanyMembership.company_id == fixture.company_id
+                    )
+                )
+                if membership:
+                    membership.role_key = "Administrador"
+                    db.commit()
+
+            with TenantSession() as db:
+                db.add_all(
+                    [
+                        PromptExecution(
+                            company_id=fixture.company_id,
+                            prompt_name="Extraccion",
+                            prompt_purpose="extraction",
+                            prompt_version=1,
+                            model="gpt-4.1-mini",
+                            parameters_json="{}",
+                            output_status="missing_fields",
+                            validation_errors_json='["Falta lineas"]',
+                            duration_ms=321,
+                            response_excerpt='{"pedido":{}}',
+                        ),
+                        PromptExecution(
+                            company_id=fixture.company_id + 999,
+                            prompt_name="Otra compañía",
+                            prompt_purpose="extraction",
+                            prompt_version=1,
+                            model="gpt-4.1-mini",
+                            parameters_json="{}",
+                            output_status="valid",
+                            duration_ms=111,
+                            response_excerpt='{"pedido":{"lineas":[{}]}}',
+                        ),
+                    ]
+                )
+                db.commit()
+
+            with performance_test_client(fixture) as client:
+                response = client.get("/settings/diagnostics/prompts")
+                self.assertEqual(response.status_code, 200)
+
+                payload = response.json()
+                self.assertEqual(payload["company_id"], fixture.company_id)
+                self.assertEqual(len(payload["items"]), 1)
+                self.assertEqual(payload["items"][0]["purpose"], "extraction")
+                self.assertEqual(payload["items"][0]["status"], "missing_fields")
+                self.assertEqual(payload["items"][0]["duration_ms"], 321)
+                self.assertEqual(payload["items"][0]["response_excerpt"], '{"pedido":{}}')
         finally:
             master_engine.dispose()
             tenant_engine.dispose()
