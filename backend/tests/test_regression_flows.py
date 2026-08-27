@@ -1381,6 +1381,153 @@ class RegressionFlowsTests(unittest.TestCase):
 
         db.close()
 
+    def test_force_reprocess_email_can_be_reapplied_without_duplicate_order(self):
+        self._seed_master()
+        self._seed_tenant_settings()
+        self._seed_customer_and_product()
+        self._upgrade_tenant_schema()
+
+        db = self.TenantSession()
+
+        email = Email(
+            company_id=1,
+            external_id="mail-force-reprocess-2",
+            sender="cliente@example.com",
+            subject="Pedido para reprocesar varias veces",
+            body="Necesitamos 5 unidades de P-100.",
+        )
+        db.add(email)
+        db.commit()
+
+        channel = get_or_create_channel(db, 1, "email")
+        channel.is_active = True
+        db.commit()
+
+        classification = json.dumps(
+            {
+                "tipo_correo": "pedido",
+                "confianza": 0.96,
+                "motivo": "Pedido claro",
+            },
+            ensure_ascii=False,
+        )
+
+        first_extraction = json.dumps(
+            {
+                "cliente": {
+                    "nombre_detectado": "Cliente Demo SL",
+                    "codigo_cliente_detectado": "C001",
+                },
+                "pedido": {
+                    "fecha_pedido": "2026-07-16",
+                    "observaciones": "Primera extraccion",
+                    "lineas": [
+                        {
+                            "texto_original": "5 unidades de P-100",
+                            "referencia_detectada": "P-100",
+                            "producto_detectado": "Producto Demo",
+                            "cantidad": 5,
+                            "unidad": "uds",
+                            "confianza_extraccion": 0.95,
+                        }
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        )
+
+        second_extraction = json.dumps(
+            {
+                "cliente": {
+                    "nombre_detectado": "Cliente Demo SL",
+                    "codigo_cliente_detectado": "C001",
+                },
+                "pedido": {
+                    "fecha_pedido": "2026-07-16",
+                    "observaciones": "Segundo reproceso",
+                    "lineas": [
+                        {
+                            "texto_original": "7 unidades de P-100",
+                            "referencia_detectada": "P-100",
+                            "producto_detectado": "Producto Demo",
+                            "cantidad": 7,
+                            "unidad": "uds",
+                            "confianza_extraccion": 0.97,
+                        }
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        )
+
+        third_extraction = json.dumps(
+            {
+                "cliente": {
+                    "nombre_detectado": "Cliente Demo SL",
+                    "codigo_cliente_detectado": "C001",
+                },
+                "pedido": {
+                    "fecha_pedido": "2026-07-16",
+                    "observaciones": "Tercer reproceso",
+                    "lineas": [
+                        {
+                            "texto_original": "9 unidades de P-100",
+                            "referencia_detectada": "P-100",
+                            "producto_detectado": "Producto Demo",
+                            "cantidad": 9,
+                            "unidad": "uds",
+                            "confianza_extraccion": 0.98,
+                        }
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        )
+
+        with patch(
+            "app.agent.platform.classify_sample",
+            return_value={"ok": True, "content": classification},
+        ), patch(
+            "app.agent.platform.extract_sample",
+            side_effect=[
+                {"ok": True, "content": first_extraction},
+                {"ok": True, "content": second_extraction},
+                {"ok": True, "content": third_extraction},
+            ],
+        ):
+            first = AgentProcessingService().process_email(db, email)
+            second = AgentProcessingService().process_email(db, email, force_order=True)
+            third = AgentProcessingService().process_email(db, email, force_order=True)
+
+        self.assertTrue(first["ok"])
+        self.assertTrue(second["ok"])
+        self.assertTrue(third["ok"])
+        self.assertEqual(first["order_id"], second["order_id"])
+        self.assertEqual(first["order_id"], third["order_id"])
+        self.assertEqual(db.scalar(select(func.count()).select_from(Order)) or 0, 1)
+        self.assertEqual(db.scalar(select(func.count()).select_from(InboundMessage)) or 0, 1)
+
+        order = db.scalar(
+            select(Order)
+            .where(Order.id == first["order_id"])
+            .options(selectinload(Order.lines))
+        )
+        self.assertIsNotNone(order)
+        self.assertEqual(order.notes, "Tercer reproceso")
+        self.assertEqual(len(order.lines or []), 1)
+        self.assertEqual(order.lines[0].quantity, 9)
+        self.assertEqual(order.lines[0].detected_reference, "P-100")
+
+        inbound = db.scalar(
+            select(InboundMessage).where(
+                InboundMessage.company_id == 1,
+                InboundMessage.source_external_id == "mail-force-reprocess-2",
+            )
+        )
+        self.assertEqual(inbound.order_id, first["order_id"])
+
+        db.close()
+
     def test_duplicate_mail_retry_and_export_retry_path(self):
         self._seed_master()
         self._seed_tenant_settings()
