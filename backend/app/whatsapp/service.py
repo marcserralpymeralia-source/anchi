@@ -19,7 +19,12 @@ from app.core.encryption import decrypt_secret, encrypt_secret
 from app.db.models import ChannelSetting, Conversation, InboundMessage, InputChannel, MessageAttachment
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
-from app.messages.service import normalize_recipients, upsert_inbound_message
+from app.messages.service import (
+    NormalizedMessage,
+    normalize_recipients,
+    persist_normalized_message,
+    upsert_inbound_message,
+)
 from app.master.models import MasterCompany, MasterTenantDatabase
 
 
@@ -834,26 +839,49 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
         log_action(db, company_id=company_id, user=user, action="whatsapp.status_received", entity_type="inbound_message", entity_id=message.id, message=f"Estado WhatsApp recibido: {status_value}")
         return message
 
-    message, conversation = upsert_inbound_message(
-        db,
-        company_id=company_id,
-        channel_key=WHATSAPP_CHANNEL_KEY,
-        provider=WHATSAPP_PROVIDER,
-        external_id=event.get("external_id"),
-        sender=event.get("sender"),
-        recipients=normalize_recipients(event.get("recipients")),
-        subject="WhatsApp",
-        text_content=event.get("text_content"),
-        external_thread_id=event.get("external_thread_id"),
-        metadata=metadata,
-        content_type=event.get("message_type") or "whatsapp",
-        direction=str(event.get("direction") or "inbound"),
-        received_at=event.get("occurred_at"),
-        sent_at=event.get("occurred_at") if event.get("direction") == "outbound" else None,
-        has_attachments=bool(event.get("attachments")),
-        has_pdf=any(attachment.get("is_pdf") for attachment in event.get("attachments", [])),
-        has_audio=any(attachment.get("is_audio") for attachment in event.get("attachments", [])),
-    )
+    if event_kind in {"message_echo", "history_message"}:
+        message, conversation = upsert_inbound_message(
+            db,
+            company_id=company_id,
+            channel_key=WHATSAPP_CHANNEL_KEY,
+            provider=WHATSAPP_PROVIDER,
+            external_id=event.get("external_id"),
+            sender=event.get("sender"),
+            recipients=normalize_recipients(event.get("recipients")),
+            subject="WhatsApp",
+            text_content=event.get("text_content"),
+            external_thread_id=event.get("external_thread_id"),
+            metadata=metadata,
+            content_type=event.get("message_type") or "whatsapp",
+            direction=str(event.get("direction") or "inbound"),
+            received_at=event.get("occurred_at"),
+            sent_at=event.get("occurred_at") if event.get("direction") == "outbound" else None,
+            has_attachments=bool(event.get("attachments")),
+            has_pdf=any(attachment.get("is_pdf") for attachment in event.get("attachments", [])),
+            has_audio=any(attachment.get("is_audio") for attachment in event.get("attachments", [])),
+        )
+    else:
+        normalized = NormalizedMessage(
+            company_id=company_id,
+            channel_key=WHATSAPP_CHANNEL_KEY,
+            provider=WHATSAPP_PROVIDER,
+            external_id=event.get("external_id"),
+            sender=event.get("sender"),
+            recipients=normalize_recipients(event.get("recipients")),
+            subject="WhatsApp",
+            text_content=event.get("text_content"),
+            external_thread_id=event.get("external_thread_id"),
+            metadata=metadata,
+        )
+        message, conversation = persist_normalized_message(
+            db,
+            normalized,
+            content_type=event.get("message_type") or "whatsapp",
+            has_attachments=bool(event.get("attachments")),
+            has_pdf=any(attachment.get("is_pdf") for attachment in event.get("attachments", [])),
+            has_audio=any(attachment.get("is_audio") for attachment in event.get("attachments", [])),
+        )
+
     message.channel_id = channel.id
     if event_kind == "message_echo":
         message.processing_step = "echoed_from_business_app"

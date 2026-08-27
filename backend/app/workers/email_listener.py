@@ -15,6 +15,7 @@ import app.master.database as master_database
 from app.core.config import get_settings
 from app.db.models import EmailSettings
 from app.master.models import EmailSyncState, MasterTenantDatabase
+from app.channels.service import is_channel_enabled
 from app.settings.integrations import read_latest_imap_emails
 from app.settings.service import get_or_create_settings
 from app.tenancy.database import tenant_db_session
@@ -94,6 +95,16 @@ def reconcile_tenant_email(master_db: Session, tenant: MasterTenantDatabase, *, 
     db = session_factory()
     try:
         settings = get_or_create_settings(db, EmailSettings, tenant.company_id)
+
+        if not is_channel_enabled(db, tenant.company_id, "email"):
+            state.enabled = False
+            mark_listener_inactive(master_db, state, owner=owner)
+            return {
+                "ok": True,
+                "skipped": True,
+                "message": "Canal Email desactivado para este tenant",
+            }
+
         if not settings.auto_sync_enabled and not force:
             state.enabled = False
             mark_listener_inactive(master_db, state, owner=owner)

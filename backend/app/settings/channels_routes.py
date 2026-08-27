@@ -15,6 +15,8 @@ from app.core.timezones import format_local_datetime
 from app.db.models import ChannelSetting, Company, EmailSettings, InputChannel
 from app.dashboard.service import recent_processed_emails_overview
 from app.logs.service import log_action
+from app.master.database import get_master_db
+from app.master.models import EmailSyncState
 from app.master.service import TenantUser
 from app.settings.email_config import email_config_status
 from app.settings.service import get_or_create_settings
@@ -79,6 +81,48 @@ def channel_capabilities(channel: InputChannel) -> list[str]:
     if channel.supports_documents:
         capabilities.append("Documentos")
     return capabilities
+
+
+def _sync_email_channel_state(
+    master_db: Session,
+    db: Session,
+    company_id: int,
+    *,
+    active: bool,
+) -> None:
+    settings = get_or_create_settings(db, EmailSettings, company_id)
+    state = master_db.scalar(
+        select(EmailSyncState).where(
+            EmailSyncState.company_id == company_id,
+            EmailSyncState.channel_key == "email",
+        )
+    )
+
+    should_enable = bool(active and settings.auto_sync_enabled)
+    frequency_seconds = max(
+        int(settings.polling_frequency_minutes or 1),
+        1,
+    ) * 60
+
+    if not state:
+        state = EmailSyncState(
+            company_id=company_id,
+            channel_key="email",
+            enabled=should_enable,
+            frequency_seconds=frequency_seconds,
+            status="idle",
+            listener_status="inactive",
+            next_run_at=datetime.now(timezone.utc) if should_enable else None,
+        )
+        master_db.add(state)
+    else:
+        state.enabled = should_enable
+        state.frequency_seconds = frequency_seconds
+        state.next_run_at = datetime.now(timezone.utc) if should_enable else None
+        if not active:
+            state.listener_status = "inactive"
+
+    master_db.commit()
 
 
 def channel_settings_map(db: Session, company_id: int, channel_id: int) -> dict[str, str | None]:
@@ -300,29 +344,59 @@ async def complete_whatsapp_embedded_signup(
 
 
 @router.post("/settings/channels/{channel_key}/activate")
-async def activate_channel(channel_key: str, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+async def activate_channel(
+    channel_key: str,
+    db: Session = Depends(get_tenant_db),
+    master_db: Session = Depends(get_master_db),
+    user: TenantUser = Depends(current_user),
+):
     if not has_admin_access(user):
         return RedirectResponse("/settings/channels", status_code=303)
     channel = _get_channel_or_404(db, user.company_id, channel_key)
     if not channel:
         return RedirectResponse("/settings/channels", status_code=303)
+
     channel.is_active = True
     channel.updated_at = datetime.now(timezone.utc)
     db.commit()
+
+    if channel.key == "email":
+        _sync_email_channel_state(
+            master_db,
+            db,
+            user.company_id,
+            active=True,
+        )
+
     log_action(db, company_id=user.company_id, user=user, action="channel.activate", entity_type="input_channel", entity_id=channel.id, message=f"Canal activado: {channel.name}")
     return RedirectResponse(f"/settings/channels?focus={channel.key}", status_code=303)
 
 
 @router.post("/settings/channels/{channel_key}/deactivate")
-async def deactivate_channel(channel_key: str, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+async def deactivate_channel(
+    channel_key: str,
+    db: Session = Depends(get_tenant_db),
+    master_db: Session = Depends(get_master_db),
+    user: TenantUser = Depends(current_user),
+):
     if not has_admin_access(user):
         return RedirectResponse("/settings/channels", status_code=303)
     channel = _get_channel_or_404(db, user.company_id, channel_key)
     if not channel:
         return RedirectResponse("/settings/channels", status_code=303)
+
     channel.is_active = False
     channel.updated_at = datetime.now(timezone.utc)
     db.commit()
+
+    if channel.key == "email":
+        _sync_email_channel_state(
+            master_db,
+            db,
+            user.company_id,
+            active=False,
+        )
+
     log_action(db, company_id=user.company_id, user=user, action="channel.deactivate", entity_type="input_channel", entity_id=channel.id, message=f"Canal desactivado: {channel.name}")
     return RedirectResponse("/settings/channels", status_code=303)
 

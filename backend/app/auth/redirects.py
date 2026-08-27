@@ -5,7 +5,7 @@ from urllib.parse import quote, urlsplit
 from fastapi import Request
 
 
-DEFAULT_LOGIN_DESTINATION = "/inicio"
+DEFAULT_LOGIN_DESTINATION = "/"
 
 
 def safe_internal_next(value: str | None, *, default: str = DEFAULT_LOGIN_DESTINATION) -> str:

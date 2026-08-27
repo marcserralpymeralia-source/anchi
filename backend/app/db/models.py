@@ -274,7 +274,7 @@ class FTPSettings(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), unique=True)
-    connection_type: Mapped[str] = mapped_column(String(20), default="sftp")
+    connection_type: Mapped[str] = mapped_column(String(20), default="ftps_explicit")
     host: Mapped[str | None] = mapped_column(String(255))
     port: Mapped[int] = mapped_column(Integer, default=22)
     username: Mapped[str | None] = mapped_column(String(255))

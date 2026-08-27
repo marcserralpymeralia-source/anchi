@@ -386,6 +386,40 @@ def recover_stale_jobs(db: Session, *, owner: str | None = None, job_types: set[
     return recovered
 
 
+def start_job_execution(
+    db: Session,
+    job: BackgroundJob,
+    *,
+    owner: str,
+) -> BackgroundJob:
+    now = _now()
+    settings = _settings()
+
+    job.status = "running"
+    job.started_at = now
+    job.finished_at = None
+    job.lock_owner = owner
+    job.lock_until = now + timedelta(seconds=settings.job_stale_after_seconds)
+    job.attempt_count = int(job.attempt_count or 0) + 1
+    job.last_heartbeat_at = now
+    job.updated_at = now
+    job.next_retry_at = None
+
+    db.add(
+        JobAttempt(
+            company_id=job.company_id,
+            job_id=job.id,
+            attempt_number=job.attempt_count,
+            worker_id=owner,
+            status="running",
+            started_at=now,
+        )
+    )
+    db.commit()
+    db.refresh(job)
+    return job
+
+
 def finish_job(db: Session, job: BackgroundJob, result: dict | None = None) -> BackgroundJob:
     now = _now()
     job.status = "success"
@@ -455,6 +489,7 @@ def execute_job_inline(db: Session, job: BackgroundJob) -> dict:
     from app.workers.jobs_worker import _process_job
 
     try:
+        job = start_job_execution(db, job, owner=f"inline:{job.id}")
         result = _process_job(db, job)
         if not isinstance(result, dict):
             result = {"ok": True, "message": str(result) if result is not None else "Trabajo completado"}

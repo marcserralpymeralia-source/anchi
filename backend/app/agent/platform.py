@@ -5,6 +5,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
+from email.utils import parseaddr
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -17,6 +18,7 @@ from app.db.models import (
     Alert,
     Email,
     EmailAttachment,
+    Company,
     Customer,
     CustomerAlias,
     CustomerContact,
@@ -171,29 +173,71 @@ class OrderExtractionAgent:
         return {"cliente": {}, "pedido": {"lineas": []}, "motivos_revision": ["Motor de extracción pendiente"]}
 
 
+def _normalized_identity(value: str | None) -> str:
+    if not value:
+        return ""
+    return "".join(char for char in value.lower().strip() if char.isalnum())
+
+
+def _detected_customer_is_tenant(
+    db: Session,
+    company_id: int,
+    *,
+    detected_name: str | None = None,
+    tax_id: str | None = None,
+) -> bool:
+    company = db.get(Company, company_id)
+    if not company:
+        return False
+
+    detected_name_normalized = _normalized_identity(detected_name)
+    tenant_names = {
+        _normalized_identity(company.name),
+        _normalized_identity(company.legal_name),
+    }
+    tenant_names.discard("")
+
+    if detected_name_normalized and detected_name_normalized in tenant_names:
+        return True
+
+    detected_tax_id = _normalized_identity(tax_id)
+    tenant_tax_id = _normalized_identity(company.tax_id)
+    if detected_tax_id and tenant_tax_id and detected_tax_id == tenant_tax_id:
+        return True
+
+    return False
+
+
 class CustomerMatchingService:
     def match(self, db: Session, company_id: int, *, detected_name: str | None = None, detected_code: str | None = None, sender: str | None = None) -> tuple[Customer | None, str, float]:
+        sender_clean = parseaddr(sender or "")[1].strip().lower()
+
         if detected_code:
             customer = db.scalar(select(Customer).where(Customer.company_id == company_id, Customer.code == detected_code))
             if customer:
                 return customer, "codigo", 1.0
-        if sender:
-            sender_clean = sender.strip().lower()
-            exact_point = db.scalar(
-                select(CustomerContactPoint).where(
-                    CustomerContactPoint.company_id == company_id,
-                    CustomerContactPoint.active == True,  # noqa: E712
-                    CustomerContactPoint.value.ilike(sender_clean),
+        if sender_clean:
+            customer = db.scalar(
+                select(Customer).where(
+                    Customer.company_id == company_id,
+                    Customer.primary_email.ilike(sender_clean),
                 )
             )
-            if exact_point:
-                customer = db.get(Customer, exact_point.customer_id)
-                if customer:
-                    return customer, "contact_point", 0.98
-        if sender and "@" in sender:
-            sender_clean = sender.strip().lower()
-            domain = sender_clean.split("@", 1)[1]
+            if customer:
+                return customer, "email_principal", 0.99
+
             exact_contact = db.scalar(
+                select(CustomerContact).where(
+                    CustomerContact.company_id == company_id,
+                    CustomerContact.email.ilike(sender_clean),
+                )
+            )
+            if exact_contact:
+                customer = db.get(Customer, exact_contact.customer_id)
+                if customer:
+                    return customer, "email_contacto", 0.99
+
+            exact_point = db.scalar(
                 select(CustomerContactPoint).where(
                     CustomerContactPoint.company_id == company_id,
                     CustomerContactPoint.type == "email",
@@ -201,32 +245,38 @@ class CustomerMatchingService:
                     CustomerContactPoint.value.ilike(sender_clean),
                 )
             )
-            if exact_contact:
-                customer = db.get(Customer, exact_contact.customer_id)
+            if exact_point:
+                customer = db.get(Customer, exact_point.customer_id)
                 if customer:
-                    return customer, "contact_point_email", 0.98
-            domain_contact = db.scalar(
+                    return customer, "contact_point_email", 0.99
+        if sender_clean and "@" in sender_clean:
+            domain = sender_clean.split("@", 1)[1]
+
+            domain_points = db.scalars(
                 select(CustomerContactPoint).where(
                     CustomerContactPoint.company_id == company_id,
                     CustomerContactPoint.type == "domain",
                     CustomerContactPoint.active == True,  # noqa: E712
-                    CustomerContactPoint.value == domain,
+                    CustomerContactPoint.value.ilike(domain),
                 )
-            )
-            if domain_contact:
-                customer = db.get(Customer, domain_contact.customer_id)
+            ).all()
+            domain_customer_ids = {point.customer_id for point in domain_points}
+            if len(domain_customer_ids) == 1:
+                customer = db.get(Customer, next(iter(domain_customer_ids)))
                 if customer:
-                    return customer, "contact_point_domain", 0.96
-            contact = db.scalar(
+                    return customer, "contact_point_domain", 0.97
+
+            contacts = db.scalars(
                 select(CustomerContact).where(
                     CustomerContact.company_id == company_id,
                     CustomerContact.email.ilike(f"%@{domain}"),
                 )
-            )
-            if contact:
-                customer = db.get(Customer, contact.customer_id)
+            ).all()
+            contact_customer_ids = {contact.customer_id for contact in contacts}
+            if len(contact_customer_ids) == 1:
+                customer = db.get(Customer, next(iter(contact_customer_ids)))
                 if customer:
-                    return customer, "contacto", 0.96
+                    return customer, "dominio_contacto_unico", 0.96
         if detected_name:
             point_alias = db.scalar(
                 select(CustomerContactPoint).where(
@@ -272,9 +322,26 @@ class CustomerMatchingService:
 class ProductMatchingService:
     def match(self, db: Session, company_id: int, *, reference: str | None = None, detected_name: str | None = None) -> tuple[Product | None, str, float]:
         if reference:
-            product = db.scalar(select(Product).where(Product.company_id == company_id, Product.reference == reference))
+            product = db.scalar(
+                select(Product).where(
+                    Product.company_id == company_id,
+                    Product.reference == reference,
+                )
+            )
             if product:
                 return product, "referencia_exacta", 1.0
+
+            normalized_reference = reference.strip()
+            if len(normalized_reference) >= 6:
+                partial_matches = db.scalars(
+                    select(Product).where(
+                        Product.company_id == company_id,
+                        Product.reference.ilike(f"{normalized_reference}%"),
+                    )
+                ).all()
+
+                if len(partial_matches) == 1:
+                    return partial_matches[0], "referencia_parcial_unica", 0.95
         if detected_name:
             learned = db.scalar(
                 select(LearnedAlias).where(
@@ -409,27 +476,113 @@ class DecisionEngineService:
                 customer = db.scalar(select(Customer).where(Customer.company_id == company_id, Customer.tax_id == tax_id))
                 if customer:
                     add_candidate(DecisionCandidate(customer.fiscal_name, "exact_tax_id", 0.99, "CIF/NIF exacto", customer_id=customer.id, metadata={"tax_id": customer.tax_id}))
-            if sender and "@" in sender:
-                email = sender.lower().strip()
-                customer = db.scalar(select(Customer).where(Customer.company_id == company_id, Customer.primary_email.ilike(email)))
-                if customer:
-                    add_candidate(DecisionCandidate(customer.fiscal_name, "exact_email", 0.99, "Email exacto", customer_id=customer.id, metadata={"email": customer.primary_email}))
-                domain = email.split("@", 1)[1]
+            sender_email = parseaddr(sender or "")[1].strip().lower()
+            if sender_email and "@" in sender_email:
                 customer = db.scalar(
-                    select(Customer)
-                    .join(CustomerDomain, CustomerDomain.customer_id == Customer.id)
-                    .where(Customer.company_id == company_id, CustomerDomain.domain.ilike(domain))
+                    select(Customer).where(
+                        Customer.company_id == company_id,
+                        Customer.primary_email.ilike(sender_email),
+                    )
                 )
                 if customer:
-                    add_candidate(DecisionCandidate(customer.fiscal_name, "exact_domain", 0.98, "Dominio exacto", customer_id=customer.id, metadata={"domain": domain}))
-                contact = db.scalar(
-                    select(CustomerContact)
-                    .where(CustomerContact.company_id == company_id, CustomerContact.email.ilike(f"%@{domain}"))
-                )
-                if contact:
-                    customer = db.get(Customer, contact.customer_id)
+                    add_candidate(
+                        DecisionCandidate(
+                            customer.fiscal_name,
+                            "exact_email",
+                            0.99,
+                            "Email principal exacto",
+                            customer_id=customer.id,
+                            metadata={"email": customer.primary_email},
+                        )
+                    )
+
+                contacts = db.scalars(
+                    select(CustomerContact).where(
+                        CustomerContact.company_id == company_id,
+                        CustomerContact.email.ilike(sender_email),
+                    )
+                ).all()
+                contact_customer_ids = {contact.customer_id for contact in contacts}
+                if len(contact_customer_ids) == 1:
+                    customer = db.get(Customer, next(iter(contact_customer_ids)))
                     if customer:
-                        add_candidate(DecisionCandidate(customer.fiscal_name, "contact_email_domain", 0.96, "Contacto asociado al dominio", customer_id=customer.id, metadata={"contact": contact.name or contact.email}))
+                        add_candidate(
+                            DecisionCandidate(
+                                customer.fiscal_name,
+                                "exact_contact_email",
+                                0.99,
+                                "Email de contacto exacto",
+                                customer_id=customer.id,
+                                metadata={"email": sender_email},
+                            )
+                        )
+
+                points = db.scalars(
+                    select(CustomerContactPoint).where(
+                        CustomerContactPoint.company_id == company_id,
+                        CustomerContactPoint.type == "email",
+                        CustomerContactPoint.active == True,  # noqa: E712
+                        CustomerContactPoint.value.ilike(sender_email),
+                    )
+                ).all()
+                point_customer_ids = {point.customer_id for point in points}
+                if len(point_customer_ids) == 1:
+                    customer = db.get(Customer, next(iter(point_customer_ids)))
+                    if customer:
+                        add_candidate(
+                            DecisionCandidate(
+                                customer.fiscal_name,
+                                "exact_contact_point_email",
+                                0.99,
+                                "Email aprendido exacto",
+                                customer_id=customer.id,
+                                metadata={"email": sender_email},
+                            )
+                        )
+
+                domain = sender_email.split("@", 1)[1]
+
+                domain_rows = db.scalars(
+                    select(CustomerDomain).where(
+                        CustomerDomain.company_id == company_id,
+                        CustomerDomain.domain.ilike(domain),
+                    )
+                ).all()
+                domain_customer_ids = {row.customer_id for row in domain_rows}
+                if len(domain_customer_ids) == 1:
+                    customer = db.get(Customer, next(iter(domain_customer_ids)))
+                    if customer:
+                        add_candidate(
+                            DecisionCandidate(
+                                customer.fiscal_name,
+                                "exact_domain",
+                                0.97,
+                                "Dominio asociado de forma unívoca",
+                                customer_id=customer.id,
+                                metadata={"domain": domain},
+                            )
+                        )
+
+                domain_contacts = db.scalars(
+                    select(CustomerContact).where(
+                        CustomerContact.company_id == company_id,
+                        CustomerContact.email.ilike(f"%@{domain}"),
+                    )
+                ).all()
+                domain_contact_customer_ids = {contact.customer_id for contact in domain_contacts}
+                if len(domain_contact_customer_ids) == 1:
+                    customer = db.get(Customer, next(iter(domain_contact_customer_ids)))
+                    if customer:
+                        add_candidate(
+                            DecisionCandidate(
+                                customer.fiscal_name,
+                                "contact_email_domain",
+                                0.96,
+                                "Dominio de contacto asociado de forma unívoca",
+                                customer_id=customer.id,
+                                metadata={"domain": domain},
+                            )
+                        )
 
         if settings.enable_alias_match and detected_name:
             alias = db.scalar(
@@ -1054,14 +1207,20 @@ class AlertService:
 
 def _json_from_content(content: str) -> dict[str, Any]:
     import json
+    import re
 
     text = (content or "").strip()
     if not text:
         raise ValueError("Respuesta vacia del proveedor IA.")
     try:
-        return json.loads(text)
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else {"value": parsed}
     except json.JSONDecodeError:
-        raise ValueError("OpenAI ha devuelto una respuesta no valida: no es JSON.")
+        match = re.search(r"\{.*\}", text, flags=re.S)
+        if match:
+            parsed = json.loads(match.group(0))
+            return parsed if isinstance(parsed, dict) else {"value": parsed}
+    raise ValueError("OpenAI ha devuelto una respuesta no valida: no es JSON.")
 
 
 def _active_prompt(db: Session, company_id: int, purpose: str, fallback: str) -> str:
@@ -1092,6 +1251,22 @@ class UnifiedOrderPipelineService:
         self.alerts = AlertService()
 
     def process_inbound_message(self, db: Session, inbound_message: InboundMessage, user=None, force_order: bool = False, email: Email | None = None) -> dict[str, Any]:
+        if not force_order and inbound_message.order_id:
+            order = db.scalar(
+                select(Order).where(
+                    Order.id == inbound_message.order_id,
+                    Order.company_id == inbound_message.company_id,
+                )
+            )
+            if order:
+                return {
+                    "ok": True,
+                    "status": "order_detected",
+                    "message": f"Pedido {order.id} ya habia sido creado.",
+                    "order_id": order.id,
+                    "score": order.score,
+                }
+
         llm_settings = get_or_create_settings(db, LLMSettings, inbound_message.company_id)
         email_settings = get_or_create_settings(db, EmailSettings, inbound_message.company_id)
         if not llm_settings.agent_enabled or llm_settings.provider == "disabled" or llm_settings.agent_mode == "desactivado":
@@ -1183,10 +1358,45 @@ class UnifiedOrderPipelineService:
                 entity_id=inbound_message.id,
                 message=f"Extraccion: {extraction_meta.get('source') or 'legacy_extraction'}",
             )
-            order = self._create_order(db, inbound_message, email, extraction, normalized)
+            existing_order = None
+            if force_order and inbound_message.order_id:
+                existing_order = db.scalar(
+                    select(Order).where(
+                        Order.id == inbound_message.order_id,
+                        Order.company_id == inbound_message.company_id,
+                    )
+                )
+                if existing_order and (existing_order.confirmed_at or existing_order.exported_at):
+                    return {
+                        "ok": False,
+                        "status": "reprocess_blocked",
+                        "message": "No se puede reprocesar un pedido confirmado o exportado.",
+                        "order_id": existing_order.id,
+                    }
+
+            order = self._create_order(
+                db,
+                inbound_message,
+                email,
+                extraction,
+                normalized,
+                existing_order=existing_order,
+            )
             score_result = self.scoring.score_order(db, order)
             order.score = score_result.total_score
             order.status = self.scoring.status_for_score(db, inbound_message.company_id, order.score)
+            if existing_order:
+                pending_reviews = db.scalars(
+                    select(OrderReview).where(
+                        OrderReview.company_id == order.company_id,
+                        OrderReview.order_id == order.id,
+                        OrderReview.status == "pending",
+                    )
+                ).all()
+                for previous_review in pending_reviews:
+                    previous_review.status = "superseded"
+                    previous_review.reviewed_at = datetime.now(timezone.utc)
+
             review = self.review.open_review(db, order, user=user, comments=inbound_message.processing_error)
             inbound_message.status = "order_detected"
             inbound_message.processing_step = "completed"
@@ -1196,11 +1406,38 @@ class UnifiedOrderPipelineService:
             inbound_message.extraction_json = json.dumps(extraction, ensure_ascii=False)
             inbound_message.last_processed_at = datetime.now(timezone.utc)
             db.commit()
-            log_action(db, company_id=inbound_message.company_id, user=user, action="agent.order_created", entity_type="order", entity_id=order.id, message=f"Pedido creado desde entrada {inbound_message.id}")
+            if existing_order:
+                log_action(
+                    db,
+                    company_id=inbound_message.company_id,
+                    user=user,
+                    action="agent.order_reprocessed",
+                    entity_type="order",
+                    entity_id=order.id,
+                    message=f"Pedido reprocesado desde entrada {inbound_message.id}",
+                )
+            else:
+                log_action(
+                    db,
+                    company_id=inbound_message.company_id,
+                    user=user,
+                    action="agent.order_created",
+                    entity_type="order",
+                    entity_id=order.id,
+                    message=f"Pedido creado desde entrada {inbound_message.id}",
+                )
             if llm_settings.allow_auto_export and order.score >= get_or_create_settings(db, ScoringSettings, inbound_message.company_id).safe_threshold:
                 self.exporter.queue_export(db, company_id=inbound_message.company_id, order_id=order.id, payload_json=None)
                 db.commit()
-            return {"ok": True, "status": "order_detected", "message": f"Pedido {order.id} creado.", "order_id": order.id, "review_id": review.id, "score": order.score}
+            message = f"Pedido {order.id} reprocesado." if existing_order else f"Pedido {order.id} creado."
+            return {
+                "ok": True,
+                "status": "order_detected",
+                "message": message,
+                "order_id": order.id,
+                "review_id": review.id,
+                "score": order.score,
+            }
         except Exception as exc:
             return self._mark_error(db, inbound_message, user, str(exc))
 
@@ -1318,6 +1555,7 @@ class UnifiedOrderPipelineService:
             lines.append(
                 {
                     "texto_original": line.raw_text,
+                    "referencia_detectada": line.reference,
                     "producto_detectado": line.raw_description,
                     "cantidad": line.quantity,
                     "unidad": line.unit,
@@ -1326,6 +1564,7 @@ class UnifiedOrderPipelineService:
                     "uncertainties": line_uncertainties,
                     "source_fields": {
                         "rawDescription": line.raw_description_source,
+                        "reference": line.reference_source,
                         "quantity": line.quantity_source,
                         "unit": line.unit_source,
                     },
@@ -1381,51 +1620,111 @@ class UnifiedOrderPipelineService:
         lines = order_data.get("lineas") or order_data.get("lines") or data.get("lineas") or []
         return lines if isinstance(lines, list) else []
 
-    def _create_order(self, db: Session, inbound_message: InboundMessage, email: Email | None, extracted: dict[str, Any], source_text: str) -> Order:
+    def _create_order(
+        self,
+        db: Session,
+        inbound_message: InboundMessage,
+        email: Email | None,
+        extracted: dict[str, Any],
+        source_text: str,
+        *,
+        existing_order: Order | None = None,
+    ) -> Order:
         customer_data = self._customer_from_extraction(extracted)
         order_data = self._order_from_extraction(extracted)
         sender = inbound_message.sender or (email.sender if email else "") or ""
         detected_name = customer_data.get("nombre_detectado") or customer_data.get("name") or customer_data.get("nombre") or ""
         detected_code = customer_data.get("codigo_cliente_detectado") or customer_data.get("codigo") or customer_data.get("code")
         tax_id = customer_data.get("cif") or customer_data.get("tax_id") or customer_data.get("nif")
-        customer_decision = self.decision.customer_decision(
+
+        detected_customer_is_tenant = _detected_customer_is_tenant(
             db,
             inbound_message.company_id,
             detected_name=detected_name or None,
+            tax_id=tax_id or None,
+        )
+        matching_detected_name = None if detected_customer_is_tenant else (detected_name or None)
+        matching_tax_id = None if detected_customer_is_tenant else (tax_id or None)
+
+        customer_decision = self.decision.customer_decision(
+            db,
+            inbound_message.company_id,
+            detected_name=matching_detected_name,
             detected_code=detected_code or None,
             sender=sender or None,
-            tax_id=tax_id or None,
+            tax_id=matching_tax_id,
             text=source_text,
         )
-        customer, method, customer_score = self.matching.match(db, inbound_message.company_id, sender=sender, detected_name=detected_name, detected_code=detected_code)
+        customer, method, customer_score = self.matching.match(
+            db,
+            inbound_message.company_id,
+            sender=sender,
+            detected_name=matching_detected_name,
+            detected_code=detected_code,
+        )
         if customer_decision["selected"] and customer_decision["selected"].customer_id:
             candidate_customer = db.get(Customer, customer_decision["selected"].customer_id)
             candidate_confidence = customer_decision["selected"].confidence
-            if candidate_customer and (not customer or candidate_confidence >= customer_score):
+            if (
+                candidate_customer
+                and not customer_decision["requires_review"]
+                and (not customer or candidate_confidence >= customer_score)
+            ):
                 customer = candidate_customer
                 method = customer_decision["selected"].source
                 customer_score = candidate_confidence
-        order = Order(
-            company_id=inbound_message.company_id,
-            conversation_id=inbound_message.conversation_id,
-            email_id=email.id if email else None,
-            customer_id=customer.id if customer else None,
-            validated_customer_id=customer.id if customer else None,
-            customer_detected_name=detected_name or None,
-            customer_identification_method=method,
-            customer_score=round(customer_score * 100, 2),
-            order_date=order_data.get("fecha_pedido") or order_data.get("order_date"),
-            requested_delivery_date=order_data.get("fecha_entrega_solicitada") or order_data.get("requested_delivery_date"),
-            notes=order_data.get("observaciones") or order_data.get("notes") or "",
-            status="pedido_pendiente_revision",
-        )
-        db.add(order)
-        db.flush()
+
+        if customer_decision["requires_review"]:
+            customer = None
+            method = customer_decision["selected"].source if customer_decision["selected"] else method
+            customer_score = customer_decision["selected"].confidence if customer_decision["selected"] else customer_score
+        if existing_order:
+            order = existing_order
+            order.lines.clear()
+            db.flush()
+            order.conversation_id = inbound_message.conversation_id
+            order.email_id = email.id if email else order.email_id
+            order.customer_id = customer.id if customer else None
+            order.validated_customer_id = customer.id if customer else None
+            order.customer_detected_name = detected_name or None
+            order.customer_identification_method = method
+            order.customer_score = round(customer_score * 100, 2)
+            order.order_date = order_data.get("fecha_pedido") or order_data.get("order_date")
+            order.requested_delivery_date = order_data.get("fecha_entrega_solicitada") or order_data.get("requested_delivery_date")
+            order.notes = order_data.get("observaciones") or order_data.get("notes") or ""
+            order.status = "pedido_pendiente_revision"
+            order.review_reasons = None
+        else:
+            order = Order(
+                company_id=inbound_message.company_id,
+                conversation_id=inbound_message.conversation_id,
+                email_id=email.id if email else None,
+                customer_id=customer.id if customer else None,
+                validated_customer_id=customer.id if customer else None,
+                customer_detected_name=detected_name or None,
+                customer_identification_method=method,
+                customer_score=round(customer_score * 100, 2),
+                order_date=order_data.get("fecha_pedido") or order_data.get("order_date"),
+                requested_delivery_date=order_data.get("fecha_entrega_solicitada") or order_data.get("requested_delivery_date"),
+                notes=order_data.get("observaciones") or order_data.get("notes") or "",
+                status="pedido_pendiente_revision",
+            )
+            db.add(order)
+            db.flush()
         review_reasons: list[str] = list(extracted.get("motivos_revision") or [])
+        if detected_customer_is_tenant:
+            review_reasons.append(
+                "La empresa detectada corresponde al receptor del pedido y se ha descartado como cliente."
+            )
         if extracted.get("requiere_revision_humana") and not review_reasons:
             review_reasons.append("La extraccion requiere revision humana")
         if not customer:
             review_reasons.append("Cliente no identificado")
+            if customer_decision["selected"]:
+                review_reasons.append(
+                    f"Cliente candidato por {customer_decision['selected'].source}: "
+                    f"{customer_decision['selected'].reason}. Requiere validacion humana"
+                )
         elif customer_decision["selected"]:
             review_reasons.append(f"Cliente elegido por {customer_decision['selected'].source}: {customer_decision['selected'].reason}")
         elif customer_decision["evidence"]:

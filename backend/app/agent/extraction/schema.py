@@ -46,6 +46,14 @@ class ExtractedOrderLine(StrictModel):
     raw_text: str = Field(..., alias="rawText", min_length=1)
     raw_description: str | None = Field(..., alias="rawDescription")
     raw_description_source: FieldSource = Field(..., alias="rawDescriptionSource")
+    reference: str | None = Field(
+        default=None,
+        description="Código o referencia del producto si aparece literalmente en el documento.",
+    )
+    reference_source: FieldSource = Field(
+        default="unknown",
+        alias="referenceSource",
+    )
     quantity: float | None = Field(...)
     quantity_source: FieldSource = Field(..., alias="quantitySource")
     unit: str | None = Field(...)

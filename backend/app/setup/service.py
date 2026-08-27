@@ -218,4 +218,4 @@ def get_setup_status(db: Session, company_id: int) -> SetupStatus:
 
 
 def next_setup_url(status: SetupStatus) -> str:
-    return "/inicio" if status.is_operational else f"/setup/{status.current_step}"
+    return "/" if status.is_operational else f"/setup/{status.current_step}"

@@ -311,6 +311,19 @@ def find_customer_match(db: Session, company_id: int, data: dict[str, str]) -> t
         if customer:
             return customer, "phone"
     if name:
+        alias_match = (
+            db.query(Customer)
+            .join(CustomerAlias, CustomerAlias.customer_id == Customer.id)
+            .filter(
+                Customer.company_id == company_id,
+                CustomerAlias.company_id == company_id,
+                CustomerAlias.alias.ilike(name),
+            )
+            .one_or_none()
+        )
+        if alias_match:
+            return alias_match, "alias"
+    if name:
         candidates = db.scalars(select(Customer).where(Customer.company_id == company_id)).all()
         for customer in candidates:
             if name_similarity(customer.fiscal_name, name) >= 0.92 or (customer.commercial_name and name_similarity(customer.commercial_name, name) >= 0.92):
@@ -330,6 +343,19 @@ def find_product_match(db: Session, company_id: int, data: dict[str, str]) -> tu
         product = db.scalar(select(Product).where(Product.company_id == company_id, Product.alternative_code == alternative_code))
         if product:
             return product, "alternative_code"
+    if name:
+        alias_match = (
+            db.query(Product)
+            .join(ProductAlias, ProductAlias.product_id == Product.id)
+            .filter(
+                Product.company_id == company_id,
+                ProductAlias.company_id == company_id,
+                ProductAlias.alias.ilike(name),
+            )
+            .one_or_none()
+        )
+        if alias_match:
+            return alias_match, "alias"
     if name:
         candidates = db.scalars(select(Product).where(Product.company_id == company_id)).all()
         for product in candidates:

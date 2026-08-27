@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import unittest
 from unittest.mock import patch
 
@@ -40,13 +41,18 @@ class OperationalNavigationTests(unittest.TestCase):
         fixture = build_performance_fixture("small")
         try:
             with performance_test_client(fixture) as client:
-                response = client.get("/inicio")
+                response = client.get("/")
 
             self.assertEqual(response.status_code, 200)
-            for label in ("Pedidos pendientes", "Entradas", "Productos", "Clientes", "Configuracion"):
-                self.assertIn(label, response.text)
-            for hidden_label in ("Conocimiento", "Histórico", "Bandeja de entrada", "Jobs", "Usuarios", "Importación rápida"):
-                self.assertNotIn(f'class="nav-label">{hidden_label}</span>', response.text)
+            nav_match = re.search(r'<nav class="nav">.*?</nav>', response.text, re.S)
+            self.assertIsNotNone(nav_match, "No se encontró el bloque principal de navegación")
+            nav_html = nav_match.group(0)
+
+            for label in ("Bandeja", "Pedidos", "Histórico", "Clientes", "Productos", "Configuración"):
+                self.assertIn(f'class="nav-label">{label}</span>', nav_html)
+
+            for hidden_label in ("Entradas", "Jobs", "Logs", "Bases de datos", "Diagnóstico", "Aprendizaje", "Canales"):
+                self.assertNotIn(hidden_label, nav_html)
         finally:
             fixture.cleanup()
 
@@ -54,15 +60,33 @@ class OperationalNavigationTests(unittest.TestCase):
         fixture = build_performance_fixture("small")
         try:
             with performance_test_client(fixture) as client:
-                entries = client.get("/entries")
+                entries = client.get("/entries", follow_redirects=False)
                 knowledge = client.get("/knowledge", follow_redirects=False)
+                redirected_dashboard = client.get("/")
 
-            self.assertEqual(entries.status_code, 200)
-            self.assertIn("Entradas", entries.text)
-            self.assertIn("Importar entrada", entries.text)
-            self.assertNotIn("Vista técnica", entries.text)
+            self.assertEqual(entries.status_code, 303)
+            self.assertEqual(entries.headers["location"], "/")
+            self.assertEqual(redirected_dashboard.status_code, 200)
+            self.assertIn("Bandeja", redirected_dashboard.text)
+            self.assertNotIn("Vista técnica", redirected_dashboard.text)
             self.assertEqual(knowledge.status_code, 303)
             self.assertEqual(knowledge.headers["location"], "/customers?view=knowledge")
+        finally:
+            fixture.cleanup()
+
+    def test_history_route_renders_history_page(self):
+        fixture = build_performance_fixture("small")
+        try:
+            with performance_test_client(fixture) as client:
+                history = client.get("/history", follow_redirects=False)
+                legacy_pedidos = client.get("/pedidos", follow_redirects=False)
+
+            self.assertEqual(history.status_code, 200)
+            self.assertIn("Histórico de pedidos", history.text)
+            self.assertIn("Listado de pedidos", history.text)
+            self.assertIn(legacy_pedidos.status_code, (200, 303))
+            if legacy_pedidos.status_code == 303:
+                self.assertEqual(legacy_pedidos.headers["location"], "/history")
         finally:
             fixture.cleanup()
 
@@ -129,7 +153,7 @@ class OperationalNavigationTests(unittest.TestCase):
                 )
                 db.commit()
             with performance_test_client(fixture) as client:
-                response = client.get("/entries")
+                response = client.get("/entries", follow_redirects=True)
 
             self.assertEqual(response.status_code, 200)
             self.assertNotIn("Pedido tenant B invisible", response.text)
@@ -150,8 +174,8 @@ class OperationalNavigationTests(unittest.TestCase):
                 response = client.get(f"/entries/email-{email_id}/resolve", follow_redirects=False)
 
             self.assertEqual(response.status_code, 200)
-            self.assertIn("Propuesta del agente", response.text)
-            self.assertIn("Pedido / correo / documento recibido", response.text)
+            self.assertIn("Confianza del pedido", response.text)
+            self.assertIn("Correo", response.text)
         finally:
             engine.dispose()
             fixture.cleanup()
@@ -160,7 +184,7 @@ class OperationalNavigationTests(unittest.TestCase):
         fixture = build_performance_fixture("small")
         try:
             with performance_test_client(fixture) as client:
-                dashboard = client.get("/inicio")
+                dashboard = client.get("/")
                 entries = client.get("/entries")
 
             self.assertEqual(dashboard.status_code, 200)

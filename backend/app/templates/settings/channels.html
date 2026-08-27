@@ -135,7 +135,7 @@
           </div>
           <div class="drawer-actions">
             <a class="button secondary compact-button" href="/settings#email">Abrir configuración de correo</a>
-            <a class="button secondary compact-button" href="/entries?tab=processed&date_range=30d&sort=date_desc">Ver procesados</a>
+            <a class="button secondary compact-button" href="/?tab=processed&date_range=30d&sort=date_desc">Ver procesados</a>
             <a class="button secondary compact-button" href="/pedidos">Ver pedidos</a>
             <form class="js-loading-form compact-backfill-form" method="post" action="/settings/email/backfill">
               <label>Desde<input type="date" name="from_date" value="{{ email.read_from_date or '' }}"></label>

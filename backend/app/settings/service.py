@@ -68,10 +68,23 @@ def update_with_form(instance, data: dict[str, str], secret_fields: set[str] | N
 def resolve_updated_by_id(db: Session, user) -> int | None:
     if not user:
         return None
-    user_id = getattr(user, "id", None)
-    if user_id is None:
-        return None
+
     try:
-        return user_id if db.get(User, user_id) is not None else None
+        user_id = getattr(user, "id", None)
+        if user_id is not None:
+            tenant_user = db.get(User, user_id)
+            if tenant_user and tenant_user.company_id == user.company_id:
+                return tenant_user.id
+
+        email = (getattr(user, "email", None) or "").strip().lower()
+        if not email:
+            return None
+
+        tenant_user = db.query(User).filter(
+            User.company_id == user.company_id,
+            User.email.ilike(email),
+        ).one_or_none()
+
+        return tenant_user.id if tenant_user else None
     except Exception:
         return None

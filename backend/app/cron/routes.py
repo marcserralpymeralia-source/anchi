@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.channels.service import is_channel_enabled
 from app.core.config import get_settings
 from app.db.models import EmailSettings
 from app.master.database import get_master_db
@@ -15,6 +16,7 @@ from app.settings.integrations import read_latest_imap_emails
 from app.settings.service import get_or_create_settings
 from app.tenancy.database import tenant_db_session
 from app.workers.email_worker import _acquire_lock, _release_lock  # noqa: PLC2701
+from app.workers.jobs_worker import run_worker_cycle
 
 router = APIRouter(prefix="/cron", tags=["cron"])
 
@@ -35,6 +37,13 @@ def _cron_authorized(request: Request) -> None:
     if not expected:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cron secret no configurado.")
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cron no autorizado.")
+
+
+@router.api_route("/jobs", methods=["GET", "POST"])
+def jobs_cron(request: Request):
+    _cron_authorized(request)
+    result = run_worker_cycle(max_jobs=1)
+    return JSONResponse({"ok": True, **result})
 
 
 @router.api_route("/email-sync", methods=["GET", "POST"])
@@ -82,6 +91,14 @@ def email_sync_cron(request: Request, master_db: Session = Depends(get_master_db
         db = session_factory()
         try:
             settings = get_or_create_settings(db, EmailSettings, tenant.company_id)
+
+            if not is_channel_enabled(db, tenant.company_id, "email"):
+                state.enabled = False
+                master_db.commit()
+                _release_lock(master_db, state, success=True)
+                result["skipped"] += 1
+                continue
+
             state.frequency_seconds = max(int(settings.polling_frequency_minutes or 1), 1) * 60
             master_db.commit()
             if not settings.auto_sync_enabled:

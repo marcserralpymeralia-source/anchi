@@ -1,94 +1,138 @@
-{% from "components/icons.html" import icon_check, icon_more_horizontal, icon_copy, icon_trash, icon_plus %}
-<article class="subpanel order-lines-card">
-  <div class="section-title-row">
-    <h4>Productos interpretados</h4>
-    <span class="badge">{{ order.lines|length }} líneas</span>
+{% from "components/icons.html" import icon_plus, icon_trash %}
+<div class="order-review-lines">
+  <div class="order-review-lines-toolbar">
+    <span>Productos</span>
+
+    <form
+      method="post"
+      action="/orders/{{ order.id }}/lines"
+      class="js-loading-form"
+    >
+      <input type="hidden" name="validated_product_id" value="0">
+      <input type="hidden" name="original_text" value="Linea manual">
+      <input type="hidden" name="quantity" value="1">
+      <input type="hidden" name="unit" value="">
+      <button
+        type="submit"
+        class="secondary order-review-add-line"
+        data-loading-text="Añadiendo..."
+      >
+        {{ icon_plus(14) }} <span>Añadir producto</span>
+      </button>
+    </form>
   </div>
-  <table class="line-table review-lines-table review-lines-table-v3">
-    <colgroup>
-      <col style="width: 34%;">
-      <col style="width: 28%;">
-      <col style="width: 16%;">
-      <col style="width: 12%;">
-      <col style="width: 10%;">
-    </colgroup>
+
+  <table class="order-review-table">
     <thead>
-      <tr><th>Texto fuente</th><th>Producto propuesto</th><th>Cant. / U.</th><th>Estado</th><th>Acciones</th></tr>
-    </thead>
-    <tbody>
-    {% for line in order.lines %}
-      {% set line_score = line.line_score or 0 %}
-      {% set suggestions = line_suggestions.get(line.id, []) if line_suggestions else [] %}
-      <tr class="line-{{ 'validated' if line.validation_status == 'validated' and line.validated_product_id else 'pending' }}">
-        <td class="line-source-cell">
-          <strong>{{ loop.index }}.</strong>
-          <span>{{ line.original_text or "" }}</span>
-        </td>
-        <td class="product-detected-cell">
-          <strong>{{ line.detected_product or "Producto no identificado" }}</strong>
-          <span>{{ line.detected_reference or "Sin referencia detectada" }}</span>
-          {% if suggestions %}
-            <div class="line-suggestion-row">
-              <span class="muted">Sugerencias rápidas</span>
-              <div class="line-suggestion-list">
-                {% for suggestion in suggestions %}
-                  <button
-                    type="button"
-                    class="secondary compact-button line-suggestion-chip"
-                    data-line-id="{{ line.id }}"
-                    data-product-id="{{ suggestion.id }}"
-                    onclick="applyOrderLineSuggestion(this)"
-                  >
-                    {{ suggestion.label }} · {{ "%.0f"|format(suggestion.score) }}%
-                  </button>
-                {% endfor %}
-              </div>
-            </div>
-          {% endif %}
-          <details class="line-product-picker-toggle">
-            <summary class="secondary compact-button">Cambiar producto</summary>
-            <div class="line-product-picker-panel">
-              <select form="line-form-{{ line.id }}" name="validated_product_id" class="line-product-select" data-line-product-select="{{ line.id }}" title="Referencia propuesta">
-                <option value="0">Sin referencia</option>
-                {% for product in products %}
-                  <option value="{{ product.id }}" {% if line.validated_product_id == product.id %}selected{% endif %}>{{ product.reference }} - {{ product.name }}</option>
-                {% endfor %}
-              </select>
-            </div>
-          </details>
-        </td>
-        <td>
-          <form id="line-form-{{ line.id }}" class="js-loading-form" method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}"></form>
-          <div class="line-qty-inline">
-            <input form="line-form-{{ line.id }}" name="quantity" type="number" step="0.01" value="{{ line.quantity or 0 }}" aria-label="Cantidad">
-            <input form="line-form-{{ line.id }}" name="unit" value="{{ line.unit or '' }}" placeholder="U." aria-label="Unidad">
-          </div>
-        </td>
-        <td>
-          <span class="score-badge {% if line_score >= 80 %}score-safe{% elif line_score >= 60 %}score-reviewable{% elif line_score >= 40 %}score-doubtful{% else %}score-not-importable{% endif %}">{{ "%.0f"|format(line_score) }}%</span>
-          <span class="badge">{{ line.validation_status }}</span>
-        </td>
-        <td>
-          <div class="line-actions line-actions-v2">
-            <button form="line-form-{{ line.id }}" class="secondary compact-button icon-button" data-loading-text="..." title="Guardar corrección">{{ icon_check(15) }}</button>
-            <details class="line-more-actions">
-              <summary class="secondary compact-button icon-button" title="Más acciones">{{ icon_more_horizontal(16) }}</summary>
-              <div class="line-more-actions-panel">
-                <form method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}/duplicate"><button class="secondary compact-button">{{ icon_copy(14) }} <span>Duplicar</span></button></form>
-                <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}/delete" data-confirm="Eliminar linea de pedido?"><button class="secondary compact-button danger-soft" data-loading-text="...">{{ icon_trash(14) }} <span>Eliminar</span></button></form>
-              </div>
-            </details>
-          </div>
-        </td>
+      <tr>
+        <th>Referencia</th>
+        <th>Descripción</th>
+        <th class="order-review-number">Unidades</th>
+        <th class="order-review-number">Precio</th>
+        <th class="order-review-actions-col"></th>
       </tr>
-    {% endfor %}
+    </thead>
+
+    <tbody>
+      {% for line in order.lines %}
+        {% set selected_product = line.validated_product or line.product %}
+        {% set unit_price = selected_product.sale_price if selected_product and selected_product.sale_price is not none else 0 %}
+        {% set quantity = line.quantity or 0 %}
+
+        <tr class="{% if not selected_product %}order-review-line-warning{% endif %}">
+          <td class="order-review-reference">
+            {{ selected_product.reference if selected_product else line.detected_reference or "—" }}
+          </td>
+
+          <td class="order-review-description">
+            <form
+              id="line-form-{{ line.id }}"
+              class="js-loading-form"
+              method="post"
+              action="/orders/{{ order.id }}/lines/{{ line.id }}"
+            ></form>
+
+            <div
+              class="product-autocomplete"
+              data-product-autocomplete
+              data-line-id="{{ line.id }}"
+            >
+              <input
+                type="search"
+                class="order-review-product-input"
+                data-product-input
+                value="{{ selected_product.name if selected_product else line.detected_product or line.original_text or '' }}"
+                title="{{ selected_product.name if selected_product else line.detected_product or line.original_text or '' }}"
+                placeholder="Buscar producto"
+                autocomplete="off"
+              >
+
+              <input
+                form="line-form-{{ line.id }}"
+                type="hidden"
+                name="validated_product_id"
+                data-product-id
+                value="{{ selected_product.id if selected_product else 0 }}"
+              >
+
+              <div
+                class="product-autocomplete-results"
+                data-product-results
+                hidden
+              ></div>
+            </div>
+          </td>
+
+          <td class="order-review-number">
+            <input
+              form="line-form-{{ line.id }}"
+              name="quantity"
+              class="order-review-quantity"
+              type="number"
+              step="0.01"
+              value="{{ quantity }}"
+              aria-label="Unidades"
+              onchange="this.form.requestSubmit()"
+            >
+
+            <input
+              form="line-form-{{ line.id }}"
+              name="unit"
+              type="hidden"
+              value="{{ line.unit or '' }}"
+            >
+          </td>
+
+          <td class="order-review-number order-review-price">
+            {{ "%.2f"|format(unit_price * quantity) }} €
+          </td>
+
+          <td class="order-review-actions-col">
+            <form
+              method="post"
+              action="/orders/{{ order.id }}/lines/{{ line.id }}/delete"
+              class="js-loading-form"
+              data-confirm="Eliminar este producto?"
+            >
+              <button
+                type="submit"
+                class="order-review-delete-line"
+                title="Eliminar producto"
+                aria-label="Eliminar producto"
+              >
+                {{ icon_trash(15) }}
+              </button>
+            </form>
+          </td>
+        </tr>
+
+      {% else %}
+        <tr>
+          <td colspan="5" class="order-review-empty">
+            No se han detectado productos.
+          </td>
+        </tr>
+      {% endfor %}
     </tbody>
   </table>
-  <form class="form-grid js-loading-form" method="post" action="/orders/{{ order.id }}/lines">
-    <label>Texto original<input name="original_text" value="Linea manual"></label>
-    <label>Producto<select name="validated_product_id"><option value="0">Sin referencia</option>{% for product in products %}<option value="{{ product.id }}">{{ product.reference }} - {{ product.name }}</option>{% endfor %}</select></label>
-    <label>Cantidad<input name="quantity" type="number" step="0.01" value="1"></label>
-    <label>Unidad<input name="unit"></label>
-    <label>&nbsp;<button data-loading-text="Añadiendo...">{{ icon_plus(14) }} <span>Añadir producto</span></button></label>
-  </form>
-</article>
+</div>

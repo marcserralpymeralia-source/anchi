@@ -4,6 +4,7 @@ from math import ceil
 from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.entry_workflow import canonical_email_status, canonical_inbound_status, entry_status_label
 from app.core.timezones import format_local_datetime
 from app.core.pagination import normalize_page
 from app.db.models import Company, Customer, CustomerContactPoint, CustomerDomain, Email, FTPSettings, LLMSettings, Order, OrderLine, ScoringSettings
@@ -229,48 +230,35 @@ def email_origin(email: Email) -> str:
 
 
 def email_agent_status(email: Email, order: Order | None = None) -> str:
-    if email.agent_status:
-        status_map = {
-            "processed_order_detected": "order_detected",
-            "processed_no_order": "no_order",
-            "processed_doubtful": "doubtful",
-            "processing_error": "error",
-            "queued": "queued",
-            "processing": "processing",
-            "pending_reprocess": "pending_reprocess",
-            "discarded": "discarded",
-            "not_processed": "not_processed",
-        }
-        if email.agent_status in status_map:
-            return status_map[email.agent_status]
-    if email.status == "pending":
-        return "not_processed"
-    if email.status == "descartado":
-        return "discarded"
-    if email.status.startswith("error"):
-        return "error"
-    if order:
-        return "order_detected"
-    if email.detected_type == "no_pedido":
-        return "no_order"
-    if email.detected_type == "dudoso":
+    status = canonical_email_status(email)
+    if status == "review":
         return "doubtful"
+    if status == "processed" and order:
+        return "order_detected"
+    if status in {"not_processed", "processing", "error", "no_order", "discarded", "closed", "archived", "queued"}:
+        return status
     return "processed"
 
 
 def agent_status_label(status: str) -> str:
-    return {
-        "not_processed": "Pendiente",
-        "queued": "En cola",
-        "processing": "Procesando",
-        "pending_reprocess": "Pendiente",
-        "processed": "Procesado",
-        "order_detected": "Procesado como pedido",
-        "no_order": "No es pedido",
-        "doubtful": "Pendiente de validar",
-        "error": "Error",
-        "discarded": "Descartado",
-    }.get(status, status)
+    key = (status or "").strip().lower()
+    if key == "review":
+        return "Pendiente de validar"
+    if key == "order_detected":
+        return "Procesado como pedido"
+    if key == "no_order":
+        return "No es pedido"
+    if key == "discarded":
+        return "Descartado"
+    if key == "processed":
+        return "Procesado"
+    if key == "processing":
+        return "Procesando"
+    if key in {"not_processed", "queued", "pending_reprocess"}:
+        return "Pendiente"
+    if key == "error":
+        return "Error"
+    return entry_status_label(status)
 
 
 def order_workbench_item(order: Order, settings: ScoringSettings, *, include_line_metrics: bool = True, line_metrics_by_order: dict[int, dict[str, int]] | None = None) -> dict:
@@ -305,6 +293,7 @@ def order_workbench_item(order: Order, settings: ScoringSettings, *, include_lin
         "available_actions": [action_type, "review", "reply"],
         "action_label": action_label,
         "priority_rank": item["priority_rank"],
+        "line_count": item["line_count"],
         "detail_url": f"/workbench/item/order/{order.id}/detail",
         "modal_id": f"dashboard-order-modal-{order.id}",
     }
@@ -345,6 +334,7 @@ def email_workbench_item(email: Email) -> dict:
         "action_label": action,
         "priority_rank": priority_rank,
         "priority": priority,
+        "line_count": 0,
         "modal_id": f"email-modal-{email.id}",
         "detail_url": f"/workbench/item/email/{email.id}/detail",
     }
@@ -653,7 +643,7 @@ def workbench_summary(db: Session, company_id: int, filters: dict, *, include_me
 
     emails_stmt = select(Email).where(Email.company_id == company_id)
     today = datetime.now(timezone.utc).date()
-    date_range = filters.get("date_range") or filters.get("quick_range") or "7d"
+    date_range = filters.get("date_range") or filters.get("quick_range") or ""
     if date_range == "today":
         emails_stmt = emails_stmt.where(Email.received_at >= datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc))
     elif date_range == "yesterday":

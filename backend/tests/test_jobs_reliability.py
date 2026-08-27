@@ -19,14 +19,15 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.agent.services import AgentProcessingService  # noqa: E402
+from app.channels.service import get_or_create_channel  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import BackgroundJob, Customer, Email, ImportJob, JobAttempt, LLMSettings, Order, OrderLine  # noqa: E402
+from app.db.models import BackgroundJob, Customer, Email, EmailSettings, ImportJob, InputChannel, JobAttempt, LLMSettings, Order, OrderLine  # noqa: E402
 from app.imports.service import create_preview  # noqa: E402
-from app.jobs.service import claim_next_job, enqueue_job, fail_job, finish_job, recover_stale_jobs, retry_job  # noqa: E402
+from app.jobs.service import claim_next_job, enqueue_job, fail_job, finish_job, recover_stale_jobs, retry_job, get_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.tenancy.migrations import upgrade_tenant_schema  # noqa: E402
-from app.workers.jobs_worker import _process_import_job, run_worker_cycle  # noqa: E402
+from app.workers.jobs_worker import _process_import_job, _process_job, run_worker_cycle  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 
 
@@ -63,6 +64,145 @@ class JobsReliabilityTests(unittest.TestCase):
         db.add(LLMSettings(company_id=1, api_key_encrypted="encrypted-token"))
         db.commit()
         db.close()
+
+    def test_email_sync_job_skips_when_email_channel_is_disabled(self):
+        db = self.TenantSession()
+        try:
+            db.add(
+                InputChannel(
+                    company_id=1,
+                    key="email",
+                    name="Email",
+                    channel_type="message",
+                    is_active=False,
+                    is_default=True,
+                    supports_text=True,
+                    supports_attachments=True,
+                    supports_documents=True,
+                    supports_audio=False,
+                    supports_images=False,
+                )
+            )
+            db.add(
+                EmailSettings(
+                    company_id=1,
+                    auto_sync_enabled=True,
+                )
+            )
+            db.commit()
+
+            job = enqueue_job(
+                db,
+                company_id=1,
+                job_type="email_sync",
+                payload={"auto_process": False},
+                created_by_user_id=None,
+            )
+
+            with patch(
+                "app.workers.jobs_worker.read_latest_imap_emails"
+            ) as read_imap:
+                result = _process_job(db, job)
+
+            self.assertTrue(result.get("ok"))
+            self.assertTrue(result.get("skipped"))
+            self.assertIn("desactivado", result.get("message", "").lower())
+            read_imap.assert_not_called()
+        finally:
+            db.close()
+
+    def test_backfill_job_enqueues_single_continuation_with_remaining_limit(self):
+        self._seed_master()
+
+        db = self.TenantSession()
+        try:
+            db.add(
+                InputChannel(
+                    company_id=1,
+                    key="email",
+                    name="Email",
+                    channel_type="message",
+                    is_active=True,
+                    is_default=True,
+                    supports_text=True,
+                    supports_attachments=True,
+                    supports_documents=True,
+                    supports_audio=False,
+                    supports_images=False,
+                )
+            )
+            db.add(
+                EmailSettings(
+                    company_id=1,
+                    auto_sync_enabled=True,
+                )
+            )
+            db.commit()
+
+            job = enqueue_job(
+                db,
+                company_id=1,
+                job_type="backfill_imap",
+                payload={
+                    "from_date": "2026-08-20",
+                    "to_date": None,
+                    "limit": 7,
+                },
+                created_by_user_id=None,
+            )
+
+            with patch(
+                "app.workers.jobs_worker.MasterSessionLocal",
+                new=self.MasterSession,
+            ), patch(
+                "app.workers.jobs_worker.backfill_imap_emails",
+                return_value={
+                    "ok": True,
+                    "saved": 1,
+                    "duplicates": 0,
+                    "has_more": True,
+                    "last_uid": "10",
+                    "batch_count": 5,
+                    "message": "5 correos procesados",
+                },
+            ) as backfill:
+                result = _process_job(db, job)
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["remaining"], 2)
+            self.assertIn("continuation_job_id", result)
+
+            backfill.assert_called_once()
+            kwargs = backfill.call_args.kwargs
+            self.assertEqual(kwargs["batch_size"], 5)
+            self.assertTrue(kwargs["stop_after_batch"])
+
+            jobs = db.scalars(
+                select(BackgroundJob)
+                .where(
+                    BackgroundJob.company_id == 1,
+                    BackgroundJob.job_type == "backfill_imap",
+                )
+                .order_by(BackgroundJob.id)
+            ).all()
+
+            self.assertEqual(len(jobs), 2)
+
+            continuation = jobs[1]
+            continuation_payload = __import__(
+                "app.jobs.service",
+                fromlist=["job_payload"],
+            ).job_payload(continuation)
+
+            self.assertEqual(continuation_payload["limit"], 2)
+            self.assertTrue(continuation_payload["resume"])
+            self.assertEqual(
+                continuation_payload["from_date"],
+                "2026-08-20",
+            )
+            self.assertNotIn("from_uid", continuation_payload)
+        finally:
+            db.close()
 
     def test_enqueue_job_is_idempotent_and_rejects_secrets(self):
         db = self.TenantSession()
@@ -182,6 +322,11 @@ class JobsReliabilityTests(unittest.TestCase):
         email = Email(company_id=1, external_id="mail-1", sender="cliente@example.com", subject="Pedido", body="10 cajas")
         db.add(email)
         db.commit()
+
+        channel = get_or_create_channel(db, 1, "email")
+        channel.is_active = True
+        db.commit()
+
         calls = {"count": 0}
 
         def fake_process_inbound_message(_self, session, inbound_message, user=None, force_order=False, email=None):  # noqa: ANN001
@@ -236,6 +381,129 @@ class JobsReliabilityTests(unittest.TestCase):
         self.assertEqual(customers_after_first, db.scalar(select(func.count()).select_from(Customer)) or 0)
         db.close()
 
+
+    def test_process_email_job_propagates_force_flag(self):
+        self._seed_master()
+        self._seed_llm()
+        upgrade_tenant_schema(self.tenant_engine, company_id=1, application_version="1.2.3")
+
+        db = self.TenantSession()
+        email = Email(
+            company_id=1,
+            external_id="mail-force-worker",
+            sender="cliente@example.com",
+            subject="Pedido",
+            body="3 cajas",
+        )
+        db.add(email)
+        db.commit()
+
+        channel = get_or_create_channel(db, 1, "email")
+        channel.is_active = True
+        db.commit()
+
+        job = enqueue_job(
+            db,
+            company_id=1,
+            job_type="process_email",
+            payload={"email_id": email.id, "force": True},
+            created_by_user_id=1,
+        )
+        db.close()
+
+        captured = {"force_order": None}
+
+        def fake_process_email(_self, session, current_email, user=None, force_order=False):
+            captured["force_order"] = force_order
+            return {
+                "ok": True,
+                "status": "order_detected",
+                "message": "Procesado",
+                "order_id": 1,
+                "score": 90,
+            }
+
+        with patch(
+            "app.workers.jobs_worker.MasterSessionLocal",
+            new=self.MasterSession,
+        ), patch(
+            "app.workers.jobs_worker.AgentProcessingService.process_email",
+            new=fake_process_email,
+        ):
+            summary = run_worker_cycle()
+
+        self.assertEqual(summary["tenants"], 1)
+        self.assertTrue(captured["force_order"])
+
+        db = self.TenantSession()
+        self.assertEqual(db.get(BackgroundJob, job.id).status, "success")
+        db.close()
+
+    def test_process_order_job_forces_reprocessing(self):
+        self._seed_master()
+        self._seed_llm()
+        upgrade_tenant_schema(self.tenant_engine, company_id=1, application_version="1.2.3")
+
+        db = self.TenantSession()
+
+        email = Email(
+            company_id=1,
+            external_id="mail-order-reprocess-worker",
+            sender="cliente@example.com",
+            subject="Pedido",
+            body="3 cajas",
+        )
+        db.add(email)
+        db.flush()
+
+        order = Order(
+            company_id=1,
+            email_id=email.id,
+            customer_detected_name="Cliente demo",
+            status="pedido_pendiente_revision",
+            score=90,
+        )
+        db.add(order)
+        db.commit()
+
+        order_id = order.id
+        job = enqueue_job(
+            db,
+            company_id=1,
+            job_type="process_order",
+            payload={"order_id": order_id},
+            created_by_user_id=1,
+        )
+        db.close()
+
+        captured = {"force_order": None}
+
+        def fake_process_email(_self, session, current_email, user=None, force_order=False):
+            captured["force_order"] = force_order
+            return {
+                "ok": True,
+                "status": "order_detected",
+                "message": "Reprocesado",
+                "order_id": order_id,
+                "score": 90,
+            }
+
+        with patch(
+            "app.workers.jobs_worker.MasterSessionLocal",
+            new=self.MasterSession,
+        ), patch(
+            "app.workers.jobs_worker.AgentProcessingService.process_email",
+            new=fake_process_email,
+        ):
+            summary = run_worker_cycle()
+
+        self.assertEqual(summary["tenants"], 1)
+        self.assertTrue(captured["force_order"])
+
+        db = self.TenantSession()
+        self.assertEqual(db.get(BackgroundJob, job.id).status, "success")
+        db.close()
+
     def test_worker_cycle_processes_job_once(self):
         self._seed_master()
         self._seed_llm()
@@ -244,6 +512,11 @@ class JobsReliabilityTests(unittest.TestCase):
         email = Email(company_id=1, external_id="mail-2", sender="cliente@example.com", subject="Pedido worker", body="3 cajas")
         db.add(email)
         db.commit()
+
+        channel = get_or_create_channel(db, 1, "email")
+        channel.is_active = True
+        db.commit()
+
         job = enqueue_job(db, company_id=1, job_type="process_email", payload={"email_id": email.id}, created_by_user_id=1)
         db.close()
 
@@ -271,6 +544,36 @@ class JobsReliabilityTests(unittest.TestCase):
         self.assertEqual(processed_job.status, "success")
         self.assertEqual(db.scalar(select(func.count()).select_from(Order)) or 0, 1)
         self.assertEqual(db.scalar(select(func.count()).select_from(JobAttempt).where(JobAttempt.job_id == job.id)) or 0, 1)
+        db.close()
+
+
+    def test_job_access_isolated_by_company(self):
+        db = self.TenantSession()
+
+        job = enqueue_job(
+            db,
+            company_id=1,
+            job_type="process_inbound_message",
+            payload={"test": True},
+            dedupe_key="tenant-isolation-job",
+        )
+        db.commit()
+
+        same_company = get_job(
+            db,
+            company_id=1,
+            job_id=job.id,
+        )
+
+        other_company = get_job(
+            db,
+            company_id=2,
+            job_id=job.id,
+        )
+
+        self.assertIsNotNone(same_company)
+        self.assertIsNone(other_company)
+
         db.close()
 
 
