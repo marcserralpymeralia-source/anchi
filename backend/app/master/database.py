@@ -8,7 +8,7 @@ from app.core.config import get_settings
 
 settings = get_settings()
 connect_args = {"check_same_thread": False} if settings.master_database_url.startswith("sqlite") else {}
-engine = create_engine(settings.master_database_url, connect_args=connect_args)
+engine = create_engine(settings.master_database_url, connect_args=connect_args, pool_pre_ping=True)
 MasterSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
