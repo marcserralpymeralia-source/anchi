@@ -313,6 +313,11 @@
         <h4>Acciones disponibles</h4>
         <div class="actions">
           <a class="button secondary" href="/entries/email-{{ email.id }}/resolve">Revisar</a>
+          {% if item.agent_status == "not_processed" %}
+            <form class="js-loading-form" method="post" action="/entries/email-{{ email.id }}/process">
+              <button class="primary" data-loading-text="Procesando...">Procesar ahora</button>
+            </form>
+          {% endif %}
           <form class="js-loading-form" method="post" action="/workbench/email/{{ email.id }}/mark-no-order" data-confirm="Marcar esta entrada como no pedido?"><button class="secondary">Marcar como no pedido</button></form>
           <form class="js-loading-form" method="post" action="/workbench/email/{{ email.id }}/discard" data-confirm="Descartar este correo?"><button class="secondary">Descartar</button></form>
           <form class="js-loading-form" method="post" action="/workbench/email/{{ email.id }}/close"><button class="secondary">Marcar cerrado</button></form>

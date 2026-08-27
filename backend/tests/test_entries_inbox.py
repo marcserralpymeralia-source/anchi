@@ -324,6 +324,47 @@ class EntriesInboxTests(unittest.TestCase):
             tenant_engine.dispose()
             fixture.cleanup()
 
+
+    def test_not_processed_email_detail_shows_process_now_action(self):
+        fixture = build_performance_fixture("small")
+        tenant_engine, TenantSession = _session_factory(fixture.tenant_database_url)
+
+        try:
+            with TenantSession() as db:
+                email = Email(
+                    company_id=1,
+                    sender="uat-process@example.com",
+                    subject="Pedido pendiente de analizar",
+                    body="2 cajas de producto",
+                    status="pending",
+                    agent_status="not_processed",
+                    received_at=utcnow(),
+                )
+                db.add(email)
+                db.commit()
+                email_id = email.id
+
+            client, cleanup = self._client_for(fixture)
+            try:
+                self._login(client, fixture)
+
+                response = client.get(
+                    f"/workbench/item/email/{email_id}/detail",
+                    follow_redirects=False,
+                )
+            finally:
+                cleanup()
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("Procesar ahora", response.text)
+            self.assertIn(
+                f'action="/entries/email-{email_id}/process"',
+                response.text,
+            )
+        finally:
+            tenant_engine.dispose()
+            fixture.cleanup()
+
     def test_entries_actions_enqueue_jobs_with_dedupe(self):
         fixture = build_performance_fixture("small")
         tenant_engine, TenantSession = _session_factory(fixture.tenant_database_url)
