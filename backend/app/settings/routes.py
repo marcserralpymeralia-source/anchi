@@ -16,7 +16,7 @@ from app.master.database import get_master_db
 from app.master.service import TenantUser
 from app.master.models import EmailSyncState
 from app.core.encryption import mask_secret
-from app.db.models import AuditLog, BrandingSettings, Company, Customer, DecisionSettings, Email, EmailSettings, EmailTemplate, ExportSettings, FTPSettings, InputChannel, InboundMessage, LLMSettings, Order, Product, PromptTemplate, PromptVersion, ScoringSettings
+from app.db.models import AuditLog, BrandingSettings, Company, Customer, DecisionSettings, Email, EmailSettings, EmailTemplate, ExportSettings, FTPSettings, InputChannel, InboundMessage, LLMSettings, Order, Product, PromptExecution, PromptTemplate, PromptVersion, ScoringSettings
 from app.db.models import BackgroundJob
 from app.logs.service import log_action
 from app.settings.agent_config import agent_metrics, agent_status, apply_safety_level, improvement_suggestions
@@ -33,6 +33,41 @@ from app.tenancy.migrations import tenant_migration_report
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+
+@router.get("/diagnostics/prompts")
+def prompt_execution_diagnostics(
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    executions = db.scalars(
+        select(PromptExecution)
+        .where(
+            PromptExecution.company_id == user.company_id,
+            PromptExecution.prompt_purpose.in_(["classification", "extraction"]),
+        )
+        .order_by(PromptExecution.id.desc())
+        .limit(6)
+    ).all()
+
+    return JSONResponse(
+        {
+            "company_id": user.company_id,
+            "items": [
+                {
+                    "id": execution.id,
+                    "purpose": execution.prompt_purpose,
+                    "status": execution.output_status,
+                    "model": execution.model,
+                    "validation_errors": execution.validation_errors_json,
+                    "duration_ms": execution.duration_ms,
+                    "response_excerpt": execution.response_excerpt,
+                    "created_at": execution.created_at.isoformat() if execution.created_at else None,
+                }
+                for execution in executions
+            ],
+        }
+    )
 
 
 def _queued_job_response(request: Request, job_id: int, fallback: str = "/settings", result: dict | None = None):
