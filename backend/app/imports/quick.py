@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 
 from fastapi import UploadFile
@@ -55,11 +54,16 @@ def _parse_line_block(raw_text: str) -> list[dict[str, object]]:
     lines: list[dict[str, object]] = []
     for raw_line in (raw_text or "").splitlines():
         text = raw_line.strip()
-        if not text:
+        if not text or ("|" not in text and ";" not in text):
             continue
+
         pieces = [piece.strip() for piece in text.replace(";", "|").split("|")]
+        if len([piece for piece in pieces if piece]) < 2:
+            continue
+
         while len(pieces) < 4:
             pieces.append("")
+
         lines.append(
             {
                 "original_text": text,
@@ -70,7 +74,7 @@ def _parse_line_block(raw_text: str) -> list[dict[str, object]]:
                 "confidence": 0.8,
             }
         )
-    return lines or [{"original_text": raw_text[:180], "reference": None, "product_name": None, "quantity": None, "unit": None, "confidence": 0.5}]
+    return lines
 
 
 def _active_prompt_content(db: Session, company_id: int, purpose: str) -> str:
@@ -110,7 +114,7 @@ def analysis_context(
         if classification.get("ok"):
             extraction = extract_sample(db, llm, user.company_id, agent_text, _active_prompt_content(db, user.company_id, "extraction"))
             if extraction.get("ok"):
-                extraction_payload = json.loads(extraction.get("content", "{}"))
+                extraction_payload = extraction.get("validated_content")
     except Exception as exc:  # noqa: BLE001
         classification = {"ok": False, "message": str(exc), "content": ""}
 
