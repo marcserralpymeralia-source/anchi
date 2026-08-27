@@ -26,6 +26,7 @@ DEFAULT_MAX_RETRIES = {
     "process_email": 3,
     "process_order": 3,
     "process_inbound_message": 3,
+    "download_whatsapp_media": 3,
     "export_order": 3,
     "export_order_ftp": 3,
     "bulk_order_action": 2,

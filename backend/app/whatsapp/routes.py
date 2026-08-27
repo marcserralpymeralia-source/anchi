@@ -13,15 +13,16 @@ from app.master.service import TenantUser
 from app.tenancy.database import tenant_db_session
 from app.tenancy.database import get_tenant_db
 from app.whatsapp.service import (
+    enqueue_whatsapp_media_download,
     enqueue_whatsapp_processing,
     parse_payload_events,
     persist_event,
     resolve_company_from_slug,
     resolve_company_from_whatsapp_identifiers,
-    record_manual_response,
     verify_signature,
     verify_webhook_token,
     whatsapp_config,
+    send_manual_response,
 )
 
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["whatsapp"])
@@ -73,7 +74,10 @@ async def receive_default_webhook(
             if message:
                 stored.append(message.id)
                 if event.get("kind") == "message":
-                    enqueue_whatsapp_processing(config_db, company.id, message.id)
+                    if any(attachment.get("downloadable") for attachment in event.get("attachments", [])):
+                        enqueue_whatsapp_media_download(config_db, company.id, message.id)
+                    else:
+                        enqueue_whatsapp_processing(config_db, company.id, message.id)
             config_db.commit()
         finally:
             config_db.close()
@@ -128,7 +132,10 @@ async def receive_webhook(
             message = persist_event(config_db, company.id, event)
             stored.append(message.id if message else None)
             if message and event.get("kind") == "message":
-                enqueue_whatsapp_processing(config_db, company.id, message.id)
+                if any(attachment.get("downloadable") for attachment in event.get("attachments", [])):
+                    enqueue_whatsapp_media_download(config_db, company.id, message.id)
+                else:
+                    enqueue_whatsapp_processing(config_db, company.id, message.id)
         config_db.commit()
         return {"ok": True, "company_id": company.id, "events": len(events), "stored": [item for item in stored if item is not None]}
     finally:
@@ -136,7 +143,7 @@ async def receive_webhook(
 
 
 @router.post("/{company_slug}/respond")
-def manual_response(
+async def manual_response(
     company_slug: str,
     conversation_id: int,
     body: str,
@@ -147,5 +154,12 @@ def manual_response(
     company, tenant_db = resolve_company_from_slug(master_db, company_slug)
     if not company or not tenant_db or company.id != user.company_id:
         return JSONResponse({"ok": False, "message": "tenant not found"}, status_code=404)
-    message = record_manual_response(db, company_id=company.id, conversation_id=conversation_id, body=body, user_id=user.id)
+    try:
+        message = await send_manual_response(db, company_id=company.id, conversation_id=conversation_id, body=body, user_id=user.id)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=404)
+    except Exception as exc:  # noqa: BLE001
+        error_type = getattr(exc, "error_type", "whatsapp_send_failed")
+        status_code = 400 if error_type in {"invalid_message", "recipient_not_found", "response_window_expired", "server_not_configured"} else 502
+        return JSONResponse({"ok": False, "message": str(exc), "error_type": error_type}, status_code=status_code)
     return {"ok": True, "message_id": message.id, "status": message.status}

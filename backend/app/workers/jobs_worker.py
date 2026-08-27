@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import threading
@@ -50,6 +51,7 @@ JOB_TYPES = {
     "process_email",
     "process_order",
     "process_inbound_message",
+    "download_whatsapp_media",
     "import_confirm",
     "import_file",
     "export_order",
@@ -302,6 +304,19 @@ def _process_job(db, job: BackgroundJob) -> dict:
             raise RuntimeError("No se encontró el mensaje a procesar.")
         result = AgentProcessingService().pipeline.process_inbound_message(db, inbound_message)
         return {"ok": True, **result}
+    if job.job_type == "download_whatsapp_media":
+        inbound_message_id = int(payload.get("inbound_message_id") or 0)
+        from app.whatsapp.service import download_whatsapp_media, enqueue_whatsapp_processing
+
+        result = asyncio.run(
+            download_whatsapp_media(
+                db,
+                company_id=job.company_id,
+                inbound_message_id=inbound_message_id,
+            )
+        )
+        processing_job = enqueue_whatsapp_processing(db, job.company_id, inbound_message_id, user_id=job.created_by_user_id)
+        return {**result, "processing_job_id": processing_job.id, "message": "Media WhatsApp descargada y entrada encolada"}
     raise RuntimeError(f"Tipo de job no soportado: {job.job_type}")
 
 
@@ -695,7 +710,10 @@ def _handle_tenant_jobs(
                     record_job(job_type=job.job_type, status="started")
                     result = _process_job(db, job)
                     if isinstance(result, dict) and result.get("ok") is False:
-                        raise RuntimeError(str(result.get("message") or "El job devolvio ok=false."))
+                        error = RuntimeError(str(result.get("message") or "El job devolvio ok=false."))
+                        error.retryable = bool(result.get("retryable"))
+                        error.error_type = str(result.get("error_type") or "job_failed")
+                        raise error
                     finish_job(db, job, result)
                     record_job(job_type=job.job_type, status="success")
                     log_action(db, company_id=job.company_id, user=None, action=f"job.{job.job_type}.success", entity_type="job", entity_id=job.id, message=result.get("message") or "Trabajo completado")
@@ -713,8 +731,16 @@ def _handle_tenant_jobs(
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("Job fallido company=%s job=%s", job.company_id, job.job_type)
-                    should_retry = job.attempt_count < (max(0, job.max_retries or 0) + 1) and _is_retryable_exception(exc)
-                    failed_job = fail_job(db, job, str(exc), retry=should_retry, error_type=exc.__class__.__name__)
+                    should_retry = job.attempt_count < (max(0, job.max_retries or 0) + 1) and (
+                        bool(getattr(exc, "retryable", False)) or _is_retryable_exception(exc)
+                    )
+                    failed_job = fail_job(
+                        db,
+                        job,
+                        str(exc),
+                        retry=should_retry,
+                        error_type=str(getattr(exc, "error_type", None) or exc.__class__.__name__),
+                    )
                     record_job(job_type=job.job_type, status=failed_job.status)
                     action_suffix = "retrying" if failed_job.status == "retrying" else "failed"
                     log_action(db, company_id=job.company_id, user=None, action=f"job.{job.job_type}.{action_suffix}", entity_type="job", entity_id=job.id, message=str(exc))

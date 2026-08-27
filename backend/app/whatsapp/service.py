@@ -5,10 +5,12 @@ import hmac
 import json
 import re
 import secrets
+from pathlib import Path
 from uuid import uuid4
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import select
@@ -16,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.encryption import decrypt_secret, encrypt_secret
+from app.core.storage import ensure_directory, resolve_temp_storage_dir
 from app.db.models import ChannelSetting, Conversation, InboundMessage, InputChannel, MessageAttachment
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
@@ -34,6 +37,22 @@ WHATSAPP_ONBOARDING_CLOUD_API = "cloud_api"
 WHATSAPP_ONBOARDING_COEXISTENCE = "coexistence"
 WHATSAPP_COEXISTENCE_FEATURE_TYPE = "whatsapp_business_app_onboarding"
 META_ID_PATTERN = re.compile(r"^\d{5,32}$")
+WHATSAPP_SUPPORTED_DOCUMENT_MIME_TYPES = {
+    "application/pdf",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "text/plain",
+}
+WHATSAPP_SUPPORTED_AUDIO_MIME_TYPES = {
+    "audio/ogg",
+    "audio/mpeg",
+    "audio/mp4",
+    "audio/wav",
+    "audio/x-m4a",
+    "audio/webm",
+    "audio/amr",
+}
+WHATSAPP_SUPPORTED_DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx", ".txt"}
 
 @dataclass(slots=True)
 class WhatsAppTenantConfig:
@@ -173,6 +192,7 @@ class WhatsAppEmbeddedSignupError(RuntimeError):
     def __init__(self, message: str, *, error_type: str = "meta_request_failed") -> None:
         super().__init__(message)
         self.error_type = error_type
+        self.retryable = error_type in {"timeout", "connection_failed", "media_download_failed", "meta_api_unavailable", "rate_limited"}
 
 
 def embedded_signup_public_config(settings: Settings | None = None) -> dict[str, Any]:
@@ -238,9 +258,228 @@ async def _meta_request(
         detail = _meta_error_message(payload, "Meta rechazó la operación.")
         raise WhatsAppEmbeddedSignupError(
             f"Meta rechazó {method.upper()} /{path.lstrip('/')}: {detail}",
-            error_type="meta_api_error",
+            error_type="rate_limited" if response.status_code == 429 else "meta_api_unavailable" if response.status_code >= 500 else "meta_api_error",
         )
     return payload if isinstance(payload, dict) else {}
+
+
+def _meta_media_id(message: InboundMessage, attachment: MessageAttachment) -> str:
+    try:
+        raw_payload = json.loads(message.raw_payload_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return ""
+    message_payload = raw_payload.get("payload") if isinstance(raw_payload, dict) else None
+    if not isinstance(message_payload, dict):
+        return ""
+    media_payload = message_payload.get(message.content_type or "")
+    if isinstance(media_payload, dict):
+        return str(media_payload.get("id") or "").strip()
+    return ""
+
+
+def _safe_media_filename(filename: str | None, media_id: str) -> str:
+    candidate = Path(str(filename or media_id or "whatsapp-attachment")).name
+    candidate = re.sub(r"[^A-Za-z0-9._-]+", "_", candidate).strip("._")
+    return (candidate or media_id or "whatsapp-attachment")[:200]
+
+
+def _is_supported_media(filename: str | None, content_type: str | None, *, is_audio: bool = False) -> bool:
+    normalized_type = str(content_type or "").strip().lower().split(";", 1)[0]
+    extension = Path(str(filename or "")).suffix.lower()
+    if is_audio:
+        return normalized_type in WHATSAPP_SUPPORTED_AUDIO_MIME_TYPES
+    return normalized_type in WHATSAPP_SUPPORTED_DOCUMENT_MIME_TYPES or extension in WHATSAPP_SUPPORTED_DOCUMENT_EXTENSIONS
+
+
+def _is_allowed_media_host(url: str) -> bool:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower().rstrip(".")
+    return parsed.scheme == "https" and (
+        host == "facebook.com"
+        or host.endswith(".facebook.com")
+        or host == "fbsbx.com"
+        or host.endswith(".fbsbx.com")
+        or host == "fbcdn.net"
+        or host.endswith(".fbcdn.net")
+    )
+
+
+async def _download_meta_binary(
+    client: httpx.AsyncClient,
+    *,
+    url: str,
+    access_token: str,
+    max_bytes: int,
+) -> bytes:
+    if not _is_allowed_media_host(url):
+        raise WhatsAppEmbeddedSignupError("Meta devolviÃ³ una URL de media no segura.", error_type="invalid_media_url")
+    try:
+        response = await client.get(url, headers={"Authorization": f"Bearer {access_token}"})
+    except httpx.TimeoutException as exc:
+        raise WhatsAppEmbeddedSignupError("Meta no respondiÃ³ a tiempo al descargar la media.", error_type="timeout") from exc
+    except httpx.HTTPError as exc:
+        raise WhatsAppEmbeddedSignupError("No se pudo descargar la media desde Meta.", error_type="media_download_failed") from exc
+    if response.status_code >= 400:
+        raise WhatsAppEmbeddedSignupError("Meta rechazÃ³ la descarga de la media.", error_type="media_download_failed")
+    content_length = response.headers.get("content-length")
+    try:
+        declared_size = int(content_length or 0)
+    except ValueError:
+        declared_size = 0
+    if declared_size > max_bytes or len(response.content) > max_bytes:
+        raise WhatsAppEmbeddedSignupError("El adjunto supera el tamaÃ±o mÃ¡ximo permitido.", error_type="media_too_large")
+    return response.content
+
+
+def _persist_media_failure(attachment: MessageAttachment, message: str) -> None:
+    attachment.extraction_status = "extraction_error"
+    attachment.extraction_error = message[:1000]
+
+
+async def download_whatsapp_media(
+    db: Session,
+    *,
+    company_id: int,
+    inbound_message_id: int,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    message = db.get(InboundMessage, inbound_message_id)
+    if not message or message.company_id != company_id:
+        raise ValueError("WhatsApp message not found for tenant.")
+    config = whatsapp_config(db, company_id)
+    if not config.access_token or not config.phone_number_id:
+        attachments = list(message.attachments or [])
+        for attachment in attachments:
+            _persist_media_failure(attachment, "WhatsApp no tiene credenciales configuradas para descargar media.")
+        db.commit()
+        return {"ok": True, "downloaded": 0, "skipped": 0, "failed": len(attachments)}
+    attachments = list(message.attachments or [])
+    if not attachments:
+        return {"ok": True, "downloaded": 0, "skipped": 0, "failed": 0}
+    owns_client = client is None
+    graph_client = client or httpx.AsyncClient(timeout=get_settings().meta_request_timeout_seconds)
+    downloaded = 0
+    skipped = 0
+    failed = 0
+    try:
+        storage_dir = ensure_directory(resolve_temp_storage_dir("attachments", "whatsapp", str(company_id), str(message.id)))
+        for attachment in attachments:
+            if not _is_supported_media(attachment.filename, attachment.content_type, is_audio=bool(attachment.is_audio)):
+                attachment.extraction_status = "unsupported"
+                attachment.extraction_error = "Tipo de adjunto no soportado por la integración de WhatsApp."
+                skipped += 1
+                continue
+            if attachment.storage_path and Path(attachment.storage_path).is_file():
+                skipped += 1
+                continue
+            media_id = _meta_media_id(message, attachment)
+            if not media_id:
+                _persist_media_failure(attachment, "Meta no proporcionÃ³ un identificador de media.")
+                failed += 1
+                continue
+            try:
+                media_info = await _meta_request(
+                    graph_client,
+                    get_settings(),
+                    "GET",
+                    media_id,
+                    access_token=config.access_token,
+                    params={"fields": "url,mime_type,file_size"},
+                )
+                media_url = str(media_info.get("url") or "").strip()
+                if not media_url:
+                    raise WhatsAppEmbeddedSignupError("Meta no devolviÃ³ la URL de la media.", error_type="media_download_failed")
+                declared_size = _as_int(str(media_info.get("file_size") or ""), 0)
+                if declared_size > config.max_attachment_bytes:
+                    raise WhatsAppEmbeddedSignupError("El adjunto supera el tamaÃ±o mÃ¡ximo permitido.", error_type="media_too_large")
+                content = await _download_meta_binary(
+                    graph_client,
+                    url=media_url,
+                    access_token=config.access_token,
+                    max_bytes=config.max_attachment_bytes,
+                )
+            except WhatsAppEmbeddedSignupError as exc:
+                if exc.retryable:
+                    raise
+                _persist_media_failure(attachment, str(exc))
+                failed += 1
+                continue
+            filename = _safe_media_filename(attachment.filename, media_id)
+            storage_path = storage_dir / f"{media_id}-{filename}"
+            storage_path.write_bytes(content)
+            attachment.filename = filename
+            attachment.content_type = str(media_info.get("mime_type") or attachment.content_type or "application/octet-stream")[:120]
+            attachment.size_bytes = len(content)
+            attachment.storage_path = str(storage_path)
+            attachment.extraction_status = "downloaded"
+            downloaded += 1
+        db.commit()
+    finally:
+        if owns_client:
+            await graph_client.aclose()
+    return {"ok": True, "downloaded": downloaded, "skipped": skipped, "failed": failed}
+
+
+async def send_whatsapp_text(
+    db: Session,
+    *,
+    company_id: int,
+    conversation_id: int,
+    body: str,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    conversation = db.get(Conversation, conversation_id)
+    if not conversation or conversation.company_id != company_id:
+        raise ValueError("Conversation not found for tenant.")
+    body = str(body or "").strip()
+    if not body or len(body) > 4096:
+        raise WhatsAppEmbeddedSignupError("El mensaje debe tener entre 1 y 4096 caracteres.", error_type="invalid_message")
+    config = whatsapp_config(db, company_id)
+    if config.provider != WHATSAPP_PROVIDER or not config.access_token or not config.phone_number_id:
+        raise WhatsAppEmbeddedSignupError("WhatsApp no está configurado para enviar mensajes.", error_type="server_not_configured")
+    latest_inbound = db.scalar(
+        select(InboundMessage)
+        .where(
+            InboundMessage.company_id == company_id,
+            InboundMessage.conversation_id == conversation_id,
+            InboundMessage.direction == "inbound",
+        )
+        .order_by(InboundMessage.received_at.desc(), InboundMessage.id.desc())
+    )
+    recipient = str(latest_inbound.sender or "").strip() if latest_inbound else ""
+    if not recipient:
+        raise WhatsAppEmbeddedSignupError("No se encontró el número del cliente para responder.", error_type="recipient_not_found")
+    if latest_inbound and latest_inbound.received_at:
+        received_at = latest_inbound.received_at
+        if received_at.tzinfo is None:
+            received_at = received_at.replace(tzinfo=timezone.utc)
+        age_seconds = (datetime.now(timezone.utc) - received_at).total_seconds()
+        if age_seconds > max(config.response_window_minutes, 1) * 60:
+            raise WhatsAppEmbeddedSignupError("La ventana de respuesta de WhatsApp ha caducado; usa una plantilla aprobada.", error_type="response_window_expired")
+    owns_client = client is None
+    graph_client = client or httpx.AsyncClient(timeout=get_settings().meta_request_timeout_seconds)
+    try:
+        response = await _meta_request(
+            graph_client,
+            get_settings(),
+            "POST",
+            f"{config.phone_number_id}/messages",
+            access_token=config.access_token,
+            json_body={
+                "messaging_product": "whatsapp",
+                "to": recipient,
+                "type": "text",
+                "text": {"preview_url": False, "body": body},
+            },
+        )
+    finally:
+        if owns_client:
+            await graph_client.aclose()
+    messages = response.get("messages") if isinstance(response.get("messages"), list) else []
+    provider_message_id = str(messages[0].get("id") or "").strip() if messages and isinstance(messages[0], dict) else ""
+    if not provider_message_id:
+        raise WhatsAppEmbeddedSignupError("Meta aceptó la petición pero no devolvió el identificador del mensaje.", error_type="invalid_response")
+    return {"provider_message_id": provider_message_id, "recipient": recipient}
 
 
 def _upsert_whatsapp_setting(
@@ -557,7 +796,12 @@ def resolve_company_from_whatsapp_identifiers(
             values = {row.key: str(row.value or "").strip() for row in rows}
             phone_matches = bool(wanted_phone and values.get("phone_number_id") == wanted_phone)
             waba_matches = bool(wanted_waba and values.get("business_account_id") == wanted_waba)
-            if phone_matches or waba_matches:
+            identifiers_match = (
+                phone_matches and waba_matches
+                if wanted_phone and wanted_waba
+                else phone_matches or waba_matches
+            )
+            if identifiers_match:
                 return master_db.get(MasterCompany, tenant.company_id), tenant
         finally:
             tenant_db.close()
@@ -815,22 +1059,32 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
         )
         return None
     if event_kind == "status":
-        message = upsert_inbound_message(
-            db,
-            company_id=company_id,
-            channel_key=WHATSAPP_CHANNEL_KEY,
-            provider=WHATSAPP_PROVIDER,
-            external_id=event.get("external_id"),
-            sender=event.get("sender"),
-            recipients=event.get("recipients"),
-            subject="Estado WhatsApp",
-            text_content=event.get("text_content"),
-            external_thread_id=event.get("external_thread_id"),
-            metadata=metadata,
-            content_type="whatsapp_status",
-            direction="outbound",
-            received_at=event.get("occurred_at"),
-        )[0]
+        external_id = str(event.get("external_id") or "").strip()
+        message = db.scalar(
+            select(InboundMessage).where(
+                InboundMessage.company_id == company_id,
+                InboundMessage.channel_id == channel.id,
+                InboundMessage.provider == WHATSAPP_PROVIDER,
+                InboundMessage.source_external_id == external_id,
+            )
+        ) if external_id else None
+        if not message:
+            message = upsert_inbound_message(
+                db,
+                company_id=company_id,
+                channel_key=WHATSAPP_CHANNEL_KEY,
+                provider=WHATSAPP_PROVIDER,
+                external_id=external_id or None,
+                sender=event.get("sender"),
+                recipients=event.get("recipients"),
+                subject="Estado WhatsApp",
+                text_content=event.get("text_content"),
+                external_thread_id=event.get("external_thread_id"),
+                metadata=metadata,
+                content_type="whatsapp_status",
+                direction="outbound",
+                received_at=event.get("occurred_at"),
+            )[0]
         status_value = str((metadata.get("payload") or {}).get("status") or "sent").lower()
         message.status = status_value
         message.processing_step = f"delivery_{status_value}"
@@ -839,6 +1093,17 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
         log_action(db, company_id=company_id, user=user, action="whatsapp.status_received", entity_type="inbound_message", entity_id=message.id, message=f"Estado WhatsApp recibido: {status_value}")
         return message
 
+    existing_message = None
+    external_id = str(event.get("external_id") or "").strip()
+    if external_id:
+        existing_message = db.scalar(
+            select(InboundMessage).where(
+                InboundMessage.company_id == company_id,
+                InboundMessage.channel_id == channel.id,
+                InboundMessage.provider == WHATSAPP_PROVIDER,
+                InboundMessage.source_external_id == external_id,
+            )
+        )
     if event_kind in {"message_echo", "history_message"}:
         message, conversation = upsert_inbound_message(
             db,
@@ -893,24 +1158,25 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
         message.processing_step = "received_whatsapp"
         message.status = "received"
     message.last_processed_at = datetime.now(timezone.utc)
-    for attachment in event.get("attachments", []):
-        db.add(
-            MessageAttachment(
-                company_id=company_id,
-                inbound_message_id=message.id,
-                filename=attachment.get("filename") or attachment.get("media_id") or "whatsapp-attachment",
-                content_type=attachment.get("content_type"),
-                size_bytes=int(attachment.get("size_bytes") or 0),
-                storage_path=None,
-                extracted_text=None,
-                ocr_text=None,
-                transcription_text=None,
-                is_pdf=bool(attachment.get("is_pdf")),
-                is_image=bool(attachment.get("is_image")),
-                is_audio=bool(attachment.get("is_audio")),
-                extraction_status="pending",
+    if existing_message is None:
+        for attachment in event.get("attachments", []):
+            db.add(
+                MessageAttachment(
+                    company_id=company_id,
+                    inbound_message_id=message.id,
+                    filename=attachment.get("filename") or attachment.get("media_id") or "whatsapp-attachment",
+                    content_type=attachment.get("content_type"),
+                    size_bytes=int(attachment.get("size_bytes") or 0),
+                    storage_path=None,
+                    extracted_text=None,
+                    ocr_text=None,
+                    transcription_text=None,
+                    is_pdf=bool(attachment.get("is_pdf")),
+                    is_image=bool(attachment.get("is_image")),
+                    is_audio=bool(attachment.get("is_audio")),
+                    extraction_status="pending",
+                )
             )
-        )
     db.commit()
     action = {
         "message_echo": "whatsapp.message_echoed",
@@ -938,6 +1204,16 @@ def enqueue_whatsapp_processing(db: Session, company_id: int, inbound_message_id
     )
 
 
+def enqueue_whatsapp_media_download(db: Session, company_id: int, inbound_message_id: int, user_id: int | None = None) -> object:
+    return enqueue_job(
+        db,
+        company_id=company_id,
+        job_type="download_whatsapp_media",
+        payload={"inbound_message_id": inbound_message_id, "channel": WHATSAPP_CHANNEL_KEY},
+        created_by_user_id=user_id,
+    )
+
+
 def record_manual_response(
     db: Session,
     *,
@@ -946,11 +1222,14 @@ def record_manual_response(
     body: str,
     user_id: int | None = None,
     template_name: str | None = None,
+    external_id: str | None = None,
+    status: str = "recorded",
+    processing_step: str = "outbound_recorded",
 ) -> InboundMessage:
     conversation = db.get(Conversation, conversation_id)
     if not conversation or conversation.company_id != company_id:
         raise ValueError("Conversation not found for tenant.")
-    external_id = f"wa-out-{uuid4().hex}"
+    external_id = external_id or f"wa-out-{uuid4().hex}"
     message, _ = upsert_inbound_message(
         db,
         company_id=company_id,
@@ -967,13 +1246,49 @@ def record_manual_response(
         direction="outbound",
         sent_at=datetime.now(timezone.utc),
     )
-    message.status = "sent"
-    message.processing_step = "outbound_sent"
+    message.status = status
+    message.processing_step = processing_step
     conversation.status = "human_owned"
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
-    log_action(db, company_id=company_id, user=None, action="whatsapp.outbound_recorded", entity_type="inbound_message", entity_id=message.id, message="Respuesta manual de WhatsApp registrada")
+    log_action(
+        db,
+        company_id=company_id,
+        user=None,
+        action="whatsapp.outbound_accepted" if status == "accepted" else "whatsapp.outbound_recorded",
+        entity_type="inbound_message",
+        entity_id=message.id,
+        message="Respuesta manual de WhatsApp aceptada por Meta" if status == "accepted" else "Respuesta manual de WhatsApp registrada",
+    )
     return message
+
+
+async def send_manual_response(
+    db: Session,
+    *,
+    company_id: int,
+    conversation_id: int,
+    body: str,
+    user_id: int | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> InboundMessage:
+    result = await send_whatsapp_text(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+        body=body,
+        client=client,
+    )
+    return record_manual_response(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+        body=body,
+        user_id=user_id,
+        external_id=result["provider_message_id"],
+        status="accepted",
+        processing_step="outbound_accepted",
+    )
 
 
 def _extract_message_text(message: dict[str, Any]) -> str | None:
@@ -1003,13 +1318,16 @@ def _message_attachments(message: dict[str, Any]) -> list[dict[str, Any]]:
     attachments: list[dict[str, Any]] = []
     if message.get("type") == "document":
         document = message.get("document") or {}
+        filename = document.get("filename")
+        content_type = document.get("mime_type")
         attachments.append(
             {
                 "media_id": document.get("id"),
-                "filename": document.get("filename"),
-                "content_type": document.get("mime_type"),
+                "filename": filename,
+                "content_type": content_type,
                 "size_bytes": document.get("file_size"),
-                "is_pdf": str(document.get("mime_type") or "").lower() == "application/pdf",
+                "is_pdf": str(content_type or "").lower() == "application/pdf" or str(filename or "").lower().endswith(".pdf"),
+                "downloadable": _is_supported_media(filename, content_type),
             }
         )
     elif message.get("type") == "image":
@@ -1021,6 +1339,7 @@ def _message_attachments(message: dict[str, Any]) -> list[dict[str, Any]]:
                 "content_type": image.get("mime_type"),
                 "size_bytes": image.get("file_size"),
                 "is_image": True,
+                "downloadable": False,
             }
         )
     elif message.get("type") == "audio":
@@ -1032,6 +1351,7 @@ def _message_attachments(message: dict[str, Any]) -> list[dict[str, Any]]:
                 "content_type": audio.get("mime_type"),
                 "size_bytes": audio.get("file_size"),
                 "is_audio": True,
+                "downloadable": _is_supported_media(None, audio.get("mime_type"), is_audio=True),
             }
         )
     elif message.get("type") == "video":
@@ -1042,6 +1362,7 @@ def _message_attachments(message: dict[str, Any]) -> list[dict[str, Any]]:
                 "filename": video.get("filename") or "video.mp4",
                 "content_type": video.get("mime_type"),
                 "size_bytes": video.get("file_size"),
+                "downloadable": False,
             }
         )
     return attachments

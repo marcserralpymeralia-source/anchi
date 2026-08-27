@@ -4,8 +4,10 @@ import asyncio
 import hashlib
 import hmac
 import json
+import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -18,7 +20,7 @@ from sqlalchemy.pool import NullPool
 from app.agent.platform import UnifiedOrderPipelineService
 from app.core.encryption import decrypt_secret, encrypt_secret
 from app.db.database import Base
-from app.db.models import BackgroundJob, ChannelSetting, Conversation, Customer, CustomerContactPoint, InboundMessage, InputChannel, LLMSettings, Order, Product, ProductAlias, ScoringSettings
+from app.db.models import BackgroundJob, ChannelSetting, Conversation, Customer, CustomerContactPoint, InboundMessage, InputChannel, LLMSettings, MessageAttachment, Order, Product, ProductAlias, ScoringSettings
 from app.jobs.service import enqueue_job
 from app.master.database import MasterBase
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser
@@ -28,10 +30,13 @@ from app.tenancy.database import get_tenant_engine
 from app.tenancy.migrations import upgrade_tenant_schema
 from app.whatsapp.service import (
     complete_embedded_signup,
+    download_whatsapp_media,
     enqueue_whatsapp_processing,
     parse_payload_events,
     persist_event,
     redact_whatsapp_config,
+    record_manual_response,
+    send_manual_response,
     resolve_company_from_slug,
     resolve_company_from_whatsapp_identifiers,
     verify_signature,
@@ -184,6 +189,230 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertEqual(db.scalar(select(func.count()).select_from(BackgroundJob)) or 0, 1)
         db.close()
 
+    def test_repeated_media_webhook_does_not_duplicate_attachments(self):
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123", "business_account_id": "ba-123"},
+                                "messages": [
+                                    {
+                                        "id": "wa-media-1",
+                                        "from": "+34600000000",
+                                        "type": "document",
+                                        "document": {
+                                            "id": "media-1",
+                                            "filename": "pedido.pdf",
+                                            "mime_type": "application/pdf",
+                                            "file_size": 1024,
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+        event = parse_payload_events(payload)[0]
+        self.assertTrue(event["attachments"][0]["downloadable"])
+        db = self.TenantSession()
+        first = persist_event(db, 1, event)
+        second = persist_event(db, 1, event)
+        self.assertEqual(first.id, second.id)
+        self.assertEqual(
+            db.scalar(select(func.count()).select_from(MessageAttachment).where(MessageAttachment.inbound_message_id == first.id)),
+            1,
+        )
+        db.close()
+
+    def test_media_policy_only_allows_documents_text_and_audio(self):
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123", "business_account_id": "ba-123"},
+                                "messages": [
+                                    {"id": "wa-image-1", "from": "+34600000000", "type": "image", "image": {"id": "image-1", "mime_type": "image/jpeg"}},
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+        event = parse_payload_events(payload)[0]
+        self.assertFalse(event["attachments"][0]["downloadable"])
+
+    def test_media_download_persists_file_with_meta_mock(self):
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123", "business_account_id": "ba-123"},
+                                "messages": [
+                                    {
+                                        "id": "wa-media-download-1",
+                                        "from": "+34600000000",
+                                        "type": "document",
+                                        "document": {"id": "media-download-1", "filename": "pedido.pdf", "mime_type": "application/pdf", "file_size": 12},
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+        db = self.TenantSession()
+        message = persist_event(db, 1, parse_payload_events(payload)[0])
+
+        def handler(request):
+            if request.url.path.endswith("/media-download-1"):
+                return httpx.Response(200, json={"url": "https://lookaside.facebook.com/media-download-1", "mime_type": "application/pdf", "file_size": 12})
+            if request.url.host == "lookaside.facebook.com":
+                return httpx.Response(200, content=b"%PDF-1.4 demo")
+            return httpx.Response(404, json={"error": {"message": "unexpected request"}})
+
+        storage_root = Path(self.tempdir.name) / "storage"
+        with patch.dict(os.environ, {"TEMP_STORAGE_DIR": str(storage_root)}):
+            async def run_download():
+                async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                    return await download_whatsapp_media(db, company_id=1, inbound_message_id=message.id, client=client)
+
+            result = asyncio.run(run_download())
+        attachment = db.scalar(select(MessageAttachment).where(MessageAttachment.inbound_message_id == message.id))
+        self.assertEqual(result["downloaded"], 1)
+        self.assertEqual(attachment.extraction_status, "downloaded")
+        self.assertTrue(Path(attachment.storage_path).is_file())
+        db.close()
+
+    def test_identifier_resolution_requires_both_identifiers_when_present(self):
+        db = self.MasterSession()
+        company, tenant = resolve_company_from_whatsapp_identifiers(
+            db,
+            business_account_id="ba-other",
+            phone_number_id="pn-123",
+        )
+        self.assertIsNone(company)
+        self.assertIsNone(tenant)
+        company, tenant = resolve_company_from_whatsapp_identifiers(
+            db,
+            business_account_id="ba-123",
+            phone_number_id="pn-123",
+        )
+        self.assertEqual(company.id, 1)
+        self.assertEqual(tenant.company_id, 1)
+        db.close()
+
+    def test_manual_response_is_not_marked_as_sent_before_provider_delivery(self):
+        db = self.TenantSession()
+        inbound = upsert_inbound_message(
+            db,
+            company_id=1,
+            channel_key="whatsapp",
+            provider="meta",
+            external_id="wa-inbound-for-response",
+            sender="+34600000000",
+            recipients=["+34910000000"],
+            text_content="Hola",
+            external_thread_id="+34600000000",
+            content_type="text",
+        )[0]
+        db.commit()
+        response = record_manual_response(
+            db,
+            company_id=1,
+            conversation_id=inbound.conversation_id,
+            body="Te respondemos en breve",
+        )
+        self.assertEqual(response.status, "recorded")
+        self.assertEqual(response.processing_step, "outbound_recorded")
+        db.close()
+
+    def test_manual_response_sends_text_and_records_meta_id(self):
+        db = self.TenantSession()
+        inbound = upsert_inbound_message(
+            db,
+            company_id=1,
+            channel_key="whatsapp",
+            provider="meta",
+            external_id="wa-inbound-for-send",
+            sender="+34600000000",
+            recipients=["+34910000000"],
+            text_content="Hola",
+            external_thread_id="+34600000000",
+            content_type="text",
+            received_at=datetime.now(timezone.utc),
+        )[0]
+        db.commit()
+
+        def handler(request):
+            request_payload = json.loads(request.content)
+            self.assertEqual(request.url.path, "/v24.0/pn-123/messages")
+            self.assertEqual(request_payload["to"], "+34600000000")
+            self.assertEqual(request_payload["type"], "text")
+            return httpx.Response(200, json={"messages": [{"id": "wamid.test-1"}]})
+
+        async def run_send():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                return await send_manual_response(
+                    db,
+                    company_id=1,
+                    conversation_id=inbound.conversation_id,
+                    body="Respuesta real de prueba",
+                    client=client,
+                )
+
+        response = asyncio.run(run_send())
+        self.assertEqual(response.source_external_id, "wamid.test-1")
+        self.assertEqual(response.status, "accepted")
+        self.assertEqual(response.processing_step, "outbound_accepted")
+        db.close()
+
+    def test_delivery_status_updates_existing_outbound_conversation(self):
+        db = self.TenantSession()
+        inbound = upsert_inbound_message(
+            db,
+            company_id=1,
+            channel_key="whatsapp",
+            provider="meta",
+            external_id="wa-inbound-for-status",
+            sender="+34600000000",
+            recipients=["+34910000000"],
+            text_content="Hola",
+            external_thread_id="+34600000000",
+            content_type="text",
+        )[0]
+        db.commit()
+        outbound = record_manual_response(
+            db,
+            company_id=1,
+            conversation_id=inbound.conversation_id,
+            body="Respuesta",
+            external_id="wamid.delivery-1",
+            status="accepted",
+            processing_step="outbound_accepted",
+        )
+        status_event = {
+            "kind": "status",
+            "external_id": "wamid.delivery-1",
+            "external_thread_id": "provider-conversation-1",
+            "occurred_at": datetime.now(timezone.utc),
+            "metadata": {"payload": {"status": "delivered"}},
+        }
+        updated = persist_event(db, 1, status_event)
+        self.assertEqual(updated.id, outbound.id)
+        self.assertEqual(updated.conversation_id, inbound.conversation_id)
+        self.assertEqual(updated.status, "delivered")
+        db.close()
+
     def test_worker_processes_whatsapp_into_order(self):
         payload = {
             "entry": [
@@ -276,7 +505,6 @@ class WhatsAppIntegrationTests(unittest.TestCase):
                 }
             ]
         }
-
         events = parse_payload_events(payload)
         db = self.TenantSession()
         message = persist_event(db, 1, events[0])
@@ -340,6 +568,46 @@ class WhatsAppIntegrationTests(unittest.TestCase):
 
         db.close()
 
+    def test_worker_retries_retryable_pipeline_result(self):
+        upgrade_tenant_schema(self.tenant_engine, company_id=1, application_version="1.2.3")
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123", "business_account_id": "ba-123"},
+                                "messages": [
+                                    {
+                                        "id": "wa-retry-1",
+                                        "from": "+34600000000",
+                                        "type": "text",
+                                        "text": {"body": "Reintentar"},
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+        db = self.TenantSession()
+        message = persist_event(db, 1, parse_payload_events(payload)[0])
+        job = enqueue_whatsapp_processing(db, 1, message.id)
+        db.close()
+
+        with patch("app.workers.jobs_worker.MasterSessionLocal", new=self.MasterSession), patch(
+            "app.agent.platform.UnifiedOrderPipelineService.process_inbound_message",
+            return_value={"ok": False, "retryable": True, "error_type": "provider_unavailable", "message": "Proveedor temporalmente no disponible"},
+        ):
+            summary = run_worker_cycle()
+
+        db = self.TenantSession()
+        processed_job = db.get(BackgroundJob, job.id)
+        self.assertEqual(summary["processed"], 0)
+        self.assertEqual(processed_job.status, "retrying")
+        self.assertEqual(processed_job.last_error_type, "provider_unavailable")
+        db.close()
 
     def test_embedded_signup_exchanges_code_registers_phone_and_subscribes_webhook(self):
         settings = SimpleNamespace(
