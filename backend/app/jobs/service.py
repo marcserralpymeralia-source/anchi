@@ -336,6 +336,62 @@ def claim_next_job(db: Session, *, owner: str, job_types: set[str] | None = None
     return job
 
 
+def _is_stale_running_job(job: BackgroundJob, *, now: datetime, stale_after_seconds: int) -> bool:
+    if job.status != "running":
+        return False
+    stale_before = now - timedelta(seconds=stale_after_seconds)
+    lock_until = _aware(job.lock_until)
+    started_at = _aware(job.started_at)
+    heartbeat_at = _aware(job.last_heartbeat_at)
+    return bool(
+        (lock_until is not None and lock_until <= now)
+        or (lock_until is None and started_at is not None and started_at <= stale_before)
+        or (heartbeat_at is not None and heartbeat_at <= stale_before)
+    )
+
+
+def _recover_stale_job(db: Session, job: BackgroundJob, *, now: datetime, owner: str | None = None) -> BackgroundJob:
+    lock_owner = owner or job.lock_owner
+    next_retry_at = now + timedelta(seconds=_retry_delay_seconds(job))
+    attempt = _latest_attempt(db, job.id)
+    if attempt:
+        attempt.status = "abandoned"
+        attempt.finished_at = now
+        attempt.duration_seconds = max(int((now - (_aware(attempt.started_at) or _aware(job.started_at) or now)).total_seconds()), 0)
+        attempt.error_type = "stale_worker"
+        attempt.error_message = "El worker anterior supero el tiempo maximo y el job fue recuperado."
+        attempt.next_retry_at = next_retry_at
+        attempt.worker_id = lock_owner
+
+    job.lock_owner = None
+    job.lock_until = None
+    job.last_heartbeat_at = now
+    job.last_error_at = now
+    job.last_error_type = "stale_worker"
+    job.error_message = "El worker anterior supero el tiempo maximo y el job fue recuperado."
+    job.next_retry_at = None
+    job.updated_at = now
+    if job.attempt_count < _max_attempts(job):
+        job.status = "retrying"
+        job.retry_count += 1
+        job.next_retry_at = next_retry_at
+    else:
+        job.status = "failed"
+        job.finished_at = now
+    return job
+
+
+def recover_stale_job(db: Session, job: BackgroundJob, *, owner: str | None = None) -> BackgroundJob | None:
+    now = _now()
+    settings = _settings()
+    if not _is_stale_running_job(job, now=now, stale_after_seconds=settings.job_stale_after_seconds):
+        return None
+    _recover_stale_job(db, job, now=now, owner=owner)
+    db.commit()
+    db.refresh(job)
+    return job
+
+
 def recover_stale_jobs(db: Session, *, owner: str | None = None, job_types: set[str] | None = None) -> list[BackgroundJob]:
     now = _now()
     settings = _settings()
@@ -353,32 +409,7 @@ def recover_stale_jobs(db: Session, *, owner: str | None = None, job_types: set[
     jobs = db.scalars(select(BackgroundJob).where(*conditions)).all()
     recovered: list[BackgroundJob] = []
     for job in jobs:
-        lock_owner = owner or job.lock_owner
-        next_retry_at = now + timedelta(seconds=_retry_delay_seconds(job))
-        attempt = _latest_attempt(db, job.id)
-        if attempt:
-            attempt.status = "abandoned"
-            attempt.finished_at = now
-            attempt.duration_seconds = max(int((now - (_aware(attempt.started_at) or _aware(job.started_at) or now)).total_seconds()), 0)
-            attempt.error_type = "stale_worker"
-            attempt.error_message = "El worker anterior supero el tiempo maximo y el job fue recuperado."
-            attempt.next_retry_at = next_retry_at
-            attempt.worker_id = lock_owner
-        job.lock_owner = None
-        job.lock_until = None
-        job.last_heartbeat_at = now
-        job.last_error_at = now
-        job.last_error_type = "stale_worker"
-        job.error_message = "El worker anterior supero el tiempo maximo y el job fue recuperado."
-        job.next_retry_at = None
-        job.updated_at = now
-        if job.attempt_count < _max_attempts(job):
-            job.status = "retrying"
-            job.retry_count += 1
-            job.next_retry_at = next_retry_at
-        else:
-            job.status = "failed"
-            job.finished_at = now
+        _recover_stale_job(db, job, now=now, owner=owner)
         recovered.append(job)
     if recovered:
         db.commit()
@@ -490,6 +521,15 @@ def execute_job_inline(db: Session, job: BackgroundJob) -> dict:
     from app.workers.jobs_worker import _process_job
 
     try:
+        if job.status == "running":
+            recovered = recover_stale_job(db, job, owner=f"inline:{job.id}")
+            if recovered is None:
+                return {
+                    "ok": False,
+                    "message": "El job ya esta en ejecucion.",
+                    "error_type": "job_already_running",
+                }
+
         job = start_job_execution(db, job, owner=f"inline:{job.id}")
         result = _process_job(db, job)
         if not isinstance(result, dict):
