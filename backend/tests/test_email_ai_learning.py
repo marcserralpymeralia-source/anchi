@@ -5,6 +5,8 @@ import unittest
 import imaplib
 import socket
 import ssl
+from email import policy
+from email.message import EmailMessage
 from pathlib import Path
 from unittest.mock import patch
 
@@ -19,8 +21,10 @@ os.environ.setdefault("APP_ENV", "development")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.encryption import encrypt_secret  # noqa: E402
+from app.agent.services import AgentProcessingService  # noqa: E402
+from app.channels.service import get_or_create_channel  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import Email, EmailSettings, LLMSettings, PromptExecution, PromptTemplate, PromptVersion  # noqa: E402
+from app.db.models import Email, EmailAttachment, EmailSettings, LLMSettings, MessageAttachment, PromptExecution, PromptTemplate, PromptVersion  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import EmailSyncState, MasterCompany  # noqa: E402
 from app.agent.prompt_runtime import run_prompt_execution, validate_prompt_output  # noqa: E402
@@ -375,6 +379,65 @@ class EmailAiLearningTests(unittest.TestCase):
         tenant_db.close()
         master_db.close()
 
+    def test_backfill_imap_deduplicates_pdf_attachment_on_second_run(self):
+        self._seed_imap()
+        tenant_db = self.TenantSession()
+        master_db = self.MasterSession()
+        settings = tenant_db.scalar(select(EmailSettings).where(EmailSettings.company_id == 1))
+        state = master_db.scalar(
+            select(EmailSyncState).where(
+                EmailSyncState.company_id == 1,
+                EmailSyncState.channel_key == "email",
+            )
+        )
+        email_message = EmailMessage()
+        email_message["From"] = "compras@example.com"
+        email_message["To"] = "pedidos@example.com"
+        email_message["Subject"] = "Pedido PDF histórico"
+        email_message["Message-ID"] = "<pedido-pdf-historico@example.com>"
+        email_message.set_content("Pedido histórico con PDF")
+        email_message.add_attachment(
+            b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n%%EOF",
+            maintype="application",
+            subtype="pdf",
+            filename="pedido-historico.pdf",
+        )
+        client = FakeImapClient({"1": email_message.as_bytes(policy=policy.default)})
+
+        with patch("app.settings.integrations._imap_client", return_value=client):
+            first = backfill_imap_emails(
+                tenant_db,
+                settings,
+                1,
+                from_date="2026-07-01",
+                to_date="2026-07-16",
+                limit=1,
+                sync_state=state,
+                sync_session=master_db,
+            )
+            second = backfill_imap_emails(
+                tenant_db,
+                settings,
+                1,
+                from_date="2026-07-01",
+                to_date="2026-07-16",
+                limit=1,
+                sync_state=state,
+                sync_session=master_db,
+            )
+
+        self.assertTrue(first["ok"])
+        self.assertEqual(first["saved"], 1)
+        self.assertTrue(second["ok"])
+        self.assertEqual(second["saved"], 0)
+        self.assertEqual(second["duplicates"], 1)
+        self.assertEqual(tenant_db.scalar(select(func.count()).select_from(Email)) or 0, 1)
+        self.assertEqual(tenant_db.scalar(select(func.count()).select_from(EmailAttachment)) or 0, 1)
+        self.assertEqual(tenant_db.scalar(select(func.count()).select_from(MessageAttachment)) or 0, 1)
+
+        tenant_db.close()
+        master_db.close()
+
     def test_imap_connection_gmail_success_uses_ssl_and_inbox(self):
         self._seed_imap()
         tenant_db = self.TenantSession()
@@ -446,6 +509,52 @@ class EmailAiLearningTests(unittest.TestCase):
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["message"], "La configuración IMAP está incompleta.")
+        tenant_db.close()
+
+    def test_email_without_pdf_uses_body_text_and_keeps_attachment_count_zero(self):
+        self._seed_imap()
+        tenant_db = self.TenantSession()
+        tenant_db.add(LLMSettings(company_id=1, api_key_encrypted=encrypt_secret("dummy-key")))
+        tenant_db.commit()
+        email = Email(
+            company_id=1,
+            external_id="mail-no-pdf-1",
+            sender="compras@example.com",
+            subject="Pedido sin PDF",
+            body="Necesitamos 5 unidades de P-100 sin PDF.",
+        )
+        tenant_db.add(email)
+        tenant_db.commit()
+
+        channel = get_or_create_channel(tenant_db, 1, "email")
+        channel.is_active = True
+        tenant_db.commit()
+
+        captured = {"classification_text": None, "extraction_text": None}
+        classification = '{"tipo_correo":"pedido","confianza":0.96,"motivo":"Pedido claro"}'
+        extraction = '{"cliente":{"nombre_detectado":"Cliente Demo SL","codigo_cliente_detectado":"C001"},"pedido":{"lineas":[{"texto_original":"5 unidades de P-100","referencia_detectada":"P-100","producto_detectado":"Producto Demo","cantidad":5,"unidad":"uds","confianza_extraccion":0.93}]}}'
+
+        def fake_classify(_db, _settings, _company_id, text, _prompt):  # noqa: ANN001
+            captured["classification_text"] = text
+            return {"ok": True, "content": classification}
+
+        def fake_extract(_db, _settings, _company_id, text, _prompt):  # noqa: ANN001
+            captured["extraction_text"] = text
+            return {"ok": True, "content": extraction}
+
+        with patch("app.agent.platform.classify_sample", side_effect=fake_classify), patch(
+            "app.agent.platform.extract_sample",
+            side_effect=fake_extract,
+        ):
+            result = AgentProcessingService().process_email(tenant_db, email)
+
+        self.assertTrue(result["ok"])
+        self.assertIn("Necesitamos 5 unidades de P-100 sin PDF.", captured["classification_text"] or "")
+        self.assertIn("Necesitamos 5 unidades de P-100 sin PDF.", captured["extraction_text"] or "")
+        refreshed = tenant_db.get(Email, email.id)
+        self.assertIsNotNone(refreshed)
+        self.assertFalse(refreshed.has_pdf)
+        self.assertEqual(tenant_db.scalar(select(func.count()).select_from(EmailAttachment)) or 0, 0)
         tenant_db.close()
 
     def test_initial_imap_preview_and_sync_seed_last_seen_uid_without_history(self):
