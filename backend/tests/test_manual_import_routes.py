@@ -244,6 +244,73 @@ Gracias."""
         self.assertEqual(result[0]["quantity"], "2")
         self.assertEqual(result[0]["unit"], "cajas")
 
+
+    def test_manual_import_result_shows_ai_classification_and_omits_empty_mismatch(self):
+        fixture = build_performance_fixture("small")
+
+        try:
+            with performance_test_client(fixture) as client:
+                with patch(
+                    "app.imports.routes.analysis_context",
+                    return_value={
+                        "classification": {
+                            "ok": True,
+                            "validated_content": {
+                                "tipo_correo": "pedido",
+                                "confianza": 0.95,
+                                "motivo": "Pedido",
+                            },
+                        },
+                        "classification_type": "pedido",
+                        "classification_confidence": 0.95,
+                        "customer": {
+                            "name": "desconocido",
+                            "method": "sin_cliente",
+                            "score": 0.0,
+                            "matched": False,
+                        },
+                        "lines": [],
+                        "score": 74.8,
+                        "category": "doubtful",
+                        "category_label": "Dudoso",
+                        "status": "pedido_pendiente_revision",
+                        "source_text": "Pedido de prueba",
+                        "source_label": "Importación manual de correo",
+                        "expected": {
+                            "customer": "",
+                            "score": None,
+                            "status": "",
+                        },
+                        "comparison": {
+                            "customer_match": False,
+                            "score_delta": None,
+                            "status_match": False,
+                        },
+                        "suggested_action": "Revisar",
+                    },
+                ):
+                    response = client.post(
+                        "/imports/quick",
+                        data={
+                            "sender": "uat@example.com",
+                            "subject": "Pedido prueba",
+                            "sample_text": "Pedido de prueba",
+                            "expected_customer": "",
+                            "expected_score": "",
+                            "expected_status": "",
+                        },
+                    )
+
+                self.assertEqual(response.status_code, 200)
+                self.assertIn("Pedido", response.text)
+                self.assertIn("95%", response.text)
+                self.assertIn("Dudoso", response.text)
+                self.assertIn("Revisar", response.text)
+                self.assertNotIn("Cliente no coincide", response.text)
+                self.assertNotIn("Estado no coincide", response.text)
+        finally:
+            fixture.cleanup()
+
     def test_channel_buttons_use_real_routes(self):
         fixture = build_performance_fixture("small")
         SessionLocal = _tenant_session(fixture.tenant_database_url)

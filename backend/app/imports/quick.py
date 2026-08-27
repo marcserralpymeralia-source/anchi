@@ -176,8 +176,11 @@ def analysis_context(
         expected_score_value = float(str(expected_score).replace(",", ".")) if expected_score else None
     except ValueError:
         expected_score_value = None
+    classification_data = classification.get("validated_content") or {}
     result = {
         "classification": classification,
+        "classification_type": classification_data.get("tipo_correo"),
+        "classification_confidence": classification_data.get("confianza"),
         "customer": {
             "name": customer.fiscal_name if customer else detected_name or "Sin cliente",
             "method": customer_method,
