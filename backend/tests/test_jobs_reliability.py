@@ -266,6 +266,50 @@ class JobsReliabilityTests(unittest.TestCase):
         self.assertEqual(attempts[0].status, "failed_permanent")
         db.close()
 
+    def test_retry_manual_can_be_applied_multiple_times_without_duplicate_attempts(self):
+        db = self.TenantSession()
+        job = enqueue_job(db, company_id=1, job_type="process_email", payload={"email_id": 13}, created_by_user_id=1)
+
+        claimed_first = claim_next_job(db, owner="worker-a", job_types={"process_email"})
+        self.assertIsNotNone(claimed_first)
+        self.assertEqual(claimed_first.attempt_count, 1)
+        fail_job(db, claimed_first, "timeout-1", retry=False, error_type="TimeoutError")
+        db.close()
+
+        db = self.TenantSession()
+        first_retry = retry_job(db, 1, job.id)
+        self.assertIsNotNone(first_retry)
+        self.assertEqual(first_retry.retry_count, 1)
+        db.close()
+
+        db = self.TenantSession()
+        claimed_second = claim_next_job(db, owner="worker-b", job_types={"process_email"})
+        self.assertIsNotNone(claimed_second)
+        self.assertEqual(claimed_second.attempt_count, 2)
+        fail_job(db, claimed_second, "timeout-2", retry=False, error_type="TimeoutError")
+        db.close()
+
+        db = self.TenantSession()
+        second_retry = retry_job(db, 1, job.id)
+        self.assertIsNotNone(second_retry)
+        self.assertEqual(second_retry.retry_count, 2)
+        db.close()
+
+        db = self.TenantSession()
+        claimed_third = claim_next_job(db, owner="worker-c", job_types={"process_email"})
+        self.assertIsNotNone(claimed_third)
+        self.assertEqual(claimed_third.attempt_count, 3)
+        finish_job(db, claimed_third, {"ok": True, "message": "done"})
+
+        job = db.get(BackgroundJob, job.id)
+        attempts = db.scalars(select(JobAttempt).where(JobAttempt.job_id == job.id).order_by(JobAttempt.attempt_number)).all()
+        self.assertEqual(job.status, "success")
+        self.assertEqual(job.retry_count, 2)
+        self.assertEqual(len(attempts), 3)
+        self.assertEqual([attempt.status for attempt in attempts], ["failed_permanent", "failed_permanent", "succeeded"])
+        self.assertEqual([attempt.worker_id for attempt in attempts], ["worker-a", "worker-b", "worker-c"])
+        db.close()
+
     def test_stale_jobs_recover_or_fail_at_limit(self):
         db = self.TenantSession()
         stale_running = BackgroundJob(
