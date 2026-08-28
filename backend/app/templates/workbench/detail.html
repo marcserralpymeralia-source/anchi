@@ -329,9 +329,9 @@
   {% set incoming_title = "Conversación de WhatsApp recibida" if "whatsapp" in (item.provider_label or "")|lower else "Entrada recibida" %}
   <div class="review-modal-header review-modal-header-v3">
     <div class="review-header-title">
-      <strong>{{ item.customer_name }} · {{ "%.0f"|format(item.score or 0) if item.score is not none else "Sin score" }} · {{ item.agent_status_label }}</strong>
+      <strong>{{ item.customer_name }} · {{ "%.0f"|format(item.score or 0) if item.score is not none else "Sin score" }} · {{ item.operational_status_label or item.agent_status_label }}</strong>
       <div class="review-header-meta">
-        <span class="badge agent-{{ item.agent_status }}">{{ item.agent_status_label }}</span>
+        <span class="badge operational-{{ item.operational_status }}">{{ item.operational_status_label or item.agent_status_label }}</span>
         <span class="badge">{{ item.provider_label }}</span>
         <span class="badge">{{ item.origin }}</span>
       </div>

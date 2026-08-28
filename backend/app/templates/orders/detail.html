@@ -85,15 +85,23 @@
       </div>
 
       <div class="order-review-confidence-copy">
-        <strong>Confianza del pedido</strong>
-        {% if score_value >= 80 %}
-          <p>Pedido listo para validar.</p>
-        {% elif not selected_customer_id %}
-          <p>Falta identificar correctamente el cliente.</p>
-        {% elif order.lines|selectattr("validated_product_id", "none")|list|length %}
-          <p>Hay productos pendientes de identificar o validar.</p>
+        {% if order.status in ["pedido_confirmado", "pedido_validado"] %}
+          <strong>Pedido confirmado</strong>
+          <p>El pedido ya ha sido validado y no requiere nueva confirmación.</p>
+        {% elif order.status in ["pedido_exportado", "cerrado", "cancelado", "descartado", "deleted", "archived_deleted"] %}
+          <strong>Pedido archivado</strong>
+          <p>El pedido ha finalizado su ciclo operativo.</p>
         {% else %}
-          <p>Revisa los datos marcados antes de validar el pedido.</p>
+          <strong>Confianza del pedido</strong>
+          {% if score_value >= 80 %}
+            <p>Pedido listo para validar.</p>
+          {% elif not selected_customer_id %}
+            <p>Falta identificar correctamente el cliente.</p>
+          {% elif order.lines|selectattr("validated_product_id", "none")|list|length %}
+            <p>Hay productos pendientes de identificar o validar.</p>
+          {% else %}
+            <p>Revisa los datos marcados antes de validar el pedido.</p>
+          {% endif %}
         {% endif %}
       </div>
     </div>
@@ -150,16 +158,26 @@
         Guardar cambios
       </button>
 
-      <form
-        class="js-loading-form"
-        method="post"
-        action="/orders/{{ order.id }}/validate"
-        data-confirm="Validar pedido?"
-      >
-        <button data-loading-text="Validando...">
-          Validar pedido
-        </button>
-      </form>
+      {% if order.status not in ["pedido_confirmado", "pedido_validado", "pedido_exportado", "cerrado", "cancelado", "descartado", "deleted", "archived_deleted"] %}
+        <form
+          class="js-loading-form"
+          method="post"
+          action="/orders/{{ order.id }}/validate"
+          data-confirm="Validar pedido?"
+        >
+          <button data-loading-text="Validando...">
+            Validar pedido
+          </button>
+        </form>
+      {% else %}
+        <span class="badge">
+          {% if order.status in ["pedido_confirmado", "pedido_validado"] %}
+            Pedido confirmado
+          {% else %}
+            Archivado
+          {% endif %}
+        </span>
+      {% endif %}
     </div>
 
   </section>
