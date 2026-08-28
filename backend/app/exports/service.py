@@ -2,6 +2,7 @@ from datetime import date
 from io import BytesIO, StringIO
 import csv
 import ftplib
+import json
 import posixpath
 import socket
 import ssl
@@ -113,6 +114,99 @@ class ExportService:
         }
 
         return values[field]
+
+    def canonical_payload(self, order: Order) -> dict:
+        customer = order.validated_customer or order.customer
+
+        lines = []
+        for index, line in enumerate(order.lines or [], start=1):
+            product = line.validated_product or line.product
+            lines.append(
+                {
+                    "line_number": index,
+                    "product_code": (
+                        product.reference
+                        if product
+                        else line.detected_reference or ""
+                    ),
+                    "description": (
+                        product.name
+                        if product
+                        else line.detected_product or ""
+                    ),
+                    "quantity": line.quantity,
+                    "unit": line.unit or "",
+                }
+            )
+
+        return {
+            "schema_version": "1.0",
+            "order_id": order.id,
+            "customer": {
+                "code": customer.code if customer else "",
+            },
+            "order_date": order.order_date,
+            "requested_delivery_date": order.requested_delivery_date,
+            "notes": order.notes or "",
+            "lines": lines,
+        }
+
+    def generate(self, db: Session, order: Order) -> ExportFile:
+        settings = get_or_create_settings(
+            db,
+            ExportSettings,
+            order.company_id,
+        )
+        file_type = (settings.file_type or "csv").strip().lower()
+
+        if file_type == "csv":
+            return self.generate_csv(db, order)
+
+        if file_type == "json":
+            return self.generate_json(db, order)
+
+        raise ValueError(
+            f"Formato de exportacion no soportado: {file_type}"
+        )
+
+    def generate_json(self, db: Session, order: Order) -> ExportFile:
+        settings = get_or_create_settings(
+            db,
+            ExportSettings,
+            order.company_id,
+        )
+
+        if (settings.file_type or "").strip().lower() != "json":
+            raise ValueError(
+                f"Formato de exportacion no soportado: {settings.file_type}"
+            )
+
+        customer = order.validated_customer or order.customer
+        customer_code = customer.code if customer else ""
+
+        filename = settings.filename_template.format(
+            codigo_cliente=customer_code or "SINCLIENTE",
+            fecha=date.today().strftime("%Y%m%d"),
+            id_pedido=order.id,
+        )
+
+        export = ExportFile(
+            company_id=order.company_id,
+            order_id=order.id,
+            filename=filename,
+            content=json.dumps(
+                self.canonical_payload(order),
+                ensure_ascii=False,
+                indent=2,
+            ) + "\n",
+            status="generated",
+        )
+
+        db.add(export)
+        db.commit()
+        db.refresh(export)
+
+        return export
 
     def generate_csv(self, db: Session, order: Order) -> ExportFile:
         settings = get_or_create_settings(
