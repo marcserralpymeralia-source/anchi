@@ -276,7 +276,7 @@ class FTPSettings(Base):
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), unique=True)
     connection_type: Mapped[str] = mapped_column(String(20), default="ftps_explicit")
     host: Mapped[str | None] = mapped_column(String(255))
-    port: Mapped[int] = mapped_column(Integer, default=22)
+    port: Mapped[int] = mapped_column(Integer, default=21)
     username: Mapped[str | None] = mapped_column(String(255))
     password_encrypted: Mapped[str | None] = mapped_column(Text)
     private_key_encrypted: Mapped[str | None] = mapped_column(Text)
