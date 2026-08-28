@@ -1,12 +1,42 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_edit, icon_folder, icon_plus %}
+{% from "components/icons.html" import icon_edit, icon_filter, icon_folder, icon_plus %}
 {% set title = "Clientes" %}
-{% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css">{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css?v=11">{% endblock %}
 {% block content %}
+
+{% macro render_sort_th(col_key, label, asc_val, desc_val, default_desc=false) -%}
+  {% set cur = sort or 'name_asc' %}
+  {% set is_active = (cur == asc_val or cur == desc_val) %}
+  {% set is_asc = (cur == asc_val) %}
+  {% if is_active %}
+    {% set target_sort = desc_val if is_asc else asc_val %}
+  {% else %}
+    {% set target_sort = desc_val if default_desc else asc_val %}
+  {% endif %}
+  <th data-column="{{ col_key }}" class="sortable-th {% if is_active %}is-sorted{% endif %}" onclick="applySort('{{ target_sort }}')">
+    <span class="sort-th-content">
+      <span>{{ label }}</span>
+      {% if is_active %}
+        <span class="sort-arrow">
+          {% if is_asc %}
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="18 15 12 9 6 15"></polyline></svg>
+          {% else %}
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          {% endif %}
+        </span>
+      {% endif %}
+    </span>
+  </th>
+{%- endmacro %}
+
 <section class="database-shell {% if view == 'list' %}database-compact-page{% else %}panel stack{% endif %}">
-  <header class="database-compact-head">
-    <h2>Clientes</h2>
-    <button type="button" onclick="openCustomerEditor()">{{ icon_plus(14) }} <span>Nuevo cliente</span></button>
+  <header class="database-compact-head page-content-header">
+    <div class="page-context">
+      <span class="page-kicker">Directorio de clientes</span>
+    </div>
+    <div class="page-header-actions">
+      <button type="button" onclick="openCustomerEditor()">{{ icon_plus(14) }} <span>Nuevo cliente</span></button>
+    </div>
   </header>
 
   <div class="workbench-tabs database-tabs">
@@ -20,9 +50,10 @@
 
   {% if view == "list" %}
     <div class="database-compact-toolbar">
-      <form class="database-compact-filter-form" method="get" action="/customers">
+      <form class="database-compact-filter-form" method="get" action="/customers" id="customers-main-filter-form">
         <input type="hidden" name="view" value="list">
         <input type="hidden" name="page" value="1">
+        <input type="hidden" name="sort" value="{{ sort or 'name_asc' }}">
         <input class="database-compact-search" name="q" value="{{ q }}" placeholder="Buscar por nombre, código, email o teléfono...">
         <button class="secondary compact-button" data-loading-text="Filtrando...">Filtrar</button>
       </form>
@@ -49,12 +80,13 @@
         </div>
       </details>
       <details class="database-inline-panel">
-        <summary class="button secondary compact-button">Más filtros</summary>
+        <summary class="button secondary compact-button">{{ icon_filter(14) }}<span>Más filtros</span></summary>
         <div class="database-inline-popover database-filters-popover">
           <form class="stack" method="get" action="/customers">
             <input type="hidden" name="view" value="list">
             <input type="hidden" name="page" value="1">
             <input type="hidden" name="q" value="{{ q }}">
+            <input type="hidden" name="sort" value="{{ sort or 'name_asc' }}">
             <label>Estado
               <select name="status">
                 {% for value, label in [("all","Todos"),("active","Activos"),("inactive","Inactivos"),("with_alias","Con alias"),("without_alias","Sin alias"),("recent","Recientes")] %}
@@ -93,8 +125,6 @@
       <details class="column-toggle-panel">
         <summary class="button secondary compact-button">Columnas</summary>
         <div class="column-toggle-menu" data-table-key="customersCompact">
-          <span class="database-columns-hint">Desliza para ver más. Arrastra el separador del encabezado para cambiar el ancho.</span>
-          <button type="button" class="secondary compact-button" data-table-reset="customersCompact">Restablecer anchos</button>
           {% for key, label, checked in [
             ("name","Cliente", true),
             ("code","Código", true),
@@ -118,10 +148,6 @@
       <span class="database-compact-count">{{ pagination.total_items }} clientes</span>
     </div>
 
-    <div class="database-table-guide" role="note">
-      <strong>Vista ajustable</strong>
-      <span>Desliza horizontalmente para ver más columnas · arrastra el borde del encabezado para cambiar su ancho.</span>
-    </div>
     <div class="database-table-wrap">
     <table class="data-table database-table database-table-customersCompact database-table-customers database-table-compact" data-resizable-table data-table-key="customersCompact">
           <colgroup>
@@ -143,21 +169,21 @@
           </colgroup>
           <thead>
             <tr>
-              <th data-column="name">Cliente</th>
-              <th data-column="code">Código</th>
-              <th data-column="primary_email">Contacto</th>
-              <th data-column="city">Localidad</th>
-              <th data-column="status">Estado</th>
+              {{ render_sort_th("name", "Cliente", "name_asc", "name_desc") }}
+              {{ render_sort_th("code", "Código", "code_asc", "code_desc") }}
+              {{ render_sort_th("primary_email", "Contacto", "email_asc", "email_desc") }}
+              {{ render_sort_th("city", "Localidad", "city_asc", "city_desc") }}
+              {{ render_sort_th("status", "Estado", "status_asc", "status_desc") }}
               <th data-column="action" class="th-actions" aria-label="Acciones"></th>
-              <th data-column="channel">Canal</th>
+              {{ render_sort_th("channel", "Canal", "channel_asc", "channel_desc") }}
               <th data-column="knowledge">Conocimiento</th>
-              <th data-column="last_activity">Última actividad</th>
-              <th data-column="tax_id">CIF/NIF</th>
-              <th data-column="phone">Teléfono</th>
-              <th data-column="address">Dirección</th>
+              {{ render_sort_th("last_activity", "Última actividad", "last_activity_asc", "last_activity_desc") }}
+              {{ render_sort_th("tax_id", "CIF/NIF", "tax_id_asc", "tax_id_desc") }}
+              {{ render_sort_th("phone", "Teléfono", "phone_asc", "phone_desc") }}
+              {{ render_sort_th("address", "Dirección", "address_asc", "address_desc") }}
               <th data-column="aliases">Alias</th>
               <th data-column="domains">Dominios</th>
-              <th data-column="notes">Observaciones</th>
+              {{ render_sort_th("notes", "Observaciones", "notes_asc", "notes_desc") }}
             </tr>
           </thead>
           <tbody>
@@ -418,5 +444,12 @@
     checkboxes.forEach((checkbox) => checkbox.addEventListener("change", apply));
     apply();
   });
+
+  function applySort(sortVal) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('sort', sortVal);
+    url.searchParams.set('page', '1');
+    window.location.href = url.toString();
+  }
 </script>
 {% endblock %}

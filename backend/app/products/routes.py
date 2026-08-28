@@ -57,6 +57,7 @@ def list_products(
     q: str = "",
     family: str = "",
     obsolete: str = "",
+    sort: str = "reference_asc",
     page: int = 1,
     page_size: int = 25,
     db: Session = Depends(get_tenant_db),
@@ -84,7 +85,29 @@ def list_products(
         stmt = stmt.where(Product.obsolete.is_(True))
     elif obsolete == "no":
         stmt = stmt.where(Product.obsolete.is_(False))
-    stmt = stmt.order_by(Product.reference.asc())
+    sort_map = {
+        "reference_asc": Product.reference.asc(),
+        "reference_desc": Product.reference.desc(),
+        "name_asc": Product.name.asc(),
+        "name_desc": Product.name.desc(),
+        "unit_asc": Product.sale_unit.asc(),
+        "unit_desc": Product.sale_unit.desc(),
+        "price_asc": Product.sale_price.asc(),
+        "price_desc": Product.sale_price.desc(),
+        "status_asc": Product.status.asc(),
+        "status_desc": Product.status.desc(),
+        "family_asc": Product.family.asc(),
+        "family_desc": Product.family.desc(),
+        "supplier_asc": Product.usual_supplier.asc(),
+        "supplier_desc": Product.usual_supplier.desc(),
+        "desc_asc": Product.description_cont.asc(),
+        "desc_desc": Product.description_cont.desc(),
+        "notes_asc": Product.notes.asc(),
+        "notes_desc": Product.notes.desc(),
+        "created_asc": Product.created_at.asc(),
+        "created_desc": Product.created_at.desc(),
+    }
+    stmt = stmt.order_by(sort_map.get(sort, Product.reference.asc()))
     products, pagination = paginate(db, stmt, page=page, page_size=page_size)
     families = db.scalars(select(Product.family).where(Product.company_id == user.company_id, Product.family.is_not(None)).distinct().order_by(Product.family)).all()
     product_ids = [product.id for product in products]
@@ -120,6 +143,7 @@ def list_products(
             "q": q,
             "family": family,
             "obsolete": obsolete,
+            "sort": sort,
             "product_stats": product_stats,
         },
     )

@@ -26,6 +26,7 @@ def databases_page(
     alias_mode: str = "all",
     family: str = "",
     selected_id: int = 0,
+    sort: str = "",
     page: int = 1,
     page_size: int = 25,
     db: Session = Depends(get_tenant_db),
@@ -40,6 +41,7 @@ def databases_page(
         alias_mode=alias_mode,
         family=family,
         selected_id=selected_id,
+        sort=sort,
         page=page,
         page_size=page_size,
     )

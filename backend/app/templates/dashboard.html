@@ -1,12 +1,14 @@
 {% extends "base.html" %}
+{% from "components/icons.html" import icon_filter %}
 {% set title = "Bandeja" %}
 {% block content %}
 
 {% set tabs = workbench["tab_counts"] %}
-<section class="workbench-shell">
-  <section class="panel workbench-queue-panel">
+<section class="workbench-shell page-section">
+  <section class="workbench-queue-panel">
     <details class="workbench-filters-panel" open>
       <summary>Filtros rápidos</summary>
+      <div class="workbench-filter-controls">
       <div class="workbench-tabs">
         {% for key, label, count in [
           ("all","Todos", tabs.all),
@@ -22,7 +24,7 @@
         {% endfor %}
       </div>
       <details class="workbench-advanced-filters">
-        <summary>Más filtros</summary>
+        <summary>{{ icon_filter(14) }}<span>Más filtros</span></summary>
         <form method="get" action="/" class="workbench-filters-form">
           <input type="hidden" name="page" value="1">
           <div class="filter-grid workbench-quick-filters">
@@ -48,6 +50,7 @@
           <input type="hidden" name="mode" value="{{ filters.mode }}">
         </form>
       </details>
+      </div>
     </details>
 
     <div class="work-queue">

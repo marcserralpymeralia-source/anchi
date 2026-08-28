@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% set title = "Configuracion" %}
+{% set title = "Configuración" %}
 {% macro state_label(state) -%}
   {%- if state == "ready" -%}Configurado
   {%- elif state == "warning" -%}Con avisos
@@ -10,9 +10,9 @@
 {%- endmacro %}
 {% block content %}
 <section class="settings-shell">
-  <header class="settings-header panel">
+  <header class="settings-header page-section-header">
     <div class="settings-title">
-      <h2>Configuración</h2>
+      <span class="page-kicker">Preferencias del sistema</span>
       <span class="settings-status-pill {{ 'status-confirmed' if dashboard.errors == 0 else 'status-doubtful' if dashboard.pending else 'status-error' }}">
         {{ dashboard.progress }}% completa · {{ dashboard.configured }} módulos configurados · {{ dashboard.pending }} pendientes{% if dashboard.errors %} · {{ dashboard.errors }} bloqueados{% endif %}
       </span>
@@ -27,7 +27,7 @@
     </div>
   </header>
 
-  <section class="settings-checklist panel">
+  <section class="settings-checklist">
     {% for step in dashboard.checklist %}
       <article class="check-step {{ step.state }}">
         <span class="check-dot"></span>

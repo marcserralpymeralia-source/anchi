@@ -6,7 +6,9 @@
   <header class="webmail-toolbar">
     <div class="webmail-toolbar-top">
       <div class="webmail-title-group">
-        <h2 class="webmail-heading">Buzón de correo</h2>
+        <div class="page-context">
+          <span class="page-kicker">Mensajes y pedidos</span>
+        </div>
         <span class="badge webmail-count-badge">{{ pagination.total_items }} mensaje{% if pagination.total_items != 1 %}s{% endif %}</span>
       </div>
       <div class="webmail-toolbar-actions">

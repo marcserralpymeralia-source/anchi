@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title or app_settings.app_name }}</title>
   {% if request.state.branding.favicon_url %}<link rel="icon" href="{{ request.state.branding.favicon_url }}">{% endif %}
-  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/static/styles.css?v=25">
   <script src="/static/js/database-tables.js" defer></script>
   {% block head_extra %}{% endblock %}
   <style>{{ branding_css_vars(request.state.branding)|safe }}</style>
@@ -126,27 +126,29 @@
       <div class="alerts-list" id="alerts-drawer-list">
         {% for alert in request.state.alert_center.recent %}
           <article class="alert-card alert-{{ alert.severity }} alert-status-{{ alert.status }}" data-alert-id="{{ alert.id }}">
-            <div class="alert-card-header">
-              <div class="alert-card-tags">
-                <span class="alert-severity-badge severity-{{ alert.severity }}">{{ alert.severity_label }}</span>
-                <span class="badge">{{ alert.entity_type }} #{{ alert.entity_id }}</span>
+            <div class="alert-card-inner">
+              <div class="alert-card-header">
+                <div class="alert-card-tags">
+                  <span class="alert-severity-badge severity-{{ alert.severity }}">{{ alert.severity_label }}</span>
+                  <span class="badge">{{ alert.entity_type }} #{{ alert.entity_id }}</span>
+                </div>
+                <span class="alert-time">{{ alert.created_label }}</span>
               </div>
-              <span class="alert-time">{{ alert.created_label }}</span>
+              <div class="alert-card-body">
+                <strong class="alert-card-title">{{ alert.title }}</strong>
+                <p class="alert-card-msg">{{ alert.message }}</p>
+              </div>
             </div>
-            <div class="alert-card-body">
-              <strong class="alert-card-title">{{ alert.title }}</strong>
-              <p class="alert-card-msg">{{ alert.message }}</p>
-            </div>
-            <div class="alert-card-actions">
+            <div class="alert-card-bottom-actions">
               {% if alert.action_href %}
-                <a class="button secondary compact-button" href="{{ alert.action_href }}">{{ alert.action_label }}</a>
+                <a class="alert-btn-primary" href="{{ alert.action_href }}">{{ alert.action_label }}</a>
               {% endif %}
               {% if alert.secondary_action == "mark-read" %}
-                <button class="button secondary compact-button" type="button" onclick="handleAlertAction({{ alert.id }}, 'mark-read', this)">Marcar vista</button>
+                <button class="alert-btn-secondary" type="button" onclick="handleAlertAction({{ alert.id }}, 'mark-read', this)">Marcar vista</button>
               {% elif alert.secondary_action == "resolve" %}
-                <button class="button secondary compact-button" type="button" onclick="handleAlertAction({{ alert.id }}, 'resolve', this)">Resolver</button>
+                <button class="alert-btn-secondary" type="button" onclick="handleAlertAction({{ alert.id }}, 'resolve', this)">Resolver</button>
               {% elif alert.secondary_action == "reopen" %}
-                <button class="button secondary compact-button" type="button" onclick="handleAlertAction({{ alert.id }}, 'reopen', this)">Reabrir</button>
+                <button class="alert-btn-secondary" type="button" onclick="handleAlertAction({{ alert.id }}, 'reopen', this)">Reabrir</button>
               {% endif %}
             </div>
           </article>
@@ -234,27 +236,29 @@
       container.innerHTML = alerts.map(alert => {
         let secBtn = "";
         if (alert.secondary_action === "mark-read") {
-          secBtn = `<button class="button secondary compact-button" type="button" onclick="handleAlertAction(${alert.id}, 'mark-read', this)">Marcar vista</button>`;
+          secBtn = `<button class="alert-btn-secondary" type="button" onclick="handleAlertAction(${alert.id}, 'mark-read', this)">Marcar vista</button>`;
         } else if (alert.secondary_action === "resolve") {
-          secBtn = `<button class="button secondary compact-button" type="button" onclick="handleAlertAction(${alert.id}, 'resolve', this)">Resolver</button>`;
+          secBtn = `<button class="alert-btn-secondary" type="button" onclick="handleAlertAction(${alert.id}, 'resolve', this)">Resolver</button>`;
         } else if (alert.secondary_action === "reopen") {
-          secBtn = `<button class="button secondary compact-button" type="button" onclick="handleAlertAction(${alert.id}, 'reopen', this)">Reabrir</button>`;
+          secBtn = `<button class="alert-btn-secondary" type="button" onclick="handleAlertAction(${alert.id}, 'reopen', this)">Reabrir</button>`;
         }
         return `
           <article class="alert-card alert-${alert.severity} alert-status-${alert.status}" data-alert-id="${alert.id}">
-            <div class="alert-card-header">
-              <div class="alert-card-tags">
-                <span class="alert-severity-badge severity-${alert.severity}">${escapeHtml(alert.severity_label)}</span>
-                <span class="badge">${escapeHtml(alert.entity_type)} #${escapeHtml(String(alert.entity_id))}</span>
+            <div class="alert-card-inner">
+              <div class="alert-card-header">
+                <div class="alert-card-tags">
+                  <span class="alert-severity-badge severity-${alert.severity}">${escapeHtml(alert.severity_label)}</span>
+                  <span class="badge">${escapeHtml(alert.entity_type)} #${escapeHtml(String(alert.entity_id))}</span>
+                </div>
+                <span class="alert-time">${escapeHtml(alert.created_label || '')}</span>
               </div>
-              <span class="alert-time">${escapeHtml(alert.created_label || '')}</span>
+              <div class="alert-card-body">
+                <strong class="alert-card-title">${escapeHtml(alert.title)}</strong>
+                <p class="alert-card-msg">${escapeHtml(alert.message)}</p>
+              </div>
             </div>
-            <div class="alert-card-body">
-              <strong class="alert-card-title">${escapeHtml(alert.title)}</strong>
-              <p class="alert-card-msg">${escapeHtml(alert.message)}</p>
-            </div>
-            <div class="alert-card-actions">
-              ${alert.action_href ? `<a class="button secondary compact-button" href="${alert.action_href}">${escapeHtml(alert.action_label)}</a>` : ""}
+            <div class="alert-card-bottom-actions">
+              ${alert.action_href ? `<a class="alert-btn-primary" href="${alert.action_href}">${escapeHtml(alert.action_label)}</a>` : ""}
               ${secBtn}
             </div>
           </article>

@@ -74,7 +74,8 @@
   {% set conversation_preview = conversation_preview if conversation_preview is defined else none %}
   {% set has_email = order.email is not none %}
   {% set has_conversation = conversation_preview is not none %}
-  {% set active_source = "conversation" if has_conversation else "email" %}
+  {% set has_whatsapp_conversation = has_conversation and item.channel_key == "whatsapp" %}
+  {% set active_source = "conversation" if has_whatsapp_conversation else "email" %}
   <div class="review-modal-header review-modal-header-v3 review-summary-header">
     <div class="review-summary-item review-summary-sender">
       <span>Remitente</span>
@@ -129,7 +130,7 @@
 
   <div class="review-grid review-grid-v3">
     <section class="review-pane review-entry-pane">
-      {% if has_email and has_conversation %}
+      {% if has_email and has_whatsapp_conversation %}
         <div class="source-tabs" data-source-tabs>
           <button type="button" class="source-tab {% if active_source == 'email' %}active{% endif %}" data-source-tab="email">Correo electrónico</button>
           <button type="button" class="source-tab {% if active_source == 'conversation' %}active{% endif %}" data-source-tab="conversation">WhatsApp</button>
@@ -138,7 +139,7 @@
       {% if has_email %}
         {{ email_context_panel(order.id, order.email.sender, order.email.received_at | local_dt(tenant_timezone, "%Y-%m-%d %H:%M"), order.email.subject, order.email.body, email_attachments, "/orders/" ~ order.id ~ "/attachments", "/orders/" ~ order.id ~ "/attachments", "dash-email-body-" ~ order.id, True, has_conversation and active_source != 'email') }}
       {% endif %}
-      {% if has_conversation %}
+      {% if has_whatsapp_conversation %}
         <article class="subpanel stack source-panel" data-source-panel="conversation" {% if has_conversation and active_source != 'conversation' %}hidden{% endif %}>
           <div class="section-title-row">
             <div>

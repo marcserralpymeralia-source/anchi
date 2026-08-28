@@ -226,13 +226,26 @@ def list_orders(
             joined_email = True
         like = f"%{search}%"
         stmt = stmt.where(or_(Email.subject.ilike(like), Order.customer_detected_name.ilike(like)))
+    if sort in ("sender_asc", "sender_desc", "subject_asc", "subject_desc", "type_asc", "type_desc"):
+        if not joined_email:
+            stmt = stmt.join(Email, Order.email_id == Email.id)
+            joined_email = True
+
     sort_map = {
         "date_asc": Order.created_at.asc(),
         "date_desc": Order.created_at.desc(),
         "score_asc": Order.score.asc(),
         "score_desc": Order.score.desc(),
         "status_asc": Order.status.asc(),
+        "status_desc": Order.status.desc(),
         "customer_asc": Order.customer_detected_name.asc(),
+        "customer_desc": Order.customer_detected_name.desc(),
+        "sender_asc": Email.sender.asc() if joined_email else Order.created_at.desc(),
+        "sender_desc": Email.sender.desc() if joined_email else Order.created_at.desc(),
+        "subject_asc": Email.subject.asc() if joined_email else Order.created_at.desc(),
+        "subject_desc": Email.subject.desc() if joined_email else Order.created_at.desc(),
+        "type_asc": Email.detected_type.asc() if joined_email else Order.created_at.desc(),
+        "type_desc": Email.detected_type.desc() if joined_email else Order.created_at.desc(),
     }
     stmt = stmt.options(
         load_only(

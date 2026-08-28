@@ -2,9 +2,9 @@
 {% set title = "Previsualizar importación inicial" %}
 {% block content %}
 <section class="panel stack" style="max-width: 960px; margin: 0 auto;">
-  <div class="section-title-row">
+  <div class="section-title-row page-section-header">
     <div>
-      <h2>Previsualizar importación inicial</h2>
+      <span class="page-kicker">Sincronización inicial</span>
       <p class="muted">Revisamos cuántos correos se traerán antes de ejecutar la primera sincronización IMAP.</p>
     </div>
     <span class="badge {% if preview.ok %}status-confirmed{% else %}status-doubtful{% endif %}">{{ preview.title or "Histórico inicial" }}</span>

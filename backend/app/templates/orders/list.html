@@ -1,155 +1,294 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_edit %}
+{% from "components/icons.html" import icon_edit, icon_filter, icon_plus %}
 {% set title = "Pedidos" %}
-{% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css">{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css?v=11">{% endblock %}
 {% block content %}
-<div class="actions" style="margin-bottom:14px">
-  <form method="post" action="/orders/mock"><button>{{ request.state.branding.microcopy.create_test_order }}</button></form>
-</div>
 
-<section class="panel" style="margin-bottom:16px">
-  <details open>
-    <summary>Filtros</summary>
-    <form class="filter-grid" method="get" action="/orders">
+{% set active_count = 0 %}
+{% if filters.customer_id and filters.customer_id != 0 and filters.customer_id != "0" %}{% set active_count = active_count + 1 %}{% endif %}
+{% if filters.date_from %}{% set active_count = active_count + 1 %}{% endif %}
+{% if filters.date_to %}{% set active_count = active_count + 1 %}{% endif %}
+{% if filters.score_min or filters.score_max %}{% set active_count = active_count + 1 %}{% endif %}
+{% if filters.scoring_category %}{% set active_count = active_count + 1 %}{% endif %}
+{% if filters.has_pdf %}{% set active_count = active_count + 1 %}{% endif %}
+{% if filters.requires_review %}{% set active_count = active_count + 1 %}{% endif %}
+{% if filters.sender %}{% set active_count = active_count + 1 %}{% endif %}
+{% if filters.email_type %}{% set active_count = active_count + 1 %}{% endif %}
+
+{% macro render_sort_th(col_key, label, asc_val, desc_val, default_desc=false) -%}
+  {% set cur = filters.sort or 'date_desc' %}
+  {% set is_active = (cur == asc_val or cur == desc_val) %}
+  {% set is_asc = (cur == asc_val) %}
+  {% if is_active %}
+    {% set target_sort = desc_val if is_asc else asc_val %}
+  {% else %}
+    {% set target_sort = desc_val if default_desc else asc_val %}
+  {% endif %}
+  <th data-column="{{ col_key }}" class="sortable-th {% if is_active %}is-sorted{% endif %}" onclick="applySort('{{ target_sort }}')">
+    <span class="sort-th-content">
+      <span>{{ label }}</span>
+      {% if is_active %}
+        <span class="sort-arrow">
+          {% if is_asc %}
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="18 15 12 9 6 15"></polyline></svg>
+          {% else %}
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          {% endif %}
+        </span>
+      {% endif %}
+    </span>
+  </th>
+{%- endmacro %}
+
+<section class="database-compact-page">
+  <header class="database-compact-head page-content-header">
+    <div class="page-context">
+      <span class="page-kicker">Gestion operativa</span>
+    </div>
+    <form class="page-header-actions" method="post" action="/orders/mock" style="margin:0;">
+      <button type="submit" style="display:inline-flex;align-items:center;gap:6px;">
+        {{ icon_plus(14) }}
+        <span>{{ request.state.branding.microcopy.create_test_order }}</span>
+      </button>
+    </form>
+  </header>
+
+  <div class="orders-compact-toolbar">
+    <form class="orders-filter-form-row" method="get" action="/orders" id="orders-main-filter-form">
       <input type="hidden" name="page" value="1">
-      <label>Desde<input type="date" name="date_from" value="{{ filters.date_from }}"></label>
-      <label>Hasta<input type="date" name="date_to" value="{{ filters.date_to }}"></label>
-      <label>Cliente
-      <select name="customer_id">
-        <option value="0">Todos</option>
-        {% for customer in customers %}
-          <option value="{{ customer.id }}" {% if filters.customer_id == customer.id %}selected{% endif %}>{{ customer.code }} - {{ customer.fiscal_name }}</option>
-        {% endfor %}
-      </select>
-      </label>
-      <label>Score min.<input type="number" name="score_min" min="0" max="100" step="0.01" value="{{ filters.score_min or '' }}"></label>
-      <label>Score max.<input type="number" name="score_max" min="0" max="100" step="0.01" value="{{ filters.score_max or '' }}"></label>
-      <label>Categoria
-      <select name="scoring_category">
-        <option value="">Todas</option>
-        <option value="safe" {% if filters.scoring_category == "safe" %}selected{% endif %}>Alta</option>
-        <option value="reviewable" {% if filters.scoring_category == "reviewable" %}selected{% endif %}>Revisable</option>
-        <option value="doubtful" {% if filters.scoring_category == "doubtful" %}selected{% endif %}>Dudosa</option>
-        <option value="not_importable" {% if filters.scoring_category == "not_importable" %}selected{% endif %}>Bloqueada</option>
-        <option value="without_score" {% if filters.scoring_category == "without_score" %}selected{% endif %}>Pendiente de analizar</option>
-      </select>
-      </label>
-      <label>PDF
-      <select name="has_pdf">
-        <option value="">Todos</option>
-        <option value="yes" {% if filters.has_pdf == "yes" %}selected{% endif %}>Si</option>
-        <option value="no" {% if filters.has_pdf == "no" %}selected{% endif %}>No</option>
-      </select>
-      </label>
-      <label>Revisión
-      <select name="requires_review">
-        <option value="">Todos</option>
-        <option value="yes" {% if filters.requires_review == "yes" %}selected{% endif %}>Si</option>
-        <option value="no" {% if filters.requires_review == "no" %}selected{% endif %}>No</option>
-      </select>
-      </label>
-      <label>Tipo
-      <select name="email_type">
-        <option value="">Todos</option>
-        {% for item in ["pedido", "no_pedido", "consulta", "incidencia", "dudoso"] %}
-          <option value="{{ item }}" {% if filters.email_type == item %}selected{% endif %}>{{ item|status_label }}</option>
-        {% endfor %}
-      </select>
-      </label>
-      <label>Remitente<input name="sender" value="{{ filters.sender }}" placeholder="cliente.com"></label>
-      <label>Buscar<input name="search" value="{{ filters.search }}" placeholder="Asunto o cliente"></label>
-      <label>Estado
-      <select name="status">
-        <option value="">Todos</option>
+      <input type="hidden" name="sort" value="{{ filters.sort or 'date_desc' }}">
+      <input
+        class="orders-search-field"
+        name="search"
+        placeholder="Buscar pedidos o cliente..."
+        value="{{ filters.search or '' }}"
+      >
+      <select class="orders-select-field" name="status" aria-label="Estado" onchange="this.form.submit()">
+        <option value="">Todos los estados</option>
         {% for item in statuses %}
           <option value="{{ item }}" {% if filters.status == item %}selected{% endif %}>{{ item|status_label }}</option>
         {% endfor %}
       </select>
-      </label>
-      <label>Orden
-      <select name="sort">
-        <option value="date_desc" {% if filters.sort == "date_desc" %}selected{% endif %}>Fecha desc.</option>
-        <option value="date_asc" {% if filters.sort == "date_asc" %}selected{% endif %}>Fecha asc.</option>
-        <option value="score_desc" {% if filters.sort == "score_desc" %}selected{% endif %}>Confianza desc.</option>
-        <option value="score_asc" {% if filters.sort == "score_asc" %}selected{% endif %}>Confianza asc.</option>
-        <option value="customer_asc" {% if filters.sort == "customer_asc" %}selected{% endif %}>Cliente</option>
-        <option value="status_asc" {% if filters.sort == "status_asc" %}selected{% endif %}>Estado</option>
-      </select>
-      </label>
-      <label>Tamaño
-      <select name="page_size">
-        {% for size in pagination.allowed_page_sizes %}<option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>{% endfor %}
-      </select>
-      </label>
-      <label>&nbsp;<button class="secondary" data-loading-text="Filtrando...">Filtrar</button></label>
+      <button type="submit" class="secondary compact-button orders-btn-filter" data-loading-text="Filtrando...">Filtrar</button>
     </form>
-  </details>
+
+    <details class="database-inline-panel">
+      <summary class="button secondary compact-button orders-btn-filter">
+        {{ icon_filter(14) }}
+        <span>Más filtros</span>
+        {% if active_count > 0 %}
+          <span class="filter-count-badge">{{ active_count }}</span>
+        {% endif %}
+      </summary>
+      <div class="database-inline-popover database-filters-popover" style="width:min(440px, calc(100vw - 32px));">
+        <form class="stack" method="get" action="/orders">
+          <input type="hidden" name="page" value="1">
+          <input type="hidden" name="search" value="{{ filters.search or '' }}">
+          <input type="hidden" name="status" value="{{ filters.status or '' }}">
+          <input type="hidden" name="sort" value="{{ filters.sort or 'date_desc' }}">
+
+          <div class="database-inline-head">
+            <strong>Filtros avanzados</strong>
+            {% if active_count > 0 %}
+              <a href="/orders">Limpiar todo</a>
+            {% endif %}
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <label>Desde<input type="date" name="date_from" value="{{ filters.date_from }}"></label>
+            <label>Hasta<input type="date" name="date_to" value="{{ filters.date_to }}"></label>
+          </div>
+
+          <label>Cliente
+            <select name="customer_id">
+              <option value="0">Todos los clientes</option>
+              {% for customer in customers %}
+                <option value="{{ customer.id }}" {% if filters.customer_id == customer.id %}selected{% endif %}>{{ customer.code }} - {{ customer.fiscal_name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+
+          <label>Remitente<input name="sender" value="{{ filters.sender }}" placeholder="pedidos@empresa.com"></label>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <label>Categoría
+              <select name="scoring_category">
+                <option value="">Todas las categorías</option>
+                <option value="safe" {% if filters.scoring_category == "safe" %}selected{% endif %}>Alta</option>
+                <option value="reviewable" {% if filters.scoring_category == "reviewable" %}selected{% endif %}>Revisable</option>
+                <option value="doubtful" {% if filters.scoring_category == "doubtful" %}selected{% endif %}>Dudosa</option>
+                <option value="not_importable" {% if filters.scoring_category == "not_importable" %}selected{% endif %}>Bloqueada</option>
+                <option value="without_score" {% if filters.scoring_category == "without_score" %}selected{% endif %}>Pendiente</option>
+              </select>
+            </label>
+            <label>Tiene PDF
+              <select name="has_pdf">
+                <option value="">Todos</option>
+                <option value="yes" {% if filters.has_pdf == "yes" %}selected{% endif %}>Sí</option>
+                <option value="no" {% if filters.has_pdf == "no" %}selected{% endif %}>No</option>
+              </select>
+            </label>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <label>Score mín.<input type="number" name="score_min" min="0" max="100" step="0.01" value="{{ filters.score_min or '' }}" placeholder="0%"></label>
+            <label>Score máx.<input type="number" name="score_max" min="0" max="100" step="0.01" value="{{ filters.score_max or '' }}" placeholder="100%"></label>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+            <label>Revisión
+              <select name="requires_review">
+                <option value="">Todos</option>
+                <option value="yes" {% if filters.requires_review == "yes" %}selected{% endif %}>Sí</option>
+                <option value="no" {% if filters.requires_review == "no" %}selected{% endif %}>No</option>
+              </select>
+            </label>
+            <label>Tipo
+              <select name="email_type">
+                <option value="">Todos</option>
+                {% for item in ["pedido", "no_pedido", "consulta", "incidencia", "dudoso"] %}
+                  <option value="{{ item }}" {% if filters.email_type == item %}selected{% endif %}>{{ item|status_label }}</option>
+                {% endfor %}
+              </select>
+            </label>
+          </div>
+
+          <label>Tamaño página
+            <select name="page_size">
+              {% for size in pagination.allowed_page_sizes %}
+                <option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>
+              {% endfor %}
+            </select>
+          </label>
+
+          <button class="secondary compact-button" data-loading-text="Filtrando...">Aplicar</button>
+        </form>
+      </div>
+    </details>
+
+    <span class="database-compact-count">{{ pagination.total_items }} pedidos</span>
+  </div>
+
+  {# Active Filter Pills #}
+  {% if active_count > 0 or filters.search %}
+    <div class="active-filters-chips-bar">
+      <span class="muted" style="font-size:11.5px;font-weight:600;">Filtros activos:</span>
+      {% if filters.search %}
+        <span class="filter-chip">Búsqueda: <strong>{{ filters.search }}</strong> <a href="#" onclick="document.querySelector('[name=search]').value='';document.getElementById('orders-main-filter-form').submit();return false;" class="filter-chip-remove" title="Quitar">×</a></span>
+      {% endif %}
+      {% if filters.status %}
+        <span class="filter-chip">Estado: <strong>{{ filters.status|status_label }}</strong> <a href="#" onclick="document.querySelector('[name=status]').value='';document.getElementById('orders-main-filter-form').submit();return false;" class="filter-chip-remove" title="Quitar">×</a></span>
+      {% endif %}
+      {% if filters.customer_id and filters.customer_id != 0 and filters.customer_id != "0" %}
+        {% for customer in customers %}{% if customer.id == filters.customer_id %}<span class="filter-chip">Cliente: <strong>{{ customer.fiscal_name }}</strong> <a href="/orders" class="filter-chip-remove" title="Quitar">×</a></span>{% endif %}{% endfor %}
+      {% endif %}
+      {% if filters.date_from %}
+        <span class="filter-chip">Desde: <strong>{{ filters.date_from }}</strong> <a href="/orders" class="filter-chip-remove" title="Quitar">×</a></span>
+      {% endif %}
+      {% if filters.date_to %}
+        <span class="filter-chip">Hasta: <strong>{{ filters.date_to }}</strong> <a href="/orders" class="filter-chip-remove" title="Quitar">×</a></span>
+      {% endif %}
+      {% if filters.scoring_category %}
+        <span class="filter-chip">Categoría: <strong>{{ filters.scoring_category }}</strong> <a href="/orders" class="filter-chip-remove" title="Quitar">×</a></span>
+      {% endif %}
+      {% if filters.has_pdf %}
+        <span class="filter-chip">PDF: <strong>{{ 'Con PDF' if filters.has_pdf == 'yes' else 'Sin PDF' }}</strong> <a href="/orders" class="filter-chip-remove" title="Quitar">×</a></span>
+      {% endif %}
+      {% if filters.requires_review %}
+        <span class="filter-chip">Revisión: <strong>{{ 'Requiere' if filters.requires_review == 'yes' else 'No requiere' }}</strong> <a href="/orders" class="filter-chip-remove" title="Quitar">×</a></span>
+      {% endif %}
+      {% if filters.sender %}
+        <span class="filter-chip">Remitente: <strong>{{ filters.sender }}</strong> <a href="/orders" class="filter-chip-remove" title="Quitar">×</a></span>
+      {% endif %}
+      {% if filters.email_type %}
+        <span class="filter-chip">Tipo: <strong>{{ filters.email_type|status_label }}</strong> <a href="/orders" class="filter-chip-remove" title="Quitar">×</a></span>
+      {% endif %}
+      <a href="/orders" class="clear-all-chips-btn">Limpiar todos</a>
+    </div>
+  {% endif %}
+
+  <div class="database-table-wrap">
+    <table class="data-table review-table database-table database-table-orders database-table-compact" data-resizable-table data-table-key="orders">
+      <colgroup>
+        <col data-column="created_at">
+        <col data-column="sender">
+        <col data-column="subject">
+        <col data-column="customer">
+        <col data-column="type">
+        <col data-column="confidence">
+        <col data-column="alerts">
+        <col data-column="status">
+        <col data-column="action">
+      </colgroup>
+      <thead>
+        <tr>
+          {{ render_sort_th("created_at", "Fecha", "date_asc", "date_desc", default_desc=true) }}
+          {{ render_sort_th("sender", "Remitente", "sender_asc", "sender_desc") }}
+          {{ render_sort_th("subject", "Asunto", "subject_asc", "subject_desc") }}
+          {{ render_sort_th("customer", "Cliente", "customer_asc", "customer_desc") }}
+          {{ render_sort_th("type", "Tipo", "type_asc", "type_desc") }}
+          {{ render_sort_th("confidence", "Confianza", "score_asc", "score_desc", default_desc=true) }}
+          <th data-column="alerts">Alertas</th>
+          {{ render_sort_th("status", "Estado", "status_asc", "status_desc") }}
+          <th data-column="action" class="th-actions" aria-label="Acciones"></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for order in orders %}
+        {% set category = categories[order.id][0] %}
+        {% set category_label = categories[order.id][1] %}
+        {% set order_alerts = alerts[order.id] %}
+        <tr class="clickable-row row-{{ category }}" onclick="window.location.href='/orders/{{ order.id }}'">
+          <td data-column="created_at">{{ order.created_at | local_dt(tenant_timezone, "%Y-%m-%d %H:%M") }}</td>
+          <td data-column="sender">{{ order.email.sender if order.email else "" }}</td>
+          <td data-column="subject" class="wide-cell" title="{{ order.email.subject if order.email else '' }}">{{ order.email.subject if order.email else "" }}</td>
+          <td data-column="customer">{{ order.validated_customer.fiscal_name if order.validated_customer else order.customer.fiscal_name if order.customer else order.customer_detected_name or "Sin identificar" }}</td>
+          <td data-column="type">{{ order.email.detected_type|status_label if order.email else "Pedido" }}</td>
+          <td data-column="confidence">
+            <div class="score-widget score-{{ category|replace('_', '-') }}">
+              <div><strong>{{ "%.2f"|format(order.score or 0) }}%</strong> <span>{{ category_label }}</span></div>
+              <div class="score-meter"><span style="width: {{ order.score or 0 }}%"></span></div>
+            </div>
+          </td>
+          <td data-column="alerts">
+            <div class="alert-badges">
+              <span class="badge">{{ order_alerts.line_count }} lineas</span>
+              <span class="badge {% if order_alerts.doubtful_count %}warn{% endif %}">{{ order_alerts.doubtful_count }} dudas</span>
+              {% if order_alerts.has_pdf %}<span class="badge">PDF</span>{% endif %}
+              {% if order_alerts.has_notes %}<span class="badge">Obs.</span>{% endif %}
+            </div>
+          </td>
+          <td data-column="status"><span class="badge {{ order.status|status_class }}">{{ order.status|status_label }}</span></td>
+          <td data-column="action" class="actions">
+            <a class="button secondary compact-button table-edit-button" href="/orders/{{ order.id }}" title="Editar pedido" aria-label="Editar pedido" onclick="event.stopPropagation();">{{ icon_edit(15) }}</a>
+            <a class="button secondary compact-button" href="/orders/{{ order.id }}" onclick="event.stopPropagation();">{{ request.state.branding.microcopy.review_order }}</a>
+            {% if order.email_id %}<a class="button secondary compact-button" href="/?focus=email-{{ order.email_id }}" onclick="event.stopPropagation();">Ver origen</a>{% endif %}
+            <details class="row-more-actions" onclick="event.stopPropagation()">
+              <summary class="button secondary compact-button">...</summary>
+              <div class="row-more-actions-panel">
+                <a href="/orders/{{ order.id }}/export-preview" onclick="event.stopPropagation();">Ver exportación</a>
+                <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/delete" data-confirm="¿Seguro que quieres eliminar este pedido? Se quitará de la gestión activa.">
+                  <button type="submit" class="secondary compact-button danger" data-loading-text="Eliminando...">Eliminar</button>
+                </form>
+              </div>
+            </details>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="9" class="muted">{{ request.state.branding.microcopy.empty_orders }}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% include "components/pagination.html" %}
 </section>
 
-<div class="database-table-toolbar">
-  <span class="database-table-guide" role="note"><strong>Vista ajustable</strong><span>Desliza horizontalmente para ver más columnas · arrastra el borde del encabezado para cambiar su ancho.</span></span>
-  <button type="button" class="secondary compact-button" data-table-reset="orders">Restablecer anchos</button>
-</div>
-<div class="database-table-wrap">
-<table class="data-table review-table database-table database-table-orders database-table-compact" data-resizable-table data-table-key="orders">
-  <colgroup>
-    <col data-column="created_at">
-    <col data-column="sender">
-    <col data-column="subject">
-    <col data-column="customer">
-    <col data-column="type">
-    <col data-column="confidence">
-    <col data-column="alerts">
-    <col data-column="status">
-    <col data-column="action">
-  </colgroup>
-  <thead><tr><th data-column="created_at">Fecha</th><th data-column="sender">Remitente</th><th data-column="subject">Asunto</th><th data-column="customer">Cliente</th><th data-column="type">Tipo</th><th data-column="confidence">Confianza</th><th data-column="alerts">Alertas</th><th data-column="status">Estado</th><th data-column="action" class="th-actions" aria-label="Acciones"></th></tr></thead>
-  <tbody>
-  {% for order in orders %}
-    {% set category = categories[order.id][0] %}
-    {% set category_label = categories[order.id][1] %}
-    {% set order_alerts = alerts[order.id] %}
-    <tr class="clickable-row row-{{ category }}" onclick="window.location.href='/orders/{{ order.id }}'">
-      <td data-column="created_at">{{ order.created_at | local_dt(tenant_timezone, "%Y-%m-%d %H:%M") }}</td>
-      <td data-column="sender">{{ order.email.sender if order.email else "" }}</td>
-      <td data-column="subject" class="wide-cell" title="{{ order.email.subject if order.email else '' }}">{{ order.email.subject if order.email else "" }}</td>
-      <td data-column="customer">{{ order.validated_customer.fiscal_name if order.validated_customer else order.customer.fiscal_name if order.customer else order.customer_detected_name or "Sin identificar" }}</td>
-      <td data-column="type">{{ order.email.detected_type|status_label if order.email else "Pedido" }}</td>
-      <td data-column="confidence">
-        <div class="score-widget score-{{ category|replace('_', '-') }}">
-          <div><strong>{{ "%.2f"|format(order.score or 0) }}%</strong> <span>{{ category_label }}</span></div>
-          <div class="score-meter"><span style="width: {{ order.score or 0 }}%"></span></div>
-        </div>
-      </td>
-      <td data-column="alerts">
-        <div class="alert-badges">
-          <span class="badge">{{ order_alerts.line_count }} lineas</span>
-          <span class="badge {% if order_alerts.doubtful_count %}warn{% endif %}">{{ order_alerts.doubtful_count }} dudas</span>
-          {% if order_alerts.has_pdf %}<span class="badge">PDF</span>{% endif %}
-          {% if order_alerts.has_notes %}<span class="badge">Obs.</span>{% endif %}
-        </div>
-      </td>
-      <td data-column="status"><span class="badge {{ order.status|status_class }}">{{ order.status|status_label }}</span></td>
-      <td data-column="action" class="actions">
-        <a class="button secondary compact-button table-edit-button" href="/orders/{{ order.id }}" title="Editar pedido" aria-label="Editar pedido" onclick="event.stopPropagation();">{{ icon_edit(15) }}</a>
-        <a class="button secondary compact-button" href="/orders/{{ order.id }}" onclick="event.stopPropagation();">{{ request.state.branding.microcopy.review_order }}</a>
-        {% if order.email_id %}<a class="button secondary compact-button" href="/?focus=email-{{ order.email_id }}" onclick="event.stopPropagation();">Ver origen</a>{% endif %}
-        <details class="row-more-actions" onclick="event.stopPropagation()">
-          <summary class="button secondary compact-button">...</summary>
-          <div class="row-more-actions-panel">
-            <a href="/orders/{{ order.id }}/export-preview" onclick="event.stopPropagation();">Ver exportación</a>
-            <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/delete" data-confirm="¿Seguro que quieres eliminar este pedido? Se quitará de la gestión activa.">
-              <button type="submit" class="secondary compact-button danger" data-loading-text="Eliminando...">Eliminar</button>
-            </form>
-          </div>
-        </details>
-      </td>
-    </tr>
-  {% else %}
-    <tr><td colspan="9" class="muted">{{ request.state.branding.microcopy.empty_orders }}</td></tr>
-  {% endfor %}
-  </tbody>
-</table>
-</div>
-{% include "components/pagination.html" %}
+<script>
+function applySort(sortVal) {
+  const url = new URL(window.location.href);
+  url.searchParams.set('sort', sortVal);
+  url.searchParams.set('page', '1');
+  window.location.href = url.toString();
+}
+</script>
 {% endblock %}

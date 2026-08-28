@@ -5,6 +5,7 @@ from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.entry_workflow import canonical_email_status, canonical_inbound_status, entry_status_label
+from app.core.channel_identity import channel_label, order_channel_key
 from app.core.timezones import format_local_datetime
 from app.core.pagination import normalize_page
 from app.db.models import Company, Customer, CustomerContactPoint, CustomerDomain, Email, FTPSettings, LLMSettings, Order, OrderLine, ScoringSettings
@@ -185,13 +186,15 @@ def build_order_item(order: Order, settings: ScoringSettings, *, include_line_me
     metrics = _order_line_metrics(order, line_metrics_by_order)
     priority_rank, priority_label = order_priority(order, settings, line_metrics_by_order=line_metrics_by_order)
     action_label, action_type = order_action(order, settings, line_metrics_by_order=line_metrics_by_order)
+    channel_key = order_channel_key(order)
     return {
         "id": order.id,
         "kind": "order",
         "priority_rank": priority_rank,
         "priority": priority_label,
         "date": order.created_at,
-        "channel": "Email",
+        "channel_key": channel_key,
+        "channel": channel_label(channel_key),
         "customer": (order.validated_customer or order.customer).fiscal_name if (order.validated_customer or order.customer) else order.customer_detected_name or "Cliente no identificado",
         "subject": order.email.subject if order.email else "",
         "sender": order.email.sender if order.email else "",
@@ -266,9 +269,12 @@ def order_workbench_item(order: Order, settings: ScoringSettings, *, include_lin
     agent_status = email_agent_status(order.email, order) if order.email else "order_detected"
     op_category = order_operational_category(order, settings, line_metrics_by_order=line_metrics_by_order)
     action_label, action_type = order_action(order, settings, line_metrics_by_order=line_metrics_by_order)
+    channel_key = order_channel_key(order)
     return {
         "id": f"order-{order.id}",
         "kind": "order",
+        "channel_key": channel_key,
+        "channel": channel_label(channel_key),
         "email_id": order.email_id,
         "order_id": order.id,
         "received_at": order.email.received_at if order.email else order.created_at,
@@ -308,6 +314,7 @@ def email_workbench_item(email: Email) -> dict:
     return {
         "id": f"email-{email.id}",
         "kind": "email",
+        "channel_key": "email",
         "email_id": email.id,
         "order_id": None,
         "received_at": email.received_at,

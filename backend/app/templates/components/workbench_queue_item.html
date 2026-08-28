@@ -8,33 +8,71 @@
   onclick="selectWorkbenchItem(this)"
   tabindex="0"
 >
-  <div class="queue-item-summary queue-item-summary-sender">
-    <span>Remitente</span>
-    <strong>{{ item.from_email or "Sin remitente" }}</strong>
+  <div class="queue-item-inner">
+    <!-- Cabecera de la tarjeta: Badges -->
+    <div class="queue-item-header">
+      <div class="queue-item-badges">
+        <span class="queue-badge queue-badge-channel">{{ channel_label }}</span>
+        {% if status_chip %}
+          <span class="queue-badge queue-badge-status queue-badge-status-{{ status_chip|lower|replace(' ', '-') }}">{{ status_chip }}</span>
+        {% endif %}
+        {% if item.has_pdf %}
+          <span class="queue-badge queue-badge-pdf">PDF</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Cuerpo de la tarjeta: Cliente y Remitente -->
+    <div class="queue-item-body">
+      <div class="queue-item-customer">
+        <h3 class="queue-customer-title" title="{{ item.customer_name or 'Cliente no identificado' }}">
+          {{ item.customer_name or "Cliente no identificado" }}
+        </h3>
+      </div>
+      <div class="queue-item-sender" title="{{ item.from_email or 'Sin remitente' }}">
+        <svg class="queue-icon-mail" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></svg>
+        <span>{{ item.from_email or "Sin remitente" }}</span>
+        {% if item.subject %}
+          <span class="queue-sender-sep">·</span>
+          <span class="queue-subject-text" title="{{ item.subject }}">{{ item.subject }}</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Pie de la tarjeta: Metadatos estructurados (Fecha, Productos, Confianza) -->
+    <div class="queue-item-footer">
+      <div class="queue-meta-col queue-meta-date">
+        <span class="queue-meta-label">Fecha</span>
+        <span class="queue-meta-val">{{ item.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M", "-") }}</span>
+      </div>
+      <div class="queue-meta-col queue-meta-products">
+        <span class="queue-meta-label">Productos</span>
+        <span class="queue-meta-val">
+          <strong>{{ item.line_count or 0 }}</strong> {{ "línea" if item.line_count == 1 else "líneas" }}
+        </span>
+      </div>
+      <div class="queue-meta-col queue-meta-score">
+        <span class="queue-meta-label">Confianza</span>
+        <div class="queue-meta-score-val queue-score-{{ confidence_key }}">
+          <strong>{% if item.score is not none %}{{ "%.0f"|format(item.score) }}%{% else %}—{% endif %}</strong>
+          {% if item.score is not none %}
+            <div class="queue-score-bar-bg"><span class="queue-score-bar-fill" style="width: {{ item.score }}%"></span></div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
   </div>
-  <div class="queue-item-summary">
-    <span>Fecha</span>
-    <strong>{{ item.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M", "—") }}</strong>
-  </div>
-  <div class="queue-item-summary">
-    <span>Score</span>
-    <strong>{% if item.score is not none %}{{ "%.0f"|format(item.score) }}%{% else %}Sin score{% endif %}</strong>
-  </div>
-  <div class="queue-item-summary queue-item-summary-customer">
-    <span>Cliente</span>
-    <strong>{{ item.customer_name or "Cliente no identificado" }}</strong>
-  </div>
-  <div class="queue-item-summary">
-    <span>Productos</span>
-    <strong>{{ item.line_count or 0 }}</strong>
-  </div>
-  <div class="queue-item-actions">
+
+  <!-- Botón inferior a ancho completo -->
+  <div class="queue-item-bottom-action">
     {% if item.kind == "email" and item.agent_status == "not_processed" %}
-      <form class="js-loading-form" method="post" action="/entries/email-{{ item.email_id }}/process"><button class="primary compact-button" data-loading-text="Procesando..." onclick="event.stopPropagation();">Procesar</button></form>
+      <form class="js-loading-form queue-bottom-action-form" method="post" action="/entries/email-{{ item.email_id }}/process">
+        <button type="submit" class="queue-bottom-action-btn" data-loading-text="Procesando..." onclick="event.stopPropagation();">Procesar</button>
+      </form>
     {% elif item.kind == "order" %}
-      <a class="button primary compact-button" href="/orders/{{ item.order_id }}" onclick="event.stopPropagation();">Revisar</a>
+      <a class="queue-bottom-action-btn" href="/orders/{{ item.order_id }}" onclick="event.stopPropagation();">Revisar</a>
     {% else %}
-      <a class="button primary compact-button" href="/entries/email-{{ item.email_id }}/resolve" onclick="event.stopPropagation();">Revisar</a>
+      <a class="queue-bottom-action-btn" href="/entries/email-{{ item.email_id }}/resolve" onclick="event.stopPropagation();">Revisar</a>
     {% endif %}
   </div>
 </article>

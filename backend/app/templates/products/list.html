@@ -1,8 +1,34 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_edit, icon_plus %}
+{% from "components/icons.html" import icon_edit, icon_filter, icon_plus %}
 {% set title = "Productos" %}
-{% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css">{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css?v=11">{% endblock %}
 {% block content %}
+
+{% macro render_sort_th(col_key, label, asc_val, desc_val, default_desc=false) -%}
+  {% set cur = sort or 'reference_asc' %}
+  {% set is_active = (cur == asc_val or cur == desc_val) %}
+  {% set is_asc = (cur == asc_val) %}
+  {% if is_active %}
+    {% set target_sort = desc_val if is_asc else asc_val %}
+  {% else %}
+    {% set target_sort = desc_val if default_desc else asc_val %}
+  {% endif %}
+  <th data-column="{{ col_key }}" class="sortable-th {% if is_active %}is-sorted{% endif %}" onclick="applySort('{{ target_sort }}')">
+    <span class="sort-th-content">
+      <span>{{ label }}</span>
+      {% if is_active %}
+        <span class="sort-arrow">
+          {% if is_asc %}
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="18 15 12 9 6 15"></polyline></svg>
+          {% else %}
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          {% endif %}
+        </span>
+      {% endif %}
+    </span>
+  </th>
+{%- endmacro %}
+
 {% if request.query_params.get("imported") == "1" %}
 <section class="database-flash">
   <strong>Importación completada</strong>
@@ -16,16 +42,21 @@
 </section>
 {% endif %}
 <section class="database-compact-page">
-  <header class="database-compact-head">
-    <h2>Productos</h2>
-    <button type="button" onclick="document.getElementById('create-product').showModal()">{{ icon_plus(14) }} <span>Nuevo producto</span></button>
+  <header class="database-compact-head page-content-header">
+    <div class="page-context">
+      <span class="page-kicker">Catalogo de productos</span>
+    </div>
+    <div class="page-header-actions">
+      <button type="button" onclick="document.getElementById('create-product').showModal()">{{ icon_plus(14) }} <span>Nuevo producto</span></button>
+    </div>
   </header>
 
   <div class="database-compact-toolbar">
-    <form class="database-compact-filter-form" method="get" action="/products">
+    <form class="database-compact-filter-form" method="get" action="/products" id="products-main-filter-form">
       <input type="hidden" name="page" value="1">
+      <input type="hidden" name="sort" value="{{ sort or 'reference_asc' }}">
       <input class="database-compact-search" name="q" placeholder="Buscar por código, referencia o nombre..." value="{{ q }}">
-      <select class="database-compact-select" name="obsolete" aria-label="Estado">
+      <select class="database-compact-select" name="obsolete" aria-label="Estado" onchange="this.form.submit()">
         <option value="">Estado</option>
         <option value="no" {% if obsolete == "no" %}selected{% endif %}>Activos</option>
         <option value="yes" {% if obsolete == "yes" %}selected{% endif %}>Obsoletos</option>
@@ -51,12 +82,13 @@
       </div>
     </details>
     <details class="database-inline-panel">
-      <summary class="button secondary compact-button">Más filtros</summary>
+      <summary class="button secondary compact-button">{{ icon_filter(14) }}<span>Más filtros</span></summary>
       <div class="database-inline-popover database-filters-popover">
         <form class="stack" method="get" action="/products">
           <input type="hidden" name="page" value="1">
           <input type="hidden" name="q" value="{{ q }}">
           <input type="hidden" name="obsolete" value="{{ obsolete }}">
+          <input type="hidden" name="sort" value="{{ sort or 'reference_asc' }}">
           <label>Familia
             <select name="family">
               <option value="">Todas</option>
@@ -75,8 +107,6 @@
     <details class="column-toggle-panel">
       <summary class="button secondary compact-button">Columnas</summary>
       <div class="column-toggle-menu" data-table-key="productsCompact">
-        <span class="database-columns-hint">Desliza para ver más. Arrastra el separador del encabezado para cambiar el ancho.</span>
-        <button type="button" class="secondary compact-button" data-table-reset="productsCompact">Restablecer anchos</button>
         {% for key, label, checked in [
           ("name","Producto", true),
           ("reference","Referencia", true),
@@ -98,10 +128,6 @@
     <span class="database-compact-count">{{ pagination.total_items }} productos</span>
   </div>
 
-<div class="database-table-guide" role="note">
-  <strong>Vista ajustable</strong>
-  <span>Desliza horizontalmente para ver más columnas · arrastra el borde del encabezado para cambiar su ancho.</span>
-</div>
 <div class="database-table-wrap">
 <table class="data-table database-table database-table-productsCompact database-table-products database-table-compact" data-resizable-table data-table-key="productsCompact">
   <colgroup>
@@ -119,7 +145,23 @@
     <col data-column="last_import">
     <col data-column="notes">
   </colgroup>
-  <thead><tr><th data-column="name">Producto</th><th data-column="reference">Referencia</th><th data-column="sale_unit">Unidad</th><th data-column="price">Precio</th><th data-column="status">Estado</th><th data-column="action" class="th-actions" aria-label="Acciones"></th><th data-column="family">Familia</th><th data-column="aliases">Alias</th><th data-column="customers">Clientes</th><th data-column="description_cont">Descripción larga</th><th data-column="supplier">Proveedor</th><th data-column="last_import">Última importación</th><th data-column="notes">Observaciones</th></tr></thead>
+  <thead>
+    <tr>
+      {{ render_sort_th("name", "Producto", "name_asc", "name_desc") }}
+      {{ render_sort_th("reference", "Referencia", "reference_asc", "reference_desc") }}
+      {{ render_sort_th("sale_unit", "Unidad", "unit_asc", "unit_desc") }}
+      {{ render_sort_th("price", "Precio", "price_asc", "price_desc") }}
+      {{ render_sort_th("status", "Estado", "status_asc", "status_desc") }}
+      <th data-column="action" class="th-actions" aria-label="Acciones"></th>
+      {{ render_sort_th("family", "Familia", "family_asc", "family_desc") }}
+      <th data-column="aliases">Alias</th>
+      <th data-column="customers">Clientes</th>
+      {{ render_sort_th("description_cont", "Descripción larga", "desc_asc", "desc_desc") }}
+      {{ render_sort_th("supplier", "Proveedor", "supplier_asc", "supplier_desc") }}
+      {{ render_sort_th("last_import", "Última importación", "created_asc", "created_desc") }}
+      {{ render_sort_th("notes", "Observaciones", "notes_asc", "notes_desc") }}
+    </tr>
+  </thead>
   <tbody>
   {% for product in products %}
     <tr>
@@ -237,5 +279,12 @@
     checkboxes.forEach((checkbox) => checkbox.addEventListener("change", apply));
     apply();
   });
+
+  function applySort(sortVal) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('sort', sortVal);
+    url.searchParams.set('page', '1');
+    window.location.href = url.toString();
+  }
 </script>
 {% endblock %}

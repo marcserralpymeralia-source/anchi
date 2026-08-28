@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 {% set title = "Alertas" %}
 {% block content %}
-<section class="panel stack alerts-page-shell">
+<section class="page-section stack alerts-page-shell">
   <div class="section-title-row">
     <div>
-      <h2>Alertas</h2>
+      <span class="page-kicker">Centro de avisos</span>
       <p class="muted">Centro de revisión y trazabilidad de incidencias, bloqueos y avisos del sistema.</p>
     </div>
     <div class="actions">
@@ -20,7 +20,7 @@
     <article class="compact-card compact-card-safe"><span>Media/Baja</span><strong>{{ summary.medium + summary.low + summary.info }}</strong><small>Seguimiento</small></article>
   </section>
 
-  <form class="filter-grid" method="get" action="/alerts">
+  <form class="filter-grid standard-filter-bar" method="get" action="/alerts">
     <input type="hidden" name="page" value="1">
     <label>Estado
       <select name="status">

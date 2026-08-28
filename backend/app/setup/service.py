@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.encryption import decrypt_secret
 from app.db.models import BrandingSettings, Company, Customer, CustomerProductKnowledge, EmailSettings, InputChannel, LLMSettings, Product
 from app.settings.email_config import email_config_status
@@ -52,6 +53,11 @@ def _openai_connected(settings: LLMSettings) -> bool:
     if settings.provider not in {"openai", "openai_compatible", "azure_openai"}:
         return False
     return bool(decrypt_secret(settings.api_key_encrypted))
+
+
+def _openai_optional_for_demo() -> bool:
+    """Allow the seeded demo to run without enabling an external LLM provider."""
+    return get_settings().environment in {"development", "demo"}
 
 
 def _step_status(key: str, completed: bool, current_step: str, *, optional: bool = False, error: bool = False) -> str:
@@ -142,13 +148,14 @@ def is_setup_operational(db: Session, company_id: int) -> bool:
         row.provider in {"openai", "openai_compatible", "azure_openai"}
         and decrypt_secret(row.api_key_encrypted)
     )
+    openai_optional = _openai_optional_for_demo()
 
     return bool(
         company_ready
         and has_input_channel
         and row.has_product
         and row.has_customer
-        and openai_connected
+        and (openai_connected or openai_optional)
     )
 def get_setup_status(db: Session, company_id: int) -> SetupStatus:
     email = get_or_create_settings(db, EmailSettings, company_id)
@@ -174,8 +181,9 @@ def get_setup_status(db: Session, company_id: int) -> SetupStatus:
     has_products = product_count > 0
     has_customers = customer_count > 0
     openai_connected = _openai_connected(llm)
+    openai_optional = _openai_optional_for_demo() and not openai_connected
     optional_customer_knowledge = knowledge_count > 0
-    is_operational = company_ready and has_input_channel and has_products and has_customers and openai_connected
+    is_operational = company_ready and has_input_channel and has_products and has_customers and (openai_connected or openai_optional)
 
     if not company_ready:
         current_step = "company"
@@ -185,7 +193,7 @@ def get_setup_status(db: Session, company_id: int) -> SetupStatus:
         current_step = "products"
     elif not has_customers:
         current_step = "customers"
-    elif not openai_connected:
+    elif not openai_connected and not openai_optional:
         current_step = "openai"
     else:
         current_step = "complete"
@@ -196,7 +204,7 @@ def get_setup_status(db: Session, company_id: int) -> SetupStatus:
         {"key": "products", "label": "Productos", "status": _step_status("products", has_products, current_step)},
         {"key": "customers", "label": "Clientes", "status": _step_status("customers", has_customers, current_step)},
         {"key": "customer_knowledge", "label": "Información adicional", "status": _step_status("customer_knowledge", optional_customer_knowledge, current_step, optional=True)},
-        {"key": "openai", "label": "OpenAI", "status": _step_status("openai", openai_connected, current_step)},
+        {"key": "openai", "label": "OpenAI", "status": _step_status("openai", openai_connected, current_step, optional=openai_optional)},
     ]
     completed_steps = len([step for step in steps if step["status"] == "Completado"])
     progress_percent = round((completed_steps * 100) / len(steps)) if steps else 0

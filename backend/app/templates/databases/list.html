@@ -1,10 +1,36 @@
 {% extends "base.html" %}
 {% set title = "Bases de datos" %}
+{% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css?v=11">{% endblock %}
 {% block content %}
-<section class="panel stack database-shell">
+
+{% macro render_sort_th(col_key, label, asc_val, desc_val, default_desc=false) -%}
+  {% set cur = filters.sort or '' %}
+  {% set is_active = (cur == asc_val or cur == desc_val) %}
+  {% set is_asc = (cur == asc_val) %}
+  {% if is_active %}
+    {% set target_sort = desc_val if is_asc else asc_val %}
+  {% else %}
+    {% set target_sort = desc_val if default_desc else asc_val %}
+  {% endif %}
+  <th data-column="{{ col_key }}" class="sortable-th {% if is_active %}is-sorted{% endif %}" onclick="applySort('{{ target_sort }}')">
+    <span class="sort-th-content">
+      <span>{{ label }}</span>
+      {% if is_active %}
+        <span class="sort-arrow">
+          {% if is_asc %}
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="18 15 12 9 6 15"></polyline></svg>
+          {% else %}
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+          {% endif %}
+        </span>
+      {% endif %}
+    </span>
+  </th>
+{%- endmacro %}
+<section class="page-section stack database-shell">
   <div class="section-title-row">
     <div>
-      <h2>Bases de datos</h2>
+      <span class="page-kicker">Datos maestros</span>
       <p class="muted">Clientes, productos, alias e importaciones en un mismo bloque de datos maestros.</p>
     </div>
     <div class="actions">
@@ -35,7 +61,7 @@
   </div>
 
   {% if tab == "customers" %}
-    <form class="filter-grid database-filters" method="get" action="/databases">
+    <form class="filter-grid database-filters standard-filter-bar" method="get" action="/databases">
       <input type="hidden" name="tab" value="customers">
       <label>Buscar<input name="q" value="{{ filters.q }}" placeholder="Código, nombre, CIF, email, alias o contacto"></label>
       <label>Estado
@@ -63,7 +89,19 @@
           <div><h3>Clientes</h3><span class="badge">{{ pagination.start_item }}-{{ pagination.end_item }} de {{ pagination.total_items }}</span></div>
         </div>
         <table class="data-table database-table">
-          <thead><tr><th>Estado</th><th>Código</th><th>Nombre</th><th>CIF/NIF</th><th>Email</th><th>Teléfono</th><th>Alias</th><th>Último pedido</th><th>Acción</th></tr></thead>
+          <thead>
+            <tr>
+              {{ render_sort_th("status", "Estado", "status_asc", "status_desc") }}
+              {{ render_sort_th("code", "Código", "code_asc", "code_desc") }}
+              {{ render_sort_th("name", "Nombre", "name_asc", "name_desc") }}
+              {{ render_sort_th("tax_id", "CIF/NIF", "tax_id_asc", "tax_id_desc") }}
+              {{ render_sort_th("primary_email", "Email", "email_asc", "email_desc") }}
+              {{ render_sort_th("phone", "Teléfono", "phone_asc", "phone_desc") }}
+              <th>Alias</th>
+              {{ render_sort_th("last_order_at", "Último pedido", "last_activity_asc", "last_activity_desc") }}
+              <th>Acción</th>
+            </tr>
+          </thead>
           <tbody>
             {% for row in customers %}
               <tr class="database-row" onclick="selectDatabaseRecord(this)" data-kind="customer" data-record='{{ row|tojson }}'>
@@ -238,7 +276,18 @@
           <div><h3>Productos</h3><span class="badge">{{ pagination.start_item }}-{{ pagination.end_item }} de {{ pagination.total_items }}</span></div>
         </div>
         <table class="data-table database-table">
-          <thead><tr><th>Estado</th><th>Referencia</th><th>Producto</th><th>Familia</th><th>Unidad</th><th>Alias</th><th>Último uso</th><th>Acción</th></tr></thead>
+          <thead>
+            <tr>
+              {{ render_sort_th("status", "Estado", "status_asc", "status_desc") }}
+              {{ render_sort_th("reference", "Referencia", "reference_asc", "reference_desc") }}
+              {{ render_sort_th("name", "Producto", "name_asc", "name_desc") }}
+              {{ render_sort_th("family", "Familia", "family_asc", "family_desc") }}
+              {{ render_sort_th("sale_unit", "Unidad", "unit_asc", "unit_desc") }}
+              <th>Alias</th>
+              {{ render_sort_th("last_used_at", "Último uso", "created_asc", "created_desc") }}
+              <th>Acción</th>
+            </tr>
+          </thead>
           <tbody>
             {% for row in products %}
               <tr class="database-row" onclick="selectDatabaseRecord(this)" data-kind="product" data-record='{{ row|tojson }}'>
@@ -470,5 +519,12 @@
   }
   const firstRow = document.querySelector(".database-row");
   if (firstRow) selectDatabaseRecord(firstRow);
+
+  function applySort(sortVal) {
+    const url = new URL(window.location.href);
+    url.searchParams.set('sort', sortVal);
+    url.searchParams.set('page', '1');
+    window.location.href = url.toString();
+  }
 </script>
 {% endblock %}

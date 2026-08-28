@@ -15,6 +15,7 @@ from app.agent.extraction.diagnostics import extraction_diagnostics_from_message
 from app.agent.services import AgentProcessingService, ScoringService
 from app.auth.dependencies import current_user
 from app.core.attachment_storage import read_attachment
+from app.core.channel_identity import channel_label, inbound_channel_key
 from app.core.entry_workflow import close_email, discard_email, mark_email_no_order, queue_email_processing
 from app.core.templating import templates
 from app.core.timezones import format_local_datetime
@@ -149,9 +150,9 @@ def _inbound_agent_status(message: InboundMessage) -> str:
 
 def _inbound_item(message: InboundMessage, *, order: Order | None = None) -> dict:
     status_key = _inbound_agent_status(message)
-    provider = (message.provider or "").strip().lower()
-    provider_label = "WhatsApp" if provider == "whatsapp" else "Entrada"
-    source_label = "Conversación" if provider == "whatsapp" else "Entrada"
+    channel_key = inbound_channel_key(message)
+    provider_label = channel_label(channel_key)
+    source_label = "Conversación" if channel_key == "whatsapp" else provider_label
     customer_name = "Cliente no identificado"
     if order and (order.validated_customer or order.customer):
         customer_name = (order.validated_customer or order.customer).fiscal_name
@@ -166,6 +167,7 @@ def _inbound_item(message: InboundMessage, *, order: Order | None = None) -> dic
         "order_id": order.id if order else message.order_id,
         "customer_name": customer_name,
         "provider_label": provider_label,
+        "channel_key": channel_key,
         "source_label": source_label,
         "agent_status": status_key,
         "agent_status_label": {

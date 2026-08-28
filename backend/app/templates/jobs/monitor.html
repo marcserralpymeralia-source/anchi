@@ -11,10 +11,10 @@
   {%- endif -%}
 {%- endmacro %}
 {% block content %}
-<section class="panel stack jobs-shell">
+<section class="page-section stack jobs-shell">
   <div class="section-title-row">
     <div>
-      <h2>Jobs operativos</h2>
+      <span class="page-kicker">Ejecuciones en segundo plano</span>
       <p class="muted">Seguimiento de colas, reintentos, fallos y trabajos en curso sin salir de la app.</p>
     </div>
     <div class="actions">
@@ -33,7 +33,7 @@
     <article class="compact-card compact-card-safe"><span>Exitosos</span><strong>{{ counts.success }}</strong><small>Completados</small></article>
   </section>
 
-  <form class="filter-grid" method="get" action="/jobs/monitor">
+  <form class="filter-grid standard-filter-bar" method="get" action="/jobs/monitor">
     <input type="hidden" name="page" value="1">
     <label>Estado
       <select name="status">

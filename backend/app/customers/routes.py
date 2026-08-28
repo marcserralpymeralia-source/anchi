@@ -202,7 +202,7 @@ def list_customers(
     status: str = "all",
     channel: str = "",
     knowledge_state: str = "",
-    sort: str = "updated_desc",
+    sort: str = "name_asc",
     density: str = "comfortable",
     page: int = 1,
     page_size: int = 25,
@@ -211,7 +211,7 @@ def list_customers(
 ):
     view_mode = view if view in {"list", "knowledge"} else "list"
     section_mode = _normalize_customer_section(section)
-    list_context = build_databases_context(db, user.company_id, tab="customers", q=q, status=status, selected_id=selected_id, page=page, page_size=page_size)
+    list_context = build_databases_context(db, user.company_id, tab="customers", q=q, status=status, selected_id=selected_id, sort=sort, page=page, page_size=page_size)
     knowledge_all = customer_knowledge_overview(db, user.company_id)
     knowledge_filtered = [card for card in knowledge_all if _matches_knowledge_status(card, status) and _matches_knowledge_query(card, q)]
     if sort == "name_asc":
@@ -222,8 +222,20 @@ def list_customers(
         knowledge_filtered.sort(key=lambda card: (card.get("code") or "").lower())
     elif sort == "code_desc":
         knowledge_filtered.sort(key=lambda card: (card.get("code") or "").lower(), reverse=True)
+    elif sort == "email_asc":
+        knowledge_filtered.sort(key=lambda card: (card.get("primary_email") or "").lower())
+    elif sort == "email_desc":
+        knowledge_filtered.sort(key=lambda card: (card.get("primary_email") or "").lower(), reverse=True)
+    elif sort == "city_asc":
+        knowledge_filtered.sort(key=lambda card: (card.get("city") or "").lower())
+    elif sort == "city_desc":
+        knowledge_filtered.sort(key=lambda card: (card.get("city") or "").lower(), reverse=True)
+    elif sort == "status_asc":
+        knowledge_filtered.sort(key=lambda card: (card.get("status") or "").lower())
+    elif sort == "status_desc":
+        knowledge_filtered.sort(key=lambda card: (card.get("status") or "").lower(), reverse=True)
     else:
-        knowledge_filtered.sort(key=lambda card: (card.get("last_updated_sort") or 0, (card.get("name") or "").lower()), reverse=True)
+        knowledge_filtered.sort(key=lambda card: (card.get("name") or "").lower())
     knowledge_cards, knowledge_pagination = _paginate_cards(knowledge_filtered, page, page_size)
     knowledge_by_id = {card["id"]: card for card in knowledge_all}
     selected_customer = build_customer_context(db, user.company_id, selected_id, limit=8) if selected_id else None

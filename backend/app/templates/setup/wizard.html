@@ -15,7 +15,7 @@
   "products": "Sube tu catálogo para que Anchi pueda reconocer las líneas de los pedidos.",
   "customers": "Esto permitirá identificar automáticamente quién envía cada pedido.",
   "customer_knowledge": "Puedes añadir históricos, referencias, equivalencias o instrucciones. Este paso es opcional.",
-  "openai": "Anchi utiliza OpenAI para interpretar los pedidos que recibe.",
+  "openai": "Anchi utiliza OpenAI para interpretar los pedidos que recibe. En la demo puedes omitir este paso.",
   "complete": "La configuración básica está completa. Ya puedes empezar a recibir y procesar pedidos."
 } %}
 {% macro step_url(key) -%}/setup/{{ key|replace('_', '-') }}{%- endmacro %}
@@ -243,7 +243,7 @@
           <li>{{ icon_check_circle(16) }} <span>{{ setup_status.counts.products }} productos</span></li>
           <li>{{ icon_check_circle(16) }} <span>{{ setup_status.counts.customers }} clientes</span></li>
           <li>{% if setup_status.optional_customer_knowledge %}{{ icon_check_circle(16) }} <span>Información adicional</span>{% else %}{{ icon_circle(16) }} <span>Información adicional opcional</span>{% endif %}</li>
-          <li>{{ icon_check_circle(16) }} <span>OpenAI conectado</span></li>
+          <li>{% if setup_status.openai_connected %}{{ icon_check_circle(16) }} <span>OpenAI conectado</span>{% else %}{{ icon_circle(16) }} <span>OpenAI opcional en demo</span>{% endif %}</li>
         </ul>
         <div class="setup-actions">
           <a class="button secondary" href="/settings">Revisar configuración</a>

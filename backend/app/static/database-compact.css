@@ -30,8 +30,7 @@
 }
 
 .database-compact-filter-form {
-  display: grid;
-  grid-template-columns: minmax(260px, 1fr) auto auto;
+  display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -39,12 +38,22 @@
 }
 
 .database-compact-search {
-  min-width: 0;
+  width: 240px;
+  max-width: 260px;
+  flex: 0 1 240px;
+  min-width: 140px;
 }
 
 .database-compact-select {
   width: auto;
-  min-width: 118px;
+  min-width: 130px;
+}
+
+.database-compact-filter-form .compact-button,
+.database-compact-filter-form button {
+  flex: 0 0 auto;
+  width: auto;
+  white-space: nowrap;
 }
 
 .database-compact-count {
@@ -53,6 +62,69 @@
   font-size: 12px;
   font-weight: 750;
   white-space: nowrap;
+}
+
+/* Orders dedicated toolbar */
+.orders-compact-toolbar {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  padding-bottom: 8px !important;
+  border-bottom: 1px solid var(--line) !important;
+  flex-wrap: nowrap !important;
+}
+
+.orders-filter-form-row {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  margin: 0 !important;
+  flex: 0 0 auto !important;
+  flex-wrap: nowrap !important;
+}
+
+.orders-search-field {
+  width: 220px !important;
+  max-width: 240px !important;
+  min-width: 160px !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 0 10px !important;
+  font-size: 12.5px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 6px !important;
+  background: #ffffff !important;
+  box-sizing: border-box !important;
+}
+
+.orders-select-field {
+  width: auto !important;
+  min-width: 125px !important;
+  max-width: 145px !important;
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 0 8px !important;
+  font-size: 12px !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 6px !important;
+  background: #ffffff !important;
+  box-sizing: border-box !important;
+}
+
+.orders-btn-filter {
+  height: 32px !important;
+  min-height: 32px !important;
+  padding: 0 12px !important;
+  font-size: 12px !important;
+  white-space: nowrap !important;
+  flex: 0 0 auto !important;
+  width: auto !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-sizing: border-box !important;
 }
 
 .database-flash {
@@ -115,7 +187,7 @@
 }
 
 .database-filters-popover {
-  width: min(320px, calc(100vw - 32px));
+  width: min(360px, calc(100vw - 32px));
 }
 
 .database-table-compact {
@@ -147,6 +219,71 @@ table.database-table-compact th {
   color: #5f6f75;
   background: #f6f8f7;
   text-transform: uppercase;
+}
+
+th.sortable-th,
+table.data-table th.sortable-th,
+table.database-table th.sortable-th,
+table.database-table-compact th.sortable-th {
+  cursor: pointer !important;
+  user-select: none !important;
+  padding: 7px 12px !important;
+  background: #f6f8f7 !important;
+  background-color: #f6f8f7 !important;
+  color: #5f6f75 !important;
+  transition: color 0.15s ease !important;
+}
+
+th.sortable-th:hover,
+table.data-table th.sortable-th:hover,
+table.database-table th.sortable-th:hover,
+table.database-table-compact th.sortable-th:hover {
+  background: #f6f8f7 !important;
+  background-color: #f6f8f7 !important;
+  color: var(--accent, #0f766e) !important;
+}
+
+th.sortable-th.is-sorted,
+table.data-table th.sortable-th.is-sorted,
+table.database-table th.sortable-th.is-sorted,
+table.database-table-compact th.sortable-th.is-sorted {
+  color: var(--accent, #0f766e) !important;
+  font-weight: 700 !important;
+  background: #f6f8f7 !important;
+  background-color: #f6f8f7 !important;
+}
+
+th.sortable-th .sort-th-content,
+.sort-th-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+th.sortable-th .sort-arrow,
+.sort-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent, #0f766e) !important;
+  line-height: 1;
+}
+
+table.database-table-compact th button,
+table.database-table-compact th .sort-header-btn,
+table.database-table-compact th button:hover,
+table.database-table-compact th .sort-header-btn:hover {
+  all: unset !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  color: inherit !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  cursor: pointer !important;
 }
 
 .database-table-wrap {
@@ -383,6 +520,12 @@ table.database-table-compact .wide-cell {
   font-variant-numeric: tabular-nums;
 }
 
+/* Confidence column - solo quitar fondo */
+.score-widget {
+  background: transparent !important;
+  background-color: transparent !important;
+}
+
 .database-table-compact .database-actions-cell {
   white-space: nowrap;
 }
@@ -471,10 +614,6 @@ table.database-table-compact .wide-cell {
 }
 
 @media (max-width: 1280px) {
-  .database-compact-filter-form {
-    grid-template-columns: minmax(220px, 1fr) auto auto;
-  }
-
   .database-table-productsCompact [data-column="name"] {
     width: 40%;
   }
@@ -501,19 +640,181 @@ table.database-table-compact .wide-cell {
   }
 
   .database-compact-filter-form {
-    grid-template-columns: 1fr;
+    flex-direction: column;
+    align-items: stretch;
     width: 100%;
   }
 
   .database-compact-count {
     margin-left: 0;
   }
+}
 
-  .database-inline-panel {
+.filter-count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--accent, #0f766e);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.active-filters-chips-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 0 2px;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  background: #f1f5f9;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  font-size: 11.5px;
+  color: #334155;
+  line-height: 1.2;
+}
+
+.filter-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.1s ease;
+  font-style: normal;
+  line-height: 1;
+}
+
+.filter-chip-remove:hover {
+  background: #cbd5e1;
+  color: #0f172a;
+}
+
+.clear-all-chips-btn {
+  color: var(--accent, #0f766e);
+  font-size: 11.5px;
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  margin-left: 4px;
+}
+
+/* Keep master-data and order lists on the same toolbar contract. */
+.database-compact-page {
+  gap: 12px;
+}
+
+.database-compact-head.page-content-header {
+  padding: 2px 0 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.database-compact-toolbar,
+.orders-compact-toolbar {
+  display: flex !important;
+  align-items: center !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+  min-width: 0 !important;
+  padding: 2px 0 10px !important;
+  border-bottom: 1px solid var(--line) !important;
+  background: transparent !important;
+}
+
+.database-compact-filter-form,
+.orders-filter-form-row {
+  display: flex !important;
+  align-items: center !important;
+  flex: 1 1 420px !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+  min-width: 0 !important;
+}
+
+.database-compact-search,
+.orders-search-field {
+  width: min(290px, 100%) !important;
+  max-width: 290px !important;
+  flex: 1 1 220px !important;
+  min-height: 34px !important;
+}
+
+.database-compact-select,
+.orders-select-field {
+  min-height: 34px !important;
+  height: 34px !important;
+}
+
+.database-inline-panel > summary,
+.column-toggle-panel > summary {
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+}
+
+.database-tabs {
+  display: flex !important;
+  grid-template-columns: none !important;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+}
+
+.database-tabs .workbench-tab {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 7px 11px;
+}
+
+.database-tabs .workbench-tab:not(.active) {
+  background: transparent;
+}
+
+@media (max-width: 760px) {
+  .database-compact-toolbar,
+  .orders-compact-toolbar {
+    align-items: stretch !important;
+  }
+
+  .database-compact-filter-form,
+  .orders-filter-form-row {
+    align-items: stretch !important;
+    flex-direction: column !important;
+  }
+
+  .database-compact-search,
+  .orders-search-field,
+  .database-compact-select,
+  .orders-select-field,
+  .database-compact-filter-form button,
+  .orders-filter-form-row button {
+    width: 100% !important;
+    max-width: none !important;
+  }
+
+  .database-inline-panel,
+  .column-toggle-panel {
     width: 100%;
   }
 
-  .database-inline-panel > summary {
+  .database-inline-panel > summary,
+  .column-toggle-panel > summary {
     width: 100%;
   }
 }

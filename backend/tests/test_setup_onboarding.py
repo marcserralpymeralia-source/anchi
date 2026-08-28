@@ -27,7 +27,7 @@ from app.master.models import CompanyMembership, MasterCompany, MasterTenantData
 from app.migrations.helpers import ensure_columns  # noqa: E402
 from app.settings.branding import get_or_create_branding  # noqa: E402
 from app.settings.service import get_or_create_settings  # noqa: E402
-from app.setup.service import get_setup_status  # noqa: E402
+from app.setup.service import get_setup_status, is_setup_operational  # noqa: E402
 from app.tenancy.database import clear_tenant_schema_cache, ensure_tenant_schema, get_tenant_engine  # noqa: E402
 from app.whatsapp.service import whatsapp_config  # noqa: E402
 from app.core.app_factory import create_app  # noqa: E402
@@ -179,6 +179,39 @@ class SetupOnboardingTests(unittest.TestCase):
                     status = get_setup_status(db, 1)
                 self.assertTrue(status.is_operational)
                 self.assertTrue(status.email_connected)
+        finally:
+            fixture.cleanup()
+
+    def test_demo_setup_is_operational_without_openai_and_production_still_requires_it(self):
+        fixture = SetupFixture()
+        try:
+            with fixture.TenantSession() as db:
+                company = db.get(Company, 1)
+                company.name = "Setup Demo"
+                company.legal_name = "Setup Demo SL"
+                company.country = "España"
+                company.language = "es"
+                company.timezone = "Europe/Madrid"
+                branding = get_or_create_branding(db, 1)
+                branding.app_name = "Setup Demo"
+                branding.company_name = "Setup Demo"
+                db.add(InputChannel(company_id=1, key="demo", name="Demo", channel_type="message", is_active=True))
+                db.add(Product(company_id=1, reference="P001", name="Producto demo"))
+                db.add(Customer(company_id=1, code="C001", fiscal_name="Cliente Demo SL"))
+                db.commit()
+
+                with patch("app.setup.service.get_settings", return_value=SimpleNamespace(environment="demo")):
+                    status = get_setup_status(db, 1)
+                    self.assertTrue(status.is_operational)
+                    self.assertTrue(is_setup_operational(db, 1))
+                    self.assertFalse(status.openai_connected)
+                    self.assertEqual(next(item["status"] for item in status.steps if item["key"] == "openai"), "Opcional")
+
+                with patch("app.setup.service.get_settings", return_value=SimpleNamespace(environment="production")):
+                    status = get_setup_status(db, 1)
+                    self.assertFalse(status.is_operational)
+                    self.assertFalse(is_setup_operational(db, 1))
+                    self.assertEqual(next(item["status"] for item in status.steps if item["key"] == "openai"), "En progreso")
         finally:
             fixture.cleanup()
 

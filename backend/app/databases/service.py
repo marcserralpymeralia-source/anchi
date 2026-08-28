@@ -336,6 +336,7 @@ def build_databases_context(
     alias_mode: str = "all",
     family: str = "",
     selected_id: int = 0,
+    sort: str = "",
     page: int = 1,
     page_size: int = 25,
 ) -> dict:
@@ -347,6 +348,7 @@ def build_databases_context(
         "alias_mode": alias_mode,
         "family": family,
         "selected_id": selected_id,
+        "sort": sort,
         "page": page,
         "page_size": page_size,
     }
@@ -429,7 +431,40 @@ def build_databases_context(
             stmt = stmt.where(~exists().where(CustomerAlias.company_id == company_id, CustomerAlias.customer_id == Customer.id))
         elif status == "recent":
             stmt = stmt.where(Customer.created_at >= datetime.now(timezone.utc) - timedelta(days=30))
-        stmt = stmt.order_by(Customer.company_inactive.asc(), Customer.fiscal_name.asc())
+        customer_sort_map = {
+            "name_asc": (Customer.company_inactive.asc(), Customer.fiscal_name.asc()),
+            "name_desc": (Customer.company_inactive.asc(), Customer.fiscal_name.desc()),
+            "code_asc": (Customer.code.asc()),
+            "code_desc": (Customer.code.desc()),
+            "email_asc": (Customer.primary_email.asc()),
+            "email_desc": (Customer.primary_email.desc()),
+            "city_asc": (Customer.city.asc()),
+            "city_desc": (Customer.city.desc()),
+            "status_asc": (Customer.status.asc()),
+            "status_desc": (Customer.status.desc()),
+            "tax_id_asc": (Customer.tax_id.asc()),
+            "tax_id_desc": (Customer.tax_id.desc()),
+            "phone_asc": (Customer.phone.asc()),
+            "phone_desc": (Customer.phone.desc()),
+            "channel_asc": (Customer.delegation.asc()),
+            "channel_desc": (Customer.delegation.desc()),
+            "address_asc": (Customer.address.asc()),
+            "address_desc": (Customer.address.desc()),
+            "notes_asc": (Customer.notes.asc()),
+            "notes_desc": (Customer.notes.desc()),
+            "last_activity_asc": (Customer.created_at.asc()),
+            "last_activity_desc": (Customer.created_at.desc()),
+            "created_asc": (Customer.created_at.asc()),
+            "created_desc": (Customer.created_at.desc()),
+        }
+        order_clause = customer_sort_map.get(sort)
+        if order_clause:
+            if isinstance(order_clause, tuple):
+                stmt = stmt.order_by(*order_clause)
+            else:
+                stmt = stmt.order_by(order_clause)
+        else:
+            stmt = stmt.order_by(Customer.company_inactive.asc(), Customer.fiscal_name.asc())
         customers, pagination = paginate(db, stmt, page=page, page_size=page_size)
         customer_ids = [customer.id for customer in customers]
         counts, latest, contact_counts = _customer_related_stats(db, company_id, customer_ids)
@@ -469,7 +504,29 @@ def build_databases_context(
             stmt = stmt.where(~exists().where(ProductAlias.company_id == company_id, ProductAlias.product_id == Product.id))
         elif status == "recent":
             stmt = stmt.where(Product.created_at >= datetime.now(timezone.utc) - timedelta(days=30))
-        stmt = stmt.order_by(Product.reference.asc())
+        product_sort_map = {
+            "name_asc": Product.name.asc(),
+            "name_desc": Product.name.desc(),
+            "reference_asc": Product.reference.asc(),
+            "reference_desc": Product.reference.desc(),
+            "unit_asc": Product.sale_unit.asc(),
+            "unit_desc": Product.sale_unit.desc(),
+            "price_asc": Product.sale_price.asc(),
+            "price_desc": Product.sale_price.desc(),
+            "status_asc": Product.status.asc(),
+            "status_desc": Product.status.desc(),
+            "family_asc": Product.family.asc(),
+            "family_desc": Product.family.desc(),
+            "supplier_asc": Product.usual_supplier.asc(),
+            "supplier_desc": Product.usual_supplier.desc(),
+            "desc_asc": Product.description_cont.asc(),
+            "desc_desc": Product.description_cont.desc(),
+            "notes_asc": Product.notes.asc(),
+            "notes_desc": Product.notes.desc(),
+            "created_asc": Product.created_at.asc(),
+            "created_desc": Product.created_at.desc(),
+        }
+        stmt = stmt.order_by(product_sort_map.get(sort, Product.reference.asc()))
         products, pagination = paginate(db, stmt, page=page, page_size=page_size)
         product_ids = [product.id for product in products]
         counts, latest = _product_related_stats(db, company_id, product_ids)
