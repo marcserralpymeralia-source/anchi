@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -141,6 +142,40 @@ class ExportServiceTests(unittest.TestCase):
         self.assertEqual(lines[0], "1|C001|P-100|2.5")
 
         db.close()
+
+    def test_json_generates_canonical_contract(self):
+        db, order = self._seed()
+
+        db.add(
+            ExportSettings(
+                company_id=1,
+                file_type="json",
+                filename_template="PEDIDO_{codigo_cliente}_{fecha}_{id_pedido}.json",
+            )
+        )
+        db.commit()
+        db.refresh(order)
+
+        export = ExportService().generate(db, order)
+        payload = json.loads(export.content)
+
+        self.assertEqual(export.filename.split(".")[-1], "json")
+        self.assertEqual(payload["schema_version"], "1.0")
+        self.assertEqual(payload["order_id"], 1)
+        self.assertEqual(payload["customer"]["code"], "C001")
+        self.assertEqual(payload["order_date"], "2026-08-24")
+        self.assertEqual(payload["requested_delivery_date"], None)
+        self.assertEqual(len(payload["lines"]), 1)
+
+        line = payload["lines"][0]
+        self.assertEqual(line["line_number"], 1)
+        self.assertEqual(line["product_code"], "P-100")
+        self.assertEqual(line["description"], "Producto Demo")
+        self.assertEqual(line["quantity"], 2.5)
+        self.assertEqual(line["unit"], "cajas")
+
+        db.close()
+
 
     def test_unknown_export_field_is_rejected(self):
         db, order = self._seed()

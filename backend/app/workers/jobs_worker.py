@@ -406,7 +406,7 @@ def _process_export_job(db, job: BackgroundJob, payload: dict) -> dict:
         raise RuntimeError("No se encontró el pedido a exportar.")
     export = db.scalar(select(ExportFile).where(ExportFile.order_id == order.id, ExportFile.company_id == job.company_id).order_by(ExportFile.created_at.desc()))
     if not export:
-        export = ExportService().generate_csv(db, order)
+        export = ExportService().generate(db, order)
     ftp_settings = get_or_create_settings(db, FTPSettings, job.company_id)
     send_via_ftp = job.job_type == "export_order_ftp"
 
@@ -570,7 +570,7 @@ def _process_bulk_action(db, job: BackgroundJob, payload: dict) -> dict:
                     .order_by(ExportFile.created_at.desc())
                 )
                 if not export:
-                    export = ExportService().generate_csv(db, order)
+                    export = ExportService().generate(db, order)
 
                 export_settings = get_or_create_settings(
                     db,
