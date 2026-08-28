@@ -1,0 +1,192 @@
+{% from "components/icons.html" import icon_paperclip, icon_close, icon_trash, icon_refresh, icon_check, icon_copy %}
+{% if email %}
+  <article class="webmail-detail-card">
+    <header class="webmail-detail-header">
+      <div class="webmail-detail-top-row">
+        <div class="webmail-detail-badges">
+          <span class="badge {% if email.archived %}status-muted{% elif not email.is_read %}status-ready{% else %}status-idle{% endif %}">
+            {{ "Archivado" if email.archived else "No leído" if not email.is_read else "Leído" }}
+          </span>
+          {% if order %}
+            <a href="/orders/{{ order.id }}" class="badge status-confirmed">Pedido #{{ order.id }}</a>
+            {% if order.score is not none %}
+              <span class="badge status-safe">{{ "%.0f"|format(order.score) }}% confianza</span>
+            {% endif %}
+          {% elif item and item.score is not none %}
+            <span class="badge status-safe">{{ "%.0f"|format(item.score) }}% confianza</span>
+          {% endif %}
+          {% if email.attachments %}
+            <span class="badge">{{ icon_paperclip(14) }} {{ email.attachments|length }} adjunto{% if email.attachments|length > 1 %}s{% endif %}</span>
+          {% endif %}
+        </div>
+        <div class="webmail-detail-actions">
+          {% if order %}
+            <a class="button secondary compact-button" href="/orders/{{ order.id }}">Ver pedido #{{ order.id }}</a>
+          {% endif %}
+          <form class="js-loading-form inline-form" method="post" action="/mail/{{ email.id }}/process">
+            <button class="button primary compact-button" data-loading-text="Procesando...">Procesar pedido</button>
+          </form>
+          <form class="js-loading-form inline-form" method="post" action="/mail/{{ email.id }}/reprocess">
+            <button class="button secondary compact-button" data-loading-text="Reprocesando...">Reprocesar</button>
+          </form>
+          <form class="js-loading-form inline-form" method="post" action="/mail/{{ email.id }}/mark-no-order">
+            <button class="button secondary compact-button" data-loading-text="Marcando...">Sin pedido</button>
+          </form>
+          <form class="js-loading-form inline-form" method="post" action="/mail/{{ email.id }}/archive">
+            <button class="button secondary compact-button" data-loading-text="Archivando...">Archivar</button>
+          </form>
+          <button type="button" class="button secondary compact-button webmail-close-btn" onclick="closeMailDetail()" title="Cerrar vista dividida">
+            {{ icon_close(16) }}
+          </button>
+        </div>
+      </div>
+
+      <h2 class="webmail-detail-subject">{{ email.subject or "(Sin asunto)" }}</h2>
+
+      <div class="webmail-sender-bar">
+        <div class="webmail-avatar">
+          {{ (email.sender[:2] if email.sender else "EM") | upper }}
+        </div>
+        <div class="webmail-sender-info">
+          <div class="webmail-sender-main">
+            <strong class="webmail-sender-name">{{ email.sender }}</strong>
+            <span class="webmail-date">{{ email.received_at | local_dt(tenant_timezone, "%d %b %Y, %H:%M") }}</span>
+          </div>
+          <div class="webmail-recipient-line">
+            <span class="muted">Para: {{ email.recipient or email.imap_username or 'Bandeja de entrada' }}</span>
+            {% if item and item.customer_name %}
+              <span class="webmail-customer-tag">· Cliente: <strong>{{ item.customer_name }}</strong></span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    </header>
+
+    {% if order %}
+      <section class="webmail-order-summary-box">
+        <div class="webmail-order-summary-head">
+          <div>
+            <strong>Pedido vinculado #{{ order.id }}</strong>
+            <span class="muted">· {{ (order.validated_customer or order.customer).fiscal_name if (order.validated_customer or order.customer) else order.customer_detected_name or "Cliente pendiente" }}</span>
+          </div>
+          <span class="badge {{ order.status|status_class }}">{{ order.status }}</span>
+        </div>
+        {% if order.lines %}
+          <div class="webmail-order-lines">
+            <table>
+              <thead>
+                <tr>
+                  <th>Producto / Ref</th>
+                  <th>Cant.</th>
+                  <th>Precio</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for line in order.lines[:6] %}
+                  <tr>
+                    <td>
+                      <div class="webmail-line-name">{{ line.detected_product or line.original_text or "Línea de pedido" }}</div>
+                      {% if line.detected_reference %}<small class="muted">{{ line.detected_reference }}</small>{% endif %}
+                    </td>
+                    <td>{{ line.detected_quantity or line.original_quantity or 1 }}</td>
+                    <td>{{ ("%.2f €"|format(line.detected_price)) if line.detected_price else "--" }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% endif %}
+      </section>
+    {% endif %}
+
+    {% if email.attachments %}
+      <section class="webmail-attachments-section">
+        <div class="webmail-attachments-title">
+          {{ icon_paperclip(16) }}
+          <strong>Adjuntos ({{ email.attachments|length }})</strong>
+        </div>
+        <div class="webmail-attachment-grid">
+          {% for attachment in email.attachments %}
+            {% set is_pdf = attachment.is_pdf or (attachment.content_type == "application/pdf") or (attachment.filename and attachment.filename.lower().endswith(".pdf")) %}
+            <a class="webmail-attachment-chip" target="_blank" href="/channels/email/{{ email.id }}/attachments/{{ attachment.id }}/preview">
+              <span class="webmail-att-kind {% if is_pdf %}is-pdf{% endif %}">{{ "PDF" if is_pdf else "DOC" }}</span>
+              <span class="webmail-att-name" title="{{ attachment.filename }}">{{ attachment.filename }}</span>
+              <span class="webmail-att-action">Ver</span>
+            </a>
+          {% endfor %}
+        </div>
+      </section>
+    {% endif %}
+
+    <section class="webmail-body-section">
+      <div class="webmail-body-toolbar">
+        <span class="muted">Contenido del mensaje</span>
+        <button type="button" class="button secondary compact-button" onclick="copyText('webmail-text-{{ email.id }}')">Copiar texto</button>
+      </div>
+      <div id="webmail-text-{{ email.id }}" class="webmail-body-content">
+        {{ email.body or email.extracted_text or "Este correo no contiene texto en el cuerpo." }}
+      </div>
+    </section>
+  </article>
+{% elif order %}
+  <article class="webmail-detail-card">
+    <header class="webmail-detail-header">
+      <div class="webmail-detail-top-row">
+        <div class="webmail-detail-badges">
+          <span class="badge {{ order.status|status_class }}">{{ order.status }}</span>
+          {% if order.score is not none %}
+            <span class="badge status-safe">{{ "%.0f"|format(order.score) }}% confianza</span>
+          {% endif %}
+        </div>
+        <div class="webmail-detail-actions">
+          <a class="button primary compact-button" href="/orders/{{ order.id }}">Abrir pedido completo</a>
+          <button type="button" class="button secondary compact-button webmail-close-btn" onclick="closeMailDetail()" title="Cerrar vista dividida">
+            {{ icon_close(16) }}
+          </button>
+        </div>
+      </div>
+      <h2 class="webmail-detail-subject">Pedido #{{ order.id }} · {{ (order.validated_customer or order.customer).fiscal_name if (order.validated_customer or order.customer) else order.customer_detected_name or "Sin cliente asignado" }}</h2>
+      <div class="webmail-sender-bar">
+        <div class="webmail-avatar">PD</div>
+        <div class="webmail-sender-info">
+          <div class="webmail-sender-main">
+            <strong>{{ (order.validated_customer or order.customer).fiscal_name if (order.validated_customer or order.customer) else "Pedido de cliente" }}</strong>
+            <span class="webmail-date">{{ order.created_at | local_dt(tenant_timezone, "%d %b %Y, %H:%M") }}</span>
+          </div>
+        </div>
+      </div>
+    </header>
+    {% if order.lines %}
+      <section class="webmail-order-summary-box" style="margin-top: 16px;">
+        <div class="webmail-order-lines">
+          <table>
+            <thead>
+              <tr>
+                <th>Línea de pedido</th>
+                <th>Cantidad</th>
+                <th>Precio</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for line in order.lines %}
+                <tr>
+                  <td>
+                    <div class="webmail-line-name">{{ line.detected_product or line.original_text or "Línea" }}</div>
+                    {% if line.detected_reference %}<small class="muted">{{ line.detected_reference }}</small>{% endif %}
+                  </td>
+                  <td>{{ line.detected_quantity or line.original_quantity or 1 }}</td>
+                  <td>{{ ("%.2f €"|format(line.detected_price)) if line.detected_price else "--" }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    {% endif %}
+  </article>
+{% else %}
+  <div class="webmail-empty-selection">
+    <svg class="ui-icon muted" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path></svg>
+    <p class="muted">Selecciona un correo o pedido para ver su contenido en pantalla dividida.</p>
+  </div>
+{% endif %}

@@ -252,6 +252,7 @@ def channels_settings_page(request: Request, db: Session = Depends(get_tenant_db
     focus_key = request.query_params.get("focus")
     whatsapp_signup_state = secrets.token_urlsafe(32)
     request.session["whatsapp_embedded_signup_state"] = whatsapp_signup_state
+    email_settings = get_or_create_settings(db, EmailSettings, user.company_id)
     return templates.TemplateResponse(
         "settings/channels.html",
         {
@@ -259,7 +260,10 @@ def channels_settings_page(request: Request, db: Session = Depends(get_tenant_db
             "user": user,
             "channels": overview,
             "recent_processed_emails": recent_processed_emails_overview(db, user.company_id, days=30, limit=8),
-            "email": get_or_create_settings(db, EmailSettings, user.company_id),
+            "email": email_settings,
+            "email_status": email_config_status(email_settings),
+            "can_edit_email": has_admin_access(user),
+            "can_test_email": user.role.name in {"Administrador", "Supervisor"},
             "whatsapp": redact_whatsapp_config(whatsapp_config(db, user.company_id)),
             "whatsapp_embedded_signup": embedded_signup_public_config(),
             "whatsapp_signup_state": whatsapp_signup_state,

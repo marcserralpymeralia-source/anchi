@@ -27,7 +27,19 @@ def _tenant_session(tenant_path: Path):
 
 class MailInboxRoutesTests(unittest.TestCase):
     def test_mail_routes_are_registered(self):
-        routes = {(route.path, tuple(sorted(route.methods or []))) for route in __import__("app.main", fromlist=["app"]).app.routes if hasattr(route, "methods")}
+        from app.core.app_factory import create_app
+
+        def _collect_routes(app_or_router, prefix=""):
+            collected = set()
+            for route in getattr(app_or_router, "routes", []):
+                if hasattr(route, "path") and hasattr(route, "methods"):
+                    collected.add((prefix + route.path, tuple(sorted(route.methods or []))))
+                elif hasattr(route, "original_router"):
+                    p = getattr(route.include_context, "prefix", "") or ""
+                    collected.update(_collect_routes(route.original_router, prefix=prefix + p))
+            return collected
+
+        routes = _collect_routes(create_app())
         expected = {
             ("/mail", ("GET",)),
             ("/mail/{email_id}", ("GET",)),

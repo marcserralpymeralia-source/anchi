@@ -55,6 +55,9 @@ def save_email_section(db: Session, settings: EmailSettings, data: dict, user: T
 def redirect_or_json(request: Request, payload: dict, anchor: str = "email"):
     if "application/json" in (request.headers.get("accept") or ""):
         return JSONResponse(payload)
+    referer = request.headers.get("referer", "")
+    if "channels" in referer:
+        return RedirectResponse("/settings/channels?focus=email", status_code=303)
     return RedirectResponse(f"/settings#{anchor}", status_code=303)
 
 
@@ -78,13 +81,6 @@ def build_settings_dashboard(db: Session, user: TenantUser, metrics: dict, llm: 
         state("general", "General", "ready" if company and company.name else "pending", f"{company.name if company else 'Sin empresa'} · {(company.currency or 'EUR') if company else 'EUR'} · {('activa' if company and company.active else 'inactiva')}", "Editar"),
         state("identity", "Identidad", "ready" if branding.app_name and (branding.logo_url or branding.dark_logo_url) else "warning" if branding.app_name else "pending", f"{branding.app_name} · {branding.secondary_claim or 'sin claim secundario'}", "Editar"),
         state("channels", "Canales", "ready" if active_channels_count else "pending", f"{active_channels_count} canal activo" if active_channels_count == 1 else f"{active_channels_count} canales activos", "Abrir"),
-        state(
-            "email",
-            "Correo",
-            "ready" if email_status["imap_ready"] and (not email_status["smtp_enabled"] or email_status["smtp_ready"]) else "warning" if email_status["imap_ready"] or email_status["smtp_ready"] else "pending",
-            f"IMAP {'activo' if email_status['imap_ready'] else 'pendiente'} · SMTP {'activado' if email_status['smtp_enabled'] else 'opcional'}",
-            "Revisar",
-        ),
         state("ai", "Agente IA", "ready" if llm.provider != "disabled" and llm.api_key_encrypted and llm.last_test_ok is not False else "warning" if llm.api_key_encrypted else "pending", f"{llm.provider or 'sin proveedor'} · {llm.classification_model} · {llm.last_test_message or 'sin prueba reciente'}", "Editar"),
         state("customers-products", "Clientes y productos", "ready" if customer_count and product_count else "warning" if customer_count or product_count else "pending", f"{customer_count} clientes · {product_count} productos", "Abrir"),
         state("scoring", "Confianza y automatización", "ready", f"Alta confianza desde {scoring.safe_threshold}% · auto-confirmar {'sí' if llm.allow_auto_confirm else 'no'}", "Editar"),

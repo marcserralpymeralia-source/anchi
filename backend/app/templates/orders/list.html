@@ -1,5 +1,7 @@
 {% extends "base.html" %}
+{% from "components/icons.html" import icon_edit %}
 {% set title = "Pedidos" %}
+{% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css">{% endblock %}
 {% block content %}
 <div class="actions" style="margin-bottom:14px">
   <form method="post" action="/orders/mock"><button>{{ request.state.branding.microcopy.create_test_order }}</button></form>
@@ -84,26 +86,42 @@
   </details>
 </section>
 
-<table class="data-table review-table">
-  <thead><tr><th>Fecha</th><th>Remitente</th><th>Asunto</th><th>Cliente</th><th>Tipo</th><th>Confianza</th><th>Alertas</th><th>Estado</th><th>Accion</th></tr></thead>
+<div class="database-table-toolbar">
+  <span class="database-table-guide" role="note"><strong>Vista ajustable</strong><span>Desliza horizontalmente para ver más columnas · arrastra el borde del encabezado para cambiar su ancho.</span></span>
+  <button type="button" class="secondary compact-button" data-table-reset="orders">Restablecer anchos</button>
+</div>
+<div class="database-table-wrap">
+<table class="data-table review-table database-table database-table-orders database-table-compact" data-resizable-table data-table-key="orders">
+  <colgroup>
+    <col data-column="created_at">
+    <col data-column="sender">
+    <col data-column="subject">
+    <col data-column="customer">
+    <col data-column="type">
+    <col data-column="confidence">
+    <col data-column="alerts">
+    <col data-column="status">
+    <col data-column="action">
+  </colgroup>
+  <thead><tr><th data-column="created_at">Fecha</th><th data-column="sender">Remitente</th><th data-column="subject">Asunto</th><th data-column="customer">Cliente</th><th data-column="type">Tipo</th><th data-column="confidence">Confianza</th><th data-column="alerts">Alertas</th><th data-column="status">Estado</th><th data-column="action" class="th-actions" aria-label="Acciones"></th></tr></thead>
   <tbody>
   {% for order in orders %}
     {% set category = categories[order.id][0] %}
     {% set category_label = categories[order.id][1] %}
     {% set order_alerts = alerts[order.id] %}
     <tr class="clickable-row row-{{ category }}" onclick="window.location.href='/orders/{{ order.id }}'">
-      <td>{{ order.created_at | local_dt(tenant_timezone, "%Y-%m-%d %H:%M") }}</td>
-      <td>{{ order.email.sender if order.email else "" }}</td>
-      <td class="wide-cell" title="{{ order.email.subject if order.email else '' }}">{{ order.email.subject if order.email else "" }}</td>
-      <td>{{ order.validated_customer.fiscal_name if order.validated_customer else order.customer.fiscal_name if order.customer else order.customer_detected_name or "Sin identificar" }}</td>
-      <td>{{ order.email.detected_type|status_label if order.email else "Pedido" }}</td>
-      <td>
+      <td data-column="created_at">{{ order.created_at | local_dt(tenant_timezone, "%Y-%m-%d %H:%M") }}</td>
+      <td data-column="sender">{{ order.email.sender if order.email else "" }}</td>
+      <td data-column="subject" class="wide-cell" title="{{ order.email.subject if order.email else '' }}">{{ order.email.subject if order.email else "" }}</td>
+      <td data-column="customer">{{ order.validated_customer.fiscal_name if order.validated_customer else order.customer.fiscal_name if order.customer else order.customer_detected_name or "Sin identificar" }}</td>
+      <td data-column="type">{{ order.email.detected_type|status_label if order.email else "Pedido" }}</td>
+      <td data-column="confidence">
         <div class="score-widget score-{{ category|replace('_', '-') }}">
           <div><strong>{{ "%.2f"|format(order.score or 0) }}%</strong> <span>{{ category_label }}</span></div>
           <div class="score-meter"><span style="width: {{ order.score or 0 }}%"></span></div>
         </div>
       </td>
-      <td>
+      <td data-column="alerts">
         <div class="alert-badges">
           <span class="badge">{{ order_alerts.line_count }} lineas</span>
           <span class="badge {% if order_alerts.doubtful_count %}warn{% endif %}">{{ order_alerts.doubtful_count }} dudas</span>
@@ -111,8 +129,9 @@
           {% if order_alerts.has_notes %}<span class="badge">Obs.</span>{% endif %}
         </div>
       </td>
-      <td><span class="badge {{ order.status|status_class }}">{{ order.status|status_label }}</span></td>
-      <td class="actions">
+      <td data-column="status"><span class="badge {{ order.status|status_class }}">{{ order.status|status_label }}</span></td>
+      <td data-column="action" class="actions">
+        <a class="button secondary compact-button table-edit-button" href="/orders/{{ order.id }}" title="Editar pedido" aria-label="Editar pedido" onclick="event.stopPropagation();">{{ icon_edit(15) }}</a>
         <a class="button secondary compact-button" href="/orders/{{ order.id }}" onclick="event.stopPropagation();">{{ request.state.branding.microcopy.review_order }}</a>
         {% if order.email_id %}<a class="button secondary compact-button" href="/?focus=email-{{ order.email_id }}" onclick="event.stopPropagation();">Ver origen</a>{% endif %}
         <details class="row-more-actions" onclick="event.stopPropagation()">
@@ -131,5 +150,6 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% include "components/pagination.html" %}
 {% endblock %}

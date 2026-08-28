@@ -78,7 +78,12 @@ class PerformanceFixture:
     counts: dict[str, int]
 
     def cleanup(self) -> None:
-        self.tempdir.cleanup()
+        import gc
+        gc.collect()
+        try:
+            self.tempdir.cleanup()
+        except (PermissionError, OSError):
+            pass
 
 
 SCENARIO_PLANS: dict[str, ScenarioPlan] = {

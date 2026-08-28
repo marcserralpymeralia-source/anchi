@@ -141,6 +141,44 @@ def mail_detail(email_id: int, request: Request, db: Session = Depends(get_tenan
     )
 
 
+@router.get("/{email_id}/pane")
+def mail_detail_pane(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
+    active_scope = _resolve_mail_scope(master_db, db, user.company_id)
+    email = db.scalar(
+        select(Email)
+        .where(Email.id == email_id, Email.company_id == user.company_id)
+        .options(selectinload(Email.attachments))
+    )
+    if not email or not _email_matches_active_scope(email, active_scope):
+        return PlainTextResponse("<div class='webmail-empty-selection'><p class='muted'>Correo no encontrado</p></div>", status_code=404)
+    order = db.scalar(
+        select(Order)
+        .where(Order.company_id == user.company_id, Order.email_id == email.id)
+        .options(
+            selectinload(Order.lines),
+            selectinload(Order.customer),
+            selectinload(Order.validated_customer),
+        )
+    )
+    item = email_workbench_item(email)
+    if order:
+        item["order_id"] = order.id
+        item["order_status"] = order.status
+        item["order_status_label"] = order.status
+        item["score"] = order.score
+        item["customer_name"] = (order.validated_customer or order.customer).fiscal_name if (order.validated_customer or order.customer) else order.customer_detected_name or item["customer_name"]
+    return templates.TemplateResponse(
+        "history/_mail_detail_pane.html",
+        {
+            "request": request,
+            "user": user,
+            "email": email,
+            "order": order,
+            "item": item,
+        },
+    )
+
+
 @router.post("/{email_id}/process")
 def mail_process(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
     active_scope = _resolve_mail_scope(master_db, db, user.company_id)

@@ -23,6 +23,34 @@ from app.tenancy.database import get_tenant_db
 router = APIRouter(tags=["pages"])
 
 
+HISTORY_EMAIL_CURRENT_STATUSES = (
+    "not_processed",
+    "pending",
+    "queued",
+    "processing",
+    "pending_reprocess",
+    "doubtful",
+    "processed_doubtful",
+    "review",
+    "error",
+    "processing_error",
+)
+HISTORY_EMAIL_REVIEW_STATUSES = (
+    "doubtful",
+    "processed_doubtful",
+    "pending_reprocess",
+    "review",
+    "error",
+    "processing_error",
+)
+HISTORY_EMAIL_READY_STATUSES = (
+    "processed",
+    "processed_order_detected",
+    "order_detected",
+    "matched",
+)
+
+
 def _empty_workbench_summary(filters: dict) -> dict:
     return {
         "tab_counts": {"all": 0, "not_processed": 0, "attention": 0, "processed": 0, "errors": 0, "no_order": 0},
@@ -433,6 +461,8 @@ def history_page(
     search: str = "",
     page: int = 1,
     page_size: int = 50,
+    selected_id: int | None = None,
+    selected_kind: str = "email",
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
@@ -447,6 +477,8 @@ def history_page(
         search=search,
         page=page,
         page_size=page_size,
+        selected_id=selected_id,
+        selected_kind=selected_kind,
         db=db,
         user=user,
     )
@@ -464,6 +496,8 @@ def pedidos_page(
     search: str = "",
     page: int = 1,
     page_size: int = 50,
+    selected_id: int | None = None,
+    selected_kind: str = "email",
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
@@ -489,6 +523,15 @@ def pedidos_page(
         customer_id=customer_id,
         search=search,
     )
+    if allowed_kind == "all":
+        email_base_stmt = email_base_stmt.where(
+            ~exists(
+                select(1).where(
+                    Order.company_id == user.company_id,
+                    Order.email_id == Email.id,
+                )
+            )
+        )
 
     base_parts = []
     if allowed_kind in {"all", "orders"}:
@@ -497,24 +540,6 @@ def pedidos_page(
         base_parts.append(email_base_stmt)
 
     base_union = union_all(*base_parts).subquery() if base_parts else None
-    current_union = base_union
-    if allowed_state != "all":
-        current_parts = []
-        if allowed_kind in {"all", "orders"}:
-            current_parts.append(
-                _history_order_rows_stmt(
-                    user.company_id,
-                    scoring_settings,
-                    start=start,
-                    end=end,
-                    customer_id=customer_id,
-                    search=search,
-                    state=allowed_state,
-                )
-            )
-        if allowed_kind in {"all", "emails"} and allowed_state == "all":
-            current_parts.append(email_base_stmt)
-        current_union = union_all(*current_parts).subquery() if current_parts else None
 
     page, page_size = normalize_page(page, page_size)
     start_index = (page - 1) * page_size
@@ -526,120 +551,43 @@ def pedidos_page(
     total_pages = 0
     start_item = 0
     end_item = 0
+    current_union = None
 
     if base_union is not None:
+        pred_current = or_(
+            and_(base_union.c.kind == "order", base_union.c.order_status.notin_(TERMINAL_ORDER_STATUSES)),
+            and_(base_union.c.kind == "email", base_union.c.agent_status.in_(HISTORY_EMAIL_CURRENT_STATUSES)),
+        )
+        pred_review = or_(
+            and_(
+                base_union.c.kind == "order",
+                or_(
+                    base_union.c.order_state == "blocked",
+                    base_union.c.scoring_category.in_(("reviewable", "doubtful")),
+                    base_union.c.order_status.in_(tuple(REVIEW_ORDER_STATUSES)),
+                ),
+            ),
+            and_(base_union.c.kind == "email", base_union.c.agent_status.in_(HISTORY_EMAIL_REVIEW_STATUSES)),
+        )
+        pred_ready = or_(
+            and_(base_union.c.kind == "order", base_union.c.order_state == "ready"),
+            and_(base_union.c.kind == "email", base_union.c.agent_status.in_(HISTORY_EMAIL_READY_STATUSES)),
+        )
+        pred_confirmed = and_(base_union.c.kind == "order", base_union.c.order_status.in_(("pedido_confirmado", "pedido_validado")))
+        pred_sent = and_(base_union.c.kind == "order", base_union.c.order_status == "pedido_exportado")
+        pred_blocked = and_(base_union.c.kind == "order", or_(base_union.c.order_state == "blocked", base_union.c.order_status.in_(tuple(REVIEW_ORDER_STATUSES))))
+
         base_counts_row = db.execute(
             select(
                 func.count().label("all_count"),
                 func.coalesce(func.sum(case((base_union.c.kind == "order", 1), else_=0)), 0).label("orders"),
                 func.coalesce(func.sum(case((base_union.c.kind == "email", 1), else_=0)), 0).label("emails"),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (
-                                and_(
-                                    base_union.c.kind == "order",
-                                    base_union.c.order_status.notin_(TERMINAL_ORDER_STATUSES),
-                                ),
-                                1,
-                            ),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ).label("current"),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (
-                                and_(
-                                    base_union.c.kind == "order",
-                                    or_(
-                                        base_union.c.order_state == "blocked",
-                                        base_union.c.scoring_category.in_(("reviewable", "doubtful")),
-                                        base_union.c.order_status.in_(tuple(REVIEW_ORDER_STATUSES)),
-                                    ),
-                                ),
-                                1,
-                            ),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ).label("review"),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (
-                                or_(
-                                    and_(
-                                        base_union.c.kind == "order",
-                                        or_(
-                                            base_union.c.order_state == "blocked",
-                                            base_union.c.scoring_category.in_(("reviewable", "doubtful")),
-                                            base_union.c.order_status.in_(tuple(REVIEW_ORDER_STATUSES)),
-                                        ),
-                                    ),
-                                    and_(base_union.c.kind == "email", base_union.c.agent_status.in_(("error", "doubtful"))),
-                                ),
-                                1,
-                            ),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ).label("summary_review"),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (
-                                and_(base_union.c.kind == "order", base_union.c.order_state == "ready"),
-                                1,
-                            ),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ).label("ready"),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (
-                                and_(base_union.c.kind == "order", base_union.c.order_status.in_(("pedido_confirmado", "pedido_validado"))),
-                                1,
-                            ),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ).label("confirmed"),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (
-                                and_(base_union.c.kind == "order", base_union.c.order_status == "pedido_exportado"),
-                                1,
-                            ),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ).label("sent"),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (
-                                and_(
-                                    base_union.c.kind == "order",
-                                    or_(base_union.c.order_state == "blocked", base_union.c.order_status.in_(tuple(REVIEW_ORDER_STATUSES))),
-                                ),
-                                1,
-                            ),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ).label("blocked"),
+                func.coalesce(func.sum(case((pred_current, 1), else_=0)), 0).label("current"),
+                func.coalesce(func.sum(case((pred_review, 1), else_=0)), 0).label("review"),
+                func.coalesce(func.sum(case((pred_ready, 1), else_=0)), 0).label("ready"),
+                func.coalesce(func.sum(case((pred_confirmed, 1), else_=0)), 0).label("confirmed"),
+                func.coalesce(func.sum(case((pred_sent, 1), else_=0)), 0).label("sent"),
+                func.coalesce(func.sum(case((pred_blocked, 1), else_=0)), 0).label("blocked"),
             ).select_from(base_union)
         ).one()
         base_counts = base_counts_row._mapping
@@ -653,66 +601,30 @@ def pedidos_page(
             "blocked": int(base_counts["blocked"] or 0),
         }
 
-    if current_union is not None and current_union is not base_union:
-        summary_row = db.execute(
-            select(
-                func.count().label("events"),
-                func.coalesce(func.sum(case((current_union.c.kind == "order", 1), else_=0)), 0).label("orders"),
-                func.coalesce(func.sum(case((current_union.c.kind == "email", 1), else_=0)), 0).label("emails"),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (
-                                or_(
-                                    and_(
-                                        current_union.c.kind == "order",
-                                        or_(
-                                            current_union.c.order_state == "blocked",
-                                            current_union.c.scoring_category.in_(("reviewable", "doubtful")),
-                                            current_union.c.order_status.in_(tuple(REVIEW_ORDER_STATUSES)),
-                                        ),
-                                    ),
-                                    and_(current_union.c.kind == "email", current_union.c.agent_status.in_(("error", "doubtful"))),
-                                ),
-                                1,
-                            ),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ).label("review"),
-                func.coalesce(
-                    func.sum(
-                        case(
-                            (
-                                and_(current_union.c.kind == "order", current_union.c.order_state == "ready"),
-                                1,
-                            ),
-                            else_=0,
-                        )
-                    ),
-                    0,
-                ).label("ready"),
-            ).select_from(current_union)
-        ).one()
-        summary_values = summary_row._mapping
-        summary = {
-            "events": int(summary_values["events"] or 0),
-            "orders": int(summary_values["orders"] or 0),
-            "emails": int(summary_values["emails"] or 0),
-            "review": int(summary_values["review"] or 0),
-            "ready": int(summary_values["ready"] or 0),
+        state_preds = {
+            "current": pred_current,
+            "review": pred_review,
+            "ready": pred_ready,
+            "confirmed": pred_confirmed,
+            "sent": pred_sent,
+            "blocked": pred_blocked,
         }
-    elif current_union is base_union and base_union is not None:
+
+        if allowed_state != "all" and allowed_state in state_preds:
+            current_union = select(base_union).where(state_preds[allowed_state]).subquery()
+            total_items = tab_counts[allowed_state]
+        else:
+            current_union = base_union
+            total_items = tab_counts["all"]
+
         summary = {
-            "events": int(base_counts["all_count"] or 0),
+            "events": total_items,
             "orders": int(base_counts["orders"] or 0),
             "emails": int(base_counts["emails"] or 0),
-            "review": int(base_counts["summary_review"] or 0),
+            "review": int(base_counts["review"] or 0),
             "ready": int(base_counts["ready"] or 0),
         }
 
-        total_items = summary["events"]
         total_pages = (total_items + page_size - 1) // page_size if total_items else 0
         paged_rows = db.execute(
             select(current_union).order_by(current_union.c.sort_date.desc(), current_union.c.kind.asc(), current_union.c.item_id.desc()).offset(start_index).limit(page_size)
@@ -744,7 +656,6 @@ def pedidos_page(
             ).all()
             emails_by_id = {email.id: email for email in emails}
 
-        order_email_ids = {order.email_id for order in orders_by_id.values() if order.email_id}
         for row in paged_rows:
             if row.kind == "order":
                 order = orders_by_id.get(row.item_id)
@@ -766,8 +677,6 @@ def pedidos_page(
                 email = emails_by_id.get(row.item_id)
                 if not email:
                     continue
-                if email.id in order_email_ids:
-                    continue
                 item = email_workbench_item(email)
                 item.update(
                     {
@@ -782,6 +691,40 @@ def pedidos_page(
                 )
                 paged_items.append(item)
 
+    selected_email = None
+    selected_order = None
+    selected_item = None
+    if selected_id:
+        if selected_kind == "order":
+            selected_order = db.scalar(
+                select(Order)
+                .where(Order.company_id == user.company_id, Order.id == selected_id)
+                .options(
+                    selectinload(Order.email).selectinload(Email.attachments),
+                    selectinload(Order.lines),
+                    selectinload(Order.customer),
+                    selectinload(Order.validated_customer),
+                )
+            )
+            if selected_order and selected_order.email:
+                selected_email = selected_order.email
+        else:
+            selected_email = db.scalar(
+                select(Email)
+                .where(Email.company_id == user.company_id, Email.id == selected_id)
+                .options(selectinload(Email.attachments))
+            )
+            if selected_email:
+                selected_order = db.scalar(
+                    select(Order)
+                    .where(Order.company_id == user.company_id, Order.email_id == selected_email.id)
+                    .options(
+                        selectinload(Order.lines),
+                        selectinload(Order.customer),
+                        selectinload(Order.validated_customer),
+                    )
+                )
+
     customers = db.scalars(select(Customer).where(Customer.company_id == user.company_id).order_by(Customer.fiscal_name)).all()
     return templates.TemplateResponse(
         "history/list.html",
@@ -793,7 +736,72 @@ def pedidos_page(
             "all_items": paged_items,
             "tab_counts": tab_counts,
             "customers": customers,
+            "selected_id": selected_id,
+            "selected_kind": selected_kind,
+            "selected_email": selected_email,
+            "selected_order": selected_order,
+            "selected_item": selected_item,
             "filters": {"date_range": date_range, "date_from": date_from, "date_to": date_to, "kind": kind, "state": state, "customer_id": customer_id, "search": search},
             "pagination": {"page": page, "page_size": page_size, "total_items": total_items, "total_pages": total_pages, "has_previous": page > 1, "has_next": page < total_pages, "start_item": start_item, "end_item": end_item, "allowed_page_sizes": (10, 25, 50, 100)},
+        },
+    )
+
+
+@router.get("/history/pane/{kind}/{item_id}")
+def history_detail_pane(
+    kind: str,
+    item_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    email = None
+    order = None
+    item = None
+    if kind == "order":
+        order = db.scalar(
+            select(Order)
+            .where(Order.company_id == user.company_id, Order.id == item_id)
+            .options(
+                selectinload(Order.email).selectinload(Email.attachments),
+                selectinload(Order.lines),
+                selectinload(Order.customer),
+                selectinload(Order.validated_customer),
+            )
+        )
+        if order and order.email:
+            email = order.email
+            item = email_workbench_item(email)
+    else:
+        email = db.scalar(
+            select(Email)
+            .where(Email.company_id == user.company_id, Email.id == item_id)
+            .options(selectinload(Email.attachments))
+        )
+        if email:
+            order = db.scalar(
+                select(Order)
+                .where(Order.company_id == user.company_id, Order.email_id == email.id)
+                .options(
+                    selectinload(Order.lines),
+                    selectinload(Order.customer),
+                    selectinload(Order.validated_customer),
+                )
+            )
+            item = email_workbench_item(email)
+            if order:
+                item["order_id"] = order.id
+                item["order_status"] = order.status
+                item["order_status_label"] = order.status
+                item["score"] = order.score
+
+    return templates.TemplateResponse(
+        "history/_mail_detail_pane.html",
+        {
+            "request": request,
+            "user": user,
+            "email": email,
+            "order": order,
+            "item": item,
         },
     )

@@ -1,4 +1,4 @@
-{% from "components/icons.html" import icon_arrow_right %}
+{% from "components/icons.html" import icon_arrow_right, icon_edit %}
 {% set customer = customer_context.customer %}
 {% set quality = customer_context.summary.quality_percent or 0 %}
 {% set current_section = section if section in ["summary", "articles", "conditions", "import"] else "summary" %}
@@ -12,7 +12,10 @@
 <section class="knowledge-folder stack">
   <div class="knowledge-folder-head knowledge-folder-head-compact">
     <div class="knowledge-folder-lead">
-      <h3>{{ customer.name }}</h3>
+      <div class="knowledge-title-row">
+        <h3>{{ customer.name }}</h3>
+        <button type="button" class="table-inline-edit knowledge-title-edit" title="Editar ficha del cliente" aria-label="Editar ficha del cliente" onclick="openKnowledgeCustomerEditor()">{{ icon_edit(15) }}</button>
+      </div>
     </div>
     <div class="knowledge-folder-status">
       <span class="badge {% if quality >= 71 %}status-confirmed{% elif quality >= 31 %}status-doubtful{% else %}status-discarded{% endif %}">Calidad {{ quality }}%</span>
@@ -51,11 +54,11 @@
   {% if current_section == "summary" %}
     <div class="knowledge-summary-grid">
       <div class="knowledge-summary-column">
-        <article class="subpanel knowledge-panel-tight">
+        <article id="customer-file" class="subpanel knowledge-panel-tight">
           <div class="section-title-row">
             <h4>Ficha técnica</h4>
             <details class="knowledge-inline-editor">
-              <summary class="button secondary compact-button">Editar ficha</summary>
+              <summary id="customer-inline-editor-toggle" class="button secondary compact-button">{{ icon_edit(14) }} Editar ficha</summary>
               <form class="knowledge-inline-form stack js-loading-form" method="post" action="/customers">
                 <input type="hidden" name="id" value="{{ customer.id }}">
                 <div class="form-grid">
@@ -477,3 +480,19 @@
     </article>
   {% endif %}
 </section>
+
+<script>
+  function openKnowledgeCustomerEditor() {
+    const editor = document.getElementById("customer-inline-editor-toggle");
+    const file = document.getElementById("customer-file");
+    if (!editor) {
+      window.location.href = "{{ customer.edit_url }}";
+      return;
+    }
+    const details = editor.closest("details");
+    if (details) details.open = true;
+    file?.scrollIntoView({behavior: "smooth", block: "start"});
+  }
+
+  if (window.location.hash === "#customer-file") openKnowledgeCustomerEditor();
+</script>

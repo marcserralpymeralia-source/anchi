@@ -1,137 +1,234 @@
 {% extends "base.html" %}
-{% set title = "Histórico" %}
+{% set title = "Buzón de correo" %}
 {% block content %}
-<section class="panel stack history-shell">
-  <div class="section-title-row">
-    <div>
-      <h2>Histórico de pedidos</h2>
-      <p class="muted">Consulta pedidos cerrados, exportados y antiguas entradas sin mezclarlos con la bandeja operativa.</p>
+<div class="webmail-shell">
+  {# Topbar / Toolbar #}
+  <header class="webmail-toolbar">
+    <div class="webmail-toolbar-top">
+      <div class="webmail-title-group">
+        <h2 class="webmail-heading">Buzón de correo</h2>
+        <span class="badge webmail-count-badge">{{ pagination.total_items }} mensaje{% if pagination.total_items != 1 %}s{% endif %}</span>
+      </div>
+      <div class="webmail-toolbar-actions">
+        <a class="button secondary compact-button" href="/?tab=processed&date_range=30d&sort=date_desc">Ver procesados</a>
+        <a class="button secondary compact-button" href="/orders">Ir a pedidos</a>
+      </div>
     </div>
-    <div class="actions">
-      <a class="button secondary" href="/">Gestión</a>
-      <a class="button secondary" href="/channels?tab=processed&date_range=30d&sort=date_desc">Entradas</a>
+
+    {# Filter pills / Workbench tabs #}
+    <div class="webmail-tabs-bar">
+      <div class="webmail-pills">
+        {% for key, label in [
+          ("all", "Todos"),
+          ("current", "Actuales"),
+          ("review", "Con dudas"),
+          ("ready", "Listos"),
+          ("confirmed", "Confirmados"),
+          ("sent", "Enviados"),
+          ("blocked", "Bloqueados")
+        ] %}
+          <a class="webmail-pill {% if filters.state == key %}active{% endif %}" href="/history?state={{ key }}&kind={{ filters.kind }}&date_range={{ filters.date_range }}&search={{ filters.search|urlencode }}&customer_id={{ filters.customer_id }}">
+            <span>{{ label }}</span>
+            <span class="webmail-pill-count">{{ tab_counts[key] }}</span>
+          </a>
+        {% endfor %}
+      </div>
+
+      <form class="webmail-filters-inline" method="get" action="/history">
+        <input type="hidden" name="state" value="{{ filters.state }}">
+        <div class="webmail-search-box">
+          {{ icon_search(15) }}
+          <input type="search" name="search" value="{{ filters.search }}" placeholder="Buscar por cliente, remitente, asunto...">
+        </div>
+        <select name="date_range" onchange="this.form.submit()">
+          {% for value, label in [("today","Hoy"),("yesterday","Ayer"),("7d","7 días"),("30d","30 días"),("90d","90 días"),("365d","1 año"),("all","Todo")] %}
+            <option value="{{ value }}" {% if filters.date_range == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        <select name="kind" onchange="this.form.submit()">
+          {% for value, label in [("all","Todo"),("orders","Pedidos"),("emails","Correos")] %}
+            <option value="{{ value }}" {% if filters.kind == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        <select name="customer_id" onchange="this.form.submit()">
+          <option value="0">Todos los clientes</option>
+          {% for customer in customers %}
+            <option value="{{ customer.id }}" {% if filters.customer_id|string == customer.id|string %}selected{% endif %}>{{ customer.code }} - {{ customer.fiscal_name }}</option>
+          {% endfor %}
+        </select>
+        <button class="button secondary compact-button">Filtrar</button>
+      </form>
     </div>
-  </div>
+  </header>
 
-  <section class="history-summary">
-    <article class="compact-card compact-card-muted"><span>Pedidos</span><strong>{{ summary.orders }}</strong><small>Total visibles</small></article>
-    <article class="compact-card compact-card-reviewable"><span>Revisión</span><strong>{{ tab_counts.review }}</strong><small>Con dudas</small></article>
-    <article class="compact-card compact-card-safe"><span>Listos</span><strong>{{ tab_counts.ready }}</strong><small>Para confirmar</small></article>
-    <article class="compact-card compact-card-error"><span>Bloqueados</span><strong>{{ tab_counts.blocked }}</strong><small>Requieren atención</small></article>
-  </section>
-
-  <div class="workbench-tabs pedidos-tabs">
-    {% for key, label in [
-      ("all", "Todos"),
-      ("current", "Actuales"),
-      ("review", "Pendientes de revisión"),
-      ("ready", "Listos"),
-      ("confirmed", "Confirmados"),
-      ("sent", "Enviados"),
-      ("blocked", "Bloqueados")
-    ] %}
-      <a class="workbench-tab {% if filters.state == key %}active{% endif %}" href="/pedidos?state={{ key }}&kind={{ filters.kind }}&date_range={{ filters.date_range }}&search={{ filters.search|urlencode }}&customer_id={{ filters.customer_id }}">
-        <span>{{ label }}</span><strong>{{ tab_counts[key] }}</strong>
-      </a>
-    {% endfor %}
-  </div>
-
-  <form class="filter-grid history-filters" method="get" action="/pedidos">
-    <input type="hidden" name="page" value="1">
-    <input type="hidden" name="state" value="{{ filters.state }}">
-    <label>Origen
-      <select name="kind">
-        {% for value, label in [("all","Todo"),("orders","Pedidos"),("emails","Correos")] %}
-          <option value="{{ value }}" {% if filters.kind == value %}selected{% endif %}>{{ label }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Rango
-      <select name="date_range">
-        {% for value, label in [("today","Hoy"),("yesterday","Ayer"),("7d","7 días"),("30d","30 días"),("90d","90 días"),("365d","1 año"),("all","Todo"),("custom","Personalizado")] %}
-          <option value="{{ value }}" {% if filters.date_range == value %}selected{% endif %}>{{ label }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Desde<input type="date" name="date_from" value="{{ filters.date_from }}"></label>
-    <label>Hasta<input type="date" name="date_to" value="{{ filters.date_to }}"></label>
-    <label>Cliente
-      <select name="customer_id">
-        <option value="0">Todos</option>
-        {% for customer in customers %}
-          <option value="{{ customer.id }}" {% if filters.customer_id|string == customer.id|string %}selected{% endif %}>{{ customer.code }} - {{ customer.fiscal_name }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Buscar<input name="search" value="{{ filters.search }}" placeholder="Cliente, remitente, asunto, referencia"></label>
-    <label>Tamaño página
-      <select name="page_size">
-        {% for size in pagination.allowed_page_sizes %}
-          <option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>&nbsp;<button class="secondary" data-loading-text="Filtrando...">Filtrar</button></label>
-  </form>
-</section>
-
-<section class="panel stack history-table-panel">
-  <div class="section-title-row">
-    <div>
-      <h3>Listado de pedidos</h3>
-      <span class="badge">{{ pagination.start_item }}-{{ pagination.end_item }} de {{ pagination.total_items }}</span>
-    </div>
-  </div>
-
-  <table class="data-table work-table history-table">
-    <thead>
-      <tr>
-        <th>Estado</th>
-        <th>Fecha</th>
-        <th>Cliente</th>
-        <th>Origen</th>
-        <th>Nº líneas</th>
-        <th>Confianza</th>
-        <th>Última acción</th>
-        <th>Acción</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for item in items %}
-        <tr class="history-row history-row-{{ item.kind }}">
-          <td>
-            {% if item.kind == "order" %}
-              <span class="badge {{ item.order_status|status_class }}">{{ item.order_status_label }}</span>
-            {% else %}
-              <span class="badge {{ item.agent_status|status_class }}">{{ item.agent_status_label }}</span>
-            {% endif %}
-          </td>
-          <td>{{ item.date | local_dt(tenant_timezone, "%Y-%m-%d %H:%M", "--") }}</td>
-          <td>{{ item.customer_name or "Sin identificar" }}</td>
-          <td>
-            <div class="history-origin">
-              <span class="badge">{{ item.channel }}</span>
-              <span class="badge">{{ item.origin }}</span>
-              {% if item.has_pdf %}<span class="badge">PDF</span>{% endif %}
+  {# Master-Detail Split Workspace #}
+  <main id="webmail-workspace" class="webmail-workspace {% if selected_email or selected_order %}has-split-view{% endif %}">
+    {# Left Pane: Mail & Order List #}
+    <section class="webmail-list-pane">
+      <div class="webmail-list-header">
+        <span class="muted">Bandeja de mensajes ({{ pagination.start_item }}-{{ pagination.end_item }} de {{ pagination.total_items }})</span>
+      </div>
+      <div class="webmail-list-body" role="list">
+        {% for item in items %}
+          {% set real_id = item.id.split('-')[-1] if ('-' in item.id|string) else item.id %}
+          {% set item_is_selected = (selected_id and (selected_id|string == real_id|string) and (selected_kind == item.kind)) %}
+          <article
+            class="webmail-item {% if item_is_selected %}is-active-row{% endif %} {% if not item.is_read %}is-unread{% endif %}"
+            role="listitem"
+            data-item-id="{{ real_id }}"
+            data-item-kind="{{ item.kind }}"
+            onclick="openMailDetail('{{ item.kind }}', '{{ real_id }}', this)"
+          >
+            <div class="webmail-item-avatar">
+              {{ (item.customer_name[:2] if item.customer_name else item.sender[:2] if item.sender else "EM") | upper }}
             </div>
-          </td>
-          <td>{{ item.line_count if item.line_count is not none else "--" }}</td>
-          <td>{% if item.score is not none %}<span class="score">{{ "%.0f"|format(item.score) }}%</span>{% else %}<span class="muted">Sin scoring</span>{% endif %}</td>
-          <td>{{ item.action_label }}</td>
-          <td>
-            <div class="actions">
-              <a class="button secondary" href="{{ item.url }}">Abrir</a>
-              {% if item.secondary_url and item.secondary_url != item.url %}
-                <a class="button secondary" href="{{ item.secondary_url }}">Origen</a>
-              {% endif %}
+            <div class="webmail-item-main">
+              <div class="webmail-item-top">
+                <strong class="webmail-item-sender">{{ item.customer_name or item.sender or "Remitente desconocido" }}</strong>
+                <span class="webmail-item-time">{{ item.date | local_dt(tenant_timezone, "%d %b %H:%M", "--") }}</span>
+              </div>
+              <div class="webmail-item-subject">
+                {{ item.title or item.subject or "(Sin asunto)" }}
+              </div>
+              <div class="webmail-item-bottom">
+                <div class="webmail-item-tags">
+                  <span class="badge {% if item.kind == 'order' %}{{ item.order_status|status_class }}{% else %}{{ item.agent_status|status_class }}{% endif %}">
+                    {{ item.order_status_label if item.kind == 'order' else item.agent_status_label }}
+                  </span>
+                  {% if item.kind == 'order' %}
+                    <span class="badge status-confirmed">Pedido #{{ real_id }}</span>
+                  {% endif %}
+                  {% if item.score is not none %}
+                    <span class="score-badge">{{ "%.0f"|format(item.score) }}%</span>
+                  {% endif %}
+                  {% if item.has_pdf %}
+                    <span class="badge">PDF</span>
+                  {% elif item.has_attachments %}
+                    <span class="badge">{{ icon_paperclip(12) }}</span>
+                  {% endif %}
+                </div>
+                <span class="webmail-open-hint">Abrir &rarr;</span>
+              </div>
             </div>
-          </td>
-        </tr>
+          </article>
+        {% else %}
+          <div class="webmail-empty-list">
+            <p class="muted">No hay mensajes ni pedidos para los filtros seleccionados.</p>
+          </div>
+        {% endfor %}
+      </div>
+
+      <div class="webmail-list-footer">
+        {% include "components/pagination.html" %}
+      </div>
+    </section>
+
+    {# Right Pane: Detail Reader (Split-view) #}
+    <section id="webmail-detail-pane" class="webmail-detail-pane">
+      {% if selected_email %}
+        {% set email = selected_email %}
+        {% set order = selected_order %}
+        {% set item = selected_item %}
+        {% include "history/_mail_detail_pane.html" %}
+      {% elif selected_order %}
+        {% set email = selected_email %}
+        {% set order = selected_order %}
+        {% set item = selected_item %}
+        {% include "history/_mail_detail_pane.html" %}
       {% else %}
-        <tr><td colspan="8" class="muted">No hay pedidos para los filtros seleccionados.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-  {% include "components/pagination.html" %}
-</section>
+        <div class="webmail-empty-selection">
+          <svg class="ui-icon muted" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="20" height="16" rx="2"></rect><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"></path></svg>
+          <p class="muted">Haz clic en cualquier correo o pedido para abrir el lector en pantalla dividida.</p>
+        </div>
+      {% endif %}
+    </section>
+  </main>
+</div>
+
+<script>
+function openMailDetail(kind, rawId, element) {
+  const workspace = document.getElementById('webmail-workspace');
+  const detailPane = document.getElementById('webmail-detail-pane');
+  if (!workspace || !detailPane) return;
+
+  let cleanId = String(rawId || '');
+  if (cleanId.includes('-')) {
+    cleanId = cleanId.split('-').pop();
+  }
+
+  // Mark active row
+  document.querySelectorAll('.webmail-item').forEach(el => el.classList.remove('is-active-row'));
+  const row = element || document.querySelector(`.webmail-item[data-item-id="${cleanId}"][data-item-kind="${kind}"]`);
+  if (row) {
+    row.classList.add('is-active-row');
+  }
+
+  // Open split view container
+  workspace.classList.add('has-split-view');
+
+  // Loading indicator in detail pane
+  detailPane.innerHTML = '<div class="webmail-loading"><div class="loading-spinner"></div><span>Cargando contenido...</span></div>';
+
+  // Fetch pane content
+  fetch('/history/pane/' + encodeURIComponent(kind) + '/' + encodeURIComponent(cleanId))
+    .then(res => {
+      if (!res.ok) throw new Error('Error al cargar detalle HTTP ' + res.status);
+      return res.text();
+    })
+    .then(html => {
+      detailPane.innerHTML = html;
+      // Update URL without page reload
+      const url = new URL(window.location);
+      url.searchParams.set('selected_id', cleanId);
+      url.searchParams.set('selected_kind', kind);
+      window.history.replaceState({}, '', url);
+    })
+    .catch(err => {
+      console.error('Error al abrir detalle:', err);
+      detailPane.innerHTML = '<div class="webmail-empty-selection"><p class="text-danger">No se pudo cargar el mensaje.</p></div>';
+    });
+}
+
+function closeMailDetail() {
+  const workspace = document.getElementById('webmail-workspace');
+  const detailPane = document.getElementById('webmail-detail-pane');
+  if (workspace) {
+    workspace.classList.remove('has-split-view');
+  }
+  document.querySelectorAll('.webmail-item').forEach(el => el.classList.remove('is-active-row'));
+  const url = new URL(window.location);
+  url.searchParams.delete('selected_id');
+  url.searchParams.delete('selected_kind');
+  window.history.replaceState({}, '', url);
+}
+
+function copyText(elementId) {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  const text = el.innerText || el.textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    alert('Texto copiado al portapapeles');
+  }).catch(() => {
+    // Fallback
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textarea);
+    alert('Texto copiado');
+  });
+}
+
+document.addEventListener('click', (e) => {
+  const itemEl = e.target.closest('.webmail-item');
+  if (itemEl && !e.target.closest('a') && !e.target.closest('button')) {
+    const kind = itemEl.getAttribute('data-item-kind');
+    const id = itemEl.getAttribute('data-item-id');
+    if (kind && id) {
+      openMailDetail(kind, id, itemEl);
+    }
+  }
+});
+</script>
 {% endblock %}

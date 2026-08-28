@@ -21,7 +21,17 @@ from app.db.models import Email, Order  # noqa: E402
 
 class OperationalNavigationTests(unittest.TestCase):
     def test_canonical_operator_routes_are_registered(self):
-        routes = {(route.path, tuple(sorted(route.methods or []))) for route in app.routes if hasattr(route, "methods")}
+        def _collect_routes(app_or_router, prefix=""):
+            collected = set()
+            for route in getattr(app_or_router, "routes", []):
+                if hasattr(route, "path") and hasattr(route, "methods"):
+                    collected.add((prefix + route.path, tuple(sorted(route.methods or []))))
+                elif hasattr(route, "original_router"):
+                    p = getattr(route.include_context, "prefix", "") or ""
+                    collected.update(_collect_routes(route.original_router, prefix=prefix + p))
+            return collected
+
+        routes = _collect_routes(create_app())
         expected = {
             ("/entries", ("GET",)),
             ("/entries/{entry_id}", ("GET",)),
@@ -48,7 +58,7 @@ class OperationalNavigationTests(unittest.TestCase):
             self.assertIsNotNone(nav_match, "No se encontró el bloque principal de navegación")
             nav_html = nav_match.group(0)
 
-            for label in ("Bandeja", "Pedidos", "Histórico", "Clientes", "Productos", "Configuración"):
+            for label in ("Bandeja", "Pedidos", "Buzón de correo", "Clientes", "Productos", "Configuración"):
                 self.assertIn(f'class="nav-label">{label}</span>', nav_html)
 
             for hidden_label in ("Entradas", "Jobs", "Logs", "Bases de datos", "Diagnóstico", "Aprendizaje", "Canales"):
@@ -82,8 +92,8 @@ class OperationalNavigationTests(unittest.TestCase):
                 legacy_pedidos = client.get("/pedidos", follow_redirects=False)
 
             self.assertEqual(history.status_code, 200)
-            self.assertIn("Histórico de pedidos", history.text)
-            self.assertIn("Listado de pedidos", history.text)
+            self.assertIn("Buzón de correo", history.text)
+            self.assertIn("Bandeja de mensajes", history.text)
             self.assertIn(legacy_pedidos.status_code, (200, 303))
             if legacy_pedidos.status_code == 303:
                 self.assertEqual(legacy_pedidos.headers["location"], "/history")

@@ -46,7 +46,7 @@
       <input type="hidden" name="{{ key }}" value="{{ value }}">
     {% endfor %}
     <div class="actions">
-      <a class="button secondary compact-button" href="/settings#email-receive">Volver</a>
+      <a class="button secondary compact-button" href="/settings/channels?focus=email">Volver</a>
       {% if preview.ok %}
         <button class="compact-button" data-loading-text="Importando..." {% if not preview.ok %}disabled{% endif %}>Importar ahora</button>
       {% endif %}

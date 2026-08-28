@@ -74,9 +74,14 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.TenantSession = sessionmaker(bind=self.tenant_engine, autoflush=False, autocommit=False)
 
     def tearDown(self):
+        import gc
         self.master_engine.dispose()
         self.tenant_engine.dispose()
-        self.tempdir.cleanup()
+        gc.collect()
+        try:
+            self.tempdir.cleanup()
+        except (PermissionError, OSError):
+            pass
 
     def seed_master(self, *, active: bool = True, with_tenant_db: bool = True):
         db = self.MasterSession()

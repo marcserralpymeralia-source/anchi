@@ -45,7 +45,7 @@
             <h3>{{ module.label }}</h3>
             <span class="module-state {{ module.state }}">{{ state_label(module.state) }}</span>
           </div>
-          {% if module.key in ["general", "identity", "email", "ai", "scoring", "decision", "export", "ftp"] or (module.key == "advanced" and user.role.name == "Superadmin") %}
+          {% if module.key in ["general", "identity", "ai", "scoring", "decision", "export", "ftp"] or (module.key == "advanced" and user.role.name == "Superadmin") %}
             <button type="button" class="secondary compact-button" data-open-settings="{{ module.key }}">{{ module.action }}</button>
           {% elif module.key == "advanced" %}
             <span class="muted">Solo Superadmin</span>
@@ -70,28 +70,6 @@
         </div>
       </article>
     {% endfor %}
-  </section>
-
-  <section id="knowledge" class="panel stack" style="margin-top: 16px;">
-    <div class="section-title-row">
-      <div>
-        <h3>Conocimiento y aprendizaje</h3>
-        <p class="muted">Ajusta aquí la configuración que antes vivía en una ventana operativa separada.</p>
-      </div>
-      <span class="badge">Configuración centralizada</span>
-    </div>
-    <div class="history-summary">
-      <article class="compact-card compact-card-muted"><span>Clientes</span><strong>{{ dashboard.customer_count }}</strong><small>Conocimiento por carpeta</small></article>
-      <article class="compact-card compact-card-safe"><span>Productos</span><strong>{{ dashboard.product_count }}</strong><small>Base del tenant</small></article>
-      <article class="compact-card compact-card-reviewable"><span>Prompts</span><strong>{{ dashboard.prompt_templates|length }}</strong><small>Versiones activas</small></article>
-      <article class="compact-card compact-card-error"><span>Canales</span><strong>{{ dashboard.active_channels_count }}</strong><small>Entrada activa</small></article>
-    </div>
-    <div class="actions">
-      <a class="button secondary compact-button" href="/customers">Abrir clientes</a>
-      <a class="button secondary compact-button" href="/products">Abrir productos</a>
-      <a class="button secondary compact-button" href="/settings/channels">Canales</a>
-      <a class="button secondary compact-button" href="#decision">Motor de decisión</a>
-    </div>
   </section>
 </section>
 
@@ -945,7 +923,7 @@
     </section>
     <div class="drawer-actions">
       <button data-loading-text="Guardando...">Guardar motor</button>
-      <a class="button secondary compact-button" href="/settings#knowledge">Abrir conocimiento</a>
+      <a class="button secondary compact-button" href="/customers">Abrir clientes</a>
     </div>
   </form>
 </dialog>

@@ -5,7 +5,7 @@ from datetime import datetime
 from fastapi import APIRouter, Depends, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, RedirectResponse
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import current_user
@@ -81,24 +81,22 @@ def serialize_alert(alert: Alert) -> dict:
     }
 
 
-def build_alert_center_context(db: Session, company_id: int, limit: int = 6) -> dict:
-    recent_alerts = db.scalars(
+def build_alert_center_context(db: Session, company_id: int, limit: int = 10) -> dict:
+    active_alerts = db.scalars(
         select(Alert)
-        .where(Alert.company_id == company_id)
+        .where(Alert.company_id == company_id, Alert.status.notin_(["resolved", "ignored"]))
         .order_by(Alert.created_at.desc())
-        .limit(limit)
     ).all()
     all_alerts = db.scalars(select(Alert).where(Alert.company_id == company_id)).all()
-    active = [alert for alert in all_alerts if alert_is_active(alert)]
     return {
-        "total": len(active),
-        "critical": len([alert for alert in active if alert.severity == "critical"]),
-        "high": len([alert for alert in active if alert.severity == "high"]),
-        "medium": len([alert for alert in active if alert.severity == "medium"]),
-        "low": len([alert for alert in active if alert.severity == "low"]),
-        "info": len([alert for alert in active if alert.severity == "info"]),
-        "has_critical": any(alert.severity == "critical" for alert in active),
-        "recent": [serialize_alert(alert) for alert in recent_alerts],
+        "total": len(active_alerts),
+        "critical": len([a for a in active_alerts if a.severity == "critical"]),
+        "high": len([a for a in active_alerts if a.severity == "high"]),
+        "medium": len([a for a in active_alerts if a.severity == "medium"]),
+        "low": len([a for a in active_alerts if a.severity == "low"]),
+        "info": len([a for a in active_alerts if a.severity == "info"]),
+        "has_critical": any(a.severity == "critical" for a in active_alerts),
+        "recent": [serialize_alert(alert) for alert in active_alerts[:limit]],
     }
 
 
@@ -116,6 +114,12 @@ def _redirect_alert(alert: Alert | None) -> RedirectResponse:
     return RedirectResponse("/alerts", status_code=303)
 
 
+def _alert_action_response(request: Request, db: Session, user: TenantUser):
+    if "application/json" in (request.headers.get("accept") or "") or request.headers.get("x-requested-with") == "fetch":
+        return JSONResponse(jsonable_encoder(build_alert_center_context(db, user.company_id, limit=10)))
+    return RedirectResponse("/alerts", status_code=303)
+
+
 @router.get("/alerts")
 def alerts_page(
     request: Request,
@@ -128,28 +132,27 @@ def alerts_page(
     user: TenantUser = Depends(current_user),
 ):
     stmt = select(Alert).where(Alert.company_id == user.company_id)
-    if status and status != "all":
+    if status != "all":
         stmt = stmt.where(Alert.status == status)
-    if severity and severity != "all":
+    if severity != "all":
         stmt = stmt.where(Alert.severity == severity)
-    if search:
-        like = f"%{search}%"
-        stmt = stmt.where(or_(Alert.title.ilike(like), Alert.message.ilike(like), Alert.alert_type.ilike(like)))
-    alerts = db.scalars(stmt.order_by(Alert.created_at.desc())).all()
+    if search.strip():
+        term = f"%{search.strip()}%"
+        stmt = stmt.where(or_(Alert.title.ilike(term), Alert.message.ilike(term), Alert.alert_type.ilike(term)))
+    stmt = stmt.order_by(Alert.created_at.desc())
     page, page_size = normalize_page(page, page_size)
-    total_items = len(alerts)
+    total_items = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     total_pages = (total_items + page_size - 1) // page_size if total_items else 0
     start_index = (page - 1) * page_size
-    paged_alerts = alerts[start_index:start_index + page_size]
-    serialized = [serialize_alert(alert) for alert in paged_alerts]
+    alerts = db.scalars(stmt.offset(start_index).limit(page_size)).all()
     summary = build_alert_center_context(db, user.company_id, limit=12)
     return templates.TemplateResponse(
         "alerts/list.html",
         {
             "request": request,
             "user": user,
-            "alerts": serialized,
             "summary": summary,
+            "alerts": [serialize_alert(a) for a in alerts],
             "filters": {"status": status, "severity": severity, "search": search},
             "pagination": {
                 "page": page,
@@ -169,45 +172,45 @@ def alerts_page(
 
 @router.get("/alerts/summary")
 def alerts_summary(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
-    return JSONResponse(jsonable_encoder(build_alert_center_context(db, user.company_id, limit=6)))
+    return JSONResponse(jsonable_encoder(build_alert_center_context(db, user.company_id, limit=10)))
 
 
 @router.post("/alerts/{alert_id}/mark-read")
-def alert_mark_read(alert_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def alert_mark_read(alert_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     alert = _get_alert_for_user(db, user, alert_id)
     if alert and alert.status == "open":
         alert.status = "seen"
         db.commit()
-    return RedirectResponse("/alerts", status_code=303)
+    return _alert_action_response(request, db, user)
 
 
 @router.post("/alerts/{alert_id}/resolve")
-def alert_resolve(alert_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def alert_resolve(alert_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     alert = _get_alert_for_user(db, user, alert_id)
     if alert:
         alert.status = "resolved"
         alert.resolved_at = utcnow()
         db.commit()
-    return RedirectResponse("/alerts", status_code=303)
+    return _alert_action_response(request, db, user)
 
 
 @router.post("/alerts/{alert_id}/ignore")
-def alert_ignore(alert_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def alert_ignore(alert_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     alert = _get_alert_for_user(db, user, alert_id)
     if alert:
         alert.status = "ignored"
         db.commit()
-    return RedirectResponse("/alerts", status_code=303)
+    return _alert_action_response(request, db, user)
 
 
 @router.post("/alerts/{alert_id}/reopen")
-def alert_reopen(alert_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def alert_reopen(alert_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     alert = _get_alert_for_user(db, user, alert_id)
     if alert:
         alert.status = "open"
         alert.resolved_at = None
         db.commit()
-    return RedirectResponse("/alerts", status_code=303)
+    return _alert_action_response(request, db, user)
 
 
 @router.post("/alerts/{alert_id}/action")

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_plus %}
+{% from "components/icons.html" import icon_edit, icon_plus %}
 {% set title = "Productos" %}
 {% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css">{% endblock %}
 {% block content %}
@@ -70,33 +70,40 @@
           </label>
           <button class="secondary compact-button" data-loading-text="Filtrando...">Aplicar</button>
         </form>
-        <details class="column-toggle-panel">
-          <summary class="button secondary compact-button">Columnas</summary>
-          <div class="column-toggle-menu" data-table-key="productsCompact">
-            {% for key, label, checked in [
-              ("reference","Referencia", true),
-              ("name","Producto", true),
-              ("family","Familia", false),
-              ("sale_unit","Unidad", true),
-              ("aliases","Alias", false),
-              ("customers","Clientes", false),
-              ("status","Estado", true),
-              ("price","Precio", true),
-              ("description_cont","Descripción larga", false),
-              ("supplier","Proveedor", false),
-              ("last_import","Última importación", false),
-              ("notes","Observaciones", false)
-            ] %}
-              <label class="column-toggle-item"><input type="checkbox" data-column-checkbox="{{ key }}" {% if checked %}checked{% endif %}> <span>{{ label }}</span></label>
-            {% endfor %}
-          </div>
-        </details>
+      </div>
+    </details>
+    <details class="column-toggle-panel">
+      <summary class="button secondary compact-button">Columnas</summary>
+      <div class="column-toggle-menu" data-table-key="productsCompact">
+        <span class="database-columns-hint">Desliza para ver más. Arrastra el separador del encabezado para cambiar el ancho.</span>
+        <button type="button" class="secondary compact-button" data-table-reset="productsCompact">Restablecer anchos</button>
+        {% for key, label, checked in [
+          ("name","Producto", true),
+          ("reference","Referencia", true),
+          ("sale_unit","Unidad", true),
+          ("price","Precio", true),
+          ("status","Estado", true),
+          ("family","Familia", false),
+          ("aliases","Alias", false),
+          ("customers","Clientes", false),
+          ("description_cont","Descripción larga", false),
+          ("supplier","Proveedor", false),
+          ("last_import","Última importación", false),
+          ("notes","Observaciones", false)
+        ] %}
+          <label class="column-toggle-item"><input type="checkbox" data-column-checkbox="{{ key }}" {% if checked %}checked{% endif %}> <span>{{ label }}</span></label>
+        {% endfor %}
       </div>
     </details>
     <span class="database-compact-count">{{ pagination.total_items }} productos</span>
   </div>
 
-<table class="data-table database-table database-table-productsCompact database-table-products database-table-compact">
+<div class="database-table-guide" role="note">
+  <strong>Vista ajustable</strong>
+  <span>Desliza horizontalmente para ver más columnas · arrastra el borde del encabezado para cambiar su ancho.</span>
+</div>
+<div class="database-table-wrap">
+<table class="data-table database-table database-table-productsCompact database-table-products database-table-compact" data-resizable-table data-table-key="productsCompact">
   <colgroup>
     <col data-column="name" class="data-table__col-product">
     <col data-column="reference" class="data-table__col-reference">
@@ -112,19 +119,22 @@
     <col data-column="last_import">
     <col data-column="notes">
   </colgroup>
-  <thead><tr><th data-column="name">Producto</th><th data-column="reference">Referencia</th><th data-column="sale_unit">Unidad</th><th data-column="price">Precio</th><th data-column="status">Estado</th><th data-column="action">Acción</th><th data-column="family">Familia</th><th data-column="aliases">Alias</th><th data-column="customers">Clientes</th><th data-column="description_cont">Descripción larga</th><th data-column="supplier">Proveedor</th><th data-column="last_import">Última importación</th><th data-column="notes">Observaciones</th></tr></thead>
+  <thead><tr><th data-column="name">Producto</th><th data-column="reference">Referencia</th><th data-column="sale_unit">Unidad</th><th data-column="price">Precio</th><th data-column="status">Estado</th><th data-column="action" class="th-actions" aria-label="Acciones"></th><th data-column="family">Familia</th><th data-column="aliases">Alias</th><th data-column="customers">Clientes</th><th data-column="description_cont">Descripción larga</th><th data-column="supplier">Proveedor</th><th data-column="last_import">Última importación</th><th data-column="notes">Observaciones</th></tr></thead>
   <tbody>
   {% for product in products %}
     <tr>
       {% set stats = product_stats.get(product.id, {}) %}
-      <td data-column="name" class="wide-cell" title="{{ product.name }}"><span class="data-table__primary">{{ product.name }}</span></td>
+      <td data-column="name" class="wide-cell" title="{{ product.name }}">
+        <span class="data-table__primary">{{ product.name }}</span>
+      </td>
       <td data-column="reference"><span class="database-code-text">{{ product.reference }}</span></td>
       <td data-column="sale_unit">{{ product.sale_unit or "—" }}</td>
       <td data-column="price">{{ "%.2f"|format(product.sale_price) if product.sale_price is not none else "—" }}</td>
       <td data-column="status"><span class="badge data-table__status {{ 'status-confirmed' if product.status == 'active' and not product.obsolete else 'status-discarded' }}">{{ product.status|status_label }}</span></td>
       <td data-column="action" class="database-actions-cell">
         <div class="data-table__actions">
-          <button class="secondary compact-button" onclick="document.getElementById('product-{{ product.id }}').showModal()">Abrir</button>
+          <button type="button" class="secondary compact-button table-edit-button" title="Editar producto" aria-label="Editar producto" onclick="document.getElementById('product-{{ product.id }}').showModal()">{{ icon_edit(15) }}</button>
+          <button type="button" class="secondary compact-button" onclick="document.getElementById('product-{{ product.id }}').showModal()">Abrir</button>
           <details class="row-more-actions">
             <summary class="button secondary compact-button">...</summary>
             <div class="row-more-actions-panel">
@@ -147,6 +157,7 @@
   {% endfor %}
   </tbody>
 </table>
+</div>
 {% include "components/pagination.html" %}
 </section>
 
@@ -219,6 +230,7 @@
     if (Array.isArray(saved) && saved.length) checkboxes.forEach((checkbox) => { checkbox.checked = saved.includes(checkbox.dataset.columnCheckbox); });
     const apply = () => {
       const visible = checkboxes.filter((checkbox) => checkbox.checked).map((checkbox) => checkbox.dataset.columnCheckbox);
+      visible.push("action");
       localStorage.setItem(storageKey, JSON.stringify(visible));
       table.querySelectorAll("[data-column]").forEach((cell) => { cell.hidden = !visible.includes(cell.dataset.column); });
     };

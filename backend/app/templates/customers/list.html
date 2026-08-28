@@ -1,12 +1,12 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_folder, icon_plus %}
+{% from "components/icons.html" import icon_edit, icon_folder, icon_plus %}
 {% set title = "Clientes" %}
 {% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css">{% endblock %}
 {% block content %}
 <section class="database-shell {% if view == 'list' %}database-compact-page{% else %}panel stack{% endif %}">
   <header class="database-compact-head">
     <h2>Clientes</h2>
-    <button type="button" onclick="document.getElementById('create-customer').showModal()">{{ icon_plus(14) }} <span>Nuevo cliente</span></button>
+    <button type="button" onclick="openCustomerEditor()">{{ icon_plus(14) }} <span>Nuevo cliente</span></button>
   </header>
 
   <div class="workbench-tabs database-tabs">
@@ -88,35 +88,42 @@
             </label>
             <button class="secondary compact-button" data-loading-text="Filtrando...">Aplicar</button>
           </form>
-          <details class="column-toggle-panel">
-            <summary class="button secondary compact-button">Columnas</summary>
-            <div class="column-toggle-menu" data-table-key="customersCompact">
-              {% for key, label, checked in [
-                ("name","Cliente", true),
-                ("code","Código", true),
-                ("primary_email","Contacto", true),
-                ("city","Localidad", true),
-                ("channel","Canal", false),
-                ("knowledge","Conocimiento", false),
-                ("status","Estado", true),
-                ("last_activity","Última actividad", false),
-                ("tax_id","CIF/NIF", false),
-                ("phone","Teléfono", false),
-                ("address","Dirección", false),
-                ("aliases","Alias", false),
-                ("domains","Dominios", false),
-                ("notes","Observaciones", false)
-              ] %}
-                <label class="column-toggle-item"><input type="checkbox" data-column-checkbox="{{ key }}" {% if checked %}checked{% endif %}> <span>{{ label }}</span></label>
-              {% endfor %}
-            </div>
-          </details>
+        </div>
+      </details>
+      <details class="column-toggle-panel">
+        <summary class="button secondary compact-button">Columnas</summary>
+        <div class="column-toggle-menu" data-table-key="customersCompact">
+          <span class="database-columns-hint">Desliza para ver más. Arrastra el separador del encabezado para cambiar el ancho.</span>
+          <button type="button" class="secondary compact-button" data-table-reset="customersCompact">Restablecer anchos</button>
+          {% for key, label, checked in [
+            ("name","Cliente", true),
+            ("code","Código", true),
+            ("primary_email","Contacto", true),
+            ("city","Localidad", true),
+            ("status","Estado", true),
+            ("channel","Canal", false),
+            ("knowledge","Conocimiento", false),
+            ("last_activity","Última actividad", false),
+            ("tax_id","CIF/NIF", false),
+            ("phone","Teléfono", false),
+            ("address","Dirección", false),
+            ("aliases","Alias", false),
+            ("domains","Dominios", false),
+            ("notes","Observaciones", false)
+          ] %}
+            <label class="column-toggle-item"><input type="checkbox" data-column-checkbox="{{ key }}" {% if checked %}checked{% endif %}> <span>{{ label }}</span></label>
+          {% endfor %}
         </div>
       </details>
       <span class="database-compact-count">{{ pagination.total_items }} clientes</span>
     </div>
 
-    <table class="data-table database-table database-table-customersCompact database-table-customers database-table-compact">
+    <div class="database-table-guide" role="note">
+      <strong>Vista ajustable</strong>
+      <span>Desliza horizontalmente para ver más columnas · arrastra el borde del encabezado para cambiar su ancho.</span>
+    </div>
+    <div class="database-table-wrap">
+    <table class="data-table database-table database-table-customersCompact database-table-customers database-table-compact" data-resizable-table data-table-key="customersCompact">
           <colgroup>
             <col data-column="name" class="data-table__col-customer">
             <col data-column="code" class="data-table__col-code">
@@ -141,7 +148,7 @@
               <th data-column="primary_email">Contacto</th>
               <th data-column="city">Localidad</th>
               <th data-column="status">Estado</th>
-              <th data-column="action">Acción</th>
+              <th data-column="action" class="th-actions" aria-label="Acciones"></th>
               <th data-column="channel">Canal</th>
               <th data-column="knowledge">Conocimiento</th>
               <th data-column="last_activity">Última actividad</th>
@@ -167,6 +174,7 @@
                 <td data-column="status"><span class="badge data-table__status {{ 'status-confirmed' if row.status == 'active' and not row.company_inactive else 'status-discarded' }}">{{ row.status_label }}</span></td>
                 <td data-column="action" class="database-actions-cell">
                   <div class="data-table__actions">
+                    <button type="button" class="secondary compact-button table-edit-button" title="Editar cliente" aria-label="Editar cliente" onclick="openCustomerEditor(this)" data-customer='{{ row|tojson }}'>{{ icon_edit(15) }}</button>
                     <a class="button secondary compact-button" href="/customers/{{ row.id }}/knowledge">Abrir</a>
                     <details class="row-more-actions">
                       <summary class="button secondary compact-button">...</summary>
@@ -197,6 +205,7 @@
             {% endfor %}
           </tbody>
         </table>
+    </div>
     {% include "components/pagination.html" %}
 
   {% else %}
@@ -262,6 +271,7 @@
                 </div>
                 <div class="actions">
                   <a class="button secondary compact-button" href="/customers/{{ card.id }}/knowledge">Abrir carpeta</a>
+                  <a class="button secondary compact-button table-edit-button" href="/customers/{{ card.id }}/knowledge?section=summary#customer-file" title="Editar ficha" aria-label="Editar ficha">{{ icon_edit(15) }}</a>
                 </div>
               </article>
             {% else %}
@@ -283,9 +293,9 @@
   {% endif %}
 </section>
 
-<dialog id="create-customer" class="edit-dialog">
-  <form class="stack js-loading-form" method="post" action="/customers">
-    <div class="dialog-header"><h2>Crear cliente</h2><button type="button" class="secondary" onclick="this.closest('dialog').close()">Cerrar</button></div>
+<dialog id="customer-editor" class="edit-dialog">
+  <form id="customer-editor-form" class="stack js-loading-form" method="post" action="/customers">
+    <div class="dialog-header"><h2 id="customer-editor-title">Crear cliente</h2><button type="button" class="secondary" onclick="this.closest('dialog').close()">Cerrar</button></div>
     <input type="hidden" name="id" value="0">
     <div class="form-grid">
       <label>Código cliente<input name="code" required></label>
@@ -327,6 +337,47 @@
 </dialog>
 {% endfor %}
 <script>
+  const customerEditor = document.getElementById("customer-editor");
+  const customerEditorForm = document.getElementById("customer-editor-form");
+  const customerEditorTitle = document.getElementById("customer-editor-title");
+  const customerEditorFields = [
+    "code", "fiscal_name", "commercial_name", "tax_id", "primary_email", "associated_emails",
+    "delegation", "phone", "associated_phones", "city", "province", "assigned_salesperson",
+    "accounting_code", "category", "address", "country", "domains", "aliases", "status", "company_inactive", "notes"
+  ];
+
+  function setCustomerEditorField(name, value) {
+    const field = customerEditorForm?.elements.namedItem(name);
+    if (!field) return;
+    if (field.type === "checkbox") field.checked = Boolean(value);
+    else field.value = value ?? "";
+  }
+
+  function openCustomerEditor(button) {
+    if (!customerEditor || !customerEditorForm) return;
+    customerEditorForm.reset();
+    setCustomerEditorField("id", "0");
+    if (button?.dataset.customer) {
+      let customer;
+      try {
+        customer = JSON.parse(button.dataset.customer);
+      } catch (error) {
+        console.warn("No se pudo abrir el cliente para editar", error);
+        return;
+      }
+      customerEditorTitle.textContent = "Editar cliente";
+      customerEditorFields.forEach((name) => {
+        let value = customer[name];
+        if ((name === "aliases" || name === "domains") && Array.isArray(value)) value = value.join(", ");
+        setCustomerEditorField(name, value);
+      });
+      setCustomerEditorField("id", customer.id);
+    } else {
+      customerEditorTitle.textContent = "Crear cliente";
+    }
+    customerEditor.showModal();
+  }
+
   document.querySelectorAll(".js-import-paste-form").forEach((form) => {
     form.addEventListener("submit", (event) => {
       const fileInput = form.querySelector("[data-import-file]");
@@ -358,6 +409,7 @@
     }
     const apply = () => {
       const visible = checkboxes.filter((checkbox) => checkbox.checked).map((checkbox) => checkbox.dataset.columnCheckbox);
+      visible.push("action");
       localStorage.setItem(storageKey, JSON.stringify(visible));
       table.querySelectorAll("[data-column]").forEach((cell) => {
         cell.hidden = !visible.includes(cell.dataset.column);
