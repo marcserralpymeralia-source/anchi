@@ -21,7 +21,7 @@ def _connect_args(database_url: str) -> dict[str, object]:
 
 @lru_cache(maxsize=128)
 def get_tenant_engine(database_url: str):
-    return create_engine(database_url, connect_args=_connect_args(database_url))
+    return create_engine(database_url, connect_args=_connect_args(database_url), pool_pre_ping=True)
 
 
 def tenant_db_session(database_url: str):

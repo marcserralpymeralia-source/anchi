@@ -1,5 +1,5 @@
 <article
-  class="queue-item queue-item-{{ item.scoring_category }} queue-item-{{ item.agent_status }} queue-item-confidence-{{ confidence_key }}"
+  class="queue-item queue-item-{{ item.scoring_category }} queue-item-{{ item.agent_status }} queue-item-operational-{{ item.operational_status }} queue-item-confidence-{{ confidence_key }}"
   data-modal-id="{{ item.modal_id }}"
   data-kind="{{ item.kind }}"
   data-detail-url="{{ item.detail_url }}"
@@ -69,8 +69,10 @@
       <form class="js-loading-form queue-bottom-action-form" method="post" action="/entries/email-{{ item.email_id }}/process">
         <button type="submit" class="queue-bottom-action-btn" data-loading-text="Procesando..." onclick="event.stopPropagation();">Procesar</button>
       </form>
+    {% elif item.kind == "order" and item.operational_status == "pending_validation" %}
+      <a class="queue-bottom-action-btn" href="/orders/{{ item.order_id }}" onclick="event.stopPropagation();">Revisar pedido</a>
     {% elif item.kind == "order" %}
-      <a class="queue-bottom-action-btn" href="/orders/{{ item.order_id }}" onclick="event.stopPropagation();">Revisar</a>
+      <a class="queue-bottom-action-btn" href="/orders/{{ item.order_id }}" onclick="event.stopPropagation();">Ver pedido</a>
     {% else %}
       <a class="queue-bottom-action-btn" href="/entries/email-{{ item.email_id }}/resolve" onclick="event.stopPropagation();">Revisar</a>
     {% endif %}

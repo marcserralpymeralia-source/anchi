@@ -53,7 +53,16 @@
           <p class="muted">Comparación entre lo esperado y lo que ha devuelto el agente.</p>
         </div>
         {% if result %}
-          <span class="badge">{{ result.category_label }}</span>
+          {% if result.classification_type %}
+            <span class="badge">
+              {{ result.classification_type|replace("_", " ")|title }}
+              {% if result.classification_confidence is not none %}
+                · {{ (result.classification_confidence * 100)|round(0)|int }}%
+              {% endif %}
+            </span>
+          {% else %}
+            <span class="badge">Sin clasificación</span>
+          {% endif %}
         {% else %}
           <span class="badge">Sin analizar</span>
         {% endif %}
@@ -61,7 +70,7 @@
       {% if result %}
         <div class="history-summary">
           <article class="compact-card compact-card-safe"><span>Cliente</span><strong>{{ result.customer.score }}%</strong><small>{{ result.customer.name }}</small></article>
-          <article class="compact-card compact-card-reviewable"><span>Scoring</span><strong>{{ result.score }}%</strong><small>{{ result.suggested_action }}</small></article>
+          <article class="compact-card compact-card-reviewable"><span>Scoring</span><strong>{{ result.score }}%</strong><small>{{ result.category_label }} · {{ result.suggested_action }}</small></article>
           <article class="compact-card compact-card-error"><span>Líneas</span><strong>{{ result.lines|length }}</strong><small>{{ result.lines|selectattr("has_match")|list|length }} con match</small></article>
           <article class="compact-card compact-card-muted"><span>Estado</span><strong>{{ result.status }}</strong><small>{{ result.source_label }}</small></article>
         </div>
@@ -71,7 +80,20 @@
             <p>Cliente esperado: {{ result.expected.customer or "No indicado" }}</p>
             <p>Score esperado: {{ result.expected.score if result.expected.score is not none else "No indicado" }}</p>
             <p>Estado esperado: {{ result.expected.status or "No indicado" }}</p>
-            <p>{% if result.comparison.customer_match %}Cliente coincide{% else %}Cliente no coincide{% endif %}{% if result.comparison.score_delta is not none %} · Delta score {{ result.comparison.score_delta }}{% endif %}{% if result.comparison.status_match %} · Estado coincide{% else %} · Estado no coincide{% endif %}</p>
+            {% if result.expected.customer or result.expected.score is not none or result.expected.status %}
+              <p>
+                {% if result.expected.customer %}
+                  {% if result.comparison.customer_match %}Cliente coincide{% else %}Cliente no coincide{% endif %}
+                {% endif %}
+                {% if result.comparison.score_delta is not none %}
+                  {% if result.expected.customer %} · {% endif %}Delta score {{ result.comparison.score_delta }}
+                {% endif %}
+                {% if result.expected.status %}
+                  {% if result.expected.customer or result.comparison.score_delta is not none %} · {% endif %}
+                  {% if result.comparison.status_match %}Estado coincide{% else %}Estado no coincide{% endif %}
+                {% endif %}
+              </p>
+            {% endif %}
           </div>
         </div>
         <div class="job-log-list">

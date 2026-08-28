@@ -38,6 +38,7 @@ from app.settings.service import get_or_create_settings
 from app.jobs.service import claim_next_job, enqueue_job, fail_job, finish_job, job_payload, job_trace, recover_stale_jobs, update_job_progress
 from app.tenancy.migrations import tenant_migration_report
 from app.tenancy.database import tenant_db_session
+from app.whatsapp.conversation_orders import evaluate_conversation_order
 
 logger = logging.getLogger(__name__)
 _worker_started = False
@@ -302,7 +303,51 @@ def _process_job(db, job: BackgroundJob) -> dict:
         inbound_message = db.get(InboundMessage, inbound_message_id)
         if not inbound_message or inbound_message.company_id != job.company_id:
             raise RuntimeError("No se encontró el mensaje a procesar.")
-        result = AgentProcessingService().pipeline.process_inbound_message(db, inbound_message)
+
+        pipeline = AgentProcessingService().pipeline
+
+        is_live_meta_whatsapp = (
+            str(payload.get("channel") or "").strip().lower() == "whatsapp"
+            and str(inbound_message.provider or "").strip().lower() == "meta"
+        )
+
+        if is_live_meta_whatsapp:
+            context = evaluate_conversation_order(db, message=inbound_message)
+
+            if context.state == "collecting":
+                inbound_message.status = "received"
+                inbound_message.processing_step = "whatsapp_order_collecting"
+                db.commit()
+                return {
+                    "ok": True,
+                    "status": "collecting",
+                    "message": "Conversación WhatsApp pendiente de completar.",
+                    "conversation_id": context.conversation_id,
+                }
+
+            if context.state == "ready":
+                result = pipeline.process_inbound_message(
+                    db,
+                    inbound_message,
+                    source_text_override=context.transcript,
+                )
+
+                order_id = result.get("order_id") if isinstance(result, dict) else None
+                if order_id:
+                    for source_message in context.messages:
+                        if source_message.company_id != job.company_id:
+                            continue
+                        if source_message.order_id is None:
+                            source_message.order_id = int(order_id)
+                    db.commit()
+
+                return {
+                    "ok": True,
+                    "conversation_id": context.conversation_id,
+                    **result,
+                }
+
+        result = pipeline.process_inbound_message(db, inbound_message)
         return {"ok": True, **result}
     if job.job_type == "download_whatsapp_media":
         inbound_message_id = int(payload.get("inbound_message_id") or 0)
@@ -406,7 +451,7 @@ def _process_export_job(db, job: BackgroundJob, payload: dict) -> dict:
         raise RuntimeError("No se encontró el pedido a exportar.")
     export = db.scalar(select(ExportFile).where(ExportFile.order_id == order.id, ExportFile.company_id == job.company_id).order_by(ExportFile.created_at.desc()))
     if not export:
-        export = ExportService().generate_csv(db, order)
+        export = ExportService().generate(db, order)
     ftp_settings = get_or_create_settings(db, FTPSettings, job.company_id)
     send_via_ftp = job.job_type == "export_order_ftp"
 
@@ -570,7 +615,7 @@ def _process_bulk_action(db, job: BackgroundJob, payload: dict) -> dict:
                     .order_by(ExportFile.created_at.desc())
                 )
                 if not export:
-                    export = ExportService().generate_csv(db, order)
+                    export = ExportService().generate(db, order)
 
                 export_settings = get_or_create_settings(
                     db,

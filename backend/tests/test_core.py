@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core.security import hash_password  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import BackgroundJob, Customer, CustomerAlias, Email, EmailSettings, LLMSettings, Order, OrderLine, Product, ProductAlias  # noqa: E402
+from app.db.models import BackgroundJob, Customer, CustomerAlias, Email, EmailSettings, LLMSettings, Order, OrderLine, Product, ProductAlias, PromptExecution  # noqa: E402
 from app.jobs.service import cancel_job, claim_next_job, retry_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
@@ -528,6 +528,18 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
             Customer(company_id=1, code="C1", fiscal_name="Cliente Demo", commercial_name="Cliente Demo"),
             Product(company_id=1, reference="P1", name="Producto Demo", description="Producto Demo", status="active"),
             Order(company_id=1, status="pedido_confirmado", score=91, customer_detected_name="Cliente Demo"),
+            PromptExecution(
+                company_id=1,
+                prompt_name="Extraccion de pedido",
+                prompt_purpose="extraction",
+                prompt_version=1,
+                model="gpt-4.1-mini",
+                parameters_json="{}",
+                output_status="valid",
+                validation_errors_json=None,
+                duration_ms=123,
+                response_excerpt='{"pedido":{"lineas":[]}}',
+            ),
         ])
         tenant_db.commit()
         tenant_db.close()
@@ -540,6 +552,12 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.assertGreaterEqual(data["products_total"], 1)
         self.assertGreaterEqual(data["orders_total"], 1)
         self.assertIn("schema_report", data)
+        self.assertIn("prompt_executions", data)
+        self.assertGreaterEqual(len(data["prompt_executions"]), 1)
+        self.assertEqual(data["prompt_executions"][0]["purpose"], "extraction")
+        self.assertEqual(data["prompt_executions"][0]["status"], "valid")
+        self.assertEqual(data["prompt_executions"][0]["model"], "gpt-4.1-mini")
+        self.assertEqual(data["prompt_executions"][0]["duration_ms"], 123)
         master_db.close()
 
     def test_master_data_upserts_reuse_the_same_flow(self):

@@ -938,7 +938,7 @@
   </div>
   <form class="drawer-body stack js-loading-form" method="post" action="/settings/export">
     <div class="form-grid">
-      <label>Formato<select name="file_type"><option value="csv" {% if export.file_type == "csv" %}selected{% endif %}>CSV</option><option value="txt" {% if export.file_type == "txt" %}selected{% endif %}>TXT</option><option value="json" {% if export.file_type == "json" %}selected{% endif %}>JSON</option></select></label>
+      <label>Formato<select name="file_type"><option value="csv" {% if export.file_type == "csv" %}selected{% endif %}>CSV</option><option value="json" {% if export.file_type == "json" %}selected{% endif %}>JSON</option></select></label>
       <label>Separador CSV<input name="csv_separator" value="{{ export.csv_separator }}"></label>
       <label>Encoding<input name="encoding" value="{{ export.encoding }}"></label>
       <label>Fecha<input name="date_format" value="{{ export.date_format }}"></label>
@@ -985,6 +985,12 @@
     <div class="drawer-actions">
       <button data-loading-text="Guardando...">Guardar FTP</button>
     </div>
+  </form>
+  <form class="drawer-body js-loading-form" method="post" action="/settings/test/ftp">
+    <div class="drawer-actions">
+      <button class="secondary" data-loading-text="Probando...">Probar conexión FTP / FTPS</button>
+    </div>
+    <p class="muted">La prueba utiliza los datos guardados actualmente y no envía ningún pedido ni fichero.</p>
   </form>
 </dialog>
 

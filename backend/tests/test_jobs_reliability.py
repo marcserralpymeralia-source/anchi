@@ -23,7 +23,7 @@ from app.channels.service import get_or_create_channel  # noqa: E402
 from app.db.database import Base  # noqa: E402
 from app.db.models import BackgroundJob, Customer, Email, EmailSettings, ImportJob, InputChannel, JobAttempt, LLMSettings, Order, OrderLine  # noqa: E402
 from app.imports.service import create_preview  # noqa: E402
-from app.jobs.service import claim_next_job, enqueue_job, fail_job, finish_job, recover_stale_jobs, retry_job, get_job  # noqa: E402
+from app.jobs.service import claim_next_job, enqueue_job, execute_job_inline, fail_job, finish_job, recover_stale_jobs, retry_job, get_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.tenancy.migrations import upgrade_tenant_schema  # noqa: E402
@@ -266,6 +266,50 @@ class JobsReliabilityTests(unittest.TestCase):
         self.assertEqual(attempts[0].status, "failed_permanent")
         db.close()
 
+    def test_retry_manual_can_be_applied_multiple_times_without_duplicate_attempts(self):
+        db = self.TenantSession()
+        job = enqueue_job(db, company_id=1, job_type="process_email", payload={"email_id": 13}, created_by_user_id=1)
+
+        claimed_first = claim_next_job(db, owner="worker-a", job_types={"process_email"})
+        self.assertIsNotNone(claimed_first)
+        self.assertEqual(claimed_first.attempt_count, 1)
+        fail_job(db, claimed_first, "timeout-1", retry=False, error_type="TimeoutError")
+        db.close()
+
+        db = self.TenantSession()
+        first_retry = retry_job(db, 1, job.id)
+        self.assertIsNotNone(first_retry)
+        self.assertEqual(first_retry.retry_count, 1)
+        db.close()
+
+        db = self.TenantSession()
+        claimed_second = claim_next_job(db, owner="worker-b", job_types={"process_email"})
+        self.assertIsNotNone(claimed_second)
+        self.assertEqual(claimed_second.attempt_count, 2)
+        fail_job(db, claimed_second, "timeout-2", retry=False, error_type="TimeoutError")
+        db.close()
+
+        db = self.TenantSession()
+        second_retry = retry_job(db, 1, job.id)
+        self.assertIsNotNone(second_retry)
+        self.assertEqual(second_retry.retry_count, 2)
+        db.close()
+
+        db = self.TenantSession()
+        claimed_third = claim_next_job(db, owner="worker-c", job_types={"process_email"})
+        self.assertIsNotNone(claimed_third)
+        self.assertEqual(claimed_third.attempt_count, 3)
+        finish_job(db, claimed_third, {"ok": True, "message": "done"})
+
+        job = db.get(BackgroundJob, job.id)
+        attempts = db.scalars(select(JobAttempt).where(JobAttempt.job_id == job.id).order_by(JobAttempt.attempt_number)).all()
+        self.assertEqual(job.status, "success")
+        self.assertEqual(job.retry_count, 2)
+        self.assertEqual(len(attempts), 3)
+        self.assertEqual([attempt.status for attempt in attempts], ["failed_permanent", "failed_permanent", "succeeded"])
+        self.assertEqual([attempt.worker_id for attempt in attempts], ["worker-a", "worker-b", "worker-c"])
+        db.close()
+
     def test_stale_jobs_recover_or_fail_at_limit(self):
         db = self.TenantSession()
         stale_running = BackgroundJob(
@@ -314,6 +358,112 @@ class JobsReliabilityTests(unittest.TestCase):
         self.assertIsNotNone(exhausted.finished_at)
         abandoned_attempt = db.scalar(select(JobAttempt).where(JobAttempt.job_id == stale_running.id))
         self.assertEqual(abandoned_attempt.status, "abandoned")
+        db.close()
+
+    def test_execute_inline_does_not_restart_active_running_job(self):
+        db = self.TenantSession()
+        job = BackgroundJob(
+            company_id=1,
+            job_type="process_email",
+            status="running",
+            payload_json='{"email_id": 1}',
+            lock_owner="active-worker",
+            attempt_count=1,
+            retry_count=0,
+            max_retries=2,
+        )
+        db.add(job)
+        db.flush()
+
+        from datetime import datetime, timedelta, timezone
+
+        now = datetime.now(timezone.utc)
+        job.started_at = now
+        job.lock_until = now + timedelta(minutes=10)
+        job.last_heartbeat_at = now
+        db.add(
+            JobAttempt(
+                company_id=1,
+                job_id=job.id,
+                attempt_number=1,
+                worker_id="active-worker",
+                status="running",
+                started_at=now,
+            )
+        )
+        db.commit()
+
+        with patch("app.workers.jobs_worker._process_job") as process_job:
+            result = execute_job_inline(db, job)
+
+        db.refresh(job)
+        attempts = db.scalars(
+            select(JobAttempt).where(JobAttempt.job_id == job.id)
+        ).all()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_type"], "job_already_running")
+        self.assertEqual(job.status, "running")
+        self.assertEqual(job.attempt_count, 1)
+        self.assertEqual(len(attempts), 1)
+        process_job.assert_not_called()
+        db.close()
+
+    def test_execute_inline_recovers_stale_running_job_before_retry(self):
+        db = self.TenantSession()
+        job = BackgroundJob(
+            company_id=1,
+            job_type="process_email",
+            status="running",
+            payload_json='{"email_id": 1}',
+            lock_owner="old-worker",
+            attempt_count=1,
+            retry_count=0,
+            max_retries=2,
+        )
+        db.add(job)
+        db.flush()
+
+        from datetime import datetime, timedelta, timezone
+
+        stale_at = datetime.now(timezone.utc) - timedelta(hours=1)
+        job.started_at = stale_at
+        job.lock_until = stale_at
+        job.last_heartbeat_at = stale_at
+        db.add(
+            JobAttempt(
+                company_id=1,
+                job_id=job.id,
+                attempt_number=1,
+                worker_id="old-worker",
+                status="running",
+                started_at=stale_at,
+            )
+        )
+        db.commit()
+
+        with patch(
+            "app.workers.jobs_worker._process_job",
+            return_value={"ok": True, "message": "Procesado"},
+        ) as process_job:
+            result = execute_job_inline(db, job)
+
+        db.refresh(job)
+        attempts = db.scalars(
+            select(JobAttempt)
+            .where(JobAttempt.job_id == job.id)
+            .order_by(JobAttempt.attempt_number)
+        ).all()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(job.status, "success")
+        self.assertEqual(job.attempt_count, 2)
+        self.assertEqual(job.retry_count, 1)
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(attempts[0].status, "abandoned")
+        self.assertEqual(attempts[0].error_type, "stale_worker")
+        self.assertEqual(attempts[1].status, "succeeded")
+        process_job.assert_called_once()
         db.close()
 
     def test_process_email_retry_is_idempotent(self):
