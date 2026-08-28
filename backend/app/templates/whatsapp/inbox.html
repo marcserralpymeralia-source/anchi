@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_send %}
+{% set title = "Buzón de WhatsApp" %}
+{% block content %}
+<div class="channel-inbox-shell whatsapp-inbox-shell">
+  <header class="channel-inbox-toolbar">
+    <div class="channel-inbox-heading">
+      <div class="channel-inbox-title-line">
+        <span class="channel-inbox-mark whatsapp-mark">{{ icon_whatsapp(18) }}</span>
+        <div>
+          <p class="page-kicker">Conversaciones</p>
+          <h2>Buzón de WhatsApp</h2>
+        </div>
+        <span class="badge channel-inbox-count">{{ summary.conversations }} contactos</span>
+      </div>
+      <p class="muted">Mensajes recibidos en el número conectado, separados del buzón de correo.</p>
+    </div>
+    <div class="channel-inbox-toolbar-meta">
+      {% if config.display_phone_number %}<span class="channel-number">{{ config.display_phone_number }}</span>{% endif %}
+      <span class="badge {% if ready_to_send %}status-ready{% else %}status-doubtful{% endif %}">{{ "Conectado" if ready_to_send else "Pendiente de conexión" }}</span>
+    </div>
+  </header>
+
+  {% if notice == "sent" %}
+    <div class="channel-inbox-notice success" role="status">Mensaje enviado a Meta correctamente.</div>
+  {% elif error %}
+    <div class="channel-inbox-notice error" role="alert">
+      {% if error == "whatsapp_not_ready" %}WhatsApp todavía no está listo para enviar mensajes.{% elif error == "attachment_too_large" %}El tamaño total de los archivos supera el límite configurado.{% elif error == "attachment_type_not_supported" %}Solo se admiten PDF, DOC, DOCX, TXT y audio.{% elif error == "empty_message" %}Escribe un mensaje o adjunta un archivo.{% else %}No se pudo enviar el mensaje. Revisa la conexión de WhatsApp e inténtalo de nuevo.{% endif %}
+    </div>
+  {% endif %}
+
+  <main class="channel-inbox-workspace">
+    <aside class="channel-inbox-contacts">
+      <div class="channel-inbox-pane-header">
+        <div><strong>Contactos</strong><span class="muted">{{ summary.unread }} pendientes</span></div>
+        <span class="muted">{{ pagination.start_item }}–{{ pagination.end_item }} / {{ pagination.total_items }}</span>
+      </div>
+      <form class="channel-inbox-search" method="get" action="/whatsapp/inbox">
+        <span>{{ icon_search(15) }}</span>
+        <input type="search" name="search" value="{{ search }}" placeholder="Buscar contacto o mensaje…" aria-label="Buscar contacto o mensaje">
+      </form>
+      <div class="channel-inbox-contact-list" role="list">
+        {% for conversation in conversations %}
+          <a class="channel-contact {% if selected and selected.id == conversation.id %}is-selected{% endif %} {% if conversation.unread %}is-unread{% endif %}" href="/whatsapp/inbox?conversation_id={{ conversation.id }}{% if search %}&search={{ search|urlencode }}{% endif %}" role="listitem">
+            <span class="channel-contact-avatar">{{ conversation.name[:2]|upper }}</span>
+            <span class="channel-contact-main">
+              <span class="channel-contact-top"><strong>{{ conversation.name }}</strong><time>{{ conversation.date|local_dt(tenant_timezone, "%d %b %H:%M", "--") }}</time></span>
+              <span class="channel-contact-detail">{{ conversation.detail or "WhatsApp" }}</span>
+              <span class="channel-contact-preview">{{ conversation.preview }}</span>
+            </span>
+            {% if conversation.unread %}<span class="channel-contact-unread" aria-label="Mensajes pendientes"></span>{% endif %}
+          </a>
+        {% else %}
+          <div class="channel-inbox-empty-list">
+            {{ icon_whatsapp(28) }}
+            <strong>No hay conversaciones</strong>
+            <span class="muted">Cuando llegue un mensaje de WhatsApp aparecerá aquí.</span>
+          </div>
+        {% endfor %}
+      </div>
+      <div class="channel-inbox-pagination">
+        {% if pagination.has_previous %}<a href="/whatsapp/inbox?page={{ pagination.page - 1 }}{% if search %}&search={{ search|urlencode }}{% endif %}">Anterior</a>{% endif %}
+        <span>Página {{ pagination.page }} de {{ pagination.total_pages or 1 }}</span>
+        {% if pagination.has_next %}<a href="/whatsapp/inbox?page={{ pagination.page + 1 }}{% if search %}&search={{ search|urlencode }}{% endif %}">Siguiente</a>{% endif %}
+      </div>
+    </aside>
+
+    <section class="channel-inbox-chat" aria-live="polite">
+      {% if selected %}
+        <header class="channel-chat-header">
+          <div class="channel-chat-identity">
+            <span class="channel-contact-avatar large">{{ selected.name[:2]|upper }}</span>
+            <div><h3>{{ selected.name }}</h3><span class="muted">{{ selected.detail or "Conversación de WhatsApp" }}</span></div>
+          </div>
+          <div class="channel-chat-actions"><span class="badge">{{ selected.message_count }} mensajes</span><a class="button secondary compact-button" href="/whatsapp/inbox">Cerrar</a></div>
+        </header>
+        <div class="channel-chat-messages" id="whatsapp-chat-messages">
+          {% for message in selected.messages %}
+            <article class="channel-chat-message {{ message.direction }}">
+              <div class="channel-chat-message-meta"><strong>{{ message.speaker }}</strong><time>{{ message.date|local_dt(tenant_timezone, "%d %b %Y, %H:%M", "--") }}</time>{% if message.direction == "outbound" %}<span class="muted">{{ message.status }}</span>{% endif %}</div>
+              {% if message.text %}<p>{{ message.text }}</p>{% endif %}
+              {% if message.attachments %}
+                <div class="channel-chat-attachments">
+                  {% for attachment in message.attachments %}
+                    {% if attachment.available %}<a class="channel-chat-attachment" href="{{ attachment.href }}" target="_blank"><span class="attachment-kind {{ attachment.kind }}">{{ attachment.kind|upper }}</span><span><strong>{{ attachment.filename }}</strong><small>{{ attachment.content_type }} · {{ attachment.size }}</small></span><span class="attachment-open">Abrir</span></a>{% else %}<div class="channel-chat-attachment is-pending"><span class="attachment-kind {{ attachment.kind }}">{{ attachment.kind|upper }}</span><span><strong>{{ attachment.filename }}</strong><small>{{ "Tipo no compatible" if attachment.status == "unsupported" else "Esperando descarga desde Meta" }} · {{ attachment.size }}</small></span></div>{% endif %}
+                  {% endfor %}
+                </div>
+              {% endif %}
+            </article>
+          {% endfor %}
+        </div>
+        <form class="channel-chat-compose" method="post" action="/whatsapp/inbox/{{ selected.id }}/reply" enctype="multipart/form-data">
+          <textarea name="body" rows="3" maxlength="4096" placeholder="Escribe una respuesta…" {% if not ready_to_send %}disabled{% endif %}></textarea>
+          <div class="channel-chat-compose-footer">
+            <label class="channel-chat-file-picker"><input type="file" name="files" multiple accept=".pdf,.doc,.docx,.txt,audio/*"><span>{{ icon_paperclip(16) }} Adjuntar</span></label>
+            <span class="muted">PDF, DOC, DOCX, TXT y audio · ventana de respuesta de Meta</span>
+            <button class="button primary" type="submit" {% if not ready_to_send %}disabled{% endif %}>{{ icon_send(15) }} Enviar</button>
+          </div>
+        </form>
+        {% if not ready_to_send %}<p class="channel-chat-disabled-note">Conecta y activa el canal WhatsApp para poder responder desde Anchi.</p>{% endif %}
+      {% else %}
+        <div class="channel-chat-placeholder">
+          <span class="channel-inbox-mark whatsapp-mark">{{ icon_whatsapp(24) }}</span>
+          <h3>Selecciona una conversación</h3>
+          <p class="muted">Aquí podrás consultar el historial y responder sin salir de Anchi.</p>
+        </div>
+      {% endif %}
+    </section>
+  </main>
+</div>
+<script>
+  const chat = document.getElementById("whatsapp-chat-messages");
+  if (chat) chat.scrollTop = chat.scrollHeight;
+</script>
+{% endblock %}

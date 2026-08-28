@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import unittest
 
 os.environ.setdefault("APP_ENV", "test")
@@ -12,6 +13,57 @@ from scripts.performance_data import build_performance_fixture, performance_test
 
 
 class OrdersListOptimizationTests(unittest.TestCase):
+    def test_orders_switches_between_card_and_list_views(self):
+        fixture = build_performance_fixture("small")
+        try:
+            with performance_test_client(fixture) as client:
+                cards_response = client.get("/orders?view=cards")
+                list_response = client.get("/orders?view=list")
+
+            self.assertEqual(cards_response.status_code, 200)
+            self.assertIn('class="work-queue"', cards_response.text)
+            self.assertIn('href="/orders?view=list"', cards_response.text)
+            self.assertEqual(list_response.status_code, 200)
+            self.assertIn("database-table-orders", list_response.text)
+            self.assertIn('href="/orders?view=cards"', list_response.text)
+        finally:
+            fixture.cleanup()
+
+    def test_orders_can_be_archived_and_restored(self):
+        fixture = build_performance_fixture("small")
+        try:
+            with performance_test_client(fixture) as client:
+                response = client.get("/orders?view=list")
+                archive_match = re.search(r'action="/orders/(\d+)/archive"', response.text)
+                self.assertIsNotNone(archive_match)
+                order_id = archive_match.group(1)
+
+                archived_response = client.post(
+                    f"/orders/{order_id}/archive",
+                    headers={"referer": "/orders?view=list"},
+                    follow_redirects=False,
+                )
+                self.assertEqual(archived_response.status_code, 303)
+                self.assertEqual(archived_response.headers["location"], "/orders?view=list")
+
+                active_response = client.get("/orders?view=list")
+                archived_list_response = client.get("/orders?view=list&archived=true")
+                self.assertNotIn(f'action="/orders/{order_id}/archive"', active_response.text)
+                self.assertIn(f'action="/orders/{order_id}/unarchive"', archived_list_response.text)
+                self.assertIn("Solo pedidos archivados", archived_list_response.text)
+
+                restored_response = client.post(
+                    f"/orders/{order_id}/unarchive",
+                    headers={"referer": "/orders?view=list&archived=true"},
+                    follow_redirects=False,
+                )
+                self.assertEqual(restored_response.status_code, 303)
+                self.assertEqual(restored_response.headers["location"], "/orders?view=list&archived=true")
+                restored_list_response = client.get("/orders?view=list")
+                self.assertIn(f'action="/orders/{order_id}/archive"', restored_list_response.text)
+        finally:
+            fixture.cleanup()
+
     def _assert_orders_list_is_light(self, scenario: str, *, max_queries: int, max_duplicates: int, max_response_size: int | None = None) -> None:
         fixture = build_performance_fixture(scenario)
         try:

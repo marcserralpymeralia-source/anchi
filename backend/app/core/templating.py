@@ -176,7 +176,38 @@ def tenant_timezone_context_processor(request):  # noqa: ANN001
     return {"tenant_timezone": timezone_name, "default_timezone": DEFAULT_TIMEZONE}
 
 
+def enabled_channels_context_processor(request):  # noqa: ANN001
+    """Expose active tenant channels to the shared navigation after auth resolves."""
+    tenant = getattr(getattr(request, "state", None), "tenant", None)
+    company = getattr(tenant, "company", None)
+    enabled_channels: tuple[str, ...] = ()
+    if company and company.database_url:
+        db = None
+        try:
+            from sqlalchemy import select
+
+            from app.db.models import InputChannel
+            from app.tenancy.database import tenant_db_session
+
+            db = tenant_db_session(company.database_url)()
+            enabled_channels = tuple(
+                db.scalars(
+                    select(InputChannel.key).where(
+                        InputChannel.company_id == company.id,
+                        InputChannel.is_active.is_(True),
+                    )
+                ).all()
+            )
+        except Exception:  # noqa: BLE001
+            enabled_channels = ()
+        finally:
+            if db is not None:
+                db.close()
+    return {"enabled_channels": enabled_channels}
+
+
 templates.context_processors.append(tenant_timezone_context_processor)
+templates.context_processors.append(enabled_channels_context_processor)
 templates.env.filters["local_dt"] = format_local_datetime
 templates.env.filters["status_label"] = status_label
 templates.env.filters["status_class"] = status_class

@@ -158,6 +158,8 @@ def _conversation_preview(order: Order | None) -> dict | None:
 @router.get("")
 def list_orders(
     request: Request,
+    view: str = "list",
+    archived: bool = False,
     date_from: str = "",
     date_to: str = "",
     customer_id: int = 0,
@@ -176,7 +178,34 @@ def list_orders(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
-    stmt = select(Order).where(Order.company_id == user.company_id, Order.deleted_at.is_(None))
+    if view == "cards" and not archived:
+        # Keep the card view on the same endpoint while delegating to the
+        # existing Bandeja renderer and query pipeline.
+        from app.pages.routes import dashboard
+
+        return dashboard(
+            request,
+            date_from=date_from,
+            date_to=date_to,
+            customer_id=str(customer_id or ""),
+            score_min=score_min,
+            score_max=score_max,
+            status=status,
+            email_type=email_type,
+            customer_or_sender=search,
+            has_pdf=has_pdf,
+            requires_review=requires_review,
+            page=page,
+            page_size=page_size,
+            db=db,
+            user=user,
+        )
+
+    stmt = select(Order).where(
+        Order.company_id == user.company_id,
+        Order.deleted_at.is_(None),
+        Order.archived.is_(archived),
+    )
     if date_from:
         stmt = stmt.where(Order.created_at >= datetime.fromisoformat(date_from).replace(tzinfo=timezone.utc))
     if date_to:
@@ -256,6 +285,7 @@ def list_orders(
             Order.customer_detected_name,
             Order.score,
             Order.status,
+            Order.archived,
             Order.notes,
             Order.created_at,
         ),
@@ -305,7 +335,7 @@ def list_orders(
             .group_by(Order.id)
         ):
             pdf_flags[int(order_id)] = bool(pdf_count)
-    filters = {"date_from": date_from, "date_to": date_to, "customer_id": customer_id, "score_min": score_min, "score_max": score_max, "status": status, "email_type": email_type, "sender": sender, "search": search, "scoring_category": scoring_category, "has_pdf": has_pdf, "requires_review": requires_review, "sort": sort}
+    filters = {"archived": archived, "date_from": date_from, "date_to": date_to, "customer_id": customer_id, "score_min": score_min, "score_max": score_max, "status": status, "email_type": email_type, "sender": sender, "search": search, "scoring_category": scoring_category, "has_pdf": has_pdf, "requires_review": requires_review, "sort": sort}
     categories = {order.id: order_score_category(order.score, scoring) for order in orders}
     alerts = {
         order.id: order_alerts(
@@ -1120,6 +1150,44 @@ def discard_order(order_id: int, db: Session = Depends(get_tenant_db), user: Ten
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="order.discard", entity_type="order", entity_id=order.id, message="Pedido descartado")
     return RedirectResponse("/orders", status_code=303)
+
+
+@router.post("/{order_id}/archive")
+def archive_order(order_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    order = db.get(Order, order_id)
+    if not order or order.company_id != user.company_id or order.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Pedido no encontrado.")
+    if not order.archived:
+        order.archived = True
+        log_action(
+            db,
+            company_id=user.company_id,
+            user=user,
+            action="order.archive",
+            entity_type="order",
+            entity_id=order.id,
+            message="Pedido archivado",
+        )
+    return RedirectResponse(request.headers.get("referer") or "/orders", status_code=303)
+
+
+@router.post("/{order_id}/unarchive")
+def unarchive_order(order_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    order = db.get(Order, order_id)
+    if not order or order.company_id != user.company_id or order.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Pedido no encontrado.")
+    if order.archived:
+        order.archived = False
+        log_action(
+            db,
+            company_id=user.company_id,
+            user=user,
+            action="order.unarchive",
+            entity_type="order",
+            entity_id=order.id,
+            message="Pedido desarchivado",
+        )
+    return RedirectResponse(request.headers.get("referer") or "/orders", status_code=303)
 
 
 @router.post("/{order_id}/delete")

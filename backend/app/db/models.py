@@ -977,6 +977,7 @@ class Order(Base):
     score: Mapped[float] = mapped_column(Float, default=0)
     status: Mapped[str] = mapped_column(String(80), default="pending_review")
     review_reasons: Mapped[str | None] = mapped_column(Text)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     delete_reason: Mapped[str | None] = mapped_column(Text)

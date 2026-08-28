@@ -401,6 +401,26 @@ body.is-resizing-table-column * {
   height: 15px;
 }
 
+.table-action-form {
+  display: contents;
+}
+
+.table-action-icon {
+  width: 30px;
+  min-width: 30px;
+  padding: 0;
+}
+
+.database-archive-view-label {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
 .table-inline-edit {
   display: inline-grid;
   flex: 0 0 auto;
@@ -526,12 +546,23 @@ table.database-table-compact .wide-cell {
   background-color: transparent !important;
 }
 
-.database-table-compact .database-actions-cell {
-  white-space: nowrap;
+.database-table-compact td {
+  border-bottom: 1px solid var(--line, #e2e8f0);
 }
 
-.database-table-compact .data-table__actions,
-.database-table-compact td[data-column="action"].actions {
+.database-table-compact .database-actions-cell,
+.database-table-compact td[data-column="action"] {
+  white-space: nowrap;
+  vertical-align: middle !important;
+  border-bottom: 1px solid var(--line, #e2e8f0) !important;
+}
+
+.database-table-compact tbody tr:last-child td,
+.database-table-compact tbody tr:last-child td[data-column="action"] {
+  border-bottom: 0 !important;
+}
+
+.database-table-compact .data-table__actions {
   display: inline-flex;
   flex-wrap: nowrap;
   justify-content: flex-end;
@@ -547,10 +578,7 @@ table.database-table-compact .wide-cell {
 
 .database-table-compact tbody tr:hover .data-table__actions,
 .database-table-compact tbody tr:focus-within .data-table__actions,
-.database-table-compact tbody tr:hover td[data-column="action"].actions,
-.database-table-compact tbody tr:focus-within td[data-column="action"].actions,
-.database-table-compact tbody tr:has(details[open]) .data-table__actions,
-.database-table-compact tbody tr:has(details[open]) td[data-column="action"].actions {
+.database-table-compact tbody tr:has(details[open]) .data-table__actions {
   opacity: 1;
   transform: translateX(0);
   pointer-events: auto;
@@ -606,9 +634,9 @@ table.database-table-compact .wide-cell {
 .database-table-orders [data-column="action"],
 .database-table-orders th[data-column="action"],
 .database-table-orders td[data-column="action"] {
-  width: 190px !important;
-  min-width: 190px !important;
-  max-width: 190px !important;
+  width: 220px !important;
+  min-width: 220px !important;
+  max-width: 220px !important;
   text-align: right;
   box-sizing: border-box;
 }
@@ -723,6 +751,10 @@ table.database-table-compact .wide-cell {
 .database-compact-head.page-content-header {
   padding: 2px 0 10px;
   border-bottom: 1px solid var(--line);
+}
+
+.database-compact-head .view-toggle {
+  margin-left: auto;
 }
 
 .database-compact-toolbar,

@@ -42,6 +42,8 @@ class OperationalNavigationTests(unittest.TestCase):
             ("/orders/{order_id}/validate", ("POST",)),
             ("/orders/{order_id}/export", ("POST",)),
             ("/orders/{order_id}/discard", ("POST",)),
+            ("/orders/{order_id}/archive", ("POST",)),
+            ("/orders/{order_id}/unarchive", ("POST",)),
             ("/knowledge", ("GET",)),
         }
         for item in expected:
@@ -58,8 +60,10 @@ class OperationalNavigationTests(unittest.TestCase):
             self.assertIsNotNone(nav_match, "No se encontró el bloque principal de navegación")
             nav_html = nav_match.group(0)
 
-            for label in ("Bandeja", "Pedidos", "Buzón de correo", "Clientes", "Productos", "Configuración"):
+            for label in ("Pedidos", "Buzón de correo", "Clientes", "Productos", "Configuración"):
                 self.assertIn(f'class="nav-label">{label}</span>', nav_html)
+            self.assertEqual(nav_html.count('class="nav-label">Pedidos</span>'), 1)
+            self.assertIn('class="nav-label">Archivos</span>', nav_html)
 
             for hidden_label in ("Entradas", "Jobs", "Logs", "Bases de datos", "Diagnóstico", "Aprendizaje", "Canales"):
                 self.assertNotIn(hidden_label, nav_html)
@@ -77,7 +81,8 @@ class OperationalNavigationTests(unittest.TestCase):
             self.assertEqual(entries.status_code, 303)
             self.assertEqual(entries.headers["location"], "/")
             self.assertEqual(redirected_dashboard.status_code, 200)
-            self.assertIn("Bandeja", redirected_dashboard.text)
+            self.assertIn("Pedidos", redirected_dashboard.text)
+            self.assertIn('href="/orders?view=list"', redirected_dashboard.text)
             self.assertNotIn("Vista técnica", redirected_dashboard.text)
             self.assertEqual(knowledge.status_code, 303)
             self.assertEqual(knowledge.headers["location"], "/customers?view=knowledge")

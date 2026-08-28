@@ -195,6 +195,32 @@
 </svg>
 {%- endmacro %}
 
+{% macro icon_send(size=16, class="") -%}
+<svg class="ui-icon {{ class }}" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="m22 2-7 20-4-9-9-4Z"></path>
+  <path d="M22 2 11 13"></path>
+</svg>
+{%- endmacro %}
+
+{% macro icon_archive(size=16, class="") -%}
+<svg class="ui-icon {{ class }}" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M3 6h18"></path>
+  <path d="M5 6v14h14V6"></path>
+  <path d="M9 10h6"></path>
+  <path d="m9 3 1 3h4l1-3"></path>
+</svg>
+{%- endmacro %}
+
+{% macro icon_archive_restore(size=16, class="") -%}
+<svg class="ui-icon {{ class }}" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M3 6h18"></path>
+  <path d="M5 6v14h14V6"></path>
+  <path d="M9 10h6"></path>
+  <path d="m12 17-3-3 3-3"></path>
+  <path d="M9 14h6"></path>
+</svg>
+{%- endmacro %}
+
 {% macro icon_edit(size=16, class="") -%}
 <svg class="ui-icon {{ class }}" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
   <path d="M12 20h9"></path>

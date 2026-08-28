@@ -6,6 +6,12 @@
 {% set tabs = workbench["tab_counts"] %}
 <section class="workbench-shell page-section">
   <section class="workbench-queue-panel">
+    <header class="workbench-view-header page-content-header">
+      <div class="page-context">
+        <span class="page-kicker">Gestion operativa</span>
+      </div>
+      {% include "components/view_toggle.html" %}
+    </header>
     <details class="workbench-filters-panel" open>
       <summary>Filtros rápidos</summary>
       <div class="workbench-filter-controls">
@@ -18,14 +24,15 @@
           ("errors","Errores", tabs.errors),
           ("no_order","Sin pedido", tabs.no_order)
         ] %}
-          <a class="workbench-tab {% if filters.mode == key %}active{% endif %}" href="/?mode={{ key }}">
+          <a class="workbench-tab {% if filters.mode == key %}active{% endif %}" href="{{ dashboard_action }}?{% if dashboard_action == '/orders' %}view=cards&{% endif %}mode={{ key }}">
             <span>{{ label }}</span><strong>{{ count }}</strong>
           </a>
         {% endfor %}
       </div>
       <details class="workbench-advanced-filters">
         <summary>{{ icon_filter(14) }}<span>Más filtros</span></summary>
-        <form method="get" action="/" class="workbench-filters-form">
+        <form method="get" action="{{ dashboard_action }}" class="workbench-filters-form">
+          {% if dashboard_action == "/orders" %}<input type="hidden" name="view" value="cards">{% endif %}
           <input type="hidden" name="page" value="1">
           <div class="filter-grid workbench-quick-filters">
             <label>Buscar<input name="customer_or_sender" value="{{ filters.customer_or_sender or filters.search }}" placeholder="Cliente / asunto"></label>
@@ -45,7 +52,7 @@
             <label>Tipo<input name="email_type" value="{{ filters.email_type }}" placeholder="pedido / duda"></label>
             <label>Tamaño<select name="page_size">{% for size in pagination.allowed_page_sizes %}<option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>{% endfor %}</select></label>
             <button class="secondary compact-button" data-loading-text="Filtrando...">Filtrar</button>
-            <a class="button secondary compact-button" href="/">Limpiar</a>
+            <a class="button secondary compact-button" href="{{ view_cards_url }}">Limpiar</a>
           </div>
           <input type="hidden" name="mode" value="{{ filters.mode }}">
         </form>

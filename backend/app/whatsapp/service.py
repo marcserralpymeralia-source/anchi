@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.encryption import decrypt_secret, encrypt_secret
+from app.core.attachment_storage import save_attachment
 from app.core.storage import ensure_directory, resolve_temp_storage_dir
 from app.db.models import ChannelSetting, Conversation, InboundMessage, InputChannel, MessageAttachment
 from app.jobs.service import enqueue_job
@@ -239,13 +240,22 @@ async def _meta_request(
     access_token: str | None = None,
     params: dict[str, str] | None = None,
     json_body: dict[str, Any] | None = None,
+    data: dict[str, str] | None = None,
+    files: Any = None,
 ) -> dict[str, Any]:
     url = f"https://graph.facebook.com/{settings.meta_graph_api_version}/{path.lstrip('/')}"
     headers = {"Accept": "application/json"}
     if access_token:
         headers["Authorization"] = f"Bearer {access_token}"
     try:
-        response = await client.request(method, url, headers=headers, params=params, json=json_body)
+        request_kwargs: dict[str, Any] = {"headers": headers, "params": params}
+        if json_body is not None:
+            request_kwargs["json"] = json_body
+        if data is not None:
+            request_kwargs["data"] = data
+        if files is not None:
+            request_kwargs["files"] = files
+        response = await client.request(method, url, **request_kwargs)
     except httpx.TimeoutException as exc:
         raise WhatsAppEmbeddedSignupError("Meta no respondió a tiempo. Vuelve a intentarlo.", error_type="timeout") from exc
     except httpx.HTTPError as exc:
@@ -479,6 +489,101 @@ async def send_whatsapp_text(
     provider_message_id = str(messages[0].get("id") or "").strip() if messages and isinstance(messages[0], dict) else ""
     if not provider_message_id:
         raise WhatsAppEmbeddedSignupError("Meta aceptó la petición pero no devolvió el identificador del mensaje.", error_type="invalid_response")
+    return {"provider_message_id": provider_message_id, "recipient": recipient}
+
+
+def _whatsapp_reply_recipient(
+    db: Session,
+    *,
+    company_id: int,
+    conversation_id: int,
+    response_window_minutes: int,
+) -> str:
+    latest_inbound = db.scalar(
+        select(InboundMessage)
+        .where(
+            InboundMessage.company_id == company_id,
+            InboundMessage.conversation_id == conversation_id,
+            InboundMessage.direction == "inbound",
+        )
+        .order_by(InboundMessage.received_at.desc(), InboundMessage.id.desc())
+    )
+    recipient = str(latest_inbound.sender or "").strip() if latest_inbound else ""
+    if not recipient:
+        raise WhatsAppEmbeddedSignupError("No se encontró el número del cliente para responder.", error_type="recipient_not_found")
+    if latest_inbound and latest_inbound.received_at:
+        received_at = latest_inbound.received_at
+        if received_at.tzinfo is None:
+            received_at = received_at.replace(tzinfo=timezone.utc)
+        age_seconds = (datetime.now(timezone.utc) - received_at).total_seconds()
+        if age_seconds > max(response_window_minutes, 1) * 60:
+            raise WhatsAppEmbeddedSignupError("La ventana de respuesta de WhatsApp ha caducado; usa una plantilla aprobada.", error_type="response_window_expired")
+    return recipient
+
+
+async def send_whatsapp_media(
+    db: Session,
+    *,
+    company_id: int,
+    conversation_id: int,
+    content: bytes,
+    filename: str,
+    content_type: str,
+    is_audio: bool = False,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    config = whatsapp_config(db, company_id)
+    if config.provider != WHATSAPP_PROVIDER or not config.access_token or not config.phone_number_id:
+        raise WhatsAppEmbeddedSignupError("WhatsApp no está configurado para enviar archivos.", error_type="server_not_configured")
+    if not content or len(content) > config.max_attachment_bytes:
+        raise WhatsAppEmbeddedSignupError("El adjunto supera el tamaño máximo permitido.", error_type="media_too_large")
+    if not _is_supported_media(filename, content_type, is_audio=is_audio):
+        raise WhatsAppEmbeddedSignupError("Tipo de adjunto no soportado por WhatsApp.", error_type="unsupported_media")
+    recipient = _whatsapp_reply_recipient(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+        response_window_minutes=config.response_window_minutes,
+    )
+    owns_client = client is None
+    graph_client = client or httpx.AsyncClient(timeout=get_settings().meta_request_timeout_seconds)
+    try:
+        media_response = await _meta_request(
+            graph_client,
+            get_settings(),
+            "POST",
+            f"{config.phone_number_id}/media",
+            access_token=config.access_token,
+            data={"messaging_product": "whatsapp"},
+            files={"file": (filename, content, content_type)},
+        )
+        media_id = str(media_response.get("id") or "").strip()
+        if not media_id:
+            raise WhatsAppEmbeddedSignupError("Meta no devolvió el identificador del archivo.", error_type="invalid_response")
+        message_type = "audio" if is_audio else "document"
+        media_body: dict[str, str] = {"id": media_id}
+        if not is_audio:
+            media_body["filename"] = filename
+        response = await _meta_request(
+            graph_client,
+            get_settings(),
+            "POST",
+            f"{config.phone_number_id}/messages",
+            access_token=config.access_token,
+            json_body={
+                "messaging_product": "whatsapp",
+                "to": recipient,
+                "type": message_type,
+                message_type: media_body,
+            },
+        )
+    finally:
+        if owns_client:
+            await graph_client.aclose()
+    messages = response.get("messages") if isinstance(response.get("messages"), list) else []
+    provider_message_id = str(messages[0].get("id") or "").strip() if messages and isinstance(messages[0], dict) else ""
+    if not provider_message_id:
+        raise WhatsAppEmbeddedSignupError("Meta no devolvió el identificador del mensaje.", error_type="invalid_response")
     return {"provider_message_id": provider_message_id, "recipient": recipient}
 
 
@@ -1225,11 +1330,13 @@ def record_manual_response(
     external_id: str | None = None,
     status: str = "recorded",
     processing_step: str = "outbound_recorded",
+    attachments: list[dict[str, Any]] | None = None,
 ) -> InboundMessage:
     conversation = db.get(Conversation, conversation_id)
     if not conversation or conversation.company_id != company_id:
         raise ValueError("Conversation not found for tenant.")
     external_id = external_id or f"wa-out-{uuid4().hex}"
+    attachment_payloads = attachments or []
     message, _ = upsert_inbound_message(
         db,
         company_id=company_id,
@@ -1239,15 +1346,48 @@ def record_manual_response(
         sender=None,
         recipients=[],
         subject="WhatsApp outbound",
-        text_content=body,
+        text_content=body or None,
         external_thread_id=conversation.external_thread_id or external_id,
         metadata={"manual_response": True, "template_name": template_name},
-        content_type="whatsapp_text",
+        content_type="whatsapp_media" if attachment_payloads and not body else "whatsapp_text",
         direction="outbound",
         sent_at=datetime.now(timezone.utc),
+        has_attachments=bool(attachment_payloads),
+        has_pdf=any(str(item.get("filename") or "").lower().endswith(".pdf") for item in attachment_payloads),
+        has_audio=any(bool(item.get("is_audio")) for item in attachment_payloads),
     )
     message.status = status
     message.processing_step = processing_step
+    for item in attachment_payloads:
+        filename = _safe_media_filename(str(item.get("filename") or "whatsapp-attachment"), str(message.id))
+        storage_path = None
+        extraction_status = "storage_error"
+        extraction_error = "No se pudo guardar una copia local del adjunto enviado."
+        try:
+            storage_path = save_attachment(
+                filename=filename,
+                payload=bytes(item.get("content") or b""),
+                content_type=str(item.get("content_type") or "application/octet-stream"),
+            )
+            extraction_status = "downloaded"
+            extraction_error = None
+        except Exception:  # noqa: BLE001
+            pass
+        content_type = str(item.get("content_type") or "application/octet-stream")
+        db.add(
+            MessageAttachment(
+                company_id=company_id,
+                inbound_message_id=message.id,
+                filename=filename,
+                content_type=content_type[:120],
+                size_bytes=len(bytes(item.get("content") or b"")),
+                storage_path=storage_path,
+                is_pdf=filename.lower().endswith(".pdf") or content_type.lower() == "application/pdf",
+                is_audio=bool(item.get("is_audio")) or content_type.lower().startswith("audio/"),
+                extraction_status=extraction_status,
+                extraction_error=extraction_error,
+            )
+        )
     conversation.status = "human_owned"
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
@@ -1271,24 +1411,58 @@ async def send_manual_response(
     body: str,
     user_id: int | None = None,
     client: httpx.AsyncClient | None = None,
+    attachments: list[dict[str, Any]] | None = None,
 ) -> InboundMessage:
-    result = await send_whatsapp_text(
-        db,
-        company_id=company_id,
-        conversation_id=conversation_id,
-        body=body,
-        client=client,
-    )
-    return record_manual_response(
-        db,
-        company_id=company_id,
-        conversation_id=conversation_id,
-        body=body,
-        user_id=user_id,
-        external_id=result["provider_message_id"],
-        status="accepted",
-        processing_step="outbound_accepted",
-    )
+    clean_body = str(body or "").strip()
+    attachment_payloads = attachments or []
+    if not clean_body and not attachment_payloads:
+        raise WhatsAppEmbeddedSignupError("El mensaje debe incluir texto o un archivo.", error_type="invalid_message")
+    sent_messages: list[InboundMessage] = []
+    if clean_body:
+        result = await send_whatsapp_text(
+            db,
+            company_id=company_id,
+            conversation_id=conversation_id,
+            body=clean_body,
+            client=client,
+        )
+        sent_messages.append(
+            record_manual_response(
+                db,
+                company_id=company_id,
+                conversation_id=conversation_id,
+                body=clean_body,
+                user_id=user_id,
+                external_id=result["provider_message_id"],
+                status="accepted",
+                processing_step="outbound_accepted",
+            )
+        )
+    for attachment in attachment_payloads:
+        result = await send_whatsapp_media(
+            db,
+            company_id=company_id,
+            conversation_id=conversation_id,
+            content=bytes(attachment.get("content") or b""),
+            filename=str(attachment.get("filename") or "whatsapp-attachment"),
+            content_type=str(attachment.get("content_type") or "application/octet-stream"),
+            is_audio=bool(attachment.get("is_audio")),
+            client=client,
+        )
+        sent_messages.append(
+            record_manual_response(
+                db,
+                company_id=company_id,
+                conversation_id=conversation_id,
+                body="",
+                user_id=user_id,
+                external_id=result["provider_message_id"],
+                status="accepted",
+                processing_step="outbound_accepted",
+                attachments=[attachment],
+            )
+        )
+    return sent_messages[-1]
 
 
 def _extract_message_text(message: dict[str, Any]) -> str | None:

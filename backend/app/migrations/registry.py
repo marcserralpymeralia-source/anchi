@@ -59,6 +59,7 @@ TENANT_COMPAT_COLUMNS = {
     },
     "orders": {
         "conversation_id": "INTEGER",
+        "archived": "BOOLEAN DEFAULT false",
         "deleted_at": "DATETIME",
         "deleted_by": "INTEGER",
         "delete_reason": "TEXT",
@@ -813,6 +814,10 @@ def _apply_tenant_knowledge_entries(engine, dry_run: bool) -> list[str]:  # noqa
     return actions
 
 
+def _apply_tenant_order_archiving(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    return ensure_columns(engine, "orders", {"archived": "BOOLEAN DEFAULT false"}, dry_run=dry_run)
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -855,6 +860,12 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant business knowledge entries",
         checksum=checksum_text("tenant", "business_knowledge_entries", "knowledge_entries"),
         upgrade=_apply_tenant_knowledge_entries,
+    ),
+    MigrationSpec(
+        version="2026.08.28.1",
+        name="tenant order archiving",
+        checksum=checksum_text("tenant", "order_archiving", "orders", "archived"),
+        upgrade=_apply_tenant_order_archiving,
     ),
 ]
 

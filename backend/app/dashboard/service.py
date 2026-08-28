@@ -601,7 +601,11 @@ def workbench_summary(db: Session, company_id: int, filters: dict, *, include_me
         selectinload(Order.customer),
         selectinload(Order.validated_customer),
     ]
-    orders_stmt = select(Order).where(Order.company_id == company_id).options(*order_load_options)
+    orders_stmt = select(Order).where(
+        Order.company_id == company_id,
+        Order.deleted_at.is_(None),
+        Order.archived.is_(False),
+    ).options(*order_load_options)
     today = datetime.now(timezone.utc).date()
     quick_range = mapped_filters.get("quick_range")
     if quick_range == "today":
@@ -649,6 +653,12 @@ def workbench_summary(db: Session, company_id: int, filters: dict, *, include_me
     order_email_ids = {item["email_id"] for item in order_items if item["email_id"]}
 
     emails_stmt = select(Email).where(Email.company_id == company_id)
+    archived_order_email_ids = select(Order.email_id).where(
+        Order.company_id == company_id,
+        Order.email_id.is_not(None),
+        Order.archived.is_(True),
+    )
+    emails_stmt = emails_stmt.where(~Email.id.in_(archived_order_email_ids))
     today = datetime.now(timezone.utc).date()
     date_range = filters.get("date_range") or filters.get("quick_range") or ""
     if date_range == "today":

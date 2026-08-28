@@ -1,4 +1,4 @@
-{% from "components/icons.html" import icon_menu, icon_dashboard, icon_entries, icon_mail, icon_customers, icon_products, icon_settings, icon_book_open, icon_bell, icon_plus, icon_logout, icon_paperclip, icon_search, icon_close, icon_check, icon_refresh, icon_trash, icon_copy %}
+{% from "components/icons.html" import icon_menu, icon_dashboard, icon_entries, icon_mail, icon_whatsapp, icon_customers, icon_products, icon_settings, icon_book_open, icon_bell, icon_plus, icon_logout, icon_paperclip, icon_search, icon_close, icon_check, icon_refresh, icon_trash, icon_copy, icon_folder %}
 <!doctype html>
 <html lang="es">
 <head>
@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title or app_settings.app_name }}</title>
   {% if request.state.branding.favicon_url %}<link rel="icon" href="{{ request.state.branding.favicon_url }}">{% endif %}
-  <link rel="stylesheet" href="/static/styles.css?v=25">
+  <link rel="stylesheet" href="/static/styles.css?v=28">
   <script src="/static/js/database-tables.js" defer></script>
   {% block head_extra %}{% endblock %}
   <style>{{ branding_css_vars(request.state.branding)|safe }}</style>
@@ -24,17 +24,22 @@
         </div>
         <button class="sidebar-toggle secondary" type="button" title="Contraer menu" aria-label="Contraer menu" onclick="toggleSidebar()">{{ icon_menu(18) }}</button>
       </div>
-      {% set href_dashboard = '/' %}
-      {% set href_orders = '/orders' %}
+      {% set href_orders = '/orders?view=list' %}
+      {% set href_archived_orders = '/orders?view=list&archived=true' %}
       {% set href_history = '/history' %}
       {% set href_customers = '/customers' %}
       {% set href_products = '/products' %}
       {% set href_settings = '/settings' %}
       {% set href_import_manual = request.url_for('manual_import_page') if request.url_for is defined else '/imports/manual' %}
       <nav class="nav">
-        <a href="{{ href_dashboard }}" title="Bandeja" class="{% if request.url.path in ['/', '/inicio', '/workbench'] %}active{% endif %}"><span class="nav-icon">{{ icon_dashboard(20) }}</span><span class="nav-label">Bandeja</span></a>
-        <a href="{{ href_orders }}" title="Pedidos" class="{% if request.url.path.startswith('/orders') %}active{% endif %}"><span class="nav-icon">{{ icon_entries(20) }}</span><span class="nav-label">Pedidos</span></a>
-        <a href="{{ href_history }}" title="Buzón de correo" class="{% if request.url.path.startswith('/history') or request.url.path.startswith('/pedidos') or request.url.path.startswith('/mail') %}active{% endif %}"><span class="nav-icon">{{ icon_mail(20) }}</span><span class="nav-label">Buzón de correo</span></a>
+        <a href="{{ href_orders }}" title="Pedidos" class="{% if request.url.path in ['/', '/inicio', '/workbench'] or (request.url.path.startswith('/orders') and request.query_params.get('archived') != 'true') %}active{% endif %}"><span class="nav-icon">{{ icon_entries(20) }}</span><span class="nav-label">Pedidos</span></a>
+        <a href="{{ href_archived_orders }}" title="Archivos" class="{% if request.url.path.startswith('/orders') and request.query_params.get('archived') == 'true' %}active{% endif %}"><span class="nav-icon">{{ icon_folder(20) }}</span><span class="nav-label">Archivos</span></a>
+        {% if "email" in enabled_channels %}
+          <a href="{{ href_history }}" title="Buzón de correo" class="{% if request.url.path.startswith('/history') or request.url.path.startswith('/pedidos') or request.url.path.startswith('/mail') %}active{% endif %}"><span class="nav-icon">{{ icon_mail(20) }}</span><span class="nav-label">Buzón de correo</span></a>
+        {% endif %}
+        {% if "whatsapp" in enabled_channels %}
+          <a href="/whatsapp/inbox" title="WhatsApp" class="{% if request.url.path.startswith('/whatsapp/inbox') %}active{% endif %}"><span class="nav-icon">{{ icon_whatsapp(20) }}</span><span class="nav-label">WhatsApp</span></a>
+        {% endif %}
         <a href="{{ href_customers }}" title="Clientes" class="{% if request.url.path.startswith('/customers') %}active{% endif %}"><span class="nav-icon">{{ icon_customers(20) }}</span><span class="nav-label">Clientes</span></a>
         <a href="{{ href_products }}" title="Productos" class="{% if request.url.path.startswith('/products') %}active{% endif %}"><span class="nav-icon">{{ icon_products(20) }}</span><span class="nav-label">Productos</span></a>
         {% if user.role.name in ["Administrador", "Superadmin"] %}

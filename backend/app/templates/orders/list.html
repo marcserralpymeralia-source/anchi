@@ -1,7 +1,9 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_edit, icon_filter, icon_plus %}
-{% set title = "Pedidos" %}
-{% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css?v=11">{% endblock %}
+{% from "components/icons.html" import icon_archive, icon_archive_restore, icon_edit, icon_filter, icon_plus %}
+{% set archived_view = filters.archived %}
+{% set title = "Archivos" if archived_view else "Pedidos" %}
+{% set orders_reset_url = "/orders?archived=true" if archived_view else "/orders" %}
+{% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css?v=12">{% endblock %}
 {% block content %}
 
 {% set active_count = 0 %}
@@ -43,20 +45,29 @@
 <section class="database-compact-page">
   <header class="database-compact-head page-content-header">
     <div class="page-context">
-      <span class="page-kicker">Gestion operativa</span>
+      <span class="page-kicker">{{ "Histórico operativo" if archived_view else "Gestión operativa" }}</span>
     </div>
-    <form class="page-header-actions" method="post" action="/orders/mock" style="margin:0;">
-      <button type="submit" style="display:inline-flex;align-items:center;gap:6px;">
-        {{ icon_plus(14) }}
-        <span>{{ request.state.branding.microcopy.create_test_order }}</span>
-      </button>
-    </form>
+    {% if archived_view %}
+      <span class="database-archive-view-label">Solo pedidos archivados</span>
+    {% else %}
+      {% set current_view = "list" %}
+      {% set view_cards_url = "/orders?view=cards" %}
+      {% set view_list_url = "/orders?view=list" %}
+      {% include "components/view_toggle.html" %}
+      <form class="page-header-actions" method="post" action="/orders/mock" style="margin:0;">
+        <button type="submit" style="display:inline-flex;align-items:center;gap:6px;">
+          {{ icon_plus(14) }}
+          <span>{{ request.state.branding.microcopy.create_test_order }}</span>
+        </button>
+      </form>
+    {% endif %}
   </header>
 
   <div class="orders-compact-toolbar">
     <form class="orders-filter-form-row" method="get" action="/orders" id="orders-main-filter-form">
       <input type="hidden" name="page" value="1">
       <input type="hidden" name="sort" value="{{ filters.sort or 'date_desc' }}">
+      {% if archived_view %}<input type="hidden" name="archived" value="true">{% endif %}
       <input
         class="orders-search-field"
         name="search"
@@ -86,11 +97,12 @@
           <input type="hidden" name="search" value="{{ filters.search or '' }}">
           <input type="hidden" name="status" value="{{ filters.status or '' }}">
           <input type="hidden" name="sort" value="{{ filters.sort or 'date_desc' }}">
+          {% if archived_view %}<input type="hidden" name="archived" value="true">{% endif %}
 
           <div class="database-inline-head">
             <strong>Filtros avanzados</strong>
             {% if active_count > 0 %}
-              <a href="/orders">Limpiar todo</a>
+              <a href="{{ orders_reset_url }}">Limpiar todo</a>
             {% endif %}
           </div>
 
@@ -166,7 +178,7 @@
       </div>
     </details>
 
-    <span class="database-compact-count">{{ pagination.total_items }} pedidos</span>
+    <span class="database-compact-count">{{ pagination.total_items }} {{ "archivados" if archived_view else "pedidos" }}</span>
   </div>
 
   {# Active Filter Pills #}
@@ -180,30 +192,30 @@
         <span class="filter-chip">Estado: <strong>{{ filters.status|status_label }}</strong> <a href="#" onclick="document.querySelector('[name=status]').value='';document.getElementById('orders-main-filter-form').submit();return false;" class="filter-chip-remove" title="Quitar">×</a></span>
       {% endif %}
       {% if filters.customer_id and filters.customer_id != 0 and filters.customer_id != "0" %}
-        {% for customer in customers %}{% if customer.id == filters.customer_id %}<span class="filter-chip">Cliente: <strong>{{ customer.fiscal_name }}</strong> <a href="/orders" class="filter-chip-remove" title="Quitar">×</a></span>{% endif %}{% endfor %}
+        {% for customer in customers %}{% if customer.id == filters.customer_id %}<span class="filter-chip">Cliente: <strong>{{ customer.fiscal_name }}</strong> <a href="{{ orders_reset_url }}" class="filter-chip-remove" title="Quitar">×</a></span>{% endif %}{% endfor %}
       {% endif %}
       {% if filters.date_from %}
-        <span class="filter-chip">Desde: <strong>{{ filters.date_from }}</strong> <a href="/orders" class="filter-chip-remove" title="Quitar">×</a></span>
+        <span class="filter-chip">Desde: <strong>{{ filters.date_from }}</strong> <a href="{{ orders_reset_url }}" class="filter-chip-remove" title="Quitar">×</a></span>
       {% endif %}
       {% if filters.date_to %}
-        <span class="filter-chip">Hasta: <strong>{{ filters.date_to }}</strong> <a href="/orders" class="filter-chip-remove" title="Quitar">×</a></span>
+        <span class="filter-chip">Hasta: <strong>{{ filters.date_to }}</strong> <a href="{{ orders_reset_url }}" class="filter-chip-remove" title="Quitar">×</a></span>
       {% endif %}
       {% if filters.scoring_category %}
-        <span class="filter-chip">Categoría: <strong>{{ filters.scoring_category }}</strong> <a href="/orders" class="filter-chip-remove" title="Quitar">×</a></span>
+        <span class="filter-chip">Categoría: <strong>{{ filters.scoring_category }}</strong> <a href="{{ orders_reset_url }}" class="filter-chip-remove" title="Quitar">×</a></span>
       {% endif %}
       {% if filters.has_pdf %}
-        <span class="filter-chip">PDF: <strong>{{ 'Con PDF' if filters.has_pdf == 'yes' else 'Sin PDF' }}</strong> <a href="/orders" class="filter-chip-remove" title="Quitar">×</a></span>
+        <span class="filter-chip">PDF: <strong>{{ 'Con PDF' if filters.has_pdf == 'yes' else 'Sin PDF' }}</strong> <a href="{{ orders_reset_url }}" class="filter-chip-remove" title="Quitar">×</a></span>
       {% endif %}
       {% if filters.requires_review %}
-        <span class="filter-chip">Revisión: <strong>{{ 'Requiere' if filters.requires_review == 'yes' else 'No requiere' }}</strong> <a href="/orders" class="filter-chip-remove" title="Quitar">×</a></span>
+        <span class="filter-chip">Revisión: <strong>{{ 'Requiere' if filters.requires_review == 'yes' else 'No requiere' }}</strong> <a href="{{ orders_reset_url }}" class="filter-chip-remove" title="Quitar">×</a></span>
       {% endif %}
       {% if filters.sender %}
-        <span class="filter-chip">Remitente: <strong>{{ filters.sender }}</strong> <a href="/orders" class="filter-chip-remove" title="Quitar">×</a></span>
+        <span class="filter-chip">Remitente: <strong>{{ filters.sender }}</strong> <a href="{{ orders_reset_url }}" class="filter-chip-remove" title="Quitar">×</a></span>
       {% endif %}
       {% if filters.email_type %}
-        <span class="filter-chip">Tipo: <strong>{{ filters.email_type|status_label }}</strong> <a href="/orders" class="filter-chip-remove" title="Quitar">×</a></span>
+        <span class="filter-chip">Tipo: <strong>{{ filters.email_type|status_label }}</strong> <a href="{{ orders_reset_url }}" class="filter-chip-remove" title="Quitar">×</a></span>
       {% endif %}
-      <a href="/orders" class="clear-all-chips-btn">Limpiar todos</a>
+      <a href="{{ orders_reset_url }}" class="clear-all-chips-btn">Limpiar todos</a>
     </div>
   {% endif %}
 
@@ -259,19 +271,24 @@
             </div>
           </td>
           <td data-column="status"><span class="badge {{ order.status|status_class }}">{{ order.status|status_label }}</span></td>
-          <td data-column="action" class="actions">
-            <a class="button secondary compact-button table-edit-button" href="/orders/{{ order.id }}" title="Editar pedido" aria-label="Editar pedido" onclick="event.stopPropagation();">{{ icon_edit(15) }}</a>
-            <a class="button secondary compact-button" href="/orders/{{ order.id }}" onclick="event.stopPropagation();">{{ request.state.branding.microcopy.review_order }}</a>
-            {% if order.email_id %}<a class="button secondary compact-button" href="/?focus=email-{{ order.email_id }}" onclick="event.stopPropagation();">Ver origen</a>{% endif %}
-            <details class="row-more-actions" onclick="event.stopPropagation()">
-              <summary class="button secondary compact-button">...</summary>
-              <div class="row-more-actions-panel">
-                <a href="/orders/{{ order.id }}/export-preview" onclick="event.stopPropagation();">Ver exportación</a>
-                <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/delete" data-confirm="¿Seguro que quieres eliminar este pedido? Se quitará de la gestión activa.">
-                  <button type="submit" class="secondary compact-button danger" data-loading-text="Eliminando...">Eliminar</button>
-                </form>
-              </div>
-            </details>
+          <td data-column="action" class="database-actions-cell">
+            <div class="data-table__actions">
+              <a class="button secondary compact-button table-edit-button" href="/orders/{{ order.id }}" title="Editar pedido" aria-label="Editar pedido" onclick="event.stopPropagation();">{{ icon_edit(15) }}</a>
+              <form class="table-action-form js-loading-form" method="post" action="/orders/{{ order.id }}/{{ 'unarchive' if archived_view else 'archive' }}" data-confirm="{{ '¿Sacar este pedido del archivo?' if archived_view else '¿Archivar este pedido?' }}" onclick="event.stopPropagation();">
+                <button type="submit" class="button secondary compact-button table-action-icon" title="{{ 'Desarchivar' if archived_view else 'Archivar' }}" aria-label="{{ 'Desarchivar' if archived_view else 'Archivar' }}" data-loading-text="{{ 'Desarchivando...' if archived_view else 'Archivando...' }}">{{ icon_archive_restore(15) if archived_view else icon_archive(15) }}</button>
+              </form>
+              <a class="button secondary compact-button" href="/orders/{{ order.id }}" onclick="event.stopPropagation();">{{ request.state.branding.microcopy.review_order }}</a>
+              <details class="row-more-actions" onclick="event.stopPropagation()">
+                <summary class="button secondary compact-button">...</summary>
+                <div class="row-more-actions-panel">
+                  {% if order.email_id %}<a href="/?focus=email-{{ order.email_id }}" onclick="event.stopPropagation();">Ver origen</a>{% endif %}
+                  <a href="/orders/{{ order.id }}/export-preview" onclick="event.stopPropagation();">Ver exportación</a>
+                  <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/delete" data-confirm="¿Seguro que quieres eliminar este pedido? Se quitará de la gestión activa.">
+                    <button type="submit" class="secondary compact-button danger" data-loading-text="Eliminando...">Eliminar</button>
+                  </form>
+                </div>
+              </details>
+            </div>
           </td>
         </tr>
       {% else %}

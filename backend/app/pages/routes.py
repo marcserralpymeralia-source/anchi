@@ -447,6 +447,10 @@ def dashboard(
             "featured_process_item": featured_process_item,
             "filters": filters,
             "pagination": workbench["pagination"],
+            "current_view": "cards",
+            "view_cards_url": "/orders?view=cards" if request.url.path.startswith("/orders") else "/",
+            "view_list_url": "/orders?view=list",
+            "dashboard_action": "/orders" if request.url.path.startswith("/orders") else "/",
         },
     )
 @router.get("/history")
