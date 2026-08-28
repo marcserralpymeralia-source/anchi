@@ -1250,7 +1250,15 @@ class UnifiedOrderPipelineService:
         self.exporter = ExportService()
         self.alerts = AlertService()
 
-    def process_inbound_message(self, db: Session, inbound_message: InboundMessage, user=None, force_order: bool = False, email: Email | None = None) -> dict[str, Any]:
+    def process_inbound_message(
+        self,
+        db: Session,
+        inbound_message: InboundMessage,
+        user=None,
+        force_order: bool = False,
+        email: Email | None = None,
+        source_text_override: str | None = None,
+    ) -> dict[str, Any]:
         if not force_order and inbound_message.order_id:
             order = db.scalar(
                 select(Order).where(
@@ -1280,7 +1288,7 @@ class UnifiedOrderPipelineService:
 
         email = email or db.scalar(select(Email).where(Email.company_id == inbound_message.company_id, Email.external_id == inbound_message.source_external_id))
         try:
-            source_text = self._input_text(inbound_message, email)
+            source_text = source_text_override or self._input_text(inbound_message, email)
             if len(source_text.strip()) < 12:
                 inbound_message.status = "doubtful"
                 inbound_message.processing_step = "insufficient_text"
