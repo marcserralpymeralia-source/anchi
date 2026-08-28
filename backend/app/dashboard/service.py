@@ -261,11 +261,41 @@ def agent_status_label(status: str) -> str:
     return entry_status_label(status)
 
 
+
+def operational_status_for_order(order: Order) -> tuple[str, str]:
+    status = (order.status or "").strip().lower()
+
+    if status in {
+        "pedido_exportado",
+        "cerrado",
+        "cancelado",
+        "descartado",
+        "deleted",
+        "archived_deleted",
+    }:
+        return "archived", "Archivado"
+
+    if status in CONFIRMED_ORDER_STATUSES:
+        return "confirmed", "Pedido confirmado"
+
+    return "pending_validation", "Pendiente de validación"
+
+
+def operational_status_for_email(email: Email) -> tuple[str, str]:
+    status = canonical_email_status(email)
+
+    if status in {"closed", "archived", "discarded", "no_order"}:
+        return "archived", "Archivado"
+
+    return "pending_classification", "Pendiente de clasificar"
+
+
 def order_workbench_item(order: Order, settings: ScoringSettings, *, include_line_metrics: bool = True, line_metrics_by_order: dict[int, dict[str, int]] | None = None) -> dict:
     item = build_order_item(order, settings, include_line_metrics=include_line_metrics, line_metrics_by_order=line_metrics_by_order)
     agent_status = email_agent_status(order.email, order) if order.email else "order_detected"
     op_category = order_operational_category(order, settings, line_metrics_by_order=line_metrics_by_order)
     action_label, action_type = order_action(order, settings, line_metrics_by_order=line_metrics_by_order)
+    operational_status, operational_status_label = operational_status_for_order(order)
     return {
         "id": f"order-{order.id}",
         "kind": "order",
@@ -279,6 +309,8 @@ def order_workbench_item(order: Order, settings: ScoringSettings, *, include_lin
         "suggested_customer": item["customer"],
         "agent_status": agent_status,
         "agent_status_label": agent_status_label(agent_status),
+        "operational_status": operational_status,
+        "operational_status_label": operational_status_label,
         "detected_type": order.email.detected_type if order.email else "pedido",
         "has_pdf": item["has_pdf"],
         "has_attachments": bool(order.email and order.email.has_attachments),
@@ -301,6 +333,7 @@ def order_workbench_item(order: Order, settings: ScoringSettings, *, include_lin
 
 def email_workbench_item(email: Email) -> dict:
     agent_status = email_agent_status(email)
+    operational_status, operational_status_label = operational_status_for_email(email)
     action = "Procesar ahora" if agent_status == "not_processed" else "Revisar"
     sender_domain = _safe_sender_domain(email.sender)
     priority_rank = 1 if agent_status == "error" else 3 if agent_status == "not_processed" else 7
@@ -319,6 +352,8 @@ def email_workbench_item(email: Email) -> dict:
         "suggested_customer": "",
         "agent_status": agent_status,
         "agent_status_label": agent_status_label(agent_status),
+        "operational_status": operational_status,
+        "operational_status_label": operational_status_label,
         "detected_type": email.detected_type or "",
         "has_pdf": email_has_pdf(email),
         "has_attachments": bool(email.has_attachments),

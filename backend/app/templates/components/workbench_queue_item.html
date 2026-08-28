@@ -1,5 +1,5 @@
 <article
-  class="queue-item queue-item-{{ item.scoring_category }} queue-item-{{ item.agent_status }} queue-item-confidence-{{ confidence_key }}"
+  class="queue-item queue-item-{{ item.scoring_category }} queue-item-{{ item.agent_status }} queue-item-operational-{{ item.operational_status }} queue-item-confidence-{{ confidence_key }}"
   data-modal-id="{{ item.modal_id }}"
   data-kind="{{ item.kind }}"
   data-detail-url="{{ item.detail_url }}"
@@ -17,6 +17,10 @@
     <strong>{{ item.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M", "—") }}</strong>
   </div>
   <div class="queue-item-summary">
+    <span>Estado</span>
+    <strong>{{ item.operational_status_label }}</strong>
+  </div>
+  <div class="queue-item-summary">
     <span>Score</span>
     <strong>{% if item.score is not none %}{{ "%.0f"|format(item.score) }}%{% else %}Sin score{% endif %}</strong>
   </div>
@@ -30,9 +34,13 @@
   </div>
   <div class="queue-item-actions">
     {% if item.kind == "email" and item.agent_status == "not_processed" %}
-      <form class="js-loading-form" method="post" action="/entries/email-{{ item.email_id }}/process"><button class="primary compact-button" data-loading-text="Procesando..." onclick="event.stopPropagation();">Procesar</button></form>
+      <form class="js-loading-form" method="post" action="/entries/email-{{ item.email_id }}/process">
+        <button class="primary compact-button" data-loading-text="Procesando..." onclick="event.stopPropagation();">Procesar</button>
+      </form>
+    {% elif item.kind == "order" and item.operational_status == "pending_validation" %}
+      <a class="button primary compact-button" href="/orders/{{ item.order_id }}" onclick="event.stopPropagation();">Revisar pedido</a>
     {% elif item.kind == "order" %}
-      <a class="button primary compact-button" href="/orders/{{ item.order_id }}" onclick="event.stopPropagation();">Revisar</a>
+      <a class="button secondary compact-button" href="/orders/{{ item.order_id }}" onclick="event.stopPropagation();">Ver pedido</a>
     {% else %}
       <a class="button primary compact-button" href="/entries/email-{{ item.email_id }}/resolve" onclick="event.stopPropagation();">Revisar</a>
     {% endif %}
