@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.core.encryption import mask_secret
 from app.db.models import AuditLog, BackgroundJob, BrandingSettings, Company, Customer, DecisionSettings, Email, EmailSettings, ExportSettings, FTPSettings, InputChannel, InboundMessage, LLMSettings, Order, Product, PromptTemplate, PromptVersion, ScoringSettings
 from app.dashboard.service import agent_status_label, recent_processed_emails_overview
+from app.exports.service import FTPService
 from app.logs.service import log_action
 from app.master.service import TenantUser
 from app.settings.agent_config import agent_metrics, agent_status, improvement_suggestions, apply_safety_level
@@ -320,4 +321,24 @@ def run_connection_test(section: str, db: Session, user: TenantUser) -> tuple[di
         llm.last_response_ms = elapsed_ms
         db.commit()
         return result, "agent-ai"
-    return {"message": f"Prueba no disponible para {section}."}, "email"
+    if section == "ftp":
+        ftp = get_or_create_settings(db, FTPSettings, user.company_id)
+        try:
+            FTPService().test_connection(ftp)
+            result = {
+                "ok": True,
+                "message": (
+                    f"Conexion {ftp.connection_type.upper()} correcta "
+                    f"con {ftp.host}:{ftp.port}."
+                ),
+            }
+        except Exception as exc:
+            result = {
+                "ok": False,
+                "message": (
+                    f"No se pudo conectar por {ftp.connection_type.upper()}: "
+                    f"{exc}"
+                ),
+            }
+        return result, "ftp"
+    return {"ok": False, "message": f"Prueba no disponible para {section}."}, "email"

@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 from app.core.encryption import encrypt_secret
 from app.exports.service import FTPService
+from app.settings.application import run_connection_test
 
 
 class FTPTransportTests(unittest.TestCase):
@@ -27,6 +28,48 @@ class FTPTransportTests(unittest.TestCase):
             filename="PEDIDO_1.csv",
             content="pedido;cliente\n1;C001\n",
         )
+
+    @patch("app.settings.application.FTPService.test_connection")
+    @patch("app.settings.application.get_or_create_settings")
+    def test_settings_connection_test_uses_ftp_service(
+        self,
+        get_settings,
+        test_connection,
+    ):
+        ftp_settings = self._settings("ftps_explicit", 21)
+        get_settings.return_value = ftp_settings
+        test_connection.return_value = True
+
+        db = MagicMock()
+        user = SimpleNamespace(company_id=1)
+
+        result, anchor = run_connection_test("ftp", db, user)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(anchor, "ftp")
+        self.assertIn("correcta", result["message"])
+        test_connection.assert_called_once_with(ftp_settings)
+
+    @patch("app.settings.application.FTPService.test_connection")
+    @patch("app.settings.application.get_or_create_settings")
+    def test_settings_connection_test_returns_controlled_error(
+        self,
+        get_settings,
+        test_connection,
+    ):
+        ftp_settings = self._settings("ftps_explicit", 21)
+        get_settings.return_value = ftp_settings
+        test_connection.side_effect = ConnectionError("connection refused")
+
+        db = MagicMock()
+        user = SimpleNamespace(company_id=1)
+
+        result, anchor = run_connection_test("ftp", db, user)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(anchor, "ftp")
+        self.assertIn("connection refused", result["message"])
+
 
     @patch("app.exports.service.ftplib.FTP")
     def test_plain_ftp_upload(self, ftp_cls):
