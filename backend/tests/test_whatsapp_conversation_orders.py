@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import unittest.mock
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -13,6 +14,7 @@ from app.whatsapp.conversation_orders import (
     build_transcript,
     evaluate_conversation_order,
     has_explicit_order_close,
+    is_short_order_confirmation,
 )
 
 
@@ -136,6 +138,273 @@ class WhatsAppConversationOrderTests(unittest.TestCase):
         self.assertIn("CLIENTE: Ponme 4 cajas de tomate", result.transcript)
         self.assertIn("CLIENTE: Nada más, gracias", result.transcript)
         db.close()
+
+    def test_short_confirmation_detection_is_conservative(self):
+        self.assertTrue(is_short_order_confirmation("Sí"))
+        self.assertTrue(is_short_order_confirmation("Correcto"))
+        self.assertTrue(is_short_order_confirmation("Adelante"))
+        self.assertFalse(is_short_order_confirmation("Sí, pero añade dos cajas"))
+        self.assertFalse(is_short_order_confirmation("Sí quiero cuatro cajas"))
+
+    def test_confirmation_after_ready_prompt_releases_order(self):
+        db = self.Session()
+        now = datetime.now(timezone.utc)
+
+        self._message(
+            db,
+            1,
+            "Ponme 4 cajas de tomate",
+            received_at=now,
+        )
+        outbound = self._message(
+            db,
+            2,
+            "¿Confirmas 4 cajas de tomate?",
+            direction="outbound",
+            received_at=now + timedelta(seconds=1),
+        )
+        outbound.raw_payload_json = (
+            '{"auto_response": true, '
+            '"semantic_state": "ready_for_confirmation", '
+            '"trigger_message_id": 1}'
+        )
+        confirmation = self._message(
+            db,
+            3,
+            "Sí",
+            received_at=now + timedelta(seconds=2),
+        )
+        db.commit()
+
+        evaluator = unittest.mock.MagicMock()
+
+        result = evaluate_conversation_order(
+            db,
+            message=confirmation,
+            semantic_evaluator=evaluator,
+        )
+
+        self.assertEqual(result.state, "ready")
+        self.assertEqual(result.closing_message_id, confirmation.id)
+        evaluator.assert_not_called()
+        db.close()
+
+    def test_confirmation_without_ready_prompt_does_not_release_order(self):
+        db = self.Session()
+        latest = self._message(db, 1, "Sí")
+        db.commit()
+
+        evaluator = unittest.mock.MagicMock(
+            return_value=SimpleNamespace(
+                intent="other",
+                state="collecting",
+                missing_or_uncertain=[],
+                reply_needed=False,
+                suggested_reply="",
+                confidence=0.7,
+                prompt_execution_id=300,
+            )
+        )
+
+        result = evaluate_conversation_order(
+            db,
+            message=latest,
+            semantic_evaluator=evaluator,
+        )
+
+        self.assertEqual(result.state, "collecting")
+        evaluator.assert_called_once()
+        db.close()
+
+    def test_confirmation_with_modification_does_not_release_order(self):
+        db = self.Session()
+        now = datetime.now(timezone.utc)
+
+        self._message(
+            db,
+            1,
+            "Ponme 4 cajas de tomate",
+            received_at=now,
+        )
+        outbound = self._message(
+            db,
+            2,
+            "¿Confirmas 4 cajas de tomate?",
+            direction="outbound",
+            received_at=now + timedelta(seconds=1),
+        )
+        outbound.raw_payload_json = (
+            '{"auto_response": true, '
+            '"semantic_state": "ready_for_confirmation", '
+            '"trigger_message_id": 1}'
+        )
+        latest = self._message(
+            db,
+            3,
+            "Sí, pero añade dos cajas de calabacín",
+            received_at=now + timedelta(seconds=2),
+        )
+        db.commit()
+
+        evaluator = unittest.mock.MagicMock(
+            return_value=SimpleNamespace(
+                intent="order",
+                state="ready_for_confirmation",
+                missing_or_uncertain=[],
+                reply_needed=True,
+                suggested_reply="¿Confirmas también las dos cajas de calabacín?",
+                confidence=0.96,
+                prompt_execution_id=301,
+            )
+        )
+
+        result = evaluate_conversation_order(
+            db,
+            message=latest,
+            semantic_evaluator=evaluator,
+        )
+
+        self.assertEqual(result.state, "collecting")
+        self.assertEqual(result.semantic_state, "ready_for_confirmation")
+        evaluator.assert_called_once()
+        db.close()
+
+    def test_old_explicit_close_does_not_close_later_message(self):
+        db = self.Session()
+        now = datetime.now(timezone.utc)
+
+        self._message(
+            db,
+            1,
+            "Confirma el pedido",
+            received_at=now,
+        )
+        latest = self._message(
+            db,
+            2,
+            "Espera, cambia el tomate por calabacín",
+            received_at=now + timedelta(seconds=1),
+        )
+        db.commit()
+
+        evaluator = unittest.mock.MagicMock(
+            return_value=SimpleNamespace(
+                intent="order",
+                state="needs_clarification",
+                missing_or_uncertain=["pedido modificado"],
+                reply_needed=True,
+                suggested_reply="¿Qué cantidad de calabacín necesitas?",
+                confidence=0.9,
+                prompt_execution_id=302,
+            )
+        )
+
+        result = evaluate_conversation_order(
+            db,
+            message=latest,
+            semantic_evaluator=evaluator,
+        )
+
+        self.assertEqual(result.state, "collecting")
+        self.assertEqual(result.semantic_state, "needs_clarification")
+        evaluator.assert_called_once()
+        db.close()
+
+
+    def test_semantic_clarification_is_exposed_without_releasing_pipeline(self):
+        db = self.Session()
+        latest = self._message(db, 1, "Ponme 4 de tomate")
+        db.commit()
+
+        evaluator = unittest.mock.MagicMock(
+            return_value=SimpleNamespace(
+                intent="order",
+                state="needs_clarification",
+                missing_or_uncertain=["unidad de tomate"],
+                reply_needed=True,
+                suggested_reply="¿Las 4 de tomate son cajas o unidades?",
+                confidence=0.93,
+                prompt_execution_id=101,
+            )
+        )
+
+        result = evaluate_conversation_order(
+            db,
+            message=latest,
+            semantic_evaluator=evaluator,
+        )
+
+        self.assertEqual(result.state, "collecting")
+        self.assertEqual(result.semantic_state, "needs_clarification")
+        self.assertEqual(result.semantic_intent, "order")
+        self.assertEqual(result.missing_or_uncertain, ["unidad de tomate"])
+        self.assertTrue(result.reply_needed)
+        self.assertIn("cajas o unidades", result.suggested_reply)
+        self.assertEqual(result.semantic_confidence, 0.93)
+        self.assertEqual(result.prompt_execution_id, 101)
+
+        evaluator.assert_called_once()
+        _, kwargs = evaluator.call_args
+        self.assertEqual(kwargs["company_id"], 1)
+        self.assertIn("CLIENTE: Ponme 4 de tomate", kwargs["transcript"])
+        self.assertEqual(
+            kwargs["input_reference"],
+            f"conversation:1:message:{latest.id}",
+        )
+        db.close()
+
+    def test_semantic_ready_for_confirmation_does_not_create_ready_state_yet(self):
+        db = self.Session()
+        latest = self._message(
+            db,
+            1,
+            "Ponme 4 cajas de tomate y 2 cajas de calabacín",
+        )
+        db.commit()
+
+        evaluator = unittest.mock.MagicMock(
+            return_value=SimpleNamespace(
+                intent="order",
+                state="ready_for_confirmation",
+                missing_or_uncertain=[],
+                reply_needed=True,
+                suggested_reply="¿Confirmas 4 cajas de tomate y 2 de calabacín?",
+                confidence=0.97,
+                prompt_execution_id=102,
+            )
+        )
+
+        result = evaluate_conversation_order(
+            db,
+            message=latest,
+            semantic_evaluator=evaluator,
+        )
+
+        self.assertEqual(result.state, "collecting")
+        self.assertEqual(result.semantic_state, "ready_for_confirmation")
+        self.assertTrue(result.reply_needed)
+        self.assertEqual(result.missing_or_uncertain, [])
+        db.close()
+
+    def test_explicit_close_keeps_priority_over_semantic_evaluation(self):
+        db = self.Session()
+        latest = self._message(db, 1, "Nada más, confirma el pedido")
+        db.commit()
+
+        evaluator = unittest.mock.MagicMock()
+
+        result = evaluate_conversation_order(
+            db,
+            message=latest,
+            semantic_evaluator=evaluator,
+        )
+
+        self.assertEqual(result.state, "ready")
+        self.assertEqual(result.closing_message_id, latest.id)
+        self.assertIsNone(result.semantic_state)
+        evaluator.assert_not_called()
+        db.close()
+
 
     def test_earlier_message_does_not_see_future_close(self):
         db = self.Session()
@@ -266,7 +535,20 @@ class WhatsAppConversationWorkerTests(unittest.TestCase):
             payload_json='{"inbound_message_id": %d, "channel": "whatsapp"}' % message.id,
         )
 
+        semantic_result = SimpleNamespace(
+            intent="order",
+            state="collecting",
+            missing_or_uncertain=[],
+            reply_needed=False,
+            suggested_reply="",
+            confidence=0.85,
+            prompt_execution_id=150,
+        )
+
         with patch(
+            "app.workers.jobs_worker.evaluate_whatsapp_conversation_semantics",
+            return_value=semantic_result,
+        ), patch(
             "app.workers.jobs_worker.AgentProcessingService"
         ) as processing_service:
             pipeline = MagicMock()
@@ -282,6 +564,105 @@ class WhatsAppConversationWorkerTests(unittest.TestCase):
         self.assertEqual(message.processing_step, "whatsapp_order_collecting")
         self.assertIsNone(message.order_id)
         db.close()
+
+    def test_semantic_clarification_sends_mocked_auto_response(self):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from app.workers.jobs_worker import _process_job
+
+        db = self.Session()
+        message = self._message(db, 40, "Ponme 4 de tomate")
+        db.commit()
+
+        job = SimpleNamespace(
+            job_type="process_inbound_message",
+            company_id=1,
+            created_by_user_id=None,
+            payload_json='{"inbound_message_id": %d, "channel": "whatsapp"}' % message.id,
+        )
+
+        semantic_result = SimpleNamespace(
+            intent="order",
+            state="needs_clarification",
+            missing_or_uncertain=["unidad de tomate"],
+            reply_needed=True,
+            suggested_reply="¿Las 4 de tomate son cajas o unidades?",
+            confidence=0.95,
+            prompt_execution_id=200,
+        )
+
+        with patch(
+            "app.workers.jobs_worker.whatsapp_config",
+            return_value=SimpleNamespace(bot_enabled=True),
+        ), patch(
+            "app.workers.jobs_worker.evaluate_whatsapp_conversation_semantics",
+            return_value=semantic_result,
+        ), patch(
+            "app.workers.jobs_worker.send_automatic_response",
+            new=AsyncMock(
+                return_value={
+                    "sent": True,
+                    "skipped": False,
+                    "reason": "sent",
+                    "message_id": 999,
+                }
+            ),
+        ) as sender, patch(
+            "app.workers.jobs_worker.AgentProcessingService"
+        ) as processing_service:
+            pipeline = MagicMock()
+            processing_service.return_value.pipeline = pipeline
+
+            result = _process_job(db, job)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "needs_clarification")
+        self.assertEqual(result["semantic_state"], "needs_clarification")
+        self.assertTrue(result["auto_response"]["sent"])
+        pipeline.process_inbound_message.assert_not_called()
+        sender.assert_awaited_once()
+        db.close()
+
+    def test_bot_disabled_skips_semantic_evaluation_and_auto_response(self):
+        from types import SimpleNamespace
+        from unittest.mock import MagicMock, patch
+
+        from app.workers.jobs_worker import _process_job
+
+        db = self.Session()
+        message = self._message(db, 41, "Ponme 4 de tomate")
+        db.commit()
+
+        job = SimpleNamespace(
+            job_type="process_inbound_message",
+            company_id=1,
+            created_by_user_id=None,
+            payload_json='{"inbound_message_id": %d, "channel": "whatsapp"}' % message.id,
+        )
+
+        with patch(
+            "app.workers.jobs_worker.whatsapp_config",
+            return_value=SimpleNamespace(bot_enabled=False),
+        ), patch(
+            "app.workers.jobs_worker.evaluate_whatsapp_conversation_semantics"
+        ) as semantic, patch(
+            "app.workers.jobs_worker.send_automatic_response"
+        ) as sender, patch(
+            "app.workers.jobs_worker.AgentProcessingService"
+        ) as processing_service:
+            pipeline = MagicMock()
+            processing_service.return_value.pipeline = pipeline
+
+            result = _process_job(db, job)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "collecting")
+        semantic.assert_not_called()
+        sender.assert_not_called()
+        pipeline.process_inbound_message.assert_not_called()
+        db.close()
+
 
     def test_manual_import_whatsapp_bypasses_live_conversation_gate(self):
         from types import SimpleNamespace

@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.core.encryption import decrypt_secret, encrypt_secret
 from app.core.storage import ensure_directory, resolve_temp_storage_dir
-from app.db.models import ChannelSetting, Conversation, InboundMessage, InputChannel, MessageAttachment
+from app.db.models import ChannelSetting, Conversation, InboundMessage, InputChannel, MessageAttachment, Order
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
 from app.messages.service import (
@@ -1212,6 +1212,207 @@ def enqueue_whatsapp_media_download(db: Session, company_id: int, inbound_messag
         payload={"inbound_message_id": inbound_message_id, "channel": WHATSAPP_CHANNEL_KEY},
         created_by_user_id=user_id,
     )
+
+
+def _whatsapp_message_metadata(message: InboundMessage) -> dict[str, Any]:
+    try:
+        payload = json.loads(message.raw_payload_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _last_conversation_order_created_at(
+    db: Session,
+    *,
+    company_id: int,
+    conversation_id: int,
+) -> datetime | None:
+    return db.scalar(
+        select(Order.created_at)
+        .where(
+            Order.company_id == company_id,
+            Order.conversation_id == conversation_id,
+        )
+        .order_by(Order.created_at.desc(), Order.id.desc())
+        .limit(1)
+    )
+
+
+def automatic_response_status(
+    db: Session,
+    *,
+    company_id: int,
+    conversation_id: int,
+    trigger_message_id: int,
+) -> dict[str, Any]:
+    config = whatsapp_config(db, company_id)
+
+    if not config.bot_enabled:
+        return {
+            "allowed": False,
+            "reason": "bot_disabled",
+            "count": 0,
+            "limit": config.max_auto_messages,
+        }
+
+    boundary = _last_conversation_order_created_at(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+    )
+
+    query = select(InboundMessage).where(
+        InboundMessage.company_id == company_id,
+        InboundMessage.conversation_id == conversation_id,
+        InboundMessage.direction == "outbound",
+    )
+    if boundary is not None:
+        query = query.where(InboundMessage.received_at > boundary)
+
+    outbound_messages = db.scalars(
+        query.order_by(InboundMessage.received_at, InboundMessage.id)
+    ).all()
+
+    automatic_messages: list[InboundMessage] = []
+    for message in outbound_messages:
+        metadata = _whatsapp_message_metadata(message)
+        if not metadata.get("auto_response"):
+            continue
+
+        automatic_messages.append(message)
+
+        if int(metadata.get("trigger_message_id") or 0) == int(trigger_message_id):
+            return {
+                "allowed": False,
+                "reason": "already_replied",
+                "count": len(automatic_messages),
+                "limit": config.max_auto_messages,
+                "message_id": message.id,
+            }
+
+    limit = max(int(config.max_auto_messages or 0), 0)
+    if len(automatic_messages) >= limit:
+        return {
+            "allowed": False,
+            "reason": "auto_message_limit",
+            "count": len(automatic_messages),
+            "limit": limit,
+        }
+
+    return {
+        "allowed": True,
+        "reason": "allowed",
+        "count": len(automatic_messages),
+        "limit": limit,
+    }
+
+
+def record_automatic_response(
+    db: Session,
+    *,
+    company_id: int,
+    conversation_id: int,
+    body: str,
+    external_id: str,
+    trigger_message_id: int,
+    semantic_state: str,
+    prompt_execution_id: int | None = None,
+) -> InboundMessage:
+    conversation = db.get(Conversation, conversation_id)
+    if not conversation or conversation.company_id != company_id:
+        raise ValueError("Conversation not found for tenant.")
+
+    message, _ = upsert_inbound_message(
+        db,
+        company_id=company_id,
+        channel_key=WHATSAPP_CHANNEL_KEY,
+        provider=WHATSAPP_PROVIDER,
+        external_id=external_id,
+        sender=None,
+        recipients=[],
+        subject="WhatsApp automatic response",
+        text_content=body,
+        external_thread_id=conversation.external_thread_id or external_id,
+        metadata={
+            "auto_response": True,
+            "trigger_message_id": trigger_message_id,
+            "semantic_state": semantic_state,
+            "prompt_execution_id": prompt_execution_id,
+        },
+        content_type="whatsapp_text",
+        direction="outbound",
+        sent_at=datetime.now(timezone.utc),
+    )
+    message.status = "accepted"
+    message.processing_step = "outbound_auto_accepted"
+    conversation.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    log_action(
+        db,
+        company_id=company_id,
+        user=None,
+        action="whatsapp.auto_response_accepted",
+        entity_type="inbound_message",
+        entity_id=message.id,
+        message=f"Respuesta automática de WhatsApp aceptada por Meta ({semantic_state})",
+    )
+    return message
+
+
+async def send_automatic_response(
+    db: Session,
+    *,
+    company_id: int,
+    conversation_id: int,
+    trigger_message_id: int,
+    body: str,
+    semantic_state: str,
+    prompt_execution_id: int | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    status = automatic_response_status(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+        trigger_message_id=trigger_message_id,
+    )
+    if not status["allowed"]:
+        return {
+            "sent": False,
+            "skipped": True,
+            **status,
+        }
+
+    result = await send_whatsapp_text(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+        body=body,
+        client=client,
+    )
+
+    message = record_automatic_response(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+        body=body,
+        external_id=result["provider_message_id"],
+        trigger_message_id=trigger_message_id,
+        semantic_state=semantic_state,
+        prompt_execution_id=prompt_execution_id,
+    )
+
+    return {
+        "sent": True,
+        "skipped": False,
+        "reason": "sent",
+        "message_id": message.id,
+        "provider_message_id": result["provider_message_id"],
+        "count": int(status["count"]) + 1,
+        "limit": status["limit"],
+    }
 
 
 def record_manual_response(

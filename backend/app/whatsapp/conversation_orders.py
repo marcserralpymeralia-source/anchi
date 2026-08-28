@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -31,6 +32,13 @@ class ConversationOrderContext:
     transcript: str
     state: str
     closing_message_id: int | None = None
+    semantic_state: str | None = None
+    semantic_intent: str | None = None
+    missing_or_uncertain: list[str] | None = None
+    reply_needed: bool = False
+    suggested_reply: str = ""
+    semantic_confidence: float | None = None
+    prompt_execution_id: int | None = None
 
 
 def _normalized_text(value: str | None) -> str:
@@ -42,6 +50,54 @@ def has_explicit_order_close(text: str | None) -> bool:
     if not normalized:
         return False
     return any(re.search(pattern, normalized) for pattern in _EXPLICIT_CLOSE_PATTERNS)
+
+
+_SHORT_CONFIRMATION_PATTERN = re.compile(
+    r"^(?:sí|si|correcto|correcta|de acuerdo|adelante|confirmo|confirmado|confirmada|vale|ok|okay)[.! ]*$",
+    re.IGNORECASE,
+)
+
+
+def is_short_order_confirmation(text: str | None) -> bool:
+    normalized = _normalized_text(text)
+    return bool(normalized and _SHORT_CONFIRMATION_PATTERN.fullmatch(normalized))
+
+
+def _message_metadata(message: InboundMessage) -> dict:
+    try:
+        payload = json.loads(message.raw_payload_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def has_contextual_order_confirmation(
+    messages: list[InboundMessage],
+    *,
+    message: InboundMessage,
+) -> bool:
+    if message.direction != "inbound":
+        return False
+    if not is_short_order_confirmation(message.original_content):
+        return False
+
+    previous_messages = [
+        item
+        for item in messages
+        if item.id != message.id and item.content_type != "whatsapp_status"
+    ]
+    if not previous_messages:
+        return False
+
+    previous = previous_messages[-1]
+    if previous.direction != "outbound":
+        return False
+
+    metadata = _message_metadata(previous)
+    return bool(
+        metadata.get("auto_response")
+        and metadata.get("semantic_state") == "ready_for_confirmation"
+    )
 
 
 def _last_order_created_at(
@@ -146,6 +202,7 @@ def evaluate_conversation_order(
     db: Session,
     *,
     message: InboundMessage,
+    semantic_evaluator=None,
 ) -> ConversationOrderContext:
     if not message.conversation_id:
         return ConversationOrderContext(
@@ -177,20 +234,52 @@ def evaluate_conversation_order(
     )
     transcript = build_transcript(messages)
 
-    closing_message = next(
-        (
-            item
-            for item in reversed(messages)
-            if item.direction == "inbound"
-            and has_explicit_order_close(item.original_content)
-        ),
-        None,
+    closing_message = (
+        message
+        if message.direction == "inbound"
+        and has_explicit_order_close(message.original_content)
+        else None
+    )
+    contextual_confirmation = has_contextual_order_confirmation(
+        messages,
+        message=message,
+    )
+
+    if closing_message or contextual_confirmation:
+        return ConversationOrderContext(
+            conversation_id=conversation.id,
+            messages=messages,
+            transcript=transcript,
+            state="ready",
+            closing_message_id=message.id,
+        )
+
+    if semantic_evaluator is None:
+        return ConversationOrderContext(
+            conversation_id=conversation.id,
+            messages=messages,
+            transcript=transcript,
+            state="collecting",
+        )
+
+    semantic = semantic_evaluator(
+        db,
+        company_id=message.company_id,
+        transcript=transcript,
+        input_reference=f"conversation:{conversation.id}:message:{message.id}",
     )
 
     return ConversationOrderContext(
         conversation_id=conversation.id,
         messages=messages,
         transcript=transcript,
-        state="ready" if closing_message else "collecting",
-        closing_message_id=closing_message.id if closing_message else None,
+        # Compatibility gate: W05-C2 does not authorize order creation.
+        state="collecting",
+        semantic_state=semantic.state,
+        semantic_intent=semantic.intent,
+        missing_or_uncertain=list(semantic.missing_or_uncertain),
+        reply_needed=semantic.reply_needed,
+        suggested_reply=semantic.suggested_reply,
+        semantic_confidence=semantic.confidence,
+        prompt_execution_id=semantic.prompt_execution_id,
     )
