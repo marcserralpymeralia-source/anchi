@@ -30,6 +30,38 @@ PROMPT_REGISTRY: dict[str, dict[str, Any]] = {
         "fallback": "Clasifica la entrada como pedido, no_pedido, consulta, incidencia o dudoso. Responde solo JSON con tipo_correo, confianza y motivo.",
         "input_limit": 12000,
     },
+    "whatsapp_conversation": {
+        "name": "Estado conversacional de WhatsApp",
+        "purpose": "whatsapp_conversation",
+        "default_model": "gpt-4.1-mini",
+        "default_parameters": {"temperature": 0.0, "max_tokens": 900},
+        "expected_schema": {
+            "type": "object",
+            "required": [
+                "intent",
+                "state",
+                "missing_or_uncertain",
+                "reply_needed",
+                "suggested_reply",
+                "confidence",
+            ],
+        },
+        "fallback": (
+            "Analiza una conversacion de WhatsApp B2B entre CLIENTE y EMPRESA. "
+            "Determina si el cliente esta realizando un pedido y si hay informacion "
+            "suficiente para pedir su confirmacion. No inventes productos, cantidades, "
+            "unidades ni clientes. Responde solo JSON con: "
+            "intent (order, question u other), "
+            "state (collecting, needs_clarification o ready_for_confirmation), "
+            "missing_or_uncertain (lista de textos), "
+            "reply_needed (boolean), suggested_reply (texto) y confidence (0 a 1). "
+            "Usa ready_for_confirmation solo cuando el pedido expresado sea suficientemente "
+            "claro para resumirlo y pedir confirmacion al cliente. "
+            "Si falta o es ambigua informacion necesaria del pedido usa needs_clarification. "
+            "Si el cliente todavia parece estar añadiendo contenido usa collecting."
+        ),
+        "input_limit": 12000,
+    },
     "extraction": {
         "name": "Extraccion de pedido",
         "purpose": "extraction",
@@ -142,6 +174,74 @@ def validate_prompt_output(purpose: str, content: str) -> PromptValidationResult
         if confidence is None:
             return PromptValidationResult(status="missing_fields", data=data, errors=["Falta confianza."])
         return PromptValidationResult(status="valid", data=data, errors=[])
+    if purpose == "whatsapp_conversation":
+        intent = str(data.get("intent") or "").strip().lower()
+        state = str(data.get("state") or "").strip().lower()
+        missing = data.get("missing_or_uncertain")
+        reply_needed = data.get("reply_needed")
+        suggested_reply = data.get("suggested_reply")
+        confidence = data.get("confidence")
+
+        if intent not in {"order", "question", "other"}:
+            return PromptValidationResult(
+                status="unsupported_value",
+                data=data,
+                errors=[f"Intent no soportado: {intent or 'vacio'}."],
+            )
+        if state not in {
+            "collecting",
+            "needs_clarification",
+            "ready_for_confirmation",
+        }:
+            return PromptValidationResult(
+                status="unsupported_value",
+                data=data,
+                errors=[f"Estado conversacional no soportado: {state or 'vacio'}."],
+            )
+        if not isinstance(missing, list) or not all(
+            isinstance(item, str) for item in missing
+        ):
+            return PromptValidationResult(
+                status="schema_error",
+                data=data,
+                errors=["missing_or_uncertain debe ser una lista de textos."],
+            )
+        if not isinstance(reply_needed, bool):
+            return PromptValidationResult(
+                status="schema_error",
+                data=data,
+                errors=["reply_needed debe ser boolean."],
+            )
+        if not isinstance(suggested_reply, str):
+            return PromptValidationResult(
+                status="schema_error",
+                data=data,
+                errors=["suggested_reply debe ser texto."],
+            )
+        if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
+            return PromptValidationResult(
+                status="schema_error",
+                data=data,
+                errors=["confidence debe ser numerico."],
+            )
+        if not 0 <= float(confidence) <= 1:
+            return PromptValidationResult(
+                status="unsupported_value",
+                data=data,
+                errors=["confidence debe estar entre 0 y 1."],
+            )
+        if state in {"needs_clarification", "ready_for_confirmation"}:
+            if not reply_needed or not suggested_reply.strip():
+                return PromptValidationResult(
+                    status="schema_error",
+                    data=data,
+                    errors=[
+                        "El estado requiere una respuesta sugerida para el cliente."
+                    ],
+                )
+
+        return PromptValidationResult(status="valid", data=data, errors=[])
+
     if purpose == "extraction":
         order = data.get("pedido") or data.get("order") or {}
         if not isinstance(order, dict):

@@ -39,6 +39,8 @@ from app.jobs.service import claim_next_job, enqueue_job, fail_job, finish_job, 
 from app.tenancy.migrations import tenant_migration_report
 from app.tenancy.database import tenant_db_session
 from app.whatsapp.conversation_orders import evaluate_conversation_order
+from app.whatsapp.conversation_semantics import evaluate_whatsapp_conversation_semantics
+from app.whatsapp.service import send_automatic_response, whatsapp_config
 
 logger = logging.getLogger(__name__)
 _worker_started = False
@@ -312,17 +314,58 @@ def _process_job(db, job: BackgroundJob) -> dict:
         )
 
         if is_live_meta_whatsapp:
-            context = evaluate_conversation_order(db, message=inbound_message)
+            config = whatsapp_config(db, job.company_id)
+            semantic_evaluator = (
+                evaluate_whatsapp_conversation_semantics
+                if config.bot_enabled
+                else None
+            )
+
+            context = evaluate_conversation_order(
+                db,
+                message=inbound_message,
+                semantic_evaluator=semantic_evaluator,
+            )
 
             if context.state == "collecting":
                 inbound_message.status = "received"
                 inbound_message.processing_step = "whatsapp_order_collecting"
                 db.commit()
+
+                auto_response = None
+                if (
+                    config.bot_enabled
+                    and context.semantic_state
+                    in {"needs_clarification", "ready_for_confirmation"}
+                    and context.reply_needed
+                    and context.suggested_reply
+                ):
+                    auto_response = asyncio.run(
+                        send_automatic_response(
+                            db,
+                            company_id=job.company_id,
+                            conversation_id=context.conversation_id,
+                            trigger_message_id=inbound_message.id,
+                            body=context.suggested_reply,
+                            semantic_state=context.semantic_state,
+                            prompt_execution_id=context.prompt_execution_id,
+                        )
+                    )
+
                 return {
                     "ok": True,
-                    "status": "collecting",
-                    "message": "Conversación WhatsApp pendiente de completar.",
+                    "status": context.semantic_state or "collecting",
+                    "message": (
+                        "Conversación WhatsApp evaluada."
+                        if context.semantic_state
+                        else "Conversación WhatsApp pendiente de completar."
+                    ),
                     "conversation_id": context.conversation_id,
+                    "semantic_state": context.semantic_state,
+                    "semantic_intent": context.semantic_intent,
+                    "missing_or_uncertain": context.missing_or_uncertain or [],
+                    "reply_needed": context.reply_needed,
+                    "auto_response": auto_response,
                 }
 
             if context.state == "ready":
