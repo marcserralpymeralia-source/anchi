@@ -426,7 +426,7 @@ class WhatsAppIntegrationTests(unittest.TestCase):
                                         "id": "wa-msg-2",
                                         "from": "+34600000000",
                                         "type": "text",
-                                        "text": {"body": "Pedido de 5 unidades de P-100 para Cliente WhatsApp SL"},
+                                        "text": {"body": "Pedido de 5 unidades de P-100 para Cliente WhatsApp SL. Nada más, gracias"},
                                     }
                                 ],
                             }
@@ -582,7 +582,7 @@ class WhatsAppIntegrationTests(unittest.TestCase):
                                         "id": "wa-retry-1",
                                         "from": "+34600000000",
                                         "type": "text",
-                                        "text": {"body": "Reintentar"},
+                                        "text": {"body": "Reintentar. Confirma el pedido"},
                                     }
                                 ],
                             }
