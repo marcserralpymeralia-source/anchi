@@ -1150,7 +1150,7 @@ def parse_payload_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
             statuses = value.get("statuses", []) if isinstance(value.get("statuses"), list) else []
             messages = value.get("messages", []) if isinstance(value.get("messages"), list) else []
             for message in messages:
-                if isinstance(message, dict):
+                if isinstance(message, dict) and str(message.get("id") or "").strip():
                     events.append(
                         _message_event(
                             kind="message",
@@ -1165,7 +1165,7 @@ def parse_payload_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
                         )
                     )
             for status in statuses:
-                if not isinstance(status, dict):
+                if not isinstance(status, dict) or not str(status.get("id") or "").strip():
                     continue
                 events.append(
                     {
@@ -1185,7 +1185,7 @@ def parse_payload_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 )
             message_echoes = value.get("message_echoes", []) if isinstance(value.get("message_echoes"), list) else []
             for message in message_echoes:
-                if isinstance(message, dict):
+                if isinstance(message, dict) and str(message.get("id") or "").strip():
                     events.append(
                         _message_event(
                             kind="message_echo",
@@ -1225,7 +1225,7 @@ def parse_payload_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
                     thread_id = str(thread.get("id") or "").strip() or None
                     history_messages = thread.get("messages") if isinstance(thread.get("messages"), list) else []
                     for message in history_messages:
-                        if not isinstance(message, dict):
+                        if not isinstance(message, dict) or not str(message.get("id") or "").strip():
                             continue
                         events.append(
                             _message_event(
@@ -1273,6 +1273,11 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
     metadata = dict(event.get("metadata") or {})
     metadata.setdefault("whatsapp", True)
     event_kind = str(event.get("kind") or "")
+    if event_kind in {"message", "message_echo", "history_message", "status"} and not str(event.get("external_id") or "").strip():
+        # Meta IDs are the only stable deduplication key available for these
+        # events. Persisting an event without one would create an orphan entry
+        # that a repeated webhook could never match safely.
+        return None
     if event_kind in {"contact_sync", "history_sync", "account_update"}:
         now = datetime.now(timezone.utc)
         payload = metadata.get("payload") if isinstance(metadata.get("payload"), dict) else {}

@@ -159,6 +159,36 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertEqual(redacted["verify_token"], "••••••••")
         self.assertNotIn("app_secret", redacted)
 
+    def test_parser_ignores_message_events_without_provider_ids(self):
+        payload = {
+            "entry": [
+                {
+                    "id": "ba-123",
+                    "changes": [
+                        {
+                            "field": "messages",
+                            "value": {
+                                "metadata": {
+                                    "phone_number_id": "pn-123",
+                                    "business_account_id": "ba-123",
+                                },
+                                "messages": [
+                                    {"from": "+34600000000", "type": "text", "text": {"body": "sin id"}},
+                                    {"id": "wa-valid-id", "from": "+34600000000", "type": "text", "text": {"body": "válido"}},
+                                ],
+                                "statuses": [{"status": "delivered"}],
+                                "message_echoes": [{"to": "+34600000000", "type": "text", "text": {"body": "sin id"}}],
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+
+        events = parse_payload_events(payload)
+
+        self.assertEqual([event["external_id"] for event in events], ["wa-valid-id"])
+
     def test_live_webhook_requires_ready_tenant_and_exact_meta_identifiers(self):
         db = self.TenantSession()
         config = whatsapp_config(db, 1)
