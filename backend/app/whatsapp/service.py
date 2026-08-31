@@ -263,9 +263,17 @@ def whatsapp_outbound_is_ready(
 
 
 def whatsapp_event_matches_config(event: dict[str, Any], config: WhatsAppTenantConfig) -> bool:
-    """Require both Meta identifiers to belong to the configured tenant."""
+    """Require Meta identifiers to belong to the configured tenant."""
     event_waba = str(event.get("business_account_id") or "").strip()
     event_phone = str(event.get("phone_number_id") or "").strip()
+    if str(event.get("kind") or "").strip().lower() == "account_update":
+        if not event_waba or not config.business_account_id or event_waba != config.business_account_id:
+            return False
+        if event_phone and event_phone != config.phone_number_id:
+            return False
+        event_phone_number = re.sub(r"\D", "", str(event.get("phone_number") or ""))
+        configured_phone_number = re.sub(r"\D", "", config.display_phone_number)
+        return not event_phone_number or not configured_phone_number or event_phone_number == configured_phone_number
     return bool(
         event_waba
         and event_phone
@@ -1296,6 +1304,7 @@ def parse_payload_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
                         "kind": "account_update",
                         "phone_number_id": phone_number_id,
                         "business_account_id": business_account_id,
+                        "phone_number": value.get("phone_number") or value.get("display_phone_number"),
                         "metadata": {"payload": value, "metadata": metadata, "webhook_field": webhook_field},
                     }
                 )
@@ -1336,7 +1345,7 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
                 "last_account_update_at": now.isoformat(),
                 "last_account_update_event": account_event[:120],
             }
-            if account_event == "ACCOUNT_OFFBOARDED":
+            if account_event in {"ACCOUNT_OFFBOARDED", "PARTNER_REMOVED"}:
                 channel.is_active = False
                 setting_values.update({"connection_status": "disconnected", "webhook_enabled": "false"})
             elif account_event == "ACCOUNT_RECONNECTED":

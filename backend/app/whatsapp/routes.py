@@ -75,7 +75,7 @@ async def receive_default_webhook(
         config_db = tenant_db_session(tenant_db.database_url)()
         try:
             config = whatsapp_config(config_db, company.id)
-            if not whatsapp_ingress_is_ready(config_db, company.id, config=config):
+            if event.get("kind") != "account_update" and not whatsapp_ingress_is_ready(config_db, company.id, config=config):
                 ignored += 1
                 continue
             if not whatsapp_event_matches_config(event, config):
@@ -143,9 +143,13 @@ async def receive_webhook(
             return JSONResponse({"ok": True, "message": "no events"})
         stored = []
         ignored = 0
-        if not whatsapp_ingress_is_ready(config_db, company.id, config=config):
+        ingress_ready = whatsapp_ingress_is_ready(config_db, company.id, config=config)
+        if not any(event.get("kind") == "account_update" for event in events) and not ingress_ready:
             return {"ok": True, "company_id": company.id, "events": len(events), "stored": [], "ignored": len(events)}
         for event in events:
+            if event.get("kind") != "account_update" and not ingress_ready:
+                ignored += 1
+                continue
             if not whatsapp_event_matches_config(event, config):
                 ignored += 1
                 continue

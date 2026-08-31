@@ -243,6 +243,70 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertFalse(whatsapp_ingress_is_ready(db, 1, config=config))
         db.close()
 
+    def test_account_update_without_phone_id_controls_channel_lifecycle(self):
+        db = self.TenantSession()
+        channel = db.scalar(select(InputChannel).where(InputChannel.company_id == 1, InputChannel.key == "whatsapp"))
+        db.add(
+            ChannelSetting(
+                company_id=1,
+                channel_id=channel.id,
+                key="display_phone_number",
+                value="+34 610 000 000",
+                value_type="string",
+            )
+        )
+        db.commit()
+        config = whatsapp_config(db, 1)
+        payload = {
+            "entry": [
+                {
+                    "id": "ba-123",
+                    "changes": [
+                        {
+                            "field": "account_update",
+                            "value": {
+                                "phone_number": "+34610000000",
+                                "event": "PARTNER_REMOVED",
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+
+        event = parse_payload_events(payload)[0]
+
+        self.assertEqual(event["kind"], "account_update")
+        self.assertIsNone(event["phone_number_id"])
+        self.assertEqual(event["phone_number"], "+34610000000")
+        self.assertTrue(whatsapp_event_matches_config(event, config))
+        persist_event(db, 1, event)
+        db.refresh(channel)
+        self.assertFalse(channel.is_active)
+        self.assertEqual(whatsapp_config(db, 1).connection_status, "disconnected")
+
+        reconnect_payload = {
+            "entry": [
+                {
+                    "id": "ba-123",
+                    "changes": [
+                        {
+                            "field": "account_update",
+                            "value": {
+                                "phone_number": "+34610000000",
+                                "event": "ACCOUNT_RECONNECTED",
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+        persist_event(db, 1, parse_payload_events(reconnect_payload)[0])
+        db.refresh(channel)
+        self.assertTrue(channel.is_active)
+        self.assertEqual(whatsapp_config(db, 1).connection_status, "connected")
+        db.close()
+
     def test_text_message_dedupes_and_queues_job(self):
         payload = {
             "entry": [
