@@ -360,8 +360,16 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 inbound_message_id=inbound_message_id,
             )
         )
-        processing_job = enqueue_whatsapp_processing(db, job.company_id, inbound_message_id, user_id=job.created_by_user_id)
-        return {**result, "processing_job_id": processing_job.id, "message": "Media WhatsApp descargada y entrada encolada"}
+        processing_job_id = None
+        if result.get("ready_for_processing"):
+            processing_job = enqueue_whatsapp_processing(db, job.company_id, inbound_message_id, user_id=job.created_by_user_id)
+            processing_job_id = processing_job.id
+        message = (
+            "Media WhatsApp descargada y entrada encolada"
+            if processing_job_id
+            else "Media WhatsApp guardada; la entrada queda pendiente de completar la extraccion"
+        )
+        return {**result, "processing_job_id": processing_job_id, "message": message}
     raise RuntimeError(f"Tipo de job no soportado: {job.job_type}")
 
 
@@ -464,8 +472,23 @@ def _process_export_job(db, job: BackgroundJob, payload: dict) -> dict:
             "order_id": order.id,
         }
 
+    if export.status == "sent":
+        return {
+            "ok": True,
+            "message": "La exportacion ya estaba completada; no se reenvia el archivo.",
+            "export": _serialize_export(export),
+            "order_id": order.id,
+        }
+
     if order.status not in {"pedido_confirmado", "pedido_validado", "error_exportacion"}:
         raise RuntimeError("El pedido debe estar confirmado antes de enviarse.")
+
+    validation_errors = validate_confirmation(
+        order,
+        get_or_create_settings(db, ScoringSettings, job.company_id),
+    )
+    if validation_errors:
+        raise RuntimeError("No se puede exportar el pedido: " + " | ".join(validation_errors))
 
     if not ftp_settings.host:
         raise RuntimeError("La conexion de exportacion no esta configurada.")
@@ -595,7 +618,26 @@ def _process_bulk_action(db, job: BackgroundJob, payload: dict) -> dict:
                 db.commit()
                 processed += 1
             elif action == "export":
+                export = db.scalar(
+                    select(ExportFile)
+                    .where(
+                        ExportFile.order_id == order.id,
+                        ExportFile.company_id == job.company_id,
+                    )
+                    .order_by(ExportFile.created_at.desc())
+                )
+                if export and export.status == "sent":
+                    processed += 1
+                    update_job_progress(db, job, int(((processed + skipped) / total) * 100))
+                    continue
+
                 if order.status not in {"pedido_confirmado", "pedido_validado", "error_exportacion"}:
+                    skipped += 1
+                    update_job_progress(db, job, int(((processed + skipped) / total) * 100))
+                    continue
+
+                validation_errors = validate_confirmation(order, scoring)
+                if validation_errors:
                     skipped += 1
                     update_job_progress(db, job, int(((processed + skipped) / total) * 100))
                     continue
@@ -606,14 +648,6 @@ def _process_bulk_action(db, job: BackgroundJob, payload: dict) -> dict:
                     update_job_progress(db, job, int(((processed + skipped) / total) * 100))
                     continue
 
-                export = db.scalar(
-                    select(ExportFile)
-                    .where(
-                        ExportFile.order_id == order.id,
-                        ExportFile.company_id == job.company_id,
-                    )
-                    .order_by(ExportFile.created_at.desc())
-                )
                 if not export:
                     export = ExportService().generate(db, order)
 

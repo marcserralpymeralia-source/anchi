@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from email.utils import parseaddr
+from math import isfinite
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -48,6 +49,7 @@ from app.db.models import (
 from app.logs.service import log_action
 from app.knowledge.service import retrieve_product_knowledge
 from app.orders.state import ORDER_STATE
+from app.orders.scoring import calculate_order_score
 from app.semantic_retrieval.embeddings import EmbeddingProvider
 from app.semantic_retrieval.products import find_product_candidates
 from app.settings.integrations import classify_sample, extract_sample
@@ -923,29 +925,35 @@ class DecisionEngineService:
 class ScoringService:
     def score_order(self, db: Session, order: Order) -> ScoringResult:
         settings = get_or_create_settings(db, ScoringSettings, order.company_id)
-        customer_score = 25.0 if order.customer_id else 0.0
-        product_score = 0.0
-        confidence_score = 0.0
-        if order.lines:
-            validated = sum(1 for line in order.lines if line.product_id)
-            product_score = 40.0 * (validated / len(order.lines))
-            confidence_score = 5.0 * (sum(line.extraction_confidence for line in order.lines) / len(order.lines))
-        rule_score = 10.0
-        total = min(customer_score + product_score + confidence_score + rule_score, 100.0)
+        breakdown = calculate_order_score(order, settings)
         result = ScoringResult(
             company_id=order.company_id,
             order_id=order.id,
-            total_score=round(total, 2),
-            customer_score=round(customer_score, 2),
-            product_score=round(product_score, 2),
-            confidence_score=round(confidence_score, 2),
-            rule_score=round(rule_score, 2),
-            block_reason=None if total >= settings.doubtful_threshold else "Bajo umbral configurado",
-            details_json=None,
+            total_score=breakdown.total,
+            customer_score=breakdown.customer,
+            product_score=breakdown.products,
+            confidence_score=breakdown.confidence,
+            rule_score=breakdown.coherence,
+            block_reason=None if breakdown.total >= settings.doubtful_threshold else "Bajo umbral configurado",
+            details_json=json.dumps(
+                {
+                    "weights": {
+                        "customer": settings.customer_weight,
+                        "products": settings.products_weight,
+                        "quantities": settings.quantities_weight,
+                        "coherence": settings.coherence_weight,
+                        "llm": settings.llm_weight,
+                    },
+                    "line_count": breakdown.line_count,
+                    "validated_products": breakdown.validated_products,
+                    "valid_quantities": breakdown.valid_quantities,
+                },
+                ensure_ascii=False,
+            ),
         )
         db.add(result)
         db.flush()
-        log_action(db, company_id=order.company_id, user=None, action="agent.scoring_recorded", entity_type="scoring_result", entity_id=result.id, message=f"Scoring guardado para pedido {order.id}")
+        log_action(db, company_id=order.company_id, user=None, action="agent.scoring_recorded", entity_type="scoring_result", entity_id=result.id, message=f"Scoring guardado para pedido {order.id}: {breakdown.total}")
         return result
 
     def status_for_score(self, db: Session, company_id: int, score: float) -> str:
@@ -1239,6 +1247,18 @@ def _confidence(value, default: float = 0.0) -> float:
     return number if number <= 1 else number / 100
 
 
+def _parse_positive_quantity(value) -> tuple[float | None, str | None]:  # noqa: ANN001
+    if value is None or str(value).strip() == "":
+        return None, "Cantidad no detectada"
+    try:
+        quantity = float(str(value).replace(",", "."))
+    except (TypeError, ValueError):
+        return None, "Cantidad ambigua"
+    if not isfinite(quantity) or quantity <= 0:
+        return None, "La cantidad debe ser mayor que cero"
+    return quantity, None
+
+
 class UnifiedOrderPipelineService:
     def __init__(self) -> None:
         self.matching = CustomerMatchingService()
@@ -1457,18 +1477,33 @@ class UnifiedOrderPipelineService:
         return {"ok": False, "message": message}
 
     def _input_text(self, inbound_message: InboundMessage, email: Email | None = None) -> str:
-        attachment_texts = []
+        source_parts: list[str] = []
+        seen_parts: set[str] = set()
+
+        def add_part(value: str | None, *, label: str | None = None) -> None:
+            normalized = str(value or "").strip()
+            if not normalized:
+                return
+            fingerprint = normalized
+            if fingerprint in seen_parts:
+                return
+            seen_parts.add(fingerprint)
+            source_parts.append(f"[{label}]\n{normalized}" if label else normalized)
+
+        add_part(inbound_message.original_content or inbound_message.normalized_text)
         for attachment in inbound_message.attachments or []:
             if attachment.extracted_text:
-                attachment_texts.append(attachment.extracted_text)
+                add_part(attachment.extracted_text, label=f"Adjunto: {attachment.filename}")
             elif attachment.ocr_text:
-                attachment_texts.append(attachment.ocr_text)
+                add_part(attachment.ocr_text, label=f"Adjunto: {attachment.filename}")
             elif attachment.transcription_text:
-                attachment_texts.append(attachment.transcription_text)
-        source = "\n\n".join(attachment_texts) if attachment_texts else (inbound_message.original_content or "")
-        if not source and email:
-            pdf_texts = [att.extracted_text for att in (email.attachments or []) if att.is_pdf and att.extracted_text]
-            source = "\n\n".join(pdf_texts) if pdf_texts else (email.extracted_text or email.body or "")
+                add_part(attachment.transcription_text, label=f"Adjunto: {attachment.filename}")
+        if email:
+            add_part(email.body or email.extracted_text)
+            for attachment in email.attachments or []:
+                if attachment.extracted_text:
+                    add_part(attachment.extracted_text, label=f"Adjunto: {attachment.filename}")
+        source = "\n\n".join(source_parts)
         subject = inbound_message.subject or (email.subject if email else "")
         sender = inbound_message.sender or (email.sender if email else "")
         return f"Asunto: {subject}\nRemitente: {sender}\n\n{source}".strip()
@@ -1756,7 +1791,7 @@ class UnifiedOrderPipelineService:
                 text=raw_line.get("texto_original") or raw_line.get("original_text") or source_text,
             )
             semantic_candidates = product_decision.get("semantic_candidates") or []
-            quantity = raw_line.get("cantidad") or raw_line.get("quantity")
+            quantity = raw_line.get("cantidad") if "cantidad" in raw_line else raw_line.get("quantity")
             product, product_method, product_score = self.product_matching.match(db, inbound_message.company_id, reference=reference, detected_name=product_name)
             if product_decision["selected"] and product_decision["selected"].product_id:
                 candidate_product = db.get(Product, product_decision["selected"].product_id)
@@ -1766,29 +1801,53 @@ class UnifiedOrderPipelineService:
                     product_method = product_decision["selected"].source
                     product_score = candidate_confidence
             confidence = _confidence(raw_line.get("confianza_extraccion") or raw_line.get("confidence"), 0.7)
-            doubt = "" if product else f"Producto no encontrado por {product_method}"
-            if quantity in {"", None}:
-                doubt = (doubt + "; " if doubt else "") + "Cantidad no detectada"
-                parsed_quantity = None
-            else:
-                try:
-                    parsed_quantity = float(str(quantity).replace(",", "."))
-                except ValueError:
-                    parsed_quantity = None
-                    doubt = (doubt + "; " if doubt else "") + "Cantidad ambigua"
+            parsed_quantity, quantity_issue = _parse_positive_quantity(quantity)
+            selected_product = product_decision["selected"]
+            deterministic_sources = {
+                "exact_reference",
+                "exact_ean",
+                "exact_sku",
+                "approved_alias",
+                "learned_alias",
+            }
+            product_is_deterministic = bool(
+                product
+                and selected_product
+                and selected_product.product_id == product.id
+                and not product_decision["requires_review"]
+                and selected_product.source in deterministic_sources
+            )
+            # Keep the legacy matcher's safe unique-reference behaviour when
+            # the decision engine has no candidate (for example a partial
+            # reference).
+            product_is_deterministic = product_is_deterministic or product_method in {
+                "referencia_exacta",
+                "referencia_parcial_unica",
+                "alias",
+                "alias_aprendido",
+            }
+            doubt_parts: list[str] = []
+            if not product:
+                doubt_parts.append(f"Producto no encontrado por {product_method}")
+            elif not product_is_deterministic:
+                doubt_parts.append(f"Producto propuesto por {product_method}; requiere validacion humana")
+            if raw_line.get("requires_review"):
+                doubt_parts.append("Linea marcada para revision por extraccion")
+                product_is_deterministic = False
+            if quantity_issue:
+                doubt_parts.append(quantity_issue)
+            doubt = "; ".join(dict.fromkeys(doubt_parts))
             if doubt:
                 review_reasons.append(doubt)
                 if semantic_candidates:
                     top_semantic = semantic_candidates[0]
                     review_reasons.append(f"Candidato semantico sugerido: {top_semantic.label} ({top_semantic.confidence:.2f}). Requiere validacion humana.")
-            elif product_decision["selected"]:
-                review_reasons.append(f"Linea {product_decision['selected'].label} por {product_decision['selected'].source}: {product_decision['selected'].reason}")
             db.add(
                 OrderLine(
                     company_id=inbound_message.company_id,
                     order_id=order.id,
                     product_id=product.id if product else None,
-                    validated_product_id=product.id if product else None,
+                    validated_product_id=product.id if product_is_deterministic and parsed_quantity is not None else None,
                     original_text=raw_line.get("texto_original") or raw_line.get("original_text") or product_name or source_text[:180],
                     detected_reference=reference,
                     detected_product=product_name,
@@ -1796,7 +1855,7 @@ class UnifiedOrderPipelineService:
                     unit=raw_line.get("unidad") or raw_line.get("unit") or "",
                     extraction_confidence=confidence,
                     line_score=round(product_score * 80 + confidence * 20, 2),
-                    validation_status="validated" if product and parsed_quantity else "pending",
+                    validation_status="validated" if product_is_deterministic and parsed_quantity is not None else "pending",
                     doubt_reason=doubt,
                 )
             )

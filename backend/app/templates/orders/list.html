@@ -3,7 +3,7 @@
 {% set archived_view = filters.archived %}
 {% set title = "Archivos" if archived_view else "Pedidos" %}
 {% set orders_reset_url = "/orders?archived=true" if archived_view else "/orders" %}
-{% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css?v=12">{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css?v=21">{% endblock %}
 {% block content %}
 
 {% set active_count = 0 %}
@@ -50,16 +50,18 @@
     {% if archived_view %}
       <span class="database-archive-view-label">Solo pedidos archivados</span>
     {% else %}
-      {% set current_view = "list" %}
-      {% set view_cards_url = "/orders?view=cards" %}
-      {% set view_list_url = "/orders?view=list" %}
-      {% include "components/view_toggle.html" %}
-      <form class="page-header-actions" method="post" action="/orders/mock" style="margin:0;">
-        <button type="submit" style="display:inline-flex;align-items:center;gap:6px;">
-          {{ icon_plus(14) }}
-          <span>{{ request.state.branding.microcopy.create_test_order }}</span>
-        </button>
-      </form>
+      <div class="page-header-actions">
+        {% set current_view = "list" %}
+        {% set view_cards_url = "/orders?view=cards" %}
+        {% set view_list_url = "/orders?view=list" %}
+        {% include "components/view_toggle.html" %}
+        <form method="post" action="/orders/mock" style="margin:0;">
+          <button type="submit" style="display:inline-flex;align-items:center;gap:6px;">
+            {{ icon_plus(14) }}
+            <span>{{ request.state.branding.microcopy.create_test_order }}</span>
+          </button>
+        </form>
+      </div>
     {% endif %}
   </header>
 
@@ -220,17 +222,16 @@
   {% endif %}
 
   <div class="database-table-wrap">
-    <table class="data-table review-table database-table database-table-orders database-table-compact" data-resizable-table data-table-key="orders">
+    <table class="data-table review-table database-table database-table-orders database-table-compact" data-resizable-table data-table-key="orders" data-min-table-width="1648">
       <colgroup>
-        <col data-column="created_at">
-        <col data-column="sender">
-        <col data-column="subject">
-        <col data-column="customer">
-        <col data-column="type">
-        <col data-column="confidence">
-        <col data-column="alerts">
-        <col data-column="status">
-        <col data-column="action">
+        <col data-column="created_at" data-default-width="148" data-min-width="128" data-max-width="240">
+        <col data-column="sender" data-default-width="240" data-min-width="180" data-max-width="560">
+        <col data-column="subject" data-default-width="280" data-min-width="200" data-max-width="640">
+        <col data-column="customer" data-default-width="220" data-min-width="160" data-max-width="480">
+        <col data-column="type" data-default-width="120" data-min-width="104" data-max-width="240">
+        <col data-column="confidence" data-default-width="148" data-min-width="120" data-max-width="280">
+        <col data-column="alerts" data-default-width="180" data-min-width="140" data-max-width="360">
+        <col data-column="status" data-default-width="132" data-min-width="112" data-max-width="260">
       </colgroup>
       <thead>
         <tr>
@@ -242,7 +243,6 @@
           {{ render_sort_th("confidence", "Confianza", "score_asc", "score_desc", default_desc=true) }}
           <th data-column="alerts">Alertas</th>
           {{ render_sort_th("status", "Estado", "status_asc", "status_desc") }}
-          <th data-column="action" class="th-actions" aria-label="Acciones"></th>
         </tr>
       </thead>
       <tbody>
@@ -251,7 +251,28 @@
         {% set category_label = categories[order.id][1] %}
         {% set order_alerts = alerts[order.id] %}
         <tr class="clickable-row row-{{ category }}" onclick="window.location.href='/orders/{{ order.id }}'">
-          <td data-column="created_at">{{ order.created_at | local_dt(tenant_timezone, "%Y-%m-%d %H:%M") }}</td>
+          <td data-column="created_at">
+            {{ order.created_at | local_dt(tenant_timezone, "%Y-%m-%d %H:%M") }}
+            <div class="row-context-actions" hidden>
+              <div class="data-table__actions">
+                <a class="button secondary compact-button table-edit-button" href="/orders/{{ order.id }}" title="Editar pedido" aria-label="Editar pedido" onclick="event.stopPropagation();">{{ icon_edit(15) }}</a>
+                <form class="table-action-form js-loading-form" method="post" action="/orders/{{ order.id }}/{{ 'unarchive' if archived_view else 'archive' }}" data-confirm="{{ '¿Sacar este pedido del archivo?' if archived_view else '¿Archivar este pedido?' }}" onclick="event.stopPropagation();">
+                  <button type="submit" class="button secondary compact-button table-action-icon" title="{{ 'Desarchivar' if archived_view else 'Archivar' }}" aria-label="{{ 'Desarchivar' if archived_view else 'Archivar' }}" data-loading-text="{{ 'Desarchivando...' if archived_view else 'Archivando...' }}">{{ icon_archive_restore(15) if archived_view else icon_archive(15) }}</button>
+                </form>
+                <a class="button secondary compact-button" href="/orders/{{ order.id }}" onclick="event.stopPropagation();">{{ request.state.branding.microcopy.review_order }}</a>
+                <details class="row-more-actions" onclick="event.stopPropagation()">
+                  <summary class="button secondary compact-button">...</summary>
+                  <div class="row-more-actions-panel">
+                    {% if order.email_id %}<a href="/?focus=email-{{ order.email_id }}" onclick="event.stopPropagation();">Ver origen</a>{% endif %}
+                    <a href="/orders/{{ order.id }}/export-preview" onclick="event.stopPropagation();">Ver exportación</a>
+                    <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/delete" data-confirm="¿Seguro que quieres eliminar este pedido? Se quitará de la gestión activa.">
+                      <button type="submit" class="secondary compact-button danger" data-loading-text="Eliminando...">Eliminar</button>
+                    </form>
+                  </div>
+                </details>
+              </div>
+            </div>
+          </td>
           <td data-column="sender">{{ order.email.sender if order.email else "" }}</td>
           <td data-column="subject" class="wide-cell" title="{{ order.email.subject if order.email else '' }}">{{ order.email.subject if order.email else "" }}</td>
           <td data-column="customer">{{ order.validated_customer.fiscal_name if order.validated_customer else order.customer.fiscal_name if order.customer else order.customer_detected_name or "Sin identificar" }}</td>
@@ -271,28 +292,9 @@
             </div>
           </td>
           <td data-column="status"><span class="badge {{ order.status|status_class }}">{{ order.status|status_label }}</span></td>
-          <td data-column="action" class="database-actions-cell">
-            <div class="data-table__actions">
-              <a class="button secondary compact-button table-edit-button" href="/orders/{{ order.id }}" title="Editar pedido" aria-label="Editar pedido" onclick="event.stopPropagation();">{{ icon_edit(15) }}</a>
-              <form class="table-action-form js-loading-form" method="post" action="/orders/{{ order.id }}/{{ 'unarchive' if archived_view else 'archive' }}" data-confirm="{{ '¿Sacar este pedido del archivo?' if archived_view else '¿Archivar este pedido?' }}" onclick="event.stopPropagation();">
-                <button type="submit" class="button secondary compact-button table-action-icon" title="{{ 'Desarchivar' if archived_view else 'Archivar' }}" aria-label="{{ 'Desarchivar' if archived_view else 'Archivar' }}" data-loading-text="{{ 'Desarchivando...' if archived_view else 'Archivando...' }}">{{ icon_archive_restore(15) if archived_view else icon_archive(15) }}</button>
-              </form>
-              <a class="button secondary compact-button" href="/orders/{{ order.id }}" onclick="event.stopPropagation();">{{ request.state.branding.microcopy.review_order }}</a>
-              <details class="row-more-actions" onclick="event.stopPropagation()">
-                <summary class="button secondary compact-button">...</summary>
-                <div class="row-more-actions-panel">
-                  {% if order.email_id %}<a href="/?focus=email-{{ order.email_id }}" onclick="event.stopPropagation();">Ver origen</a>{% endif %}
-                  <a href="/orders/{{ order.id }}/export-preview" onclick="event.stopPropagation();">Ver exportación</a>
-                  <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/delete" data-confirm="¿Seguro que quieres eliminar este pedido? Se quitará de la gestión activa.">
-                    <button type="submit" class="secondary compact-button danger" data-loading-text="Eliminando...">Eliminar</button>
-                  </form>
-                </div>
-              </details>
-            </div>
-          </td>
         </tr>
       {% else %}
-        <tr><td colspan="9" class="muted">{{ request.state.branding.microcopy.empty_orders }}</td></tr>
+        <tr><td colspan="8" class="muted">{{ request.state.branding.microcopy.empty_orders }}</td></tr>
       {% endfor %}
       </tbody>
     </table>

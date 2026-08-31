@@ -1235,6 +1235,33 @@ class RegressionFlowsTests(unittest.TestCase):
         self.assertIn("order.confirm", actions)
         self.assertIn("job.export_order.success", actions)
         self.assertIn("job.export_order_ftp.success", actions)
+
+        enqueue_job(
+            db,
+            company_id=1,
+            job_type="export_order_ftp",
+            payload={"order_id": order.id},
+            created_by_user_id=user.id,
+        )
+        duplicate_send_job = db.scalar(
+            select(BackgroundJob)
+            .where(
+                BackgroundJob.company_id == 1,
+                BackgroundJob.job_type == "export_order_ftp",
+            )
+            .order_by(BackgroundJob.id.desc())
+        )
+        with patch("app.workers.jobs_worker.MasterSessionLocal", new=self.MasterSession), patch(
+            "app.workers.jobs_worker.FTPService.send",
+            return_value=True,
+        ) as duplicate_send_mock:
+            duplicate_summary = run_worker_cycle()
+
+        self.assertEqual(duplicate_summary["tenants"], 1)
+        db.refresh(duplicate_send_job)
+        self.assertEqual(duplicate_send_job.status, "success")
+        duplicate_send_mock.assert_not_called()
+
         db.close()
 
 

@@ -4,6 +4,11 @@ import json
 
 
 EMAIL_PROVIDERS = {"email", "imap", "smtp", "gmail", "outlook", "microsoft", "exchange"}
+WHATSAPP_PROVIDERS = {"whatsapp", "meta"}
+
+
+def is_whatsapp_provider(provider: str | None) -> bool:
+    return (provider or "").strip().lower() in WHATSAPP_PROVIDERS
 
 
 def channel_label(channel_key: str | None) -> str:
@@ -15,7 +20,7 @@ def channel_label(channel_key: str | None) -> str:
 def inbound_channel_key(message) -> str:  # noqa: ANN001
     """Return the channel declared by an inbound message."""
     provider = (getattr(message, "provider", "") or "").strip().lower()
-    if provider == "whatsapp":
+    if is_whatsapp_provider(provider):
         return "whatsapp"
     raw_payload = getattr(message, "raw_payload_json", None)
     if raw_payload:
@@ -35,12 +40,12 @@ def order_channel_key(order) -> str:  # noqa: ANN001
     if getattr(order, "email_id", None):
         return "email"
     conversation = getattr(order, "conversation", None)
-    for message in (getattr(conversation, "messages", None) or []) if conversation else []:
-        if inbound_channel_key(message) == "whatsapp":
-            return "whatsapp"
     provider = (getattr(conversation, "provider", "") or "").strip().lower() if conversation else ""
-    if provider == "whatsapp":
+    if is_whatsapp_provider(provider):
         return "whatsapp"
     if provider in EMAIL_PROVIDERS:
         return "email"
+    for message in (getattr(conversation, "messages", None) or []) if conversation else []:
+        if inbound_channel_key(message) == "whatsapp":
+            return "whatsapp"
     return "inbound"

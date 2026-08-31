@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from sqlalchemy import exists, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -16,6 +16,7 @@ from app.master.service import TenantUser
 from app.tenancy.database import get_tenant_db
 from app.whatsapp.service import (
     WHATSAPP_SUPPORTED_AUDIO_MIME_TYPES,
+    WHATSAPP_SUPPORTED_AUDIO_EXTENSIONS,
     WHATSAPP_SUPPORTED_DOCUMENT_EXTENSIONS,
     WHATSAPP_SUPPORTED_DOCUMENT_MIME_TYPES,
     send_manual_response,
@@ -246,6 +247,8 @@ def whatsapp_inbox(
 async def whatsapp_inbox_reply(
     conversation_id: int,
     body: str = Form(""),
+    form_idempotency_key: str = Form("", alias="idempotency_key"),
+    header_idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     files: list[UploadFile] | None = File(default=None),
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
@@ -284,7 +287,7 @@ async def whatsapp_inbox_reply(
             return _redirect_to_conversation(conversation_id, error="attachment_too_large")
         content_type = (upload.content_type or "application/octet-stream").split(";", 1)[0].lower()
         extension = Path(upload.filename).suffix.lower()
-        is_audio = content_type in WHATSAPP_SUPPORTED_AUDIO_MIME_TYPES
+        is_audio = content_type in WHATSAPP_SUPPORTED_AUDIO_MIME_TYPES or extension in WHATSAPP_SUPPORTED_AUDIO_EXTENSIONS
         is_document = content_type in WHATSAPP_SUPPORTED_DOCUMENT_MIME_TYPES or extension in WHATSAPP_SUPPORTED_DOCUMENT_EXTENSIONS
         if not (is_audio or is_document):
             return _redirect_to_conversation(conversation_id, error="attachment_type_not_supported")
@@ -308,6 +311,7 @@ async def whatsapp_inbox_reply(
             body=clean_body,
             user_id=user.id,
             attachments=attachment_payloads,
+            idempotency_key=header_idempotency_key or form_idempotency_key,
         )
     except Exception:  # noqa: BLE001
         return _redirect_to_conversation(conversation_id, error="send_failed")

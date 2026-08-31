@@ -71,6 +71,17 @@ class ImportStorageTests(unittest.TestCase):
         self.assertEqual(calls["access"], "private")
         self.assertTrue(calls["closed"])
 
+    def test_save_attachment_rejects_ephemeral_vercel_storage(self):
+        from app.core.attachment_storage import save_attachment
+
+        with patch.dict(
+            os.environ,
+            {"VERCEL": "1", "BLOB_READ_WRITE_TOKEN": "", "BLOB_STORE_ID": ""},
+            clear=False,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Persistent attachment storage"):
+                save_attachment(filename="pedido.txt", payload=b"pedido", content_type="text/plain")
+
 
 if __name__ == "__main__":
     unittest.main()

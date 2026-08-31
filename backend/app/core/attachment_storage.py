@@ -4,14 +4,17 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
+from app.core.storage import resolve_temp_storage_dir
+
+
+def _is_vercel_runtime() -> bool:
+    return os.getenv("VERCEL") == "1" or bool(os.getenv("VERCEL_ENV"))
+
 
 def _use_vercel_blob() -> bool:
     return bool(
-        os.getenv("VERCEL")
-        and (
-            os.getenv("BLOB_READ_WRITE_TOKEN")
-            or os.getenv("BLOB_STORE_ID")
-        )
+        _is_vercel_runtime()
+        and os.getenv("BLOB_READ_WRITE_TOKEN")
     )
 
 
@@ -40,7 +43,10 @@ def save_attachment(
         finally:
             client.close()
 
-    root = Path("app/storage/attachments")
+    if _is_vercel_runtime():
+        raise RuntimeError("Persistent attachment storage is not configured for Vercel.")
+
+    root = resolve_temp_storage_dir("attachments")
     root.mkdir(parents=True, exist_ok=True)
 
     path = root / storage_name.replace("attachments/", "", 1)

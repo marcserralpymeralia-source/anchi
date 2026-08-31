@@ -146,7 +146,7 @@ def analysis_context(
         reference = raw_line.get("referencia_detectada") or raw_line.get("reference")
         product_name = raw_line.get("producto_detectado") or raw_line.get("product_name") or raw_line.get("descripcion") or raw_line.get("description")
         product, product_method, product_score = matching.find_product(db, user.company_id, reference=reference, detected_name=product_name)
-        quantity_value = raw_line.get("cantidad") or raw_line.get("quantity")
+        quantity_value = raw_line.get("cantidad") if "cantidad" in raw_line else raw_line.get("quantity")
         try:
             quantity = float(str(quantity_value).replace(",", ".")) if quantity_value not in {None, ""} else None
         except ValueError:
@@ -169,7 +169,7 @@ def analysis_context(
         temp_lines.append(SimpleNamespace(product_id=product.id if product else None, quantity=quantity, extraction_confidence=line_confidence))
 
     temp_order = SimpleNamespace(company_id=user.company_id, customer_id=customer.id if customer else None, lines=temp_lines)
-    score = ScoringService().score_order(db, temp_order)
+    score = ScoringService().score_order(db, temp_order, use_proposals=True)
     category, category_label = _score_category(score, scoring)
     expected_score_value = None
     try:

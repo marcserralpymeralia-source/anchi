@@ -90,6 +90,7 @@
           {% endfor %}
         </div>
         <form class="channel-chat-compose" method="post" action="/whatsapp/inbox/{{ selected.id }}/reply" enctype="multipart/form-data">
+          <input type="hidden" name="idempotency_key" value="">
           <textarea name="body" rows="3" maxlength="4096" placeholder="Escribe una respuesta…" {% if not ready_to_send %}disabled{% endif %}></textarea>
           <div class="channel-chat-compose-footer">
             <label class="channel-chat-file-picker"><input type="file" name="files" multiple accept=".pdf,.doc,.docx,.txt,audio/*"><span>{{ icon_paperclip(16) }} Adjuntar</span></label>
@@ -111,5 +112,10 @@
 <script>
   const chat = document.getElementById("whatsapp-chat-messages");
   if (chat) chat.scrollTop = chat.scrollHeight;
+  const compose = document.querySelector(".channel-chat-compose");
+  if (compose) compose.addEventListener("submit", () => {
+    const key = compose.querySelector("[name='idempotency_key']");
+    if (key && !key.value) key.value = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }, { once: true });
 </script>
 {% endblock %}

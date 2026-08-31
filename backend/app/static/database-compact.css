@@ -193,12 +193,17 @@
 .database-table-compact {
   display: table;
   table-layout: fixed;
-  width: 100%;
-  max-width: 100%;
+  width: max(100%, 860px);
+  min-width: 860px;
+  max-width: none;
   overflow: hidden;
   border-radius: 6px;
   border-collapse: separate;
   border-spacing: 0;
+}
+
+.database-table-compact col[data-column] {
+  width: auto;
 }
 
 table.database-table-compact th,
@@ -269,9 +274,9 @@ th.sortable-th .sort-arrow,
   line-height: 1;
 }
 
-table.database-table-compact th button,
+table.database-table-compact th button:not(.table-column-resizer),
 table.database-table-compact th .sort-header-btn,
-table.database-table-compact th button:hover,
+table.database-table-compact th button:not(.table-column-resizer):hover,
 table.database-table-compact th .sort-header-btn:hover {
   all: unset !important;
   display: inline-flex !important;
@@ -349,18 +354,33 @@ table.database-table-compact th .sort-header-btn:hover {
 }
 
 .table-column-resizer {
+  appearance: none;
+  border: 0;
+  margin: 0;
+  padding: 0;
   position: absolute;
   z-index: 2;
   top: 0;
   right: -5px;
   width: 10px;
   height: 100%;
+  background: transparent;
   cursor: col-resize;
   touch-action: none;
   user-select: none;
 }
 
-.table-column-resizer::after {
+/* The global button theme must never paint the invisible drag target. */
+.table-column-resizer:hover,
+.table-column-resizer:focus,
+.table-column-resizer:focus-visible,
+.table-column-resizer:active {
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: 0;
+}
+
+.table-column-resizer::before {
   content: "";
   position: absolute;
   top: 6px;
@@ -368,15 +388,15 @@ table.database-table-compact th .sort-header-btn:hover {
   left: 4px;
   width: 2px;
   border-radius: 1px;
-  background: rgba(100, 116, 139, 0.25);
-  transition: background-color .12s ease;
+  background: #d5e0dc;
 }
 
-.database-table-compact th:hover .table-column-resizer::after,
-.database-table-compact th:focus-within .table-column-resizer::after,
-.database-table-compact.is-resizing th .table-column-resizer::after,
-.table-column-resizer:hover::after {
-  background: var(--accent, #0f766e);
+.database-table-compact th:hover .table-column-resizer::before,
+.database-table-compact th:focus-within .table-column-resizer::before,
+.database-table-compact.is-resizing th .table-column-resizer::before,
+.table-column-resizer:hover::before,
+.table-column-resizer:focus-visible::before {
+  background: #d5e0dc;
 }
 
 .database-table-compact th:last-child .table-column-resizer,
@@ -465,7 +485,28 @@ body.is-resizing-table-column * {
 }
 
 .database-table-compact tbody tr {
-  height: 42px;
+  min-height: 36px;
+  height: auto;
+}
+
+.database-table-compact tbody td {
+  padding: 5px 10px;
+}
+
+.database-table-compact .alert-badges {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  line-height: 1.2;
+}
+
+.database-table-compact .alert-badges .badge {
+  flex: 0 0 auto;
+  min-height: 22px;
+  padding: 3px 7px;
+  line-height: 1.2;
 }
 
 .database-table-compact tbody tr:hover {
@@ -550,43 +591,14 @@ table.database-table-compact .wide-cell {
   border-bottom: 1px solid var(--line, #e2e8f0);
 }
 
-.database-table-compact .database-actions-cell,
-.database-table-compact td[data-column="action"] {
-  white-space: nowrap;
-  vertical-align: middle !important;
-  border-bottom: 1px solid var(--line, #e2e8f0) !important;
-}
-
 .database-table-compact tbody tr:last-child td,
-.database-table-compact tbody tr:last-child td[data-column="action"] {
+.database-table-compact tbody tr:last-child td {
   border-bottom: 0 !important;
 }
 
-.database-table-compact .data-table__actions {
-  display: inline-flex;
-  flex-wrap: nowrap;
-  justify-content: flex-end;
-  align-items: center;
-  gap: 4px;
-  width: 100%;
-  white-space: nowrap;
-  opacity: 0;
-  transform: translateX(4px);
-  transition: opacity 0.18s cubic-bezier(0.16, 1, 0.3, 1), transform 0.18s cubic-bezier(0.16, 1, 0.3, 1);
-  pointer-events: none;
-}
-
-.database-table-compact tbody tr:hover .data-table__actions,
-.database-table-compact tbody tr:focus-within .data-table__actions,
-.database-table-compact tbody tr:has(details[open]) .data-table__actions {
-  opacity: 1;
-  transform: translateX(0);
-  pointer-events: auto;
-}
-
 .database-table-compact .compact-button {
-  min-height: 30px;
-  height: 30px;
+  min-height: 26px;
+  height: 26px;
   padding: 0 9px;
   font-size: 12px;
   line-height: 1;
@@ -595,68 +607,68 @@ table.database-table-compact .wide-cell {
 
 .database-table-compact .row-more-actions > summary {
   width: 30px;
-  min-height: 30px;
-  height: 30px;
+  min-height: 26px;
+  height: 26px;
   padding: 0;
 }
 
-.database-table-compact [data-column="action"],
-.database-table-compact th[data-column="action"],
-.database-table-compact td[data-column="action"],
-.database-table-compact .database-actions-cell {
-  width: 120px !important;
-  min-width: 120px !important;
-  max-width: 120px !important;
-  text-align: right;
+.database-table-compact th[data-column],
+.database-table-compact td[data-column] {
+  width: auto !important;
+  min-width: 0;
+  max-width: none;
   box-sizing: border-box;
 }
 
-.database-table-productsCompact [data-column="name"] { width: 42%; }
-.database-table-productsCompact [data-column="reference"] { width: 20%; }
-.database-table-productsCompact [data-column="sale_unit"] { width: 13%; }
-.database-table-productsCompact [data-column="price"] { width: 10%; }
-.database-table-productsCompact [data-column="status"] { width: 10%; }
-
-.database-table-customersCompact [data-column="name"] { width: 36%; }
-.database-table-customersCompact [data-column="code"] { width: 10%; }
-.database-table-customersCompact [data-column="primary_email"] { width: 24%; }
-.database-table-customersCompact [data-column="city"] { width: 12%; }
-.database-table-customersCompact [data-column="status"] { width: 9%; }
-
-.database-table-orders [data-column="created_at"] { width: 126px; }
-.database-table-orders [data-column="sender"] { width: 18%; }
-.database-table-orders [data-column="subject"] { width: 22%; }
-.database-table-orders [data-column="customer"] { width: 18%; }
-.database-table-orders [data-column="type"] { width: 104px; }
-.database-table-orders [data-column="confidence"] { width: 138px; }
-.database-table-orders [data-column="alerts"] { width: 150px; }
-.database-table-orders [data-column="status"] { width: 112px; }
-.database-table-orders [data-column="action"],
-.database-table-orders th[data-column="action"],
-.database-table-orders td[data-column="action"] {
-  width: 220px !important;
-  min-width: 220px !important;
-  max-width: 220px !important;
-  text-align: right;
-  box-sizing: border-box;
+.table-context-menu {
+  position: fixed;
+  z-index: 1000;
+  display: grid;
+  gap: 2px;
+  min-width: 190px;
+  max-width: min(280px, calc(100vw - 16px));
+  max-height: min(420px, calc(100vh - 16px));
+  overflow: auto;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 14px 32px rgba(15, 23, 42, .16);
 }
 
-@media (max-width: 1280px) {
-  .database-table-productsCompact [data-column="name"] {
-    width: 40%;
-  }
+.table-context-menu[hidden] {
+  display: none;
+}
 
-  .database-table-productsCompact [data-column="reference"] {
-    width: 18%;
-  }
+.table-context-menu__item {
+  display: flex !important;
+  align-items: center;
+  justify-content: flex-start !important;
+  width: 100% !important;
+  min-height: 32px;
+  padding: 7px 10px !important;
+  border: 0 !important;
+  border-radius: 6px !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  color: var(--text) !important;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.2;
+  text-align: left;
+  white-space: normal;
+  cursor: pointer;
+}
 
-  .database-table-customersCompact [data-column="name"] {
-    width: 34%;
-  }
+.table-context-menu__item:hover,
+.table-context-menu__item:focus-visible {
+  background: #eef6f3 !important;
+  color: var(--accent-dark, #0f766e) !important;
+  outline: 0;
+}
 
-  .database-table-customersCompact [data-column="primary_email"] {
-    width: 23%;
-  }
+.database-table-compact tbody tr.context-menu-active > td {
+  background: #f1f8f5;
 }
 
 @media (max-width: 760px) {

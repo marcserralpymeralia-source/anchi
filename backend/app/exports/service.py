@@ -93,18 +93,18 @@ class ExportService:
         line,
         settings: ExportSettings,
     ) -> str:
-        product = line.validated_product or line.product
+        product = line.validated_product
 
         values = {
             "reference": (
                 product.reference
                 if product
-                else line.detected_reference or ""
+                else ""
             ),
             "description": (
                 product.name
                 if product
-                else line.detected_product or ""
+                else ""
             ),
             "quantity": self._format_number(
                 line.quantity,
@@ -116,23 +116,23 @@ class ExportService:
         return values[field]
 
     def canonical_payload(self, order: Order) -> dict:
-        customer = order.validated_customer or order.customer
+        customer = order.validated_customer
 
         lines = []
         for index, line in enumerate(order.lines or [], start=1):
-            product = line.validated_product or line.product
+            product = line.validated_product
             lines.append(
                 {
                     "line_number": index,
                     "product_code": (
                         product.reference
                         if product
-                        else line.detected_reference or ""
+                        else ""
                     ),
                     "description": (
                         product.name
                         if product
-                        else line.detected_product or ""
+                        else ""
                     ),
                     "quantity": line.quantity,
                     "unit": line.unit or "",
@@ -181,7 +181,7 @@ class ExportService:
                 f"Formato de exportacion no soportado: {settings.file_type}"
             )
 
-        customer = order.validated_customer or order.customer
+        customer = order.validated_customer
         customer_code = customer.code if customer else ""
 
         filename = settings.filename_template.format(

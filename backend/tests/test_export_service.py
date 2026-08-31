@@ -196,6 +196,21 @@ class ExportServiceTests(unittest.TestCase):
 
         db.close()
 
+    def test_export_does_not_promote_unvalidated_customer_or_product_proposal(self):
+        db, order = self._seed()
+        order.validated_customer_id = None
+        order.lines[0].validated_product_id = None
+        order.lines[0].detected_reference = "PROPOSED-REF"
+        order.lines[0].detected_product = "Producto propuesto"
+        db.commit()
+
+        payload = ExportService().canonical_payload(order)
+
+        self.assertEqual(payload["customer"]["code"], "")
+        self.assertEqual(payload["lines"][0]["product_code"], "")
+        self.assertEqual(payload["lines"][0]["description"], "")
+        db.close()
+
 
 if __name__ == "__main__":
     unittest.main()

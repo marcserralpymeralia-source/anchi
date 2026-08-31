@@ -35,11 +35,12 @@
 
     <tbody>
       {% for line in order.lines %}
-        {% set selected_product = line.validated_product or line.product %}
+        {% set selected_product = line.validated_product %}
+        {% set proposed_product = line.product if not line.validated_product_id else none %}
         {% set unit_price = selected_product.sale_price if selected_product and selected_product.sale_price is not none else 0 %}
         {% set quantity = line.quantity or 0 %}
 
-        <tr class="{% if not selected_product %}order-review-line-warning{% endif %}">
+        <tr class="{% if not selected_product or line.validation_status != 'validated' %}order-review-line-warning{% endif %}">
           <td class="order-review-reference">
             {{ selected_product.reference if selected_product else line.detected_reference or "—" }}
           </td>
@@ -66,6 +67,14 @@
                 placeholder="Buscar producto"
                 autocomplete="off"
               >
+
+              {% if proposed_product %}
+                <small class="muted order-review-proposal">
+                  Propuesta: {{ proposed_product.reference }} Â· selecciona y guarda para validarla.
+                </small>
+              {% elif line.doubt_reason %}
+                <small class="muted order-review-proposal">{{ line.doubt_reason }}</small>
+              {% endif %}
 
               <input
                 form="line-form-{{ line.id }}"

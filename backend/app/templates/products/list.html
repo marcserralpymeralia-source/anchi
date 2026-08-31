@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "components/icons.html" import icon_edit, icon_filter, icon_plus %}
 {% set title = "Productos" %}
-{% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css?v=12">{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="/static/database-compact.css?v=21">{% endblock %}
 {% block content %}
 
 {% macro render_sort_th(col_key, label, asc_val, desc_val, default_desc=false) -%}
@@ -129,21 +129,20 @@
   </div>
 
 <div class="database-table-wrap">
-<table class="data-table database-table database-table-productsCompact database-table-products database-table-compact" data-resizable-table data-table-key="productsCompact">
+<table class="data-table database-table database-table-productsCompact database-table-products database-table-compact" data-resizable-table data-table-key="productsCompact" data-min-table-width="974">
   <colgroup>
-    <col data-column="name" class="data-table__col-product">
-    <col data-column="reference" class="data-table__col-reference">
-    <col data-column="sale_unit" class="data-table__col-unit">
-    <col data-column="price" class="data-table__col-price">
-    <col data-column="status" class="data-table__col-status">
-    <col data-column="action" class="data-table__col-actions">
-    <col data-column="family">
-    <col data-column="aliases">
-    <col data-column="customers">
-    <col data-column="description_cont">
-    <col data-column="supplier">
-    <col data-column="last_import">
-    <col data-column="notes">
+    <col data-column="name" data-default-width="320" data-min-width="200" data-max-width="640" class="data-table__col-product">
+    <col data-column="reference" data-default-width="160" data-min-width="120" data-max-width="280" class="data-table__col-reference">
+    <col data-column="sale_unit" data-default-width="130" data-min-width="100" data-max-width="240" class="data-table__col-unit">
+    <col data-column="price" data-default-width="120" data-min-width="96" data-max-width="220" class="data-table__col-price">
+    <col data-column="status" data-default-width="112" data-min-width="96" data-max-width="220" class="data-table__col-status">
+    <col data-column="family" data-default-width="180" data-min-width="140" data-max-width="360">
+    <col data-column="aliases" data-default-width="130" data-min-width="110" data-max-width="280">
+    <col data-column="customers" data-default-width="130" data-min-width="110" data-max-width="280">
+    <col data-column="description_cont" data-default-width="280" data-min-width="200" data-max-width="640">
+    <col data-column="supplier" data-default-width="190" data-min-width="140" data-max-width="400">
+    <col data-column="last_import" data-default-width="160" data-min-width="126" data-max-width="320">
+    <col data-column="notes" data-default-width="260" data-min-width="180" data-max-width="640">
   </colgroup>
   <thead>
     <tr>
@@ -152,7 +151,6 @@
       {{ render_sort_th("sale_unit", "Unidad", "unit_asc", "unit_desc") }}
       {{ render_sort_th("price", "Precio", "price_asc", "price_desc") }}
       {{ render_sort_th("status", "Estado", "status_asc", "status_desc") }}
-      <th data-column="action" class="th-actions" aria-label="Acciones"></th>
       {{ render_sort_th("family", "Familia", "family_asc", "family_desc") }}
       <th data-column="aliases">Alias</th>
       <th data-column="customers">Clientes</th>
@@ -168,24 +166,24 @@
       {% set stats = product_stats.get(product.id, {}) %}
       <td data-column="name" class="wide-cell" title="{{ product.name }}">
         <span class="data-table__primary">{{ product.name }}</span>
+        <div class="row-context-actions" hidden>
+          <div class="data-table__actions">
+            <button type="button" class="secondary compact-button table-edit-button" title="Editar producto" aria-label="Editar producto" onclick="document.getElementById('product-{{ product.id }}').showModal()">{{ icon_edit(15) }}</button>
+            <button type="button" class="secondary compact-button" onclick="document.getElementById('product-{{ product.id }}').showModal()">Abrir</button>
+            <details class="row-more-actions">
+              <summary class="button secondary compact-button">...</summary>
+              <div class="row-more-actions-panel">
+                <button type="button" onclick="document.getElementById('product-{{ product.id }}').showModal()">Editar</button>
+                <a href="#" onclick="event.preventDefault(); document.getElementById('product-delete-{{ product.id }}').showModal();">Eliminar</a>
+              </div>
+            </details>
+          </div>
+        </div>
       </td>
       <td data-column="reference"><span class="database-code-text">{{ product.reference }}</span></td>
       <td data-column="sale_unit">{{ product.sale_unit or "—" }}</td>
       <td data-column="price">{{ "%.2f"|format(product.sale_price) if product.sale_price is not none else "—" }}</td>
       <td data-column="status"><span class="badge data-table__status {{ 'status-confirmed' if product.status == 'active' and not product.obsolete else 'status-discarded' }}">{{ product.status|status_label }}</span></td>
-      <td data-column="action" class="database-actions-cell">
-        <div class="data-table__actions">
-          <button type="button" class="secondary compact-button table-edit-button" title="Editar producto" aria-label="Editar producto" onclick="document.getElementById('product-{{ product.id }}').showModal()">{{ icon_edit(15) }}</button>
-          <button type="button" class="secondary compact-button" onclick="document.getElementById('product-{{ product.id }}').showModal()">Abrir</button>
-          <details class="row-more-actions">
-            <summary class="button secondary compact-button">...</summary>
-            <div class="row-more-actions-panel">
-              <button type="button" onclick="document.getElementById('product-{{ product.id }}').showModal()">Editar</button>
-              <a href="#" onclick="event.preventDefault(); document.getElementById('product-delete-{{ product.id }}').showModal();">Eliminar</a>
-            </div>
-          </details>
-        </div>
-      </td>
       <td data-column="family" class="cell-ellipsis" title="{{ product.family or '—' }}">{{ product.family or "—" }}</td>
       <td data-column="aliases"><span class="badge data-table__status">{{ product.aliases|length }}</span></td>
       <td data-column="customers"><span class="badge data-table__status">{{ stats.customers or 0 }}</span></td>
@@ -195,7 +193,7 @@
       <td data-column="notes" class="cell-ellipsis" title="{{ product.notes or '—' }}">{{ (product.notes or "—")[:120] }}</td>
     </tr>
   {% else %}
-    <tr><td colspan="13" class="muted">No hay productos para los filtros seleccionados.</td></tr>
+    <tr><td colspan="12" class="muted">No hay productos para los filtros seleccionados.</td></tr>
   {% endfor %}
   </tbody>
 </table>
