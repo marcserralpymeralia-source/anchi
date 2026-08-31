@@ -251,7 +251,13 @@
                 ("mark_doubtful_below_threshold","Marcar dudoso"),
                 ("mark_no_order_if_detected","Marcar sin pedido")
               ] %}
-                <label>{{ label }}<input name="{{ field }}" type="checkbox" {% if email|attr(field) %}checked{% endif %}></label>
+                <label class="{% if field == 'always_human_review' %}checkbox-card{% endif %}">
+                  {{ label }}
+                  <input name="{{ field }}" type="checkbox" {% if email|attr(field) %}checked{% endif %}>
+                  {% if field == "always_human_review" %}
+                    <span class="muted">{{ "Activada" if email.always_human_review else "Desactivada" }}</span>
+                  {% endif %}
+                </label>
               {% endfor %}
               <label>Carpeta procesados<input name="processed_folder" value="{{ email.processed_folder or '' }}" placeholder="Procesados"></label>
               <label>Carpeta errores<input name="error_folder" value="{{ email.error_folder or '' }}" placeholder="Errores"></label>
