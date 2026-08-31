@@ -1188,6 +1188,7 @@ class WhatsAppIntegrationTests(unittest.TestCase):
             },
         )
         self.assertEqual(updated.status, "delivered")
+        self.assertIsNone(updated.processing_error)
         db.close()
 
     def test_failed_delivery_preserves_provider_error_detail(self):

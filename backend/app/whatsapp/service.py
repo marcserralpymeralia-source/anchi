@@ -1482,11 +1482,13 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
             raise
         status_payload = metadata.get("payload") if isinstance(metadata.get("payload"), dict) else {}
         status_value = str(status_payload.get("status") or "sent").lower()
-        if _should_advance_delivery_status(message.status, status_value):
+        previous_status = str(message.status or "").strip().lower()
+        status_advanced = _should_advance_delivery_status(previous_status, status_value)
+        if status_advanced:
             message.status = status_value
             message.processing_step = f"delivery_{status_value}"
             message.last_processed_at = datetime.now(timezone.utc)
-        if status_value == "failed":
+        if status_value == "failed" and (status_advanced or previous_status == "failed"):
             status_error = _whatsapp_status_error(status_payload)
             if status_error:
                 message.processing_error = status_error
