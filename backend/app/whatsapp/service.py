@@ -1968,6 +1968,13 @@ async def send_automatic_response(
             "skipped": True,
             **status,
         }
+    _prepare_whatsapp_text_send(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+        body=body,
+        template_name=None,
+    )
     idempotency_key = f"auto:{trigger_message_id}"
     try:
         reservation, owns_send = _reserve_automatic_response(

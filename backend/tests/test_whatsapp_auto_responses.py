@@ -8,7 +8,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db.database import Base
-from app.db.models import Company, Conversation, InboundMessage, InputChannel
+from app.db.models import ChannelSetting, Company, Conversation, InboundMessage, InputChannel
 from app.whatsapp.service import (
     automatic_response_status,
     record_automatic_response,
@@ -31,7 +31,17 @@ class WhatsAppAutomaticResponseTests(unittest.IsolatedAsyncioTestCase):
                 key="whatsapp",
                 name="WhatsApp",
                 channel_type="message",
+                is_active=True,
             )
+        )
+        db.add_all(
+            [
+                ChannelSetting(company_id=1, channel_id=1, key="enabled", value="true"),
+                ChannelSetting(company_id=1, channel_id=1, key="provider", value="meta"),
+                ChannelSetting(company_id=1, channel_id=1, key="phone_number_id", value="pn-123"),
+                ChannelSetting(company_id=1, channel_id=1, key="access_token", value="test-token"),
+                ChannelSetting(company_id=1, channel_id=1, key="connection_status", value="connected"),
+            ]
         )
         db.add(
             Conversation(
