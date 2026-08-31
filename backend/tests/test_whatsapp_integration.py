@@ -46,6 +46,7 @@ from app.whatsapp.service import (
     verify_webhook_token,
     whatsapp_event_matches_config,
     whatsapp_ingress_is_ready,
+    whatsapp_outbound_is_ready,
     whatsapp_config,
 )
 from app.workers.jobs_worker import run_worker_cycle
@@ -205,6 +206,16 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         )[0]
 
         self.assertEqual(UnifiedOrderPipelineService()._source_type_for_extraction(message), "whatsapp")
+        db.close()
+
+    def test_outbound_requires_an_active_connected_channel(self):
+        db = self.TenantSession()
+        channel = db.scalar(select(InputChannel).where(InputChannel.company_id == 1, InputChannel.key == "whatsapp"))
+
+        self.assertTrue(whatsapp_outbound_is_ready(db, 1))
+        channel.is_active = False
+        db.commit()
+        self.assertFalse(whatsapp_outbound_is_ready(db, 1))
         db.close()
 
     def test_live_webhook_requires_ready_tenant_and_exact_meta_identifiers(self):

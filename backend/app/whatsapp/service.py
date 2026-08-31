@@ -236,6 +236,32 @@ def whatsapp_ingress_is_ready(
     )
 
 
+def whatsapp_outbound_is_ready(
+    db: Session,
+    company_id: int,
+    *,
+    config: WhatsAppTenantConfig | None = None,
+) -> bool:
+    """Return whether the tenant is allowed to send through Meta."""
+    channel = db.scalar(
+        select(InputChannel).where(
+            InputChannel.company_id == company_id,
+            InputChannel.key == WHATSAPP_CHANNEL_KEY,
+            InputChannel.is_active.is_(True),
+        )
+    )
+    if not channel:
+        return False
+    config = config or whatsapp_config(db, company_id)
+    return bool(
+        config.enabled
+        and config.provider == WHATSAPP_PROVIDER
+        and config.connection_status == "connected"
+        and config.phone_number_id
+        and config.access_token
+    )
+
+
 def whatsapp_event_matches_config(event: dict[str, Any], config: WhatsAppTenantConfig) -> bool:
     """Require both Meta identifiers to belong to the configured tenant."""
     event_waba = str(event.get("business_account_id") or "").strip()
@@ -584,7 +610,7 @@ async def send_whatsapp_text(
     if not clean_template_name and (not body or len(body) > 4096):
         raise WhatsAppEmbeddedSignupError("El mensaje debe tener entre 1 y 4096 caracteres.", error_type="invalid_message")
     config = whatsapp_config(db, company_id)
-    if config.provider != WHATSAPP_PROVIDER or not config.access_token or not config.phone_number_id:
+    if not whatsapp_outbound_is_ready(db, company_id, config=config):
         raise WhatsAppEmbeddedSignupError("WhatsApp no está configurado para enviar mensajes.", error_type="server_not_configured")
     latest_inbound = db.scalar(
         select(InboundMessage)
@@ -683,7 +709,7 @@ async def send_whatsapp_media(
     client: httpx.AsyncClient | None = None,
 ) -> dict[str, Any]:
     config = whatsapp_config(db, company_id)
-    if config.provider != WHATSAPP_PROVIDER or not config.access_token or not config.phone_number_id:
+    if not whatsapp_outbound_is_ready(db, company_id, config=config):
         raise WhatsAppEmbeddedSignupError("WhatsApp no está configurado para enviar archivos.", error_type="server_not_configured")
     if not content or len(content) > config.max_attachment_bytes:
         raise WhatsAppEmbeddedSignupError("El adjunto supera el tamaño máximo permitido.", error_type="media_too_large")

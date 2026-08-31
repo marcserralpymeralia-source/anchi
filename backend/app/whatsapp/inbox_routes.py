@@ -21,6 +21,7 @@ from app.whatsapp.service import (
     WHATSAPP_SUPPORTED_DOCUMENT_MIME_TYPES,
     send_manual_response,
     whatsapp_config,
+    whatsapp_outbound_is_ready,
 )
 
 
@@ -203,13 +204,7 @@ def whatsapp_inbox(
     if selected is not None and selected not in page_cards:
         page_cards = [selected, *page_cards]
 
-    ready_to_send = bool(
-        config.enabled
-        and config.provider == "meta"
-        and config.connection_status == "connected"
-        and config.phone_number_id
-        and config.access_token
-    )
+    ready_to_send = whatsapp_outbound_is_ready(db, user.company_id, config=config)
     return templates.TemplateResponse(
         "whatsapp/inbox.html",
         {
@@ -267,13 +262,7 @@ async def whatsapp_inbox_reply(
         return PlainTextResponse("Conversación no encontrada.", status_code=404)
 
     config = whatsapp_config(db, user.company_id)
-    if not (
-        config.enabled
-        and config.provider == "meta"
-        and config.connection_status == "connected"
-        and config.phone_number_id
-        and config.access_token
-    ):
+    if not whatsapp_outbound_is_ready(db, user.company_id, config=config):
         return _redirect_to_conversation(conversation_id, error="whatsapp_not_ready")
 
     attachment_payloads = []
