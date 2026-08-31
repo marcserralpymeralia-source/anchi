@@ -45,6 +45,7 @@ from app.core.encryption import encrypt_secret  # noqa: E402
 from app.pages.routes import dashboard  # noqa: E402
 from app.settings.branding import branding_to_dict, default_branding_payload  # noqa: E402
 from app.dashboard.service import _safe_sender_domain, _safe_sort_timestamp, email_workbench_item, suggest_customer_for_email, workbench_summary  # noqa: E402
+from app.workbench.routes import _inbound_item  # noqa: E402
 from app.master_data.service import normalize_conflict_policy, upsert_customer, upsert_product  # noqa: E402
 from app.settings.integrations import classify_integration_error, redact_email_config, validate_imap_config, validate_openai_config, validate_smtp_config  # noqa: E402
 
@@ -417,6 +418,25 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.assertEqual(item["sender_domain"], "")
         self.assertEqual(_safe_sender_domain(None), "")
         self.assertEqual(item["from_email"], None)
+
+    def test_inbound_workbench_item_builds_origin_without_undefined_provider(self):
+        message = SimpleNamespace(
+            id=1,
+            provider="meta",
+            raw_payload_json=None,
+            status="received",
+            processing_step="received",
+            order_id=None,
+            customer_id=None,
+            score=None,
+            conversation=SimpleNamespace(messages=[]),
+            attachments=[],
+        )
+
+        item = _inbound_item(message)
+
+        self.assertEqual(item["channel_key"], "whatsapp")
+        self.assertEqual(item["origin"], "WhatsApp")
 
     def test_suggest_customer_for_email_handles_missing_sender(self):
         db = self.TenantSession()

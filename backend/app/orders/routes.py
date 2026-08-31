@@ -12,6 +12,7 @@ from app.core.templating import templates
 from app.agent.platform import LearningService
 from app.agent.services import MockAgentService, ScoringService
 from app.auth.dependencies import current_user
+from app.core.channel_identity import is_whatsapp_provider
 from app.master.service import TenantUser
 from app.core.pagination import paginate
 from app.db.models import Conversation, Customer, CustomerContactPoint, Email, EmailAttachment, ExportFile, FTPSettings, InboundMessage, ManualCorrection, Order, OrderLine, Product, RagCase, ScoringSettings, User, utcnow
@@ -31,6 +32,7 @@ from app.orders.service import (
     validate_confirmation,
 )
 from app.orders.state import ORDER_STATE
+from app.orders.scoring import is_positive_quantity
 from app.settings.service import get_or_create_settings, resolve_updated_by_id
 from app.tenancy.database import get_tenant_db
 from app.core.attachment_storage import read_attachment
@@ -142,7 +144,7 @@ def _conversation_preview(order: Order | None) -> dict | None:
     provider = (source_message.provider or "").strip().lower()
     if provider == "manual_import":
         provider_label = "Importación manual"
-    elif provider == "whatsapp":
+    elif is_whatsapp_provider(provider):
         provider_label = "WhatsApp"
     elif provider:
         provider_label = provider.title()
@@ -789,14 +791,14 @@ def update_order_line(
         and line.order_id == order.id
         and product_is_valid
     ):
-        old_product = line.validated_product or line.product
+        old_product = line.validated_product
         old_quantity = line.quantity
         old_unit = line.unit
         line.validated_product_id = new_product.id if new_product else None
         line.product_id = new_product.id if new_product else line.product_id
         line.quantity = quantity
         line.unit = unit
-        line.validation_status = "validated" if line.validated_product_id and quantity else "pending"
+        line.validation_status = "validated" if line.validated_product_id and is_positive_quantity(quantity) else "pending"
         line.doubt_reason = "" if line.validation_status == "validated" else "Linea pendiente de validar"
         if new_product and (not old_product or old_product.id != new_product.id):
             db.add(
@@ -903,7 +905,7 @@ def add_order_line(
             unit=unit,
             extraction_confidence=1,
             line_score=100 if product else 30,
-            validation_status="validated" if product else "pending",
+            validation_status="validated" if product and is_positive_quantity(quantity) else "pending",
             doubt_reason="" if product else "Linea manual sin referencia validada",
         )
         db.add(line)
@@ -974,7 +976,7 @@ def delete_order_line(order_id: int, line_id: int, db: Session = Depends(get_ten
         and order.company_id == user.company_id
         and line.order_id == order.id
     ):
-        old_product = line.validated_product or line.product
+        old_product = line.validated_product
         if old_product:
             LearningService().penalize_customer_product_knowledge(
                 db,
@@ -1117,12 +1119,12 @@ def mark_not_order(order_id: int, db: Session = Depends(get_tenant_db), user: Te
             order.email.detected_type = "no_pedido"
             order.email.status = "no_pedido"
         for line in order.lines or []:
-            if line.validated_product or line.product:
+            if line.validated_product:
                 LearningService().record_knowledge_conflict(
                     db,
                     company_id=user.company_id,
                     customer_id=order.validated_customer_id or order.customer_id,
-                    product_id=(line.validated_product or line.product).id,
+                    product_id=line.validated_product.id,
                     title="Pedido marcado como no pedido",
                     message="La línea detectada no debe incorporarse como aprendizaje aprobado.",
                     payload={"order_id": order.id, "line_id": line.id},

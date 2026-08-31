@@ -15,7 +15,7 @@ from app.agent.extraction.diagnostics import extraction_diagnostics_from_message
 from app.agent.services import AgentProcessingService, ScoringService
 from app.auth.dependencies import current_user
 from app.core.attachment_storage import read_attachment
-from app.core.channel_identity import channel_label, inbound_channel_key
+from app.core.channel_identity import channel_label, inbound_channel_key, is_whatsapp_provider
 from app.core.entry_workflow import close_email, discard_email, mark_email_no_order, queue_email_processing
 from app.core.templating import templates
 from app.core.timezones import format_local_datetime
@@ -124,7 +124,7 @@ def _conversation_preview(source) -> dict | None:
     provider = (getattr(source_message, "provider", "") or "").strip().lower()
     if provider == "manual_import":
         provider_label = "Importación manual"
-    elif provider == "whatsapp":
+    elif is_whatsapp_provider(provider):
         provider_label = "WhatsApp"
     elif provider:
         provider_label = provider.title()
@@ -193,7 +193,7 @@ def _inbound_item(message: InboundMessage, *, order: Order | None = None) -> dic
         "score": message.score,
         "message_count": len(message.conversation.messages) if message.conversation and message.conversation.messages else 1,
         "has_attachments": bool(message.attachments),
-        "origin": "WhatsApp" if provider == "whatsapp" else "Entrada",
+        "origin": "WhatsApp" if channel_key == "whatsapp" else "Entrada",
     }
 
 

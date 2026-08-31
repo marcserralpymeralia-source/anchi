@@ -2,14 +2,16 @@ from datetime import datetime, timedelta, timezone
 from math import ceil
 
 from sqlalchemy import case, func, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, joinedload, selectinload
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.core.entry_workflow import canonical_email_status, canonical_inbound_status, entry_status_label
 from app.core.channel_identity import channel_label, order_channel_key
 from app.core.timezones import format_local_datetime
 from app.core.pagination import normalize_page
-from app.db.models import Company, Customer, CustomerContactPoint, CustomerDomain, Email, FTPSettings, LLMSettings, Order, OrderLine, ScoringSettings
+from app.db.models import Company, Conversation, Customer, CustomerContactPoint, CustomerDomain, Email, FTPSettings, InboundMessage, LLMSettings, Order, OrderLine, ScoringSettings
 from app.orders.state import CONFIRMED_ORDER_STATUSES, ERROR_ORDER_STATUSES, ORDER_STATE, PENDING_ORDER_STATUSES
+from app.orders.scoring import is_positive_quantity
 from app.settings.service import get_or_create_settings
 
 
@@ -46,7 +48,7 @@ def _order_line_metrics(order: Order, line_metrics_by_order: dict[int, dict[str,
         "line_count": len(lines),
         "doubt_count": sum(1 for line in lines if line.validation_status != "validated" or not line.validated_product_id or line.doubt_reason),
         "missing_product_count": sum(1 for line in lines if not line.validated_product_id),
-        "invalid_quantity_count": sum(1 for line in lines if line.quantity is None or line.quantity <= 0),
+        "invalid_quantity_count": sum(1 for line in lines if not is_positive_quantity(line.quantity)),
     }
 
 
@@ -93,6 +95,8 @@ def validate_blockers(order: Order, settings: ScoringSettings, *, line_metrics_b
 
 
 def order_origin(order: Order) -> str:
+    if order_channel_key(order) == "whatsapp":
+        return "WhatsApp"
     has_pdf = bool(order.email and order.email.has_pdf)
     has_body = bool(order.email and order.email.body)
     has_attachments = bool(order.email and order.email.has_attachments)
@@ -105,6 +109,76 @@ def order_origin(order: Order) -> str:
     if has_body:
         return "Email"
     return "Sin documento"
+
+
+def order_has_pdf(order: Order) -> bool:
+    if order.email:
+        return bool(order.email.has_pdf or any(attachment.is_pdf for attachment in order.email.attachments))
+    if order.conversation:
+        return any(
+            attachment.content_type == "application/pdf" or (attachment.filename or "").lower().endswith(".pdf")
+            for message in order.conversation.messages or []
+            for attachment in message.attachments or []
+        )
+    return False
+
+
+def _latest_inbound_message(order: Order):  # noqa: ANN001
+    if not order.conversation:
+        return None
+    inbound_messages = [
+        message
+        for message in (order.conversation.messages or [])
+        if message.direction == "inbound"
+    ]
+    return max(
+        inbound_messages,
+        key=lambda message: message.received_at or message.created_at,
+        default=None,
+    )
+
+
+def order_subject(order: Order) -> str:
+    if order.email:
+        return order.email.subject or ""
+    if order.conversation and order.conversation.subject:
+        return order.conversation.subject
+    return "Conversación WhatsApp" if order_channel_key(order) == "whatsapp" else ""
+
+
+def order_sender(order: Order) -> str:
+    if order.email:
+        return order.email.sender or ""
+    return order.conversation.external_thread_id if order.conversation else ""
+
+
+def _load_order_conversations(db: Session, orders: list[Order], company_id: int) -> None:
+    """Load conversation metadata only for conversation-backed orders.
+
+    Most orders are email-backed and must keep the home/workbench query budget
+    small. WhatsApp orders have no email, so they are loaded in one batched
+    query only when they are actually present.
+    """
+    conversation_ids = {
+        order.conversation_id
+        for order in orders
+        if order.conversation_id and not order.email_id
+    }
+    if not conversation_ids:
+        return
+    conversations = db.scalars(
+        select(Conversation)
+        .where(
+            Conversation.company_id == company_id,
+            Conversation.id.in_(conversation_ids),
+        )
+        .options(selectinload(Conversation.messages))
+    ).unique().all()
+    by_id = {conversation.id: conversation for conversation in conversations}
+    for order in orders:
+        conversation = by_id.get(order.conversation_id)
+        if conversation:
+            set_committed_value(order, "conversation", conversation)
 
 
 def order_issue_summary(order: Order, settings: ScoringSettings, *, line_metrics_by_order: dict[int, dict[str, int]] | None = None) -> str:
@@ -196,8 +270,8 @@ def build_order_item(order: Order, settings: ScoringSettings, *, include_line_me
         "channel_key": channel_key,
         "channel": channel_label(channel_key),
         "customer": (order.validated_customer or order.customer).fiscal_name if (order.validated_customer or order.customer) else order.customer_detected_name or "Cliente no identificado",
-        "subject": order.email.subject if order.email else "",
-        "sender": order.email.sender if order.email else "",
+        "subject": order_subject(order),
+        "sender": order_sender(order),
         "origin": order_origin(order),
         "line_count": metrics["line_count"] if include_line_metrics else 0,
         "doubt_count": metrics["doubt_count"] if include_line_metrics else 0,
@@ -308,9 +382,9 @@ def order_workbench_item(order: Order, settings: ScoringSettings, *, include_lin
         "email_id": order.email_id,
         "order_id": order.id,
         "received_at": order.email.received_at if order.email else order.created_at,
-        "from_email": order.email.sender if order.email else "",
-        "sender_domain": _safe_sender_domain(order.email.sender if order.email else None),
-        "subject": order.email.subject if order.email else "",
+        "from_email": order_sender(order),
+        "sender_domain": _safe_sender_domain(order_sender(order) if order.email else None),
+        "subject": order_subject(order),
         "customer_name": item["customer"],
         "suggested_customer": item["customer"],
         "agent_status": agent_status,
@@ -457,7 +531,7 @@ def filter_orders_for_operation(orders: list[Order], settings: ScoringSettings, 
     has_pdf = filters.get("has_pdf")
     if has_pdf:
         want_pdf = has_pdf == "yes"
-        orders = [order for order in orders if email_has_pdf(order.email) == want_pdf]
+        orders = [order for order in orders if order_has_pdf(order) == want_pdf]
     requires_review = filters.get("requires_review")
     if requires_review:
         orders = [order for order in orders if (order_operational_category(order, settings, line_metrics_by_order=line_metrics_by_order) in {"review", "blocked", "error"}) == (requires_review == "yes")]
@@ -468,10 +542,15 @@ def operational_summary(db: Session, company_id: int, filters: dict) -> dict:
     settings = get_or_create_settings(db, ScoringSettings, company_id)
     today = datetime.now(timezone.utc).date()
     orders_stmt = select(Order).where(Order.company_id == company_id).options(
-        selectinload(Order.email),
+        joinedload(Order.email),
         selectinload(Order.customer),
         selectinload(Order.validated_customer),
     )
+    if filters.get("has_pdf"):
+        orders_stmt = orders_stmt.options(
+            joinedload(Order.email).selectinload(Email.attachments),
+            selectinload(Order.conversation).selectinload(Conversation.messages).selectinload(InboundMessage.attachments),
+        )
     emails_stmt = select(Email).where(Email.company_id == company_id)
     if filters.get("quick_range") == "today":
         start = datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc)
@@ -528,6 +607,8 @@ def operational_summary(db: Session, company_id: int, filters: dict) -> dict:
         orders_stmt = orders_stmt.where(or_(Email.subject.ilike(like), Order.customer_detected_name.ilike(like)))
         emails_stmt = emails_stmt.where(or_(Email.subject.ilike(like), Email.sender.ilike(like)))
     orders = db.scalars(orders_stmt.order_by(Order.created_at.desc())).unique().all()
+    if not filters.get("has_pdf"):
+        _load_order_conversations(db, orders, company_id)
     line_metrics_by_order = _load_order_line_metrics(db, company_id, [order.id for order in orders])
     emails = db.scalars(emails_stmt.order_by(Email.received_at.desc())).all()
     if filters.get("scoring_category"):
@@ -632,10 +713,17 @@ def workbench_summary(db: Session, company_id: int, filters: dict, *, include_me
             mapped_filters["email_type"] = status_map[filters["agent_status"]]
 
     order_load_options = [
-        selectinload(Order.email),
+        joinedload(Order.email),
         selectinload(Order.customer),
         selectinload(Order.validated_customer),
     ]
+    if mapped_filters.get("has_pdf"):
+        order_load_options.extend(
+            [
+                joinedload(Order.email).selectinload(Email.attachments),
+                selectinload(Order.conversation).selectinload(Conversation.messages).selectinload(InboundMessage.attachments),
+            ]
+        )
     orders_stmt = select(Order).where(
         Order.company_id == company_id,
         Order.deleted_at.is_(None),
@@ -676,6 +764,8 @@ def workbench_summary(db: Session, company_id: int, filters: dict, *, include_me
         like = f"%{mapped_filters['search']}%"
         orders_stmt = orders_stmt.join(Email, Order.email_id == Email.id).where(or_(Email.subject.ilike(like), Order.customer_detected_name.ilike(like)))
     orders = db.scalars(orders_stmt.order_by(Order.created_at.desc())).unique().all()
+    if not mapped_filters.get("has_pdf"):
+        _load_order_conversations(db, orders, company_id)
     line_metrics_by_order = _load_order_line_metrics(db, company_id, [order.id for order in orders])
     if mapped_filters.get("scoring_category"):
         orders = [order for order in orders if scoring_category(order.score, settings) == mapped_filters["scoring_category"]]
@@ -847,10 +937,15 @@ def workbench_summary(db: Session, company_id: int, filters: dict, *, include_me
 def dashboard_summary(db: Session, company_id: int, filters: dict) -> dict:
     settings = get_or_create_settings(db, ScoringSettings, company_id)
     orders_stmt = select(Order).where(Order.company_id == company_id).options(
-        selectinload(Order.email),
+        joinedload(Order.email),
         selectinload(Order.customer),
         selectinload(Order.validated_customer),
     )
+    if filters.get("has_pdf"):
+        orders_stmt = orders_stmt.options(
+            joinedload(Order.email).selectinload(Email.attachments),
+            selectinload(Order.conversation).selectinload(Conversation.messages).selectinload(InboundMessage.attachments),
+        )
     emails_stmt = select(Email).where(Email.company_id == company_id)
     if filters.get("date_from"):
         dt = datetime.fromisoformat(filters["date_from"]).replace(tzinfo=timezone.utc)
@@ -891,6 +986,8 @@ def dashboard_summary(db: Session, company_id: int, filters: dict) -> dict:
             joined_email = True
         orders_stmt = orders_stmt.where(or_(Email.subject.ilike(like), Order.customer_detected_name.ilike(like)))
     orders = db.scalars(orders_stmt.order_by(Order.created_at.desc())).unique().all()
+    if not filters.get("has_pdf"):
+        _load_order_conversations(db, orders, company_id)
     order_email_ids = {order.email_id for order in orders if order.email_id}
     display_emails_stmt = emails_stmt.where(~Email.id.in_(order_email_ids)) if order_email_ids else emails_stmt
     emails = db.scalars(display_emails_stmt.order_by(Email.received_at.desc())).all()

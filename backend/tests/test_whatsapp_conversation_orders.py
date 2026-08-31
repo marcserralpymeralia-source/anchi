@@ -112,6 +112,26 @@ class WhatsAppConversationOrderTests(unittest.TestCase):
             "CLIENTE: Ponme cuatro cajas de tomate",
         )
 
+    def test_transcript_keeps_message_body_with_processed_attachment_text(self):
+        message = SimpleNamespace(
+            direction="inbound",
+            original_content="Te adjunto el pedido firmado",
+            attachments=[
+                SimpleNamespace(
+                    extracted_text="Producto P-100: 4 cajas",
+                    ocr_text=None,
+                    transcription_text=None,
+                )
+            ],
+        )
+
+        transcript = build_transcript([message])
+
+        self.assertEqual(
+            transcript,
+            "CLIENTE: Te adjunto el pedido firmado\n\nProducto P-100: 4 cajas",
+        )
+
     def test_open_conversation_stays_collecting(self):
         db = self.Session()
         self._message(db, 1, "Ponme 4 cajas de tomate")

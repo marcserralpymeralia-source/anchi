@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_filter %}
+{% from "components/icons.html" import icon_filter, icon_plus %}
 {% set title = "Bandeja" %}
 {% block content %}
 
@@ -10,7 +10,15 @@
       <div class="page-context">
         <span class="page-kicker">Gestion operativa</span>
       </div>
-      {% include "components/view_toggle.html" %}
+      <div class="page-header-actions">
+        {% include "components/view_toggle.html" %}
+        <form method="post" action="/orders/mock" style="margin:0;">
+          <button type="submit" style="display:inline-flex;align-items:center;gap:6px;">
+            {{ icon_plus(14) }}
+            <span>{{ request.state.branding.microcopy.create_test_order }}</span>
+          </button>
+        </form>
+      </div>
     </header>
     <details class="workbench-filters-panel" open>
       <summary>Filtros rápidos</summary>

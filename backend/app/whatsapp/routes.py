@@ -19,6 +19,8 @@ from app.whatsapp.service import (
     persist_event,
     resolve_company_from_slug,
     resolve_company_from_whatsapp_identifiers,
+    whatsapp_event_matches_config,
+    whatsapp_ingress_is_ready,
     verify_signature,
     verify_webhook_token,
     whatsapp_config,
@@ -70,6 +72,13 @@ async def receive_default_webhook(
             continue
         config_db = tenant_db_session(tenant_db.database_url)()
         try:
+            config = whatsapp_config(config_db, company.id)
+            if not whatsapp_ingress_is_ready(config_db, company.id, config=config):
+                ignored += 1
+                continue
+            if not whatsapp_event_matches_config(event, config):
+                ignored += 1
+                continue
             message = persist_event(config_db, company.id, event)
             if message:
                 stored.append(message.id)
@@ -128,7 +137,13 @@ async def receive_webhook(
         if not events:
             return JSONResponse({"ok": True, "message": "no events"})
         stored = []
+        ignored = 0
+        if not whatsapp_ingress_is_ready(config_db, company.id, config=config):
+            return {"ok": True, "company_id": company.id, "events": len(events), "stored": [], "ignored": len(events)}
         for event in events:
+            if not whatsapp_event_matches_config(event, config):
+                ignored += 1
+                continue
             message = persist_event(config_db, company.id, event)
             stored.append(message.id if message else None)
             if message and event.get("kind") == "message":
@@ -137,7 +152,7 @@ async def receive_webhook(
                 else:
                     enqueue_whatsapp_processing(config_db, company.id, message.id)
         config_db.commit()
-        return {"ok": True, "company_id": company.id, "events": len(events), "stored": [item for item in stored if item is not None]}
+        return {"ok": True, "company_id": company.id, "events": len(events), "stored": [item for item in stored if item is not None], "ignored": ignored}
     finally:
         config_db.close()
 
@@ -146,7 +161,10 @@ async def receive_webhook(
 async def manual_response(
     company_slug: str,
     conversation_id: int,
-    body: str,
+    body: str = "",
+    template_name: str | None = None,
+    template_language: str | None = None,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
     master_db: Session = Depends(get_master_db),
@@ -155,7 +173,7 @@ async def manual_response(
     if not company or not tenant_db or company.id != user.company_id:
         return JSONResponse({"ok": False, "message": "tenant not found"}, status_code=404)
     try:
-        message = await send_manual_response(db, company_id=company.id, conversation_id=conversation_id, body=body, user_id=user.id)
+        message = await send_manual_response(db, company_id=company.id, conversation_id=conversation_id, body=body, user_id=user.id, idempotency_key=idempotency_key, template_name=template_name, template_language=template_language)
     except ValueError as exc:
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=404)
     except Exception as exc:  # noqa: BLE001

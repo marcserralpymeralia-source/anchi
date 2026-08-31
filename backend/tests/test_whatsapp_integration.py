@@ -7,10 +7,12 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
+from zipfile import ZipFile
 
 import httpx
 from sqlalchemy import create_engine, func, select
@@ -18,6 +20,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
 from app.agent.platform import UnifiedOrderPipelineService
+from app.core.attachment_extraction import extract_attachment_text
 from app.core.encryption import decrypt_secret, encrypt_secret
 from app.db.database import Base
 from app.db.models import BackgroundJob, ChannelSetting, Conversation, Customer, CustomerContactPoint, InboundMessage, InputChannel, LLMSettings, MessageAttachment, Order, Product, ProductAlias, ScoringSettings
@@ -41,6 +44,8 @@ from app.whatsapp.service import (
     resolve_company_from_whatsapp_identifiers,
     verify_signature,
     verify_webhook_token,
+    whatsapp_event_matches_config,
+    whatsapp_ingress_is_ready,
     whatsapp_config,
 )
 from app.workers.jobs_worker import run_worker_cycle
@@ -114,6 +119,7 @@ class WhatsAppIntegrationTests(unittest.TestCase):
             "business_account_id": "ba-123",
             "access_token": "token-123",
             "verify_token": "verify-123",
+            "connection_status": "connected",
             "webhook_enabled": "true",
             "bot_enabled": "true",
             "default_language": "es",
@@ -152,6 +158,28 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertEqual(redacted["access_token"], "••••••••")
         self.assertEqual(redacted["verify_token"], "••••••••")
         self.assertNotIn("app_secret", redacted)
+
+    def test_live_webhook_requires_ready_tenant_and_exact_meta_identifiers(self):
+        db = self.TenantSession()
+        config = whatsapp_config(db, 1)
+        self.assertTrue(whatsapp_ingress_is_ready(db, 1, config=config))
+        self.assertTrue(
+            whatsapp_event_matches_config(
+                {"business_account_id": "ba-123", "phone_number_id": "pn-123"},
+                config,
+            )
+        )
+        self.assertFalse(
+            whatsapp_event_matches_config(
+                {"business_account_id": "ba-other", "phone_number_id": "pn-123"},
+                config,
+            )
+        )
+        channel = db.scalar(select(InputChannel).where(InputChannel.company_id == 1, InputChannel.key == "whatsapp"))
+        channel.is_active = False
+        db.flush()
+        self.assertFalse(whatsapp_ingress_is_ready(db, 1, config=config))
+        db.close()
 
     def test_text_message_dedupes_and_queues_job(self):
         payload = {
@@ -228,6 +256,44 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         )
         db.close()
 
+    def test_duplicate_message_does_not_regress_processed_state(self):
+        payload = {
+            "entry": [
+                {
+                    "id": "ba-123",
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123"},
+                                "messages": [
+                                    {
+                                        "id": "wa-state-1",
+                                        "from": "+34600000000",
+                                        "type": "text",
+                                        "text": {"body": "Pedido"},
+                                    }
+                                ],
+                            }
+                        }
+                    ],
+                }
+            ]
+        }
+        event = parse_payload_events(payload)[0]
+        db = self.TenantSession()
+        message = persist_event(db, 1, event)
+        message.status = "order_detected"
+        message.processing_step = "completed"
+        message.last_processed_at = datetime(2026, 8, 30, tzinfo=timezone.utc)
+        db.commit()
+
+        duplicate = persist_event(db, 1, event)
+
+        self.assertEqual(duplicate.status, "order_detected")
+        self.assertEqual(duplicate.processing_step, "completed")
+        self.assertEqual(duplicate.last_processed_at.replace(tzinfo=None), datetime(2026, 8, 30))
+        db.close()
+
     def test_media_policy_only_allows_documents_text_and_audio(self):
         payload = {
             "entry": [
@@ -274,10 +340,10 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         message = persist_event(db, 1, parse_payload_events(payload)[0])
 
         def handler(request):
-            if request.url.path.endswith("/media-download-1"):
+            if request.url.host == "graph.facebook.com" and request.url.path.endswith("/media-download-1"):
                 return httpx.Response(200, json={"url": "https://lookaside.facebook.com/media-download-1", "mime_type": "application/pdf", "file_size": 12})
             if request.url.host == "lookaside.facebook.com":
-                return httpx.Response(200, content=b"%PDF-1.4 demo")
+                return httpx.Response(200, content=b"%PDF-1.4\nBT\n(Pedido 10 cajas) Tj\nET")
             return httpx.Response(404, json={"error": {"message": "unexpected request"}})
 
         storage_root = Path(self.tempdir.name) / "storage"
@@ -289,9 +355,94 @@ class WhatsAppIntegrationTests(unittest.TestCase):
             result = asyncio.run(run_download())
         attachment = db.scalar(select(MessageAttachment).where(MessageAttachment.inbound_message_id == message.id))
         self.assertEqual(result["downloaded"], 1)
-        self.assertEqual(attachment.extraction_status, "downloaded")
+        self.assertEqual(attachment.extraction_status, "extracted")
+        self.assertIn("Pedido 10 cajas", attachment.extracted_text or "")
+        self.assertTrue(result["ready_for_processing"])
         self.assertTrue(Path(attachment.storage_path).is_file())
         db.close()
+
+    def test_attachment_extraction_supports_text_and_docx_without_llm(self):
+        text_result = extract_attachment_text(
+            b"Cliente Demo\n10 cajas de producto",
+            filename="pedido.txt",
+            content_type="text/plain",
+        )
+        self.assertEqual(text_result.status, "extracted")
+        self.assertIn("10 cajas", text_result.text or "")
+
+        document = BytesIO()
+        with ZipFile(document, "w") as archive:
+            archive.writestr(
+                "word/document.xml",
+                (
+                    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+                    "<w:body><w:p><w:r><w:t>Pedido DOCX</w:t></w:r></w:p>"
+                    "<w:p><w:r><w:t>5 unidades</w:t></w:r></w:p></w:body></w:document>"
+                ),
+            )
+        docx_result = extract_attachment_text(
+            document.getvalue(),
+            filename="pedido.docx",
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        self.assertEqual(docx_result.status, "extracted")
+        self.assertIn("Pedido DOCX", docx_result.text or "")
+        self.assertIn("5 unidades", docx_result.text or "")
+
+        audio_result = extract_attachment_text(
+            b"audio",
+            filename="nota.ogg",
+            content_type="audio/ogg",
+        )
+        self.assertEqual(audio_result.status, "transcription_pending")
+        self.assertIsNone(audio_result.text)
+
+    def test_audio_download_waits_for_transcription_before_pipeline(self):
+        payload = {
+            "entry": [
+                {
+                    "id": "ba-123",
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123"},
+                                "messages": [
+                                    {
+                                        "id": "wa-audio-download-1",
+                                        "from": "+34600000000",
+                                        "type": "audio",
+                                        "audio": {"id": "audio-download-1", "mime_type": "audio/ogg"},
+                                    }
+                                ],
+                            }
+                        }
+                    ],
+                }
+            ]
+        }
+        db = self.TenantSession()
+        message = persist_event(db, 1, parse_payload_events(payload)[0])
+
+        def handler(request):
+            if request.url.host == "graph.facebook.com" and request.url.path.endswith("/audio-download-1"):
+                return httpx.Response(200, json={"url": "https://lookaside.fbsbx.com/audio-download-1", "mime_type": "audio/ogg", "file_size": 4})
+            if request.url.host == "lookaside.fbsbx.com":
+                return httpx.Response(200, content=b"OggS")
+            return httpx.Response(404, json={"error": {"message": "unexpected request"}})
+
+        try:
+            async def run_download():
+                async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                    return await download_whatsapp_media(db, company_id=1, inbound_message_id=message.id, client=client)
+
+            result = asyncio.run(run_download())
+            attachment = db.scalar(select(MessageAttachment).where(MessageAttachment.inbound_message_id == message.id))
+            self.assertEqual(result["downloaded"], 1)
+            self.assertEqual(attachment.extraction_status, "transcription_pending")
+            self.assertFalse(result["ready_for_processing"])
+            self.assertTrue(Path(attachment.storage_path).is_file())
+        finally:
+            db.close()
 
     def test_identifier_resolution_requires_both_identifiers_when_present(self):
         db = self.MasterSession()
@@ -376,6 +527,96 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertEqual(response.processing_step, "outbound_accepted")
         db.close()
 
+    def test_manual_response_idempotency_key_does_not_send_twice(self):
+        db = self.TenantSession()
+        inbound = upsert_inbound_message(
+            db,
+            company_id=1,
+            channel_key="whatsapp",
+            provider="meta",
+            external_id="wa-inbound-idempotent-response",
+            sender="+34600000000",
+            recipients=["+34910000000"],
+            text_content="Hola",
+            external_thread_id="+34600000000",
+            content_type="text",
+            received_at=datetime.now(timezone.utc),
+        )[0]
+        db.commit()
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, json={"messages": [{"id": "wamid.idempotent-1"}]})
+
+        async def run_send():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                first = await send_manual_response(
+                    db,
+                    company_id=1,
+                    conversation_id=inbound.conversation_id,
+                    body="Respuesta única",
+                    client=client,
+                    idempotency_key="reply-test-1",
+                )
+                second = await send_manual_response(
+                    db,
+                    company_id=1,
+                    conversation_id=inbound.conversation_id,
+                    body="Respuesta única",
+                    client=client,
+                    idempotency_key="reply-test-1",
+                )
+                return first, second
+
+        first, second = asyncio.run(run_send())
+        self.assertEqual(calls, 1)
+        self.assertEqual(first.id, second.id)
+        self.assertEqual(second.source_message_id, "reply-test-1")
+        db.close()
+
+    def test_manual_response_can_send_template_outside_reply_window(self):
+        db = self.TenantSession()
+        inbound = upsert_inbound_message(
+            db,
+            company_id=1,
+            channel_key="whatsapp",
+            provider="meta",
+            external_id="wa-inbound-template-response",
+            sender="+34600000000",
+            recipients=["+34910000000"],
+            text_content="Pedido",
+            external_thread_id="+34600000000",
+            content_type="text",
+            received_at=datetime.now(timezone.utc) - timedelta(days=3),
+        )[0]
+        db.commit()
+
+        def handler(request):
+            payload = json.loads(request.content)
+            self.assertEqual(payload["type"], "template")
+            self.assertEqual(payload["template"]["name"], "pedido_confirmado")
+            self.assertEqual(payload["template"]["language"]["code"], "es")
+            self.assertNotIn("text", payload)
+            return httpx.Response(200, json={"messages": [{"id": "wamid.template-1"}]})
+
+        async def run_send():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                return await send_manual_response(
+                    db,
+                    company_id=1,
+                    conversation_id=inbound.conversation_id,
+                    body="",
+                    template_name="pedido_confirmado",
+                    client=client,
+                )
+
+        response = asyncio.run(run_send())
+        self.assertEqual(response.source_external_id, "wamid.template-1")
+        self.assertIn("pedido_confirmado", response.original_content)
+        db.close()
+
     def test_delivery_status_updates_existing_outbound_conversation(self):
         db = self.TenantSession()
         inbound = upsert_inbound_message(
@@ -410,6 +651,25 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         updated = persist_event(db, 1, status_event)
         self.assertEqual(updated.id, outbound.id)
         self.assertEqual(updated.conversation_id, inbound.conversation_id)
+        self.assertEqual(updated.status, "delivered")
+
+        older_status_event = {
+            "kind": "status",
+            "external_id": "wamid.delivery-1",
+            "metadata": {"payload": {"status": "sent"}},
+        }
+        persist_event(db, 1, older_status_event)
+        self.assertEqual(updated.status, "delivered")
+        self.assertEqual(updated.processing_step, "delivery_delivered")
+        persist_event(
+            db,
+            1,
+            {
+                "kind": "status",
+                "external_id": "wamid.delivery-1",
+                "metadata": {"payload": {"status": "failed"}},
+            },
+        )
         self.assertEqual(updated.status, "delivered")
         db.close()
 

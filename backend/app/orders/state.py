@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.db.models import Order, OrderLine, ScoringSettings
+from app.orders.scoring import is_positive_quantity
 from app.settings.service import get_or_create_settings
 
 
@@ -53,7 +54,7 @@ class OrderStateService:
             "line_count": len(lines),
             "doubt_count": sum(1 for line in lines if line.validation_status != "validated" or not line.validated_product_id or line.doubt_reason),
             "missing_product_count": sum(1 for line in lines if not line.validated_product_id),
-            "invalid_quantity_count": sum(1 for line in lines if line.quantity is None or line.quantity <= 0),
+            "invalid_quantity_count": sum(1 for line in lines if not is_positive_quantity(line.quantity)),
         }
 
     def validate_blockers(self, order: Order, settings: ScoringSettings, *, line_metrics: dict[int, dict[str, int]] | None = None) -> list[str]:

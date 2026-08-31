@@ -168,20 +168,20 @@ def current_order_messages(
 
 
 def _message_text(message: InboundMessage) -> str:
-    attachment_texts: list[str] = []
+    content_parts: list[str] = []
+    original_content = _normalized_text(message.original_content)
+    if original_content:
+        content_parts.append(original_content)
 
     for attachment in message.attachments or []:
         if attachment.extracted_text:
-            attachment_texts.append(attachment.extracted_text)
+            content_parts.append(_normalized_text(attachment.extracted_text))
         elif attachment.ocr_text:
-            attachment_texts.append(attachment.ocr_text)
+            content_parts.append(_normalized_text(attachment.ocr_text))
         elif attachment.transcription_text:
-            attachment_texts.append(attachment.transcription_text)
+            content_parts.append(_normalized_text(attachment.transcription_text))
 
-    if attachment_texts:
-        return _normalized_text("\n\n".join(attachment_texts))
-
-    return _normalized_text(message.original_content)
+    return "\n\n".join(dict.fromkeys(part for part in content_parts if part))
 
 
 def build_transcript(messages: list[InboundMessage]) -> str:

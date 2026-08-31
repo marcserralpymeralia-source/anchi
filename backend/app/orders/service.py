@@ -13,6 +13,7 @@ from app.db.models import Customer, CustomerAlias, CustomerContactPoint, Custome
 from app.logs.service import log_action
 from app.master.service import TenantUser
 from app.orders.state import ORDER_STATE, PENDING_ORDER_STATUSES, REVIEW_ORDER_STATUSES
+from app.orders.scoring import is_positive_quantity
 
 
 _DELETE_ROLES = {"Administrador", "Superadmin", "Owner", "Propietario"}
@@ -58,7 +59,7 @@ def validate_confirmation(order: Order, scoring: ScoringSettings) -> list[str]:
         errors = ["No se puede confirmar porque no hay cliente validado.", *errors]
     if scoring.block_without_reference and any(not line.validated_product_id for line in order.lines):
         errors = ["No se puede confirmar porque hay lineas sin referencia validada.", *errors]
-    if scoring.block_without_quantity and any(line.quantity is None or line.quantity <= 0 for line in order.lines):
+    if scoring.block_without_quantity and any(not is_positive_quantity(line.quantity) for line in order.lines):
         errors = ["No se puede confirmar porque hay lineas sin cantidad valida.", *errors]
     if scoring.block_below_threshold and order.score < scoring.doubtful_threshold:
         errors = ["No se puede confirmar porque el scoring esta por debajo del umbral minimo.", *errors]
@@ -259,8 +260,11 @@ def sync_customer_product_knowledge(
     force_habitual: bool = False,
 ) -> None:
     learning = LearningService()
-    customer = order.validated_customer or order.customer
-    product = line.validated_product or line.product
+    # Only explicit human/system validations may become learning data. A
+    # matcher proposal is useful for review but must never be promoted to a
+    # customer-product habit by a save, delete, or confirmation side effect.
+    customer = order.validated_customer
+    product = line.validated_product
     if not customer or not product:
         learning.record_knowledge_conflict(
             db,

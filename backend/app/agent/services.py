@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 
 from sqlalchemy import select
 
-from app.agent.platform import UnifiedOrderPipelineService
+from app.agent.platform import UnifiedOrderPipelineService, _parse_positive_quantity
+from app.orders.scoring import calculate_order_score
 from app.channels.service import get_or_create_channel
 from app.db.models import Company, Customer, CustomerAlias, CustomerContactPoint, CustomerDomain, Email, EmailAttachment, EmailSettings, InboundMessage, InputChannel, LLMSettings, Order, OrderLine, Product, ProductAlias, PromptTemplate, PromptVersion, ScoringSettings
 from app.messages.service import NormalizedMessage, persist_normalized_message
@@ -137,20 +138,9 @@ class MatchingService:
 
 
 class ScoringService:
-    def score_order(self, db: Session, order: Order) -> float:
+    def score_order(self, db: Session, order: Order, *, use_proposals: bool = False) -> float:
         settings = get_or_create_settings(db, ScoringSettings, order.company_id)
-        score = 0.0
-        if order.customer_id:
-            score += settings.customer_weight
-        if order.lines:
-            validated = sum(1 for line in order.lines if line.product_id)
-            score += settings.products_weight * (validated / len(order.lines))
-            quantities = sum(1 for line in order.lines if line.quantity is not None and line.quantity > 0)
-            score += settings.quantities_weight * (quantities / len(order.lines))
-            llm_confidence = sum(line.extraction_confidence for line in order.lines) / len(order.lines)
-            score += settings.llm_weight * llm_confidence
-        score += settings.coherence_weight
-        return round(min(score, 100), 2)
+        return calculate_order_score(order, settings, use_proposals=use_proposals).total
 
     def status_for_score(self, db: Session, company_id: int, score: float) -> str:
         return ORDER_STATE.status_for_score(db, company_id, score)
@@ -269,9 +259,20 @@ class AgentProcessingService:
         return {"ok": False, "message": message}
 
     def _input_text(self, email: Email) -> str:
-        pdf_texts = [att.extracted_text for att in (email.attachments or []) if att.is_pdf and att.extracted_text]
-        body = email.body or ""
-        source = "\n\n".join(pdf_texts) if pdf_texts else (email.extracted_text or body)
+        source_parts: list[str] = []
+        seen_parts: set[str] = set()
+
+        def add_part(value: str | None, *, label: str | None = None) -> None:
+            normalized = str(value or "").strip()
+            if not normalized or normalized in seen_parts:
+                return
+            seen_parts.add(normalized)
+            source_parts.append(f"[{label}]\n{normalized}" if label else normalized)
+
+        add_part(email.body or email.extracted_text)
+        for attachment in email.attachments or []:
+            add_part(attachment.extracted_text, label=f"Adjunto: {attachment.filename}")
+        source = "\n\n".join(source_parts)
         return f"Asunto: {email.subject}\nRemitente: {email.sender}\n\n{source}".strip()
 
     def _classify(self, db: Session, settings: LLMSettings, company_id: int, text: str) -> dict:
@@ -344,26 +345,30 @@ class AgentProcessingService:
         for raw_line in self._lines_from_extraction(extracted):
             product_name = raw_line.get("producto_detectado") or raw_line.get("producto") or raw_line.get("description") or raw_line.get("descripcion")
             reference = raw_line.get("referencia_detectada") or raw_line.get("referencia") or raw_line.get("reference")
-            quantity = raw_line.get("cantidad") or raw_line.get("quantity")
+            quantity = raw_line.get("cantidad") if "cantidad" in raw_line else raw_line.get("quantity")
             product, product_method, product_score = self.matching.find_product(db, email.company_id, reference=reference, detected_name=product_name)
             confidence = _confidence(raw_line.get("confianza_extraccion") or raw_line.get("confidence"), 0.7)
-            doubt = "" if product else f"Producto no encontrado por {product_method}"
-            if quantity in {"", None}:
-                doubt = (doubt + "; " if doubt else "") + "Cantidad no detectada"
-                parsed_quantity = None
-            else:
-                try:
-                    parsed_quantity = float(str(quantity).replace(",", "."))
-                except ValueError:
-                    parsed_quantity = None
-                    doubt = (doubt + "; " if doubt else "") + "Cantidad ambigua"
+            parsed_quantity, quantity_issue = _parse_positive_quantity(quantity)
+            product_is_deterministic = product_method in {"referencia_exacta", "alias"}
+            if raw_line.get("requires_review"):
+                product_is_deterministic = False
+            doubt_parts: list[str] = []
+            if not product:
+                doubt_parts.append(f"Producto no encontrado por {product_method}")
+            elif not product_is_deterministic:
+                doubt_parts.append(f"Producto propuesto por {product_method}; requiere validacion humana")
+            if raw_line.get("requires_review"):
+                doubt_parts.append("Linea marcada para revision por extraccion")
+            if quantity_issue:
+                doubt_parts.append(quantity_issue)
+            doubt = "; ".join(dict.fromkeys(doubt_parts))
             if doubt:
                 review_reasons.append(doubt)
             db.add(OrderLine(
                 company_id=email.company_id,
                 order_id=order.id,
                 product_id=product.id if product else None,
-                validated_product_id=product.id if product else None,
+                validated_product_id=product.id if product_is_deterministic and parsed_quantity is not None else None,
                 original_text=raw_line.get("texto_original") or raw_line.get("original_text") or product_name or source_text[:180],
                 detected_reference=reference,
                 detected_product=product_name,
@@ -371,7 +376,7 @@ class AgentProcessingService:
                 unit=raw_line.get("unidad") or raw_line.get("unit") or "",
                 extraction_confidence=confidence,
                 line_score=round(product_score * 80 + confidence * 20, 2),
-                validation_status="validated" if product and parsed_quantity else "pending",
+                validation_status="validated" if product_is_deterministic and parsed_quantity is not None else "pending",
                 doubt_reason=doubt,
             ))
         db.flush()
@@ -500,11 +505,12 @@ startxref
                 reference=raw_line["referencia_detectada"],
                 detected_name=raw_line["producto_detectado"],
             )
+            product_is_deterministic = product_method in {"referencia_exacta", "alias"}
             line = OrderLine(
                 company_id=company_id,
                 order_id=order.id,
                 product_id=product.id if product else None,
-                validated_product_id=product.id if product else None,
+                validated_product_id=product.id if product_is_deterministic else None,
                 original_text=raw_line["texto_original"],
                 detected_reference=raw_line["referencia_detectada"],
                 detected_product=raw_line["producto_detectado"],
@@ -512,8 +518,11 @@ startxref
                 unit=raw_line["unidad"],
                 extraction_confidence=raw_line["confianza_extraccion"],
                 line_score=round(product_score * 80 + raw_line["confianza_extraccion"] * 20, 2),
-                validation_status="validated" if product else "pending",
-                doubt_reason="" if product else f"Producto no encontrado por {product_method}",
+                validation_status="validated" if product_is_deterministic else "pending",
+                doubt_reason="" if product_is_deterministic else (
+                    f"Producto no encontrado por {product_method}" if not product else
+                    f"Producto propuesto por {product_method}; requiere validacion humana"
+                ),
             )
             db.add(line)
         db.flush()
