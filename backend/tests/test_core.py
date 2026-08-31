@@ -276,8 +276,8 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
             },
         ):
             with patch(
-                "app.pages.routes.is_setup_operational",
-                return_value=True,
+                "app.pages.routes.setup_operational_context",
+                return_value=(True, ("email", "whatsapp")),
             ):
                 with patch(
                     "app.pages.routes.workbench_summary",
@@ -364,8 +364,8 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
             },
         ):
             with patch(
-                "app.pages.routes.is_setup_operational",
-                return_value=True,
+                "app.pages.routes.setup_operational_context",
+                return_value=(True, ("email", "whatsapp")),
             ):
                 with patch(
                     "app.pages.routes.workbench_summary",

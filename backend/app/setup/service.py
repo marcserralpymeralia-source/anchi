@@ -71,7 +71,7 @@ def _step_status(key: str, completed: bool, current_step: str, *, optional: bool
         return "En progreso"
     return "Pendiente"
 
-def is_setup_operational(db: Session, company_id: int) -> bool:
+def setup_operational_context(db: Session, company_id: int) -> tuple[bool, tuple[str, ...]]:
     row = db.execute(
         select(
             Company.name,
@@ -93,6 +93,22 @@ def is_setup_operational(db: Session, company_id: int) -> bool:
             )
             .exists()
             .label("has_active_channel"),
+            select(InputChannel.id)
+            .where(
+                InputChannel.company_id == company_id,
+                InputChannel.key == "email",
+                InputChannel.is_active.is_(True),
+            )
+            .exists()
+            .label("email_channel_enabled"),
+            select(InputChannel.id)
+            .where(
+                InputChannel.company_id == company_id,
+                InputChannel.key == "whatsapp",
+                InputChannel.is_active.is_(True),
+            )
+            .exists()
+            .label("whatsapp_channel_enabled"),
             select(Product.id)
             .where(
                 Product.company_id == company_id,
@@ -125,7 +141,16 @@ def is_setup_operational(db: Session, company_id: int) -> bool:
     ).one_or_none()
 
     if row is None:
-        return False
+        return False, ()
+
+    enabled_channels = tuple(
+        key
+        for key, enabled in (
+            ("email", bool(row.email_channel_enabled)),
+            ("whatsapp", bool(row.whatsapp_channel_enabled)),
+        )
+        if enabled
+    )
 
     company_ready = bool(
         (row.name or row.legal_name)
@@ -150,13 +175,21 @@ def is_setup_operational(db: Session, company_id: int) -> bool:
     )
     openai_optional = _openai_optional_for_demo()
 
-    return bool(
+    operational = bool(
         company_ready
         and has_input_channel
         and row.has_product
         and row.has_customer
         and (openai_connected or openai_optional)
     )
+    return operational, enabled_channels
+
+
+def is_setup_operational(db: Session, company_id: int) -> bool:
+    operational, _ = setup_operational_context(db, company_id)
+    return operational
+
+
 def get_setup_status(db: Session, company_id: int) -> SetupStatus:
     email = get_or_create_settings(db, EmailSettings, company_id)
     llm = get_or_create_settings(db, LLMSettings, company_id)

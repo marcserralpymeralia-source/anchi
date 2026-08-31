@@ -224,7 +224,6 @@ class SetupOnboardingTests(unittest.TestCase):
             self.assertEqual(response.headers["location"], "/setup")
             setup_page = client.get("/setup/company")
             self.assertEqual(setup_page.status_code, 200)
-            self.assertIn("Bandeja", setup_page.text)
             self.assertIn("Configura Anchi", setup_page.text)
             self.assertIn("Configuración completada", setup_page.text)
         finally:

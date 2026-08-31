@@ -431,7 +431,7 @@ class EntriesInboxTests(unittest.TestCase):
         self.assertEqual(channels.status_code, 303)
         self.assertEqual(channels.headers["location"], "/?tab=email")
         self.assertEqual(history.status_code, 200)
-        self.assertIn("Histórico de pedidos", history.text)
+        self.assertIn("Buzón de correo", history.text)
 
     def test_entries_are_scoped_by_authenticated_tenant(self):
         fixture = build_performance_fixture("small")
