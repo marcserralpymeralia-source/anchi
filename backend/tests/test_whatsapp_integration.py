@@ -683,6 +683,71 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertTrue(Path(attachment.storage_path).is_file())
         db.close()
 
+    def test_media_download_rejects_mime_mismatch_before_fetching_content(self):
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123", "business_account_id": "ba-123"},
+                                "messages": [
+                                    {
+                                        "id": "wa-media-mime-mismatch-1",
+                                        "from": "+34600000000",
+                                        "type": "document",
+                                        "document": {
+                                            "id": "media-mime-mismatch-1",
+                                            "filename": "pedido.pdf",
+                                            "mime_type": "application/pdf",
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+        db = self.TenantSession()
+        message = persist_event(db, 1, parse_payload_events(payload)[0])
+        content_requests = 0
+
+        def handler(request):
+            nonlocal content_requests
+            if request.url.host == "graph.facebook.com" and request.url.path.endswith("/media-mime-mismatch-1"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "url": "https://lookaside.fbsbx.com/media-mime-mismatch-1",
+                        "mime_type": "image/jpeg",
+                        "file_size": 12,
+                    },
+                )
+            if request.url.host == "lookaside.fbsbx.com":
+                content_requests += 1
+                return httpx.Response(200, content=b"not-a-pdf")
+            return httpx.Response(404, json={"error": {"message": "unexpected request"}})
+
+        async def run_download():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                return await download_whatsapp_media(
+                    db,
+                    company_id=1,
+                    inbound_message_id=message.id,
+                    client=client,
+                )
+
+        result = asyncio.run(run_download())
+        attachment = db.scalar(select(MessageAttachment).where(MessageAttachment.inbound_message_id == message.id))
+        self.assertEqual(result["downloaded"], 0)
+        self.assertEqual(result["failed"], 1)
+        self.assertFalse(result["ready_for_processing"])
+        self.assertEqual(content_requests, 0)
+        self.assertEqual(attachment.extraction_status, "extraction_error")
+        self.assertIn("no soportado", attachment.extraction_error or "")
+        db.close()
+
     def test_media_download_rejects_oversized_stream_before_persisting(self):
         def handler(request):
             return httpx.Response(200, content=b"0123456789")

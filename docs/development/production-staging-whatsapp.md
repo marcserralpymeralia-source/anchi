@@ -34,6 +34,7 @@
 
 - Los adjuntos permitidos de WhatsApp se descargan desde dominios de Meta, se validan por tipo y tamano, y se persisten antes de extraer su contenido.
 - Los documentos compatibles (`PDF`, `DOCX` y `TXT`) entran en el pipeline comun mediante `MessageAttachment`; los audios quedan almacenados y pendientes de transcripcion si no hay proveedor configurado. El formato binario `.DOC` no se anuncia como compatible porque el extractor comun no puede leerlo.
+- La descarga vuelve a validar el tipo MIME que devuelve Meta antes de leer el binario; una discrepancia o un tipo no permitido queda como error no procesable y no se persiste.
 - El pipeline comun identifica WhatsApp por canal y mantiene la misma ruta de clasificacion, resolucion, score y `Order` que el resto de entradas.
 - Las respuestas manuales y automaticas usan reservas persistentes con clave de idempotencia antes de llamar a Meta. Un resultado incierto queda en `send_unknown` y no se reintenta automaticamente.
 - Las respuestas de texto respetan la ventana de conversacion; fuera de ella se exige una plantilla aprobada. Los estados `sent`, `delivered`, `read` y `failed` se reconcilian mediante los webhooks de estado.

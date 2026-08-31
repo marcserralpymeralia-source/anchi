@@ -606,6 +606,18 @@ async def download_whatsapp_media(
                     access_token=config.access_token,
                     params={"fields": "url,mime_type,file_size"},
                 )
+                remote_content_type = str(media_info.get("mime_type") or attachment.content_type or "").strip().lower()
+                normalized_remote_type = remote_content_type.split(";", 1)[0]
+                remote_type_is_generic = normalized_remote_type in {"", "application/octet-stream"}
+                if not remote_type_is_generic and not _is_supported_media(
+                    None,
+                    normalized_remote_type,
+                    is_audio=bool(attachment.is_audio),
+                ):
+                    raise WhatsAppEmbeddedSignupError(
+                        "Meta devolvió un tipo de media no soportado.",
+                        error_type="unsupported_media",
+                    )
                 media_url = str(media_info.get("url") or "").strip()
                 if not media_url:
                     raise WhatsAppEmbeddedSignupError("Meta no devolviÃ³ la URL de la media.", error_type="media_download_failed")
