@@ -1190,6 +1190,51 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertEqual(updated.status, "delivered")
         db.close()
 
+    def test_failed_delivery_preserves_provider_error_detail(self):
+        db = self.TenantSession()
+        inbound = upsert_inbound_message(
+            db,
+            company_id=1,
+            channel_key="whatsapp",
+            provider="meta",
+            external_id="wa-inbound-for-failed-status",
+            sender="+34600000000",
+            recipients=["+34910000000"],
+            text_content="Hola",
+            external_thread_id="+34600000000",
+            content_type="text",
+        )[0]
+        db.commit()
+        outbound = record_manual_response(
+            db,
+            company_id=1,
+            conversation_id=inbound.conversation_id,
+            body="Respuesta",
+            external_id="wamid.failed-detail-1",
+            status="accepted",
+            processing_step="outbound_accepted",
+        )
+
+        persist_event(
+            db,
+            1,
+            {
+                "kind": "status",
+                "external_id": outbound.source_external_id,
+                "metadata": {
+                    "payload": {
+                        "status": "failed",
+                        "errors": [{"code": 131, "title": "Rate limit", "message": "Try again later"}],
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(outbound.status, "failed")
+        self.assertIn("131", outbound.processing_error or "")
+        self.assertIn("Try again later", outbound.processing_error or "")
+        db.close()
+
     def test_worker_processes_whatsapp_into_order(self):
         payload = {
             "entry": [

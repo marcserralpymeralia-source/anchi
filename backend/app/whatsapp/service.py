@@ -300,6 +300,30 @@ def _should_advance_delivery_status(current: str | None, incoming: str) -> bool:
     return _DELIVERY_STATUS_RANK.get(incoming_key, -1) > _DELIVERY_STATUS_RANK[current_key]
 
 
+def _whatsapp_status_error(payload: dict[str, Any]) -> str:
+    errors = payload.get("errors")
+    if isinstance(errors, list) and errors:
+        first_error = errors[0]
+        if isinstance(first_error, dict):
+            parts = [
+                str(first_error.get(key) or "").strip()
+                for key in ("code", "title", "message", "details")
+            ]
+            detail = " · ".join(part for part in parts if part)
+            if detail:
+                return detail[:2000]
+    error = payload.get("error")
+    if isinstance(error, dict):
+        detail = " · ".join(
+            str(error.get(key) or "").strip()
+            for key in ("code", "type", "message")
+            if str(error.get(key) or "").strip()
+        )
+        if detail:
+            return detail[:2000]
+    return ""
+
+
 def _find_existing_whatsapp_message(db: Session, company_id: int, external_id: str) -> InboundMessage | None:
     channel = db.scalar(
         select(InputChannel).where(
@@ -1456,11 +1480,16 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
             if existing:
                 return existing
             raise
-        status_value = str((metadata.get("payload") or {}).get("status") or "sent").lower()
+        status_payload = metadata.get("payload") if isinstance(metadata.get("payload"), dict) else {}
+        status_value = str(status_payload.get("status") or "sent").lower()
         if _should_advance_delivery_status(message.status, status_value):
             message.status = status_value
             message.processing_step = f"delivery_{status_value}"
             message.last_processed_at = datetime.now(timezone.utc)
+        if status_value == "failed":
+            status_error = _whatsapp_status_error(status_payload)
+            if status_error:
+                message.processing_error = status_error
         try:
             db.commit()
         except IntegrityError:
