@@ -194,12 +194,18 @@ class WhatsAppAutomaticResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(outbound)
         db.close()
 
-    async def test_provider_failure_does_not_persist_fake_outbound(self):
+    async def test_provider_failure_records_unknown_outbound_without_retrying(self):
         db = self.Session()
+        provider_calls = 0
+
+        async def provider_failure(*args, **kwargs):
+            nonlocal provider_calls
+            provider_calls += 1
+            raise RuntimeError("Meta unavailable")
 
         with patch(
             "app.whatsapp.service.send_whatsapp_text",
-            new=AsyncMock(side_effect=RuntimeError("Meta unavailable")),
+            new=AsyncMock(side_effect=provider_failure),
         ):
             with self.assertRaises(RuntimeError):
                 await send_automatic_response(
@@ -210,11 +216,24 @@ class WhatsAppAutomaticResponseTests(unittest.IsolatedAsyncioTestCase):
                     body="¿Son cuatro cajas?",
                     semantic_state="needs_clarification",
                 )
+            retry = await send_automatic_response(
+                db,
+                company_id=1,
+                conversation_id=1,
+                trigger_message_id=1,
+                body="¿Son cuatro cajas?",
+                semantic_state="needs_clarification",
+            )
 
         outbound = db.query(InboundMessage).filter(
             InboundMessage.direction == "outbound"
         ).all()
-        self.assertEqual(outbound, [])
+        self.assertEqual(len(outbound), 1)
+        self.assertEqual(outbound[0].status, "send_unknown")
+        self.assertEqual(outbound[0].processing_step, "outbound_send_unknown")
+        self.assertFalse(retry["sent"])
+        self.assertTrue(retry["skipped"])
+        self.assertEqual(provider_calls, 1)
         db.close()
 
 

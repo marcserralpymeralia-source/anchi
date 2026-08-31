@@ -56,6 +56,7 @@ WHATSAPP_SUPPORTED_AUDIO_MIME_TYPES = {
 }
 WHATSAPP_SUPPORTED_AUDIO_EXTENSIONS = {".amr", ".m4a", ".mp3", ".ogg", ".wav", ".webm"}
 WHATSAPP_SUPPORTED_DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx", ".txt"}
+_PENDING_OUTBOUND_EXTERNAL_ID_PREFIX = "wa-pending-"
 
 @dataclass(slots=True)
 class WhatsAppTenantConfig:
@@ -625,6 +626,36 @@ async def download_whatsapp_media(
     }
 
 
+def _prepare_whatsapp_text_send(
+    db: Session,
+    *,
+    company_id: int,
+    conversation_id: int,
+    body: str,
+    template_name: str | None = None,
+) -> tuple[WhatsAppTenantConfig, str, str, str]:
+    conversation = db.get(Conversation, conversation_id)
+    if not conversation or conversation.company_id != company_id:
+        raise ValueError("Conversation not found for tenant.")
+    clean_body = str(body or "").strip()
+    clean_template_name = str(template_name or "").strip()
+    if clean_template_name and not re.fullmatch(r"[a-z0-9_]+", clean_template_name):
+        raise WhatsAppEmbeddedSignupError("El nombre de la plantilla de WhatsApp no es valido.", error_type="invalid_message")
+    if not clean_template_name and (not clean_body or len(clean_body) > 4096):
+        raise WhatsAppEmbeddedSignupError("El mensaje debe tener entre 1 y 4096 caracteres.", error_type="invalid_message")
+    config = whatsapp_config(db, company_id)
+    if not whatsapp_outbound_is_ready(db, company_id, config=config):
+        raise WhatsAppEmbeddedSignupError("WhatsApp no está configurado para enviar mensajes.", error_type="server_not_configured")
+    recipient = _whatsapp_reply_recipient(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+        response_window_minutes=config.response_window_minutes,
+        enforce_window=not bool(clean_template_name),
+    )
+    return config, recipient, clean_body, clean_template_name
+
+
 async def send_whatsapp_text(
     db: Session,
     *,
@@ -636,37 +667,13 @@ async def send_whatsapp_text(
     template_language: str | None = None,
     template_components: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    conversation = db.get(Conversation, conversation_id)
-    if not conversation or conversation.company_id != company_id:
-        raise ValueError("Conversation not found for tenant.")
-    body = str(body or "").strip()
-    clean_template_name = str(template_name or "").strip()
-    if clean_template_name and not re.fullmatch(r"[a-z0-9_]+", clean_template_name):
-        raise WhatsAppEmbeddedSignupError("El nombre de la plantilla de WhatsApp no es valido.", error_type="invalid_message")
-    if not clean_template_name and (not body or len(body) > 4096):
-        raise WhatsAppEmbeddedSignupError("El mensaje debe tener entre 1 y 4096 caracteres.", error_type="invalid_message")
-    config = whatsapp_config(db, company_id)
-    if not whatsapp_outbound_is_ready(db, company_id, config=config):
-        raise WhatsAppEmbeddedSignupError("WhatsApp no está configurado para enviar mensajes.", error_type="server_not_configured")
-    latest_inbound = db.scalar(
-        select(InboundMessage)
-        .where(
-            InboundMessage.company_id == company_id,
-            InboundMessage.conversation_id == conversation_id,
-            InboundMessage.direction == "inbound",
-        )
-        .order_by(InboundMessage.received_at.desc(), InboundMessage.id.desc())
+    config, recipient, body, clean_template_name = _prepare_whatsapp_text_send(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+        body=body,
+        template_name=template_name,
     )
-    recipient = str(latest_inbound.sender or "").strip() if latest_inbound else ""
-    if not recipient:
-        raise WhatsAppEmbeddedSignupError("No se encontró el número del cliente para responder.", error_type="recipient_not_found")
-    if not clean_template_name and latest_inbound and latest_inbound.received_at:
-        received_at = latest_inbound.received_at
-        if received_at.tzinfo is None:
-            received_at = received_at.replace(tzinfo=timezone.utc)
-        age_seconds = (datetime.now(timezone.utc) - received_at).total_seconds()
-        if age_seconds > max(config.response_window_minutes, 1) * 60:
-            raise WhatsAppEmbeddedSignupError("La ventana de respuesta de WhatsApp ha caducado; usa una plantilla aprobada.", error_type="response_window_expired")
     owns_client = client is None
     graph_client = client or httpx.AsyncClient(timeout=get_settings().meta_request_timeout_seconds)
     try:
@@ -733,7 +740,7 @@ def _whatsapp_reply_recipient(
     return recipient
 
 
-async def send_whatsapp_media(
+def _prepare_whatsapp_media_send(
     db: Session,
     *,
     company_id: int,
@@ -742,8 +749,10 @@ async def send_whatsapp_media(
     filename: str,
     content_type: str,
     is_audio: bool = False,
-    client: httpx.AsyncClient | None = None,
-) -> dict[str, Any]:
+) -> tuple[WhatsAppTenantConfig, str]:
+    conversation = db.get(Conversation, conversation_id)
+    if not conversation or conversation.company_id != company_id:
+        raise ValueError("Conversation not found for tenant.")
     config = whatsapp_config(db, company_id)
     if not whatsapp_outbound_is_ready(db, company_id, config=config):
         raise WhatsAppEmbeddedSignupError("WhatsApp no está configurado para enviar archivos.", error_type="server_not_configured")
@@ -756,6 +765,29 @@ async def send_whatsapp_media(
         company_id=company_id,
         conversation_id=conversation_id,
         response_window_minutes=config.response_window_minutes,
+    )
+    return config, recipient
+
+
+async def send_whatsapp_media(
+    db: Session,
+    *,
+    company_id: int,
+    conversation_id: int,
+    content: bytes,
+    filename: str,
+    content_type: str,
+    is_audio: bool = False,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    config, recipient = _prepare_whatsapp_media_send(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+        content=content,
+        filename=filename,
+        content_type=content_type,
+        is_audio=is_audio,
     )
     owns_client = client is None
     graph_client = client or httpx.AsyncClient(timeout=get_settings().meta_request_timeout_seconds)
@@ -1614,6 +1646,91 @@ def _find_idempotent_outbound(
     )
 
 
+def _pending_outbound_external_id(company_id: int, conversation_id: int, idempotency_key: str) -> str:
+    digest = hashlib.sha256(f"{company_id}:{conversation_id}:{idempotency_key}".encode("utf-8")).hexdigest()[:32]
+    return f"{_PENDING_OUTBOUND_EXTERNAL_ID_PREFIX}{digest}"
+
+
+def _reuse_or_reject_outbound(existing: InboundMessage) -> InboundMessage:
+    status = str(existing.status or "").strip().lower()
+    if status == "send_unknown":
+        raise WhatsAppEmbeddedSignupError(
+            "El envío anterior de WhatsApp quedó sin confirmar; no se repetirá automáticamente para evitar duplicados.",
+            error_type="send_unknown",
+        )
+    if status == "sending" or str(existing.source_external_id or "").startswith(_PENDING_OUTBOUND_EXTERNAL_ID_PREFIX):
+        raise WhatsAppEmbeddedSignupError(
+            "Ya hay un envío de WhatsApp en curso para esta clave de idempotencia.",
+            error_type="send_in_progress",
+        )
+    return existing
+
+
+def _reserve_manual_response(
+    db: Session,
+    *,
+    company_id: int,
+    conversation_id: int,
+    body: str,
+    user_id: int | None,
+    template_name: str | None,
+    idempotency_key: str,
+) -> tuple[InboundMessage, bool]:
+    existing = _find_idempotent_outbound(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+        idempotency_key=idempotency_key,
+    )
+    if existing:
+        return _reuse_or_reject_outbound(existing), False
+    try:
+        message = record_manual_response(
+            db,
+            company_id=company_id,
+            conversation_id=conversation_id,
+            body=body,
+            user_id=user_id,
+            template_name=template_name,
+            external_id=_pending_outbound_external_id(company_id, conversation_id, idempotency_key),
+            status="sending",
+            processing_step="outbound_sending",
+            idempotency_key=idempotency_key,
+        )
+    except IntegrityError:
+        db.rollback()
+        existing = _find_idempotent_outbound(
+            db,
+            company_id=company_id,
+            conversation_id=conversation_id,
+            idempotency_key=idempotency_key,
+        )
+        if existing:
+            return _reuse_or_reject_outbound(existing), False
+        raise
+    return message, True
+
+
+def _mark_outbound_send_unknown(db: Session, message: InboundMessage, *, user_id: int | None, error: Exception) -> None:
+    message.status = "send_unknown"
+    message.processing_step = "outbound_send_unknown"
+    message.processing_error = str(error)[:2000]
+    try:
+        db.commit()
+        audit_user = db.get(User, user_id) if user_id else None
+        log_action(
+            db,
+            company_id=message.company_id,
+            user=audit_user,
+            action="whatsapp.outbound_send_unknown",
+            entity_type="inbound_message",
+            entity_id=message.id,
+            message="El envío de WhatsApp quedó sin confirmar; se bloqueó el reintento automático.",
+        )
+    except Exception:  # noqa: BLE001
+        db.rollback()
+
+
 def _last_conversation_order_created_at(
     db: Session,
     *,
@@ -1710,34 +1827,58 @@ def record_automatic_response(
     trigger_message_id: int,
     semantic_state: str,
     prompt_execution_id: int | None = None,
+    idempotency_key: str | None = None,
+    status: str = "accepted",
+    processing_step: str = "outbound_auto_accepted",
 ) -> InboundMessage:
     conversation = db.get(Conversation, conversation_id)
     if not conversation or conversation.company_id != company_id:
         raise ValueError("Conversation not found for tenant.")
-
-    message, _ = upsert_inbound_message(
+    idempotency_key = _normalize_idempotency_key(idempotency_key)
+    existing = _find_idempotent_outbound(
         db,
         company_id=company_id,
-        channel_key=WHATSAPP_CHANNEL_KEY,
-        provider=WHATSAPP_PROVIDER,
-        external_id=external_id,
-        sender=None,
-        recipients=[],
-        subject="WhatsApp automatic response",
-        text_content=body,
-        external_thread_id=conversation.external_thread_id or external_id,
-        metadata={
-            "auto_response": True,
-            "trigger_message_id": trigger_message_id,
-            "semantic_state": semantic_state,
-            "prompt_execution_id": prompt_execution_id,
-        },
-        content_type="whatsapp_text",
-        direction="outbound",
-        sent_at=datetime.now(timezone.utc),
+        conversation_id=conversation_id,
+        idempotency_key=idempotency_key,
     )
-    message.status = "accepted"
-    message.processing_step = "outbound_auto_accepted"
+    is_pending_existing = bool(
+        existing
+        and str(existing.source_external_id or "").startswith(_PENDING_OUTBOUND_EXTERNAL_ID_PREFIX)
+    )
+    if existing and not (is_pending_existing and external_id and external_id != existing.source_external_id):
+        return existing
+    metadata = {
+        "auto_response": True,
+        "trigger_message_id": trigger_message_id,
+        "semantic_state": semantic_state,
+        "prompt_execution_id": prompt_execution_id,
+        "idempotency_key": idempotency_key,
+    }
+    if is_pending_existing:
+        message = existing
+        message.source_external_id = external_id
+        message.original_content = body or message.original_content
+        message.raw_payload_json = json.dumps(metadata, ensure_ascii=False)
+    else:
+        message, _ = upsert_inbound_message(
+            db,
+            company_id=company_id,
+            channel_key=WHATSAPP_CHANNEL_KEY,
+            provider=WHATSAPP_PROVIDER,
+            external_id=external_id,
+            sender=None,
+            recipients=[],
+            subject="WhatsApp automatic response",
+            text_content=body,
+            external_thread_id=conversation.external_thread_id or external_id,
+            metadata=metadata,
+            content_type="whatsapp_text",
+            direction="outbound",
+            sent_at=datetime.now(timezone.utc),
+        )
+    message.source_message_id = idempotency_key
+    message.status = status
+    message.processing_step = processing_step
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
 
@@ -1745,12 +1886,63 @@ def record_automatic_response(
         db,
         company_id=company_id,
         user=None,
-        action="whatsapp.auto_response_accepted",
+        action="whatsapp.auto_response_accepted" if status == "accepted" else "whatsapp.auto_response_started",
         entity_type="inbound_message",
         entity_id=message.id,
-        message=f"Respuesta automática de WhatsApp aceptada por Meta ({semantic_state})",
+        message=(
+            f"Respuesta automática de WhatsApp aceptada por Meta ({semantic_state})"
+            if status == "accepted"
+            else f"Envío automático de WhatsApp iniciado ({semantic_state})"
+        ),
     )
     return message
+
+
+def _reserve_automatic_response(
+    db: Session,
+    *,
+    company_id: int,
+    conversation_id: int,
+    body: str,
+    trigger_message_id: int,
+    semantic_state: str,
+    prompt_execution_id: int | None,
+    idempotency_key: str,
+) -> tuple[InboundMessage, bool]:
+    existing = _find_idempotent_outbound(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+        idempotency_key=idempotency_key,
+    )
+    if existing:
+        return _reuse_or_reject_outbound(existing), False
+    try:
+        message = record_automatic_response(
+            db,
+            company_id=company_id,
+            conversation_id=conversation_id,
+            body=body,
+            external_id=_pending_outbound_external_id(company_id, conversation_id, idempotency_key),
+            trigger_message_id=trigger_message_id,
+            semantic_state=semantic_state,
+            prompt_execution_id=prompt_execution_id,
+            idempotency_key=idempotency_key,
+            status="sending",
+            processing_step="outbound_auto_sending",
+        )
+    except IntegrityError:
+        db.rollback()
+        existing = _find_idempotent_outbound(
+            db,
+            company_id=company_id,
+            conversation_id=conversation_id,
+            idempotency_key=idempotency_key,
+        )
+        if existing:
+            return _reuse_or_reject_outbound(existing), False
+        raise
+    return message, True
 
 
 async def send_automatic_response(
@@ -1776,25 +1968,57 @@ async def send_automatic_response(
             "skipped": True,
             **status,
         }
-
-    result = await send_whatsapp_text(
-        db,
-        company_id=company_id,
-        conversation_id=conversation_id,
-        body=body,
-        client=client,
-    )
-
-    message = record_automatic_response(
-        db,
-        company_id=company_id,
-        conversation_id=conversation_id,
-        body=body,
-        external_id=result["provider_message_id"],
-        trigger_message_id=trigger_message_id,
-        semantic_state=semantic_state,
-        prompt_execution_id=prompt_execution_id,
-    )
+    idempotency_key = f"auto:{trigger_message_id}"
+    try:
+        reservation, owns_send = _reserve_automatic_response(
+            db,
+            company_id=company_id,
+            conversation_id=conversation_id,
+            body=body,
+            trigger_message_id=trigger_message_id,
+            semantic_state=semantic_state,
+            prompt_execution_id=prompt_execution_id,
+            idempotency_key=idempotency_key,
+        )
+    except WhatsAppEmbeddedSignupError as exc:
+        return {
+            "sent": False,
+            "skipped": True,
+            "reason": exc.error_type,
+            "count": int(status["count"]),
+            "limit": status["limit"],
+        }
+    if not owns_send:
+        return {
+            "sent": False,
+            "skipped": True,
+            "reason": "already_replied",
+            "message_id": reservation.id,
+            "count": int(status["count"]),
+            "limit": status["limit"],
+        }
+    try:
+        result = await send_whatsapp_text(
+            db,
+            company_id=company_id,
+            conversation_id=conversation_id,
+            body=body,
+            client=client,
+        )
+        message = record_automatic_response(
+            db,
+            company_id=company_id,
+            conversation_id=conversation_id,
+            body=body,
+            external_id=result["provider_message_id"],
+            trigger_message_id=trigger_message_id,
+            semantic_state=semantic_state,
+            prompt_execution_id=prompt_execution_id,
+            idempotency_key=idempotency_key,
+        )
+    except Exception as exc:  # noqa: BLE001
+        _mark_outbound_send_unknown(db, reservation, user_id=None, error=exc)
+        raise
 
     return {
         "sent": True,
@@ -1831,29 +2055,47 @@ def record_manual_response(
         conversation_id=conversation_id,
         idempotency_key=idempotency_key,
     )
-    if existing:
-        return existing
-    external_id = external_id or f"wa-out-{uuid4().hex}"
-    attachment_payloads = attachments or []
-    message, _ = upsert_inbound_message(
-        db,
-        company_id=company_id,
-        channel_key=WHATSAPP_CHANNEL_KEY,
-        provider=WHATSAPP_PROVIDER,
-        external_id=external_id,
-        sender=None,
-        recipients=[],
-        subject="WhatsApp outbound",
-        text_content=body or None,
-        external_thread_id=conversation.external_thread_id or external_id,
-        metadata={"manual_response": True, "template_name": template_name, "idempotency_key": idempotency_key},
-        content_type="whatsapp_media" if attachment_payloads and not body else "whatsapp_text",
-        direction="outbound",
-        sent_at=datetime.now(timezone.utc),
-        has_attachments=bool(attachment_payloads),
-        has_pdf=any(str(item.get("filename") or "").lower().endswith(".pdf") for item in attachment_payloads),
-        has_audio=any(bool(item.get("is_audio")) for item in attachment_payloads),
+    is_pending_existing = bool(
+        existing
+        and str(existing.source_external_id or "").startswith(_PENDING_OUTBOUND_EXTERNAL_ID_PREFIX)
     )
+    if existing and not (is_pending_existing and external_id and external_id != existing.source_external_id):
+        return existing
+    attachment_payloads = attachments or []
+    content_type = "whatsapp_media" if attachment_payloads and not body else "whatsapp_text"
+    has_pdf = any(str(item.get("filename") or "").lower().endswith(".pdf") for item in attachment_payloads)
+    has_audio = any(bool(item.get("is_audio")) for item in attachment_payloads)
+    metadata = {"manual_response": True, "template_name": template_name, "idempotency_key": idempotency_key}
+    if is_pending_existing:
+        message = existing
+        message.source_external_id = external_id
+        message.original_content = body or message.original_content
+        message.raw_payload_json = json.dumps(metadata, ensure_ascii=False)
+        message.content_type = content_type
+        message.has_attachments = bool(attachment_payloads) or message.has_attachments
+        message.has_pdf = has_pdf or message.has_pdf
+        message.has_audio = has_audio or message.has_audio
+    else:
+        external_id = external_id or f"wa-out-{uuid4().hex}"
+        message, _ = upsert_inbound_message(
+            db,
+            company_id=company_id,
+            channel_key=WHATSAPP_CHANNEL_KEY,
+            provider=WHATSAPP_PROVIDER,
+            external_id=external_id,
+            sender=None,
+            recipients=[],
+            subject="WhatsApp outbound",
+            text_content=body or None,
+            external_thread_id=conversation.external_thread_id or external_id,
+            metadata=metadata,
+            content_type=content_type,
+            direction="outbound",
+            sent_at=datetime.now(timezone.utc),
+            has_attachments=bool(attachment_payloads),
+            has_pdf=has_pdf,
+            has_audio=has_audio,
+        )
     message.source_message_id = idempotency_key
     message.status = status
     message.processing_step = processing_step
@@ -1895,10 +2137,22 @@ def record_manual_response(
         db,
         company_id=company_id,
         user=audit_user,
-        action="whatsapp.outbound_accepted" if status == "accepted" else "whatsapp.outbound_recorded",
+        action=(
+            "whatsapp.outbound_accepted"
+            if status == "accepted"
+            else "whatsapp.outbound_started"
+            if status == "sending"
+            else "whatsapp.outbound_recorded"
+        ),
         entity_type="inbound_message",
         entity_id=message.id,
-        message="Respuesta manual de WhatsApp aceptada por Meta" if status == "accepted" else "Respuesta manual de WhatsApp registrada",
+        message=(
+            "Respuesta manual de WhatsApp aceptada por Meta"
+            if status == "accepted"
+            else "Envío manual de WhatsApp iniciado"
+            if status == "sending"
+            else "Respuesta manual de WhatsApp registrada"
+        ),
     )
     return message
 
@@ -1922,30 +2176,74 @@ async def send_manual_response(
     if not clean_body and not attachment_payloads and not template_name:
         raise WhatsAppEmbeddedSignupError("El mensaje debe incluir texto o un archivo.", error_type="invalid_message")
     idempotency_key = _normalize_idempotency_key(idempotency_key)
-    sent_messages: list[InboundMessage] = []
-    if clean_body or template_name:
-        text_key = f"{idempotency_key}:text" if idempotency_key and attachment_payloads else idempotency_key
+    text_key = f"{idempotency_key}:text" if idempotency_key and attachment_payloads else idempotency_key
+    text_existing = _find_idempotent_outbound(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+        idempotency_key=text_key,
+    ) if text_key else None
+    if (clean_body or template_name) and not text_existing:
+        _prepare_whatsapp_text_send(
+            db,
+            company_id=company_id,
+            conversation_id=conversation_id,
+            body=clean_body,
+            template_name=template_name,
+        )
+    for index, attachment in enumerate(attachment_payloads):
+        media_key = f"{idempotency_key}:media:{index}" if idempotency_key else None
         existing = _find_idempotent_outbound(
             db,
             company_id=company_id,
             conversation_id=conversation_id,
-            idempotency_key=text_key,
-        )
+            idempotency_key=media_key,
+        ) if media_key else None
         if existing:
-            sent_messages.append(existing)
-        else:
-            result = await send_whatsapp_text(
+            continue
+        _prepare_whatsapp_media_send(
+            db,
+            company_id=company_id,
+            conversation_id=conversation_id,
+            content=bytes(attachment.get("content") or b""),
+            filename=str(attachment.get("filename") or "whatsapp-attachment"),
+            content_type=str(attachment.get("content_type") or "application/octet-stream"),
+            is_audio=bool(attachment.get("is_audio")),
+        )
+    sent_messages: list[InboundMessage] = []
+    if clean_body or template_name:
+        reservation = None
+        owns_send = True
+        if text_key:
+            reservation, owns_send = _reserve_manual_response(
                 db,
                 company_id=company_id,
                 conversation_id=conversation_id,
-                body=clean_body,
-                client=client,
+                body=clean_body or f"[Plantilla WhatsApp: {template_name}]",
+                user_id=user_id,
                 template_name=template_name,
-                template_language=template_language,
-                template_components=template_components,
+                idempotency_key=text_key,
             )
-            sent_messages.append(
-                record_manual_response(
+        if not owns_send:
+            sent_messages.append(reservation)
+        else:
+            try:
+                result = await send_whatsapp_text(
+                    db,
+                    company_id=company_id,
+                    conversation_id=conversation_id,
+                    body=clean_body,
+                    client=client,
+                    template_name=template_name,
+                    template_language=template_language,
+                    template_components=template_components,
+                )
+            except Exception as exc:  # noqa: BLE001
+                if reservation:
+                    _mark_outbound_send_unknown(db, reservation, user_id=user_id, error=exc)
+                raise
+            try:
+                sent_message = record_manual_response(
                     db,
                     company_id=company_id,
                     conversation_id=conversation_id,
@@ -1957,30 +2255,45 @@ async def send_manual_response(
                     idempotency_key=text_key,
                     template_name=template_name,
                 )
-            )
+            except Exception as exc:  # noqa: BLE001
+                if reservation:
+                    _mark_outbound_send_unknown(db, reservation, user_id=user_id, error=exc)
+                raise
+            sent_messages.append(sent_message)
     for index, attachment in enumerate(attachment_payloads):
         media_key = f"{idempotency_key}:media:{index}" if idempotency_key else None
-        existing = _find_idempotent_outbound(
-            db,
-            company_id=company_id,
-            conversation_id=conversation_id,
-            idempotency_key=media_key,
-        )
-        if existing:
-            sent_messages.append(existing)
+        reservation = None
+        owns_send = True
+        if media_key:
+            reservation, owns_send = _reserve_manual_response(
+                db,
+                company_id=company_id,
+                conversation_id=conversation_id,
+                body="",
+                user_id=user_id,
+                template_name=None,
+                idempotency_key=media_key,
+            )
+        if not owns_send:
+            sent_messages.append(reservation)
             continue
-        result = await send_whatsapp_media(
-            db,
-            company_id=company_id,
-            conversation_id=conversation_id,
-            content=bytes(attachment.get("content") or b""),
-            filename=str(attachment.get("filename") or "whatsapp-attachment"),
-            content_type=str(attachment.get("content_type") or "application/octet-stream"),
-            is_audio=bool(attachment.get("is_audio")),
-            client=client,
-        )
-        sent_messages.append(
-            record_manual_response(
+        try:
+            result = await send_whatsapp_media(
+                db,
+                company_id=company_id,
+                conversation_id=conversation_id,
+                content=bytes(attachment.get("content") or b""),
+                filename=str(attachment.get("filename") or "whatsapp-attachment"),
+                content_type=str(attachment.get("content_type") or "application/octet-stream"),
+                is_audio=bool(attachment.get("is_audio")),
+                client=client,
+            )
+        except Exception as exc:  # noqa: BLE001
+            if reservation:
+                _mark_outbound_send_unknown(db, reservation, user_id=user_id, error=exc)
+            raise
+        try:
+            sent_message = record_manual_response(
                 db,
                 company_id=company_id,
                 conversation_id=conversation_id,
@@ -1992,7 +2305,11 @@ async def send_manual_response(
                 attachments=[attachment],
                 idempotency_key=media_key,
             )
-        )
+        except Exception as exc:  # noqa: BLE001
+            if reservation:
+                _mark_outbound_send_unknown(db, reservation, user_id=user_id, error=exc)
+            raise
+        sent_messages.append(sent_message)
     return sent_messages[-1]
 
 

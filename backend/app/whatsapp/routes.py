@@ -190,6 +190,6 @@ async def manual_response(
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=404)
     except Exception as exc:  # noqa: BLE001
         error_type = getattr(exc, "error_type", "whatsapp_send_failed")
-        status_code = 400 if error_type in {"invalid_message", "recipient_not_found", "response_window_expired", "server_not_configured"} else 502
+        status_code = 400 if error_type in {"invalid_message", "recipient_not_found", "response_window_expired", "server_not_configured"} else 409 if error_type in {"send_in_progress", "send_unknown"} else 502
         return JSONResponse({"ok": False, "message": str(exc), "error_type": error_type}, status_code=status_code)
     return {"ok": True, "message_id": message.id, "status": message.status}

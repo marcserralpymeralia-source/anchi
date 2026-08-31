@@ -914,6 +914,167 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertEqual(second.source_message_id, "reply-test-1")
         db.close()
 
+    def test_idempotent_response_is_reserved_before_provider_call(self):
+        db = self.TenantSession()
+        self.addCleanup(db.close)
+        inbound = upsert_inbound_message(
+            db,
+            company_id=1,
+            channel_key="whatsapp",
+            provider="meta",
+            external_id="wa-inbound-reservation",
+            sender="+34600000000",
+            recipients=["+34910000000"],
+            text_content="Hola",
+            external_thread_id="+34600000000",
+            content_type="text",
+            received_at=datetime.now(timezone.utc),
+        )[0]
+        db.commit()
+        observed = []
+
+        def handler(request):
+            check_db = self.TenantSession()
+            try:
+                reserved = check_db.scalar(
+                    select(InboundMessage).where(
+                        InboundMessage.company_id == 1,
+                        InboundMessage.source_message_id == "reply-reservation-1",
+                    )
+                )
+                observed.append((reserved.status, reserved.processing_step, reserved.source_external_id.startswith("wa-pending-")))
+            finally:
+                check_db.close()
+            return httpx.Response(200, json={"messages": [{"id": "wamid.reserved-1"}]})
+
+        async def run_send():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                return await send_manual_response(
+                    db,
+                    company_id=1,
+                    conversation_id=inbound.conversation_id,
+                    body="Respuesta reservada",
+                    client=client,
+                    idempotency_key="reply-reservation-1",
+                )
+
+        response = asyncio.run(run_send())
+        self.assertEqual(observed, [("sending", "outbound_sending", True)])
+        self.assertEqual(response.status, "accepted")
+        self.assertEqual(response.source_external_id, "wamid.reserved-1")
+        db.close()
+
+    def test_unknown_provider_result_is_not_retried_with_same_idempotency_key(self):
+        db = self.TenantSession()
+        self.addCleanup(db.close)
+        inbound = upsert_inbound_message(
+            db,
+            company_id=1,
+            channel_key="whatsapp",
+            provider="meta",
+            external_id="wa-inbound-unknown-send",
+            sender="+34600000000",
+            recipients=["+34910000000"],
+            text_content="Hola",
+            external_thread_id="+34600000000",
+            content_type="text",
+            received_at=datetime.now(timezone.utc),
+        )[0]
+        db.commit()
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            raise httpx.ReadTimeout("provider timeout")
+
+        async def run_send():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                with self.assertRaises(WhatsAppEmbeddedSignupError) as first_error:
+                    await send_manual_response(
+                        db,
+                        company_id=1,
+                        conversation_id=inbound.conversation_id,
+                        body="No duplicar",
+                        client=client,
+                        idempotency_key="reply-unknown-1",
+                    )
+                with self.assertRaises(WhatsAppEmbeddedSignupError) as second_error:
+                    await send_manual_response(
+                        db,
+                        company_id=1,
+                        conversation_id=inbound.conversation_id,
+                        body="No duplicar",
+                        client=client,
+                        idempotency_key="reply-unknown-1",
+                    )
+                return first_error.exception, second_error.exception
+
+        first_error, second_error = asyncio.run(run_send())
+        self.assertEqual(first_error.error_type, "timeout")
+        self.assertEqual(second_error.error_type, "send_unknown")
+        self.assertEqual(calls, 1)
+        message = db.scalar(
+            select(InboundMessage).where(
+                InboundMessage.company_id == 1,
+                InboundMessage.source_message_id == "reply-unknown-1",
+            )
+        )
+        self.assertEqual(message.status, "send_unknown")
+        self.assertEqual(message.processing_step, "outbound_send_unknown")
+        db.close()
+
+    def test_accepted_idempotent_replay_bypasses_expired_reply_window(self):
+        db = self.TenantSession()
+        self.addCleanup(db.close)
+        inbound = upsert_inbound_message(
+            db,
+            company_id=1,
+            channel_key="whatsapp",
+            provider="meta",
+            external_id="wa-inbound-replay-window",
+            sender="+34600000000",
+            recipients=["+34910000000"],
+            text_content="Hola",
+            external_thread_id="+34600000000",
+            content_type="text",
+            received_at=datetime.now(timezone.utc),
+        )[0]
+        db.commit()
+        calls = 0
+
+        def handler(request):
+            nonlocal calls
+            calls += 1
+            return httpx.Response(200, json={"messages": [{"id": "wamid.replay-window-1"}]})
+
+        async def run_send():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                first = await send_manual_response(
+                    db,
+                    company_id=1,
+                    conversation_id=inbound.conversation_id,
+                    body="Respuesta única",
+                    client=client,
+                    idempotency_key="reply-replay-window-1",
+                )
+                inbound.received_at = datetime.now(timezone.utc) - timedelta(days=3)
+                db.commit()
+                second = await send_manual_response(
+                    db,
+                    company_id=1,
+                    conversation_id=inbound.conversation_id,
+                    body="Respuesta única",
+                    client=client,
+                    idempotency_key="reply-replay-window-1",
+                )
+                return first, second
+
+        first, second = asyncio.run(run_send())
+        self.assertEqual(calls, 1)
+        self.assertEqual(first.id, second.id)
+        db.close()
+
     def test_manual_response_can_send_template_outside_reply_window(self):
         db = self.TenantSession()
         inbound = upsert_inbound_message(
