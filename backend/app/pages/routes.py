@@ -17,7 +17,7 @@ from app.dashboard.service import _customer_suggestion_maps, _load_order_line_me
 from app.orders.state import ERROR_ORDER_STATUSES, PENDING_ORDER_STATUSES, REVIEW_ORDER_STATUSES, TERMINAL_ORDER_STATUSES
 from app.master.service import TenantUser
 from app.settings.service import get_or_create_settings
-from app.setup.service import get_setup_status, is_setup_operational
+from app.setup.service import get_setup_status, setup_operational_context
 from app.tenancy.database import get_tenant_db
 
 router = APIRouter(tags=["pages"])
@@ -408,7 +408,9 @@ def dashboard(
         redirect_target = "/" if not request.url.query else f"/?{request.url.query}"
         return RedirectResponse(redirect_target, status_code=303)
 
-    if not is_setup_operational(db, user.company_id):
+    setup_operational, enabled_channels = setup_operational_context(db, user.company_id)
+    request.state.enabled_channels = enabled_channels
+    if not setup_operational:
         setup_status = get_setup_status(db, user.company_id)
         missing = [
             item["label"]

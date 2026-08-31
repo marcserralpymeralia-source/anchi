@@ -180,6 +180,10 @@ def enabled_channels_context_processor(request):  # noqa: ANN001
     """Expose active tenant channels to the shared navigation after auth resolves."""
     tenant = getattr(getattr(request, "state", None), "tenant", None)
     company = getattr(tenant, "company", None)
+    preloaded_channels = getattr(getattr(request, "state", None), "enabled_channels", None)
+    if preloaded_channels is not None:
+        return {"enabled_channels": tuple(preloaded_channels)}
+
     enabled_channels: tuple[str, ...] = ()
     if company and company.database_url:
         db = None
