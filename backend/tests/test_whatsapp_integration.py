@@ -34,6 +34,7 @@ from app.tenancy.database import get_tenant_engine
 from app.tenancy.migrations import upgrade_tenant_schema
 from app.whatsapp.service import (
     WhatsAppEmbeddedSignupError,
+    _download_meta_binary,
     complete_embedded_signup,
     download_whatsapp_media,
     enqueue_whatsapp_processing,
@@ -618,6 +619,23 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertTrue(result["ready_for_processing"])
         self.assertTrue(Path(attachment.storage_path).is_file())
         db.close()
+
+    def test_media_download_rejects_oversized_stream_before_persisting(self):
+        def handler(request):
+            return httpx.Response(200, content=b"0123456789")
+
+        async def run_download():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                return await _download_meta_binary(
+                    client,
+                    url="https://lookaside.fbsbx.com/oversized-media",
+                    access_token="token-123",
+                    max_bytes=4,
+                )
+
+        with self.assertRaises(WhatsAppEmbeddedSignupError) as context:
+            asyncio.run(run_download())
+        self.assertEqual(context.exception.error_type, "media_too_large")
 
     def test_media_retry_preserves_completed_attachments(self):
         payload = {

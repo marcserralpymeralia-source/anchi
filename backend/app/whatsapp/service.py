@@ -447,21 +447,27 @@ async def _download_meta_binary(
     if not _is_allowed_media_host(url):
         raise WhatsAppEmbeddedSignupError("Meta devolviÃ³ una URL de media no segura.", error_type="invalid_media_url")
     try:
-        response = await client.get(url, headers={"Authorization": f"Bearer {access_token}"})
+        async with client.stream("GET", url, headers={"Authorization": f"Bearer {access_token}"}) as response:
+            if response.status_code >= 400:
+                raise WhatsAppEmbeddedSignupError("Meta rechazÃ³ la descarga de la media.", error_type="media_download_failed")
+            content_length = response.headers.get("content-length")
+            try:
+                declared_size = int(content_length or 0)
+            except ValueError:
+                declared_size = 0
+            if declared_size > max_bytes:
+                raise WhatsAppEmbeddedSignupError("El adjunto supera el tamaÃ±o mÃ¡ximo permitido.", error_type="media_too_large")
+
+            content = bytearray()
+            async for chunk in response.aiter_bytes():
+                if len(content) + len(chunk) > max_bytes:
+                    raise WhatsAppEmbeddedSignupError("El adjunto supera el tamaÃ±o mÃ¡ximo permitido.", error_type="media_too_large")
+                content.extend(chunk)
+            return bytes(content)
     except httpx.TimeoutException as exc:
         raise WhatsAppEmbeddedSignupError("Meta no respondiÃ³ a tiempo al descargar la media.", error_type="timeout") from exc
     except httpx.HTTPError as exc:
         raise WhatsAppEmbeddedSignupError("No se pudo descargar la media desde Meta.", error_type="media_download_failed") from exc
-    if response.status_code >= 400:
-        raise WhatsAppEmbeddedSignupError("Meta rechazÃ³ la descarga de la media.", error_type="media_download_failed")
-    content_length = response.headers.get("content-length")
-    try:
-        declared_size = int(content_length or 0)
-    except ValueError:
-        declared_size = 0
-    if declared_size > max_bytes or len(response.content) > max_bytes:
-        raise WhatsAppEmbeddedSignupError("El adjunto supera el tamaÃ±o mÃ¡ximo permitido.", error_type="media_too_large")
-    return response.content
 
 
 def _persist_media_failure(attachment: MessageAttachment, message: str) -> None:
