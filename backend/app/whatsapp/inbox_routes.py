@@ -45,10 +45,7 @@ def _attachment_kind(filename: str | None, content_type: str | None, *, is_audio
         return "audio"
     if mime == "application/pdf" or extension == ".pdf":
         return "pdf"
-    if extension in {".doc", ".docx"} or mime in {
-        "application/msword",
-        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    }:
+    if extension == ".docx" or mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
         return "doc"
     if mime.startswith("text/") or extension == ".txt":
         return "text"

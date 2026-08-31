@@ -41,7 +41,6 @@ WHATSAPP_COEXISTENCE_FEATURE_TYPE = "whatsapp_business_app_onboarding"
 META_ID_PATTERN = re.compile(r"^\d{5,32}$")
 WHATSAPP_SUPPORTED_DOCUMENT_MIME_TYPES = {
     "application/pdf",
-    "application/msword",
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "text/plain",
 }
@@ -55,7 +54,7 @@ WHATSAPP_SUPPORTED_AUDIO_MIME_TYPES = {
     "audio/amr",
 }
 WHATSAPP_SUPPORTED_AUDIO_EXTENSIONS = {".amr", ".m4a", ".mp3", ".ogg", ".wav", ".webm"}
-WHATSAPP_SUPPORTED_DOCUMENT_EXTENSIONS = {".pdf", ".doc", ".docx", ".txt"}
+WHATSAPP_SUPPORTED_DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".txt"}
 _PENDING_OUTBOUND_EXTERNAL_ID_PREFIX = "wa-pending-"
 
 @dataclass(slots=True)
@@ -530,6 +529,7 @@ def _whatsapp_media_ready_for_processing(message: InboundMessage) -> bool:
         "transcription_pending",
         "extraction_error",
         "storage_error",
+        "unsupported",
     }
     return all((attachment.extraction_status or "pending") not in pending_statuses for attachment in message.attachments or [])
 

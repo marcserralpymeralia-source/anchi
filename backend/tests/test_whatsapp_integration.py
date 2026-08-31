@@ -485,6 +485,66 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         event = parse_payload_events(payload)[0]
         self.assertFalse(event["attachments"][0]["downloadable"])
 
+        legacy_doc_payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123", "business_account_id": "ba-123"},
+                                "messages": [
+                                    {
+                                        "id": "wa-legacy-doc-1",
+                                        "from": "+34600000000",
+                                        "type": "document",
+                                        "document": {
+                                            "id": "legacy-doc-1",
+                                            "filename": "pedido.doc",
+                                            "mime_type": "application/msword",
+                                        },
+                                    },
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+        legacy_doc_event = parse_payload_events(legacy_doc_payload)[0]
+        self.assertFalse(legacy_doc_event["attachments"][0]["downloadable"])
+
+    def test_unsupported_attachment_never_reports_ready_for_pipeline(self):
+        db = self.TenantSession()
+        channel = db.scalar(select(InputChannel).where(InputChannel.company_id == 1, InputChannel.key == "whatsapp"))
+        message = InboundMessage(
+            company_id=1,
+            channel_id=channel.id,
+            provider="meta",
+            source_external_id="wa-unsupported-ready-1",
+            direction="inbound",
+            status="received",
+            original_content=None,
+            received_at=datetime.now(timezone.utc),
+        )
+        db.add(message)
+        db.flush()
+        db.add(
+            MessageAttachment(
+                company_id=1,
+                inbound_message_id=message.id,
+                filename="pedido.doc",
+                content_type="application/msword",
+                size_bytes=10,
+                extraction_status="unsupported",
+            )
+        )
+        db.commit()
+
+        result = asyncio.run(download_whatsapp_media(db, company_id=1, inbound_message_id=message.id))
+
+        self.assertFalse(result["ready_for_processing"])
+        db.close()
+
     def test_unsupported_media_without_caption_does_not_enter_order_pipeline(self):
         payload = {
             "entry": [

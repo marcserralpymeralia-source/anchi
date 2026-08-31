@@ -33,7 +33,7 @@
 ## Hito C
 
 - Los adjuntos permitidos de WhatsApp se descargan desde dominios de Meta, se validan por tipo y tamano, y se persisten antes de extraer su contenido.
-- Los documentos compatibles (`PDF`, `DOC`, `DOCX` y `TXT`) entran en el pipeline comun mediante `MessageAttachment`; los audios quedan almacenados y pendientes de transcripcion si no hay proveedor configurado.
+- Los documentos compatibles (`PDF`, `DOCX` y `TXT`) entran en el pipeline comun mediante `MessageAttachment`; los audios quedan almacenados y pendientes de transcripcion si no hay proveedor configurado. El formato binario `.DOC` no se anuncia como compatible porque el extractor comun no puede leerlo.
 - El pipeline comun identifica WhatsApp por canal y mantiene la misma ruta de clasificacion, resolucion, score y `Order` que el resto de entradas.
 - Las respuestas manuales y automaticas usan reservas persistentes con clave de idempotencia antes de llamar a Meta. Un resultado incierto queda en `send_unknown` y no se reintenta automaticamente.
 - Las respuestas de texto respetan la ventana de conversacion; fuera de ella se exige una plantilla aprobada. Los estados `sent`, `delivered`, `read` y `failed` se reconcilian mediante los webhooks de estado.
@@ -47,6 +47,14 @@ Validado localmente con pruebas automatizadas:
 3. Descarga/persistencia de documentos y tratamiento de adjuntos no compatibles.
 4. Pipeline comun hasta resolucion de cliente/producto, score y `Order`/revision.
 5. Envio de texto, plantilla y media con idempotencia, estados de entrega y fallos seguros.
+
+La validacion reproducible se ejecuta desde `backend` con:
+
+```powershell
+python -m unittest tests.test_whatsapp_integration tests.test_whatsapp_conversation_orders tests.test_whatsapp_conversation_semantics tests.test_whatsapp_auto_responses tests.test_whatsapp_demo_simulator
+```
+
+La simulacion local (`python -m scripts.simulate_whatsapp_demo --company-slug anchi-demo --enqueue`) demuestra la ingesta y el encolado sin llamar a Meta. Para ejecutar tambien el pipeline automatico hace falta configurar un proveedor de IA de desarrollo; sin el, el worker deja el job en estado reintentable y no se presenta como UAT completo.
 
 Pendiente de ejecutar con la cuenta MULET real:
 
