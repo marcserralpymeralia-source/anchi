@@ -24,7 +24,7 @@ from app.db.models import Alert, Conversation, Email, EmailAttachment, EmailSett
 from app.jobs.service import enqueue_job, execute_job_inline
 from app.logs.service import log_action
 from app.master.service import TenantUser
-from app.orders.routes import _customer_label, _sync_customer_product_knowledge, validate_confirmation
+from app.orders.service import _customer_label, _sync_customer_product_knowledge, validate_confirmation
 from app.settings.service import get_or_create_settings
 from app.tenancy.database import get_tenant_db
 from app.agent.platform import LearningService

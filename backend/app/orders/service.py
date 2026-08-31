@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
+from email.utils import parseaddr
 from types import SimpleNamespace
 
 from sqlalchemy import case, exists, func, or_, select
@@ -292,3 +294,124 @@ def sync_customer_product_knowledge(
 
 
 _sync_customer_product_knowledge = sync_customer_product_knowledge
+
+
+def learn_customer_email_from_confirmed_order(
+    db: Session,
+    *,
+    order: Order,
+    company_id: int,
+) -> str:
+    customer_id = order.validated_customer_id or order.customer_id
+    if not customer_id or not order.email_id:
+        return "skipped"
+
+    email = db.get(Email, order.email_id)
+    if not email:
+        return "skipped"
+
+    sender_email = parseaddr(email.sender or "")[1].strip().lower()
+    if not sender_email or "@" not in sender_email:
+        return "skipped"
+
+    existing_points = db.scalars(
+        select(CustomerContactPoint).where(
+            CustomerContactPoint.company_id == company_id,
+            CustomerContactPoint.type == "email",
+            CustomerContactPoint.value == sender_email,
+            CustomerContactPoint.active == True,  # noqa: E712
+        )
+    ).all()
+
+    existing_customer_ids = {point.customer_id for point in existing_points}
+    if existing_customer_ids and existing_customer_ids != {customer_id}:
+        return "conflict"
+
+    now = datetime.now(timezone.utc)
+
+    if existing_points:
+        for point in existing_points:
+            point.confidence = 1.0
+            point.source = "validated_order"
+            point.last_seen_at = now
+            point.updated_at = now
+            point.active = True
+        return "updated"
+
+    db.add(
+        CustomerContactPoint(
+            company_id=company_id,
+            customer_id=customer_id,
+            type="email",
+            value=sender_email,
+            label="Email aprendido desde pedido validado",
+            is_primary=False,
+            active=True,
+            confidence=1.0,
+            source="validated_order",
+            first_seen_at=now,
+            last_seen_at=now,
+        )
+    )
+    return "created"
+
+
+def confirm_order_with_effects(
+    db: Session,
+    *,
+    order: Order,
+    company_id: int,
+    scoring: ScoringSettings,
+    user=None,
+    source_context: str = "pedido_confirmado",
+    when: datetime | None = None,
+) -> dict:
+    errors = validate_confirmation(order, scoring)
+    if errors:
+        return {
+            "confirmed": False,
+            "errors": errors,
+            "email_learning_result": "skipped",
+        }
+
+    ORDER_STATE.confirm(order, when=when or datetime.now(timezone.utc))
+
+    for line in order.lines or []:
+        sync_customer_product_knowledge(
+            db,
+            company_id=company_id,
+            order=order,
+            line=line,
+            user=user,
+            source_context=source_context,
+            force_habitual=False,
+        )
+
+    email_learning_result = learn_customer_email_from_confirmed_order(
+        db,
+        order=order,
+        company_id=company_id,
+    )
+
+    LearningService().record_case(
+        db,
+        company_id=company_id,
+        summary=f"{_customer_label(order)} confirmado con {len(order.lines or [])} lineas.",
+        resolved_action="pedido_confirmado",
+        resolution_json=json.dumps(
+            {
+                "order_id": order.id,
+                "customer": _customer_label(order),
+                "lines": len(order.lines or []),
+            },
+            ensure_ascii=False,
+        ),
+        customer_id=order.validated_customer_id or order.customer_id,
+        order_id=order.id,
+    )
+
+    return {
+        "confirmed": True,
+        "errors": [],
+        "email_learning_result": email_learning_result,
+    }
