@@ -441,6 +441,10 @@ class DecisionEngineService:
     def __init__(self, *, semantic_provider: EmbeddingProvider | None = None) -> None:
         self.rag = RAGRetrievalService()
         self.semantic_provider = semantic_provider
+        self._semantic_unavailable_company_ids: set[int] = set()
+
+    def reset_runtime_state(self) -> None:
+        self._semantic_unavailable_company_ids.clear()
 
     def decision_settings(self, db: Session, company_id: int) -> DecisionSettings:
         return get_or_create_settings(db, DecisionSettings, company_id)
@@ -860,11 +864,12 @@ class DecisionEngineService:
         }
 
     def _semantic_product_candidates(self, db: Session, company_id: int, *, query: str) -> list[DecisionCandidate]:
-        if not query.strip():
+        if not query.strip() or company_id in self._semantic_unavailable_company_ids:
             return []
         try:
             candidates = find_product_candidates(db, company_id=company_id, query=query, provider=self.semantic_provider, limit=5)
         except Exception as exc:  # noqa: BLE001
+            self._semantic_unavailable_company_ids.add(company_id)
             logger.info("semantic_product_candidates_unavailable", extra={"company_id": company_id, "error_type": type(exc).__name__})
             return []
         return [
@@ -1260,6 +1265,8 @@ class UnifiedOrderPipelineService:
         email: Email | None = None,
         source_text_override: str | None = None,
     ) -> dict[str, Any]:
+        self.decision.reset_runtime_state()
+
         if not force_order and inbound_message.order_id:
             order = db.scalar(
                 select(Order).where(

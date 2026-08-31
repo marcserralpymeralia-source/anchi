@@ -38,7 +38,7 @@ def generate_embeddings(texts: Sequence[str], *, model: str | None = None) -> li
     if not api_key:
         raise EmbeddingError("OPENAI_API_KEY no configurada para generar embeddings.")
     base_url = (os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
-    timeout = int(os.getenv("OPENAI_TIMEOUT_SECONDS", "60"))
+    timeout = int(os.getenv("OPENAI_EMBEDDING_TIMEOUT_SECONDS", "8"))
     payload = json.dumps({"model": selected_model, "input": list(texts)}).encode("utf-8")
     request = urllib.request.Request(
         f"{base_url}/embeddings",
