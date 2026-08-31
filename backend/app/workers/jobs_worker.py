@@ -31,7 +31,7 @@ from app.master.database import MasterSessionLocal
 from app.master.models import EmailSyncState, MasterTenantDatabase
 from app.imports.service import confirm_import, guess_mapping, read_preview
 from app.knowledge.service import index_knowledge_entries
-from app.orders.routes import _customer_label, _sync_customer_product_knowledge, validate_confirmation
+from app.orders.service import _customer_label, _sync_customer_product_knowledge, validate_confirmation
 from app.semantic_retrieval.products import index_products
 from app.settings.integrations import backfill_imap_emails, read_latest_imap_emails
 from app.settings.service import get_or_create_settings

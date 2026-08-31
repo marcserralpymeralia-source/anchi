@@ -21,7 +21,7 @@ from app.agent.services import AgentProcessingService  # noqa: E402
 from app.channels.service import get_or_create_channel  # noqa: E402
 from app.core.encryption import encrypt_secret  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import Conversation, Email, InboundMessage, LLMSettings, Order, OrderLine  # noqa: E402
+from app.db.models import Conversation, DecisionSettings, Email, EmailSettings, ExportJob, InboundMessage, LLMSettings, Order, OrderLine, OrderReview, ScoringSettings  # noqa: E402
 from app.settings.integrations import (  # noqa: E402
     _existing_email_for_imap,
     _normalized_email_external_id,
@@ -632,6 +632,217 @@ class MessagesAndConversationsTests(unittest.TestCase):
                 AgentProcessingService().process_email(db, email)
         finally:
             db.close()
+
+
+    def _run_auto_confirm_case(
+        self,
+        *,
+        channel_key: str,
+        decision_human_review: bool,
+        email_human_review: bool = False,
+        allow_auto_export: bool = False,
+    ):
+        db = self.Session()
+
+        try:
+            db.add(
+                LLMSettings(
+                    company_id=1,
+                    provider="openai",
+                    api_key_encrypted=encrypt_secret("test-token"),
+                    allow_auto_confirm=True,
+                    allow_auto_export=allow_auto_export,
+                )
+            )
+            db.add(
+                DecisionSettings(
+                    company_id=1,
+                    always_human_review=decision_human_review,
+                )
+            )
+            db.add(
+                EmailSettings(
+                    company_id=1,
+                    always_human_review=email_human_review,
+                )
+            )
+            db.add(
+                ScoringSettings(
+                    company_id=1,
+                    safe_threshold=90,
+                    review_threshold=75,
+                    doubtful_threshold=50,
+                    block_without_customer=False,
+                    block_without_reference=False,
+                    block_without_quantity=False,
+                    block_below_threshold=False,
+                )
+            )
+            db.commit()
+
+            email = None
+            if channel_key == "email":
+                email = Email(
+                    company_id=1,
+                    external_id="auto-confirm-email-1",
+                    sender="cliente@example.com",
+                    subject="Pedido automático",
+                    body="Pedido de prueba con contenido suficiente",
+                )
+                db.add(email)
+                db.commit()
+
+            message, _ = persist_normalized_message(
+                db,
+                NormalizedMessage(
+                    company_id=1,
+                    channel_key=channel_key,
+                    provider="imap" if channel_key == "email" else "whatsapp",
+                    external_id=f"auto-confirm-{channel_key}-1",
+                    sender="cliente@example.com" if channel_key == "email" else "34600000000",
+                    recipients=["pedidos@example.com"] if channel_key == "email" else ["34900000000"],
+                    subject="Pedido automático",
+                    text_content="Pedido de prueba con contenido suficiente para procesar",
+                    external_thread_id=f"thread-auto-confirm-{channel_key}",
+                    metadata={"source": channel_key},
+                ),
+                content_type="email" if channel_key == "email" else "whatsapp_text",
+            )
+            db.commit()
+
+            pipeline = UnifiedOrderPipelineService()
+
+            def fake_create_order(
+                session,
+                inbound_message,
+                current_email,
+                extraction,
+                normalized,
+                existing_order=None,
+            ):
+                order = existing_order or Order(
+                    company_id=inbound_message.company_id,
+                    conversation_id=inbound_message.conversation_id,
+                    email_id=current_email.id if current_email else None,
+                    customer_detected_name="Cliente demo",
+                    status="pedido_pendiente_revision",
+                )
+                session.add(order)
+                session.flush()
+                return order
+
+            with (
+                patch.object(
+                    pipeline,
+                    "_classify",
+                    return_value={
+                        "tipo_correo": "pedido",
+                        "confianza": 0.99,
+                    },
+                ),
+                patch.object(
+                    pipeline,
+                    "_extract",
+                    return_value={
+                        "customer": {},
+                        "lines": [],
+                    },
+                ),
+                patch.object(
+                    pipeline,
+                    "_create_order",
+                    side_effect=fake_create_order,
+                ),
+                patch.object(
+                    pipeline.scoring,
+                    "score_order",
+                    return_value=SimpleNamespace(total_score=95.0),
+                ),
+            ):
+                result = pipeline.process_inbound_message(
+                    db,
+                    message,
+                    email=email,
+                )
+
+            order = db.get(Order, result["order_id"])
+            review_count = db.scalar(
+                select(func.count()).select_from(OrderReview)
+            )
+            export_count = db.scalar(
+                select(func.count()).select_from(ExportJob)
+            )
+
+            return {
+                "result": result,
+                "order_status": order.status,
+                "confirmed_at": order.confirmed_at,
+                "review_count": review_count,
+                "export_count": export_count,
+            }
+        finally:
+            db.close()
+
+    def test_safe_whatsapp_auto_confirms_without_pending_review(self):
+        outcome = self._run_auto_confirm_case(
+            channel_key="whatsapp",
+            decision_human_review=False,
+        )
+
+        self.assertTrue(outcome["result"]["ok"])
+        self.assertTrue(outcome["result"]["auto_confirmed"])
+        self.assertIsNone(outcome["result"]["review_id"])
+        self.assertEqual(outcome["order_status"], "pedido_confirmado")
+        self.assertIsNotNone(outcome["confirmed_at"])
+        self.assertEqual(outcome["review_count"], 0)
+
+    def test_global_human_review_blocks_auto_confirmation(self):
+        outcome = self._run_auto_confirm_case(
+            channel_key="whatsapp",
+            decision_human_review=True,
+        )
+
+        self.assertTrue(outcome["result"]["ok"])
+        self.assertFalse(outcome["result"]["auto_confirmed"])
+        self.assertIsNotNone(outcome["result"]["review_id"])
+        self.assertEqual(
+            outcome["order_status"],
+            "pedido_pendiente_revision",
+        )
+        self.assertIsNone(outcome["confirmed_at"])
+        self.assertEqual(outcome["review_count"], 1)
+
+    def test_email_human_review_blocks_auto_confirmation(self):
+        outcome = self._run_auto_confirm_case(
+            channel_key="email",
+            decision_human_review=False,
+            email_human_review=True,
+        )
+
+        self.assertTrue(outcome["result"]["ok"])
+        self.assertFalse(outcome["result"]["auto_confirmed"])
+        self.assertIsNotNone(outcome["result"]["review_id"])
+        self.assertEqual(
+            outcome["order_status"],
+            "pedido_pendiente_revision",
+        )
+        self.assertIsNone(outcome["confirmed_at"])
+        self.assertEqual(outcome["review_count"], 1)
+
+    def test_auto_export_does_not_queue_unconfirmed_order(self):
+        outcome = self._run_auto_confirm_case(
+            channel_key="whatsapp",
+            decision_human_review=True,
+            allow_auto_export=True,
+        )
+
+        self.assertFalse(outcome["result"]["auto_confirmed"])
+        self.assertEqual(
+            outcome["order_status"],
+            "pedido_pendiente_revision",
+        )
+        self.assertEqual(outcome["review_count"], 1)
+        self.assertEqual(outcome["export_count"], 0)
 
 
 if __name__ == "__main__":

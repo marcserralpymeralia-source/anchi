@@ -28,7 +28,8 @@ from app.db.models import AuditLog, BackgroundJob, Company, Conversation, Custom
 from app.jobs.service import enqueue_job, retry_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import MasterCompany, MasterTenantDatabase  # noqa: E402
-from app.orders.routes import _learn_customer_email_from_confirmed_order, confirm_order  # noqa: E402
+from app.orders.routes import confirm_order  # noqa: E402
+from app.orders.service import learn_customer_email_from_confirmed_order  # noqa: E402
 from app.messages.service import upsert_inbound_message  # noqa: E402
 from app.tenancy.migrations import upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import run_worker_cycle  # noqa: E402
@@ -582,7 +583,7 @@ class RegressionFlowsTests(unittest.TestCase):
         db.add(order)
         db.flush()
 
-        result = _learn_customer_email_from_confirmed_order(
+        result = learn_customer_email_from_confirmed_order(
             db,
             order=order,
             company_id=1,
@@ -656,7 +657,7 @@ class RegressionFlowsTests(unittest.TestCase):
         db.add(order)
         db.flush()
 
-        result = _learn_customer_email_from_confirmed_order(
+        result = learn_customer_email_from_confirmed_order(
             db,
             order=order,
             company_id=1,
@@ -736,7 +737,7 @@ class RegressionFlowsTests(unittest.TestCase):
         db.add(order)
         db.flush()
 
-        result = _learn_customer_email_from_confirmed_order(
+        result = learn_customer_email_from_confirmed_order(
             db,
             order=order,
             company_id=1,

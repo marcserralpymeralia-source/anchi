@@ -14,6 +14,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.agent.extraction import OrderExtractionInput, OrderExtractionResult, extract_order
+from app.core.channel_identity import inbound_channel_key
 from app.core.encryption import decrypt_secret
 from app.db.models import (
     Alert,
@@ -1413,6 +1414,18 @@ class UnifiedOrderPipelineService:
             score_result = self.scoring.score_order(db, order)
             order.score = score_result.total_score
             order.status = self.scoring.status_for_score(db, inbound_message.company_id, order.score)
+
+            scoring_settings = get_or_create_settings(
+                db,
+                ScoringSettings,
+                inbound_message.company_id,
+            )
+            decision_settings = get_or_create_settings(
+                db,
+                DecisionSettings,
+                inbound_message.company_id,
+            )
+
             if existing_order:
                 pending_reviews = db.scalars(
                     select(OrderReview).where(
@@ -1425,7 +1438,37 @@ class UnifiedOrderPipelineService:
                     previous_review.status = "superseded"
                     previous_review.reviewed_at = datetime.now(timezone.utc)
 
-            review = self.review.open_review(db, order, user=user, comments=inbound_message.processing_error)
+            from app.orders.service import confirm_order_with_effects
+
+            is_email_input = bool(email is not None or inbound_channel_key(inbound_message) == "email")
+            auto_confirm_allowed = (
+                llm_settings.allow_auto_confirm
+                and not decision_settings.always_human_review
+                and (not is_email_input or not email_settings.always_human_review)
+                and order.score >= scoring_settings.safe_threshold
+            )
+
+            confirmation = None
+            if auto_confirm_allowed:
+                confirmation = confirm_order_with_effects(
+                    db,
+                    order=order,
+                    company_id=inbound_message.company_id,
+                    scoring=scoring_settings,
+                    user=user,
+                    source_context="pedido_confirmado_auto",
+                    when=datetime.now(timezone.utc),
+                )
+
+            review = None
+            if not confirmation or not confirmation["confirmed"]:
+                review = self.review.open_review(
+                    db,
+                    order,
+                    user=user,
+                    comments=inbound_message.processing_error,
+                )
+
             inbound_message.status = "order_detected"
             inbound_message.processing_step = "completed"
             inbound_message.order_id = order.id
@@ -1434,6 +1477,7 @@ class UnifiedOrderPipelineService:
             inbound_message.extraction_json = json.dumps(extraction, ensure_ascii=False)
             inbound_message.last_processed_at = datetime.now(timezone.utc)
             db.commit()
+
             if existing_order:
                 log_action(
                     db,
@@ -1454,17 +1498,49 @@ class UnifiedOrderPipelineService:
                     entity_id=order.id,
                     message=f"Pedido creado desde entrada {inbound_message.id}",
                 )
-            if llm_settings.allow_auto_export and order.score >= get_or_create_settings(db, ScoringSettings, inbound_message.company_id).safe_threshold:
-                self.exporter.queue_export(db, company_id=inbound_message.company_id, order_id=order.id, payload_json=None)
+
+            if confirmation and confirmation["confirmed"]:
+                log_action(
+                    db,
+                    company_id=inbound_message.company_id,
+                    user=user,
+                    action="agent.order_auto_confirmed",
+                    entity_type="order",
+                    entity_id=order.id,
+                    message=f"Pedido auto-confirmado con scoring {order.score}.",
+                )
+                if confirmation["email_learning_result"] == "conflict":
+                    log_action(
+                        db,
+                        company_id=inbound_message.company_id,
+                        user=user,
+                        action="customer.email_learning.conflict",
+                        entity_type="order",
+                        entity_id=order.id,
+                        message="El email remitente ya estaba asociado a otro cliente y no se ha sobrescrito.",
+                    )
+
+            if (
+                llm_settings.allow_auto_export
+                and order.status in {"pedido_confirmado", "pedido_validado"}
+            ):
+                self.exporter.queue_export(
+                    db,
+                    company_id=inbound_message.company_id,
+                    order_id=order.id,
+                    payload_json=None,
+                )
                 db.commit()
+
             message = f"Pedido {order.id} reprocesado." if existing_order else f"Pedido {order.id} creado."
             return {
                 "ok": True,
                 "status": "order_detected",
                 "message": message,
                 "order_id": order.id,
-                "review_id": review.id,
+                "review_id": review.id if review else None,
                 "score": order.score,
+                "auto_confirmed": bool(confirmation and confirmation["confirmed"]),
             }
         except Exception as exc:
             return self._mark_error(db, inbound_message, user, str(exc))
