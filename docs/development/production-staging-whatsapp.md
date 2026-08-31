@@ -56,6 +56,8 @@ python -m unittest tests.test_whatsapp_integration tests.test_whatsapp_conversat
 
 La simulacion local (`python -m scripts.simulate_whatsapp_demo --company-slug anchi-demo --enqueue`) demuestra la ingesta y el encolado sin llamar a Meta. Para ejecutar tambien el pipeline automatico hace falta configurar un proveedor de IA de desarrollo; sin el, el worker deja el job en estado reintentable y no se presenta como UAT completo.
 
+El smoke UAT `WhatsAppIntegrationTests.test_mulet_local_uat_covers_bidirectional_flow_without_duplicates` recorre con proveedores HTTP simulados el texto, la deduplicacion, el `Order`, la extraccion de PDF, la respuesta saliente, el delivery y un fallo incierto sin repetir el envio.
+
 Pendiente de ejecutar con la cuenta MULET real:
 
 1. Recibir un mensaje real y confirmar su aparicion en la bandeja.

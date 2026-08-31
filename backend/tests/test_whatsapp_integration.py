@@ -1299,6 +1299,203 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertIn("Try again later", outbound.processing_error or "")
         db.close()
 
+    def test_mulet_local_uat_covers_bidirectional_flow_without_duplicates(self):
+        text_payload = {
+            "entry": [
+                {
+                    "id": "ba-123",
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123"},
+                                "messages": [
+                                    {
+                                        "id": "wa-mulet-uat-text-1",
+                                        "from": "+34600000000",
+                                        "type": "text",
+                                        "text": {
+                                            "body": "Pedido de 5 unidades de P-100 para Cliente WhatsApp SL. Nada más, gracias"
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ],
+                }
+            ]
+        }
+        db = self.TenantSession()
+        inbound = persist_event(db, 1, parse_payload_events(text_payload)[0])
+        duplicate = persist_event(db, 1, parse_payload_events(text_payload)[0])
+        conversation_id = inbound.conversation_id
+        enqueue_whatsapp_processing(db, 1, inbound.id)
+        db.close()
+
+        classification = json.dumps(
+            {"tipo_correo": "pedido", "confianza": 0.97, "motivo": "Pedido claro"},
+            ensure_ascii=False,
+        )
+        extraction = json.dumps(
+            {
+                "cliente": {"nombre_detectado": "Cliente WhatsApp SL", "codigo_cliente_detectado": "C001"},
+                "pedido": {
+                    "fecha_pedido": "2026-08-31",
+                    "lineas": [
+                        {
+                            "texto_original": "5 unidades de P-100",
+                            "referencia_detectada": "P-100",
+                            "producto_detectado": "Producto WhatsApp",
+                            "cantidad": 5,
+                            "unidad": "uds",
+                            "confianza_extraccion": 0.95,
+                        }
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        )
+        with patch("app.agent.platform.classify_sample", return_value={"ok": True, "content": classification}), patch(
+            "app.agent.platform.extract_sample", return_value={"ok": True, "content": extraction}
+        ), patch("app.workers.jobs_worker.MasterSessionLocal", new=self.MasterSession):
+            worker_summary = run_worker_cycle()
+
+        db = self.TenantSession()
+        self.assertIs(inbound, duplicate)
+        self.assertEqual(worker_summary["processed"], 1)
+        order = db.scalar(select(Order).where(Order.company_id == 1))
+        self.assertIsNotNone(order)
+        self.assertEqual(order.customer_id, 1)
+        self.assertEqual(order.lines[0].validated_product_id, 1)
+        self.assertEqual(db.scalar(select(func.count()).select_from(Order)), 1)
+
+        media_payload = {
+            "entry": [
+                {
+                    "id": "ba-123",
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123"},
+                                "messages": [
+                                    {
+                                        "id": "wa-mulet-uat-document-1",
+                                        "from": "+34600000000",
+                                        "type": "document",
+                                        "document": {
+                                            "id": "m-media-mulet-uat-1",
+                                            "filename": "pedido.pdf",
+                                            "mime_type": "application/pdf",
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ],
+                }
+            ]
+        }
+        media_message = persist_event(db, 1, parse_payload_events(media_payload)[0])
+
+        def media_handler(request):
+            if request.url.host == "graph.facebook.com" and request.url.path.endswith("/m-media-mulet-uat-1"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "url": "https://lookaside.fbsbx.com/m-media-mulet-uat-1",
+                        "mime_type": "application/pdf",
+                        "file_size": 32,
+                    },
+                )
+            if request.url.host == "lookaside.fbsbx.com":
+                return httpx.Response(200, content=b"%PDF-1.4\nBT\n(Pedido 5 unidades) Tj\nET")
+            return httpx.Response(404, json={"error": {"message": "unexpected request"}})
+
+        storage_root = Path(self.tempdir.name) / "mulet-uat-storage"
+        with patch.dict(os.environ, {"TEMP_STORAGE_DIR": str(storage_root)}):
+            async def run_media_download():
+                async with httpx.AsyncClient(transport=httpx.MockTransport(media_handler)) as client:
+                    return await download_whatsapp_media(
+                        db,
+                        company_id=1,
+                        inbound_message_id=media_message.id,
+                        client=client,
+                    )
+
+            media_result = asyncio.run(run_media_download())
+
+        attachment = db.scalar(select(MessageAttachment).where(MessageAttachment.inbound_message_id == media_message.id))
+        self.assertEqual(media_result["downloaded"], 1)
+        self.assertTrue(media_result["ready_for_processing"])
+        self.assertEqual(attachment.extraction_status, "extracted")
+        self.assertIn("Pedido 5 unidades", attachment.extracted_text or "")
+
+        provider_calls = 0
+
+        def outbound_handler(request):
+            nonlocal provider_calls
+            provider_calls += 1
+            return httpx.Response(200, json={"messages": [{"id": "wamid.mulet-uat-reply-1"}]})
+
+        async def send_reply():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(outbound_handler)) as client:
+                return await send_manual_response(
+                    db,
+                    company_id=1,
+                    conversation_id=conversation_id,
+                    body="Pedido recibido y en revisión.",
+                    client=client,
+                    idempotency_key="mulet-uat-reply-1",
+                )
+
+        outbound = asyncio.run(send_reply())
+        self.assertEqual(outbound.status, "accepted")
+        self.assertEqual(provider_calls, 1)
+        delivered = persist_event(
+            db,
+            1,
+            {
+                "kind": "status",
+                "external_id": outbound.source_external_id,
+                "metadata": {"payload": {"status": "delivered"}},
+            },
+        )
+        self.assertEqual(delivered.status, "delivered")
+
+        uncertain_calls = 0
+
+        def uncertain_handler(request):
+            nonlocal uncertain_calls
+            uncertain_calls += 1
+            raise httpx.ReadTimeout("provider timeout", request=request)
+
+        async def send_uncertain_reply():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(uncertain_handler)) as client:
+                with self.assertRaises(WhatsAppEmbeddedSignupError) as first_error:
+                    await send_manual_response(
+                        db,
+                        company_id=1,
+                        conversation_id=conversation_id,
+                        body="No duplicar esta respuesta.",
+                        client=client,
+                        idempotency_key="mulet-uat-uncertain-1",
+                    )
+                with self.assertRaises(WhatsAppEmbeddedSignupError) as second_error:
+                    await send_manual_response(
+                        db,
+                        company_id=1,
+                        conversation_id=conversation_id,
+                        body="No duplicar esta respuesta.",
+                        client=client,
+                        idempotency_key="mulet-uat-uncertain-1",
+                    )
+                return first_error.exception, second_error.exception
+
+        first_error, second_error = asyncio.run(send_uncertain_reply())
+        self.assertEqual(first_error.error_type, "timeout")
+        self.assertEqual(second_error.error_type, "send_unknown")
+        self.assertEqual(uncertain_calls, 1)
+        db.close()
+
     def test_worker_processes_whatsapp_into_order(self):
         payload = {
             "entry": [
