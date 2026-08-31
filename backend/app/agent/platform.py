@@ -1636,6 +1636,8 @@ class UnifiedOrderPipelineService:
     def _source_type_for_extraction(self, inbound_message: InboundMessage | None) -> str:
         if not inbound_message:
             return "unknown"
+        if inbound_channel_key(inbound_message) == "whatsapp":
+            return "whatsapp"
         raw = " ".join(
             value
             for value in [

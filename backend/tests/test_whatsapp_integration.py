@@ -189,6 +189,24 @@ class WhatsAppIntegrationTests(unittest.TestCase):
 
         self.assertEqual([event["external_id"] for event in events], ["wa-valid-id"])
 
+    def test_pipeline_marks_meta_messages_as_whatsapp_source(self):
+        db = self.TenantSession()
+        message = upsert_inbound_message(
+            db,
+            company_id=1,
+            channel_key="whatsapp",
+            provider="meta",
+            external_id="wa-source-type-1",
+            sender="+34600000000",
+            recipients=["+34910000000"],
+            text_content="Pedido de prueba",
+            external_thread_id="+34600000000",
+            content_type="text",
+        )[0]
+
+        self.assertEqual(UnifiedOrderPipelineService()._source_type_for_extraction(message), "whatsapp")
+        db.close()
+
     def test_live_webhook_requires_ready_tenant_and_exact_meta_identifiers(self):
         db = self.TenantSession()
         config = whatsapp_config(db, 1)
@@ -343,6 +361,41 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         }
         event = parse_payload_events(payload)[0]
         self.assertFalse(event["attachments"][0]["downloadable"])
+
+    def test_malformed_media_size_does_not_break_ingestion(self):
+        payload = {
+            "entry": [
+                {
+                    "id": "ba-123",
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123", "business_account_id": "ba-123"},
+                                "messages": [
+                                    {
+                                        "id": "wa-media-size-1",
+                                        "from": "+34600000000",
+                                        "type": "document",
+                                        "document": {
+                                            "id": "media-size-1",
+                                            "filename": "pedido.pdf",
+                                            "mime_type": "application/pdf",
+                                            "file_size": "not-a-number",
+                                        },
+                                    }
+                                ],
+                            }
+                        }
+                    ],
+                }
+            ]
+        }
+
+        db = self.TenantSession()
+        message = persist_event(db, 1, parse_payload_events(payload)[0])
+
+        self.assertEqual(message.attachments[0].size_bytes, 0)
+        db.close()
 
     def test_media_download_persists_file_with_meta_mock(self):
         payload = {
