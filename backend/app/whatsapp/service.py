@@ -89,6 +89,13 @@ class WhatsAppTenantConfig:
 def get_or_create_whatsapp_channel(db: Session, company_id: int) -> InputChannel:
     channel = db.scalar(select(InputChannel).where(InputChannel.company_id == company_id, InputChannel.key == WHATSAPP_CHANNEL_KEY))
     if channel:
+        # Keep persisted channel capabilities aligned with the media policy used
+        # by the WhatsApp inbox and provider adapter.
+        channel.supports_text = True
+        channel.supports_attachments = True
+        channel.supports_audio = True
+        channel.supports_documents = True
+        channel.supports_images = False
         return channel
     channel = InputChannel(
         company_id=company_id,
@@ -101,7 +108,7 @@ def get_or_create_whatsapp_channel(db: Session, company_id: int) -> InputChannel
         supports_attachments=True,
         supports_audio=True,
         supports_documents=True,
-        supports_images=True,
+        supports_images=False,
     )
     db.add(channel)
     db.flush()

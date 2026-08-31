@@ -169,7 +169,7 @@ def _ensure_input_channels(db: Session, company_id: int) -> dict[str, InputChann
     channels = {}
     definitions = [
         {"key": "email", "name": "Email", "is_active": True, "is_default": True, "supports_text": True, "supports_attachments": True, "supports_audio": False, "supports_documents": True, "supports_images": False},
-        {"key": "whatsapp", "name": "WhatsApp", "is_active": False, "is_default": False, "supports_text": True, "supports_attachments": True, "supports_audio": True, "supports_documents": False, "supports_images": True},
+        {"key": "whatsapp", "name": "WhatsApp", "is_active": False, "is_default": False, "supports_text": True, "supports_attachments": True, "supports_audio": True, "supports_documents": True, "supports_images": False},
         {"key": "voice", "name": "Teléfono / voz", "is_active": False, "is_default": False, "supports_text": False, "supports_attachments": False, "supports_audio": True, "supports_documents": False, "supports_images": False},
         {"key": "social", "name": "Redes sociales", "is_active": False, "is_default": False, "supports_text": True, "supports_attachments": True, "supports_audio": False, "supports_documents": False, "supports_images": True},
     ]

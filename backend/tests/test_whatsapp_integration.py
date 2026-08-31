@@ -153,6 +153,9 @@ class WhatsAppIntegrationTests(unittest.TestCase):
     def test_verification_and_signature(self):
         db = self.TenantSession()
         config = whatsapp_config(db, 1)
+        channel = db.scalar(select(InputChannel).where(InputChannel.company_id == 1, InputChannel.key == "whatsapp"))
+        self.assertTrue(channel.supports_documents)
+        self.assertFalse(channel.supports_images)
         db.close()
         self.assertTrue(verify_webhook_token(config, "verify-123"))
         self.assertFalse(verify_webhook_token(config, "wrong"))

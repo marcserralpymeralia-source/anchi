@@ -23,7 +23,7 @@ CHANNEL_DEFINITIONS = {
         "supports_attachments": True,
         "supports_audio": True,
         "supports_documents": True,
-        "supports_images": True,
+        "supports_images": False,
     },
 }
 
