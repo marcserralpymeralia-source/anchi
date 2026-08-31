@@ -32,6 +32,7 @@ from app.messages.service import upsert_inbound_message
 from app.tenancy.database import get_tenant_engine
 from app.tenancy.migrations import upgrade_tenant_schema
 from app.whatsapp.service import (
+    WhatsAppEmbeddedSignupError,
     complete_embedded_signup,
     download_whatsapp_media,
     enqueue_whatsapp_processing,
@@ -44,9 +45,11 @@ from app.whatsapp.service import (
     resolve_company_from_whatsapp_identifiers,
     verify_signature,
     verify_webhook_token,
+    whatsapp_event_has_processable_content,
     whatsapp_event_matches_config,
     whatsapp_ingress_is_ready,
     whatsapp_outbound_is_ready,
+    whatsapp_event_requires_media_download,
     whatsapp_config,
 )
 from app.workers.jobs_worker import run_worker_cycle
@@ -373,6 +376,62 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         event = parse_payload_events(payload)[0]
         self.assertFalse(event["attachments"][0]["downloadable"])
 
+    def test_unsupported_media_without_caption_does_not_enter_order_pipeline(self):
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123", "business_account_id": "ba-123"},
+                                "messages": [
+                                    {
+                                        "id": "wa-image-no-caption",
+                                        "from": "+34600000000",
+                                        "type": "image",
+                                        "image": {"id": "image-no-caption", "mime_type": "image/jpeg"},
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+
+        event = parse_payload_events(payload)[0]
+
+        self.assertIsNone(event["text_content"])
+        self.assertFalse(whatsapp_event_requires_media_download(event))
+        self.assertFalse(whatsapp_event_has_processable_content(event))
+
+    def test_media_with_caption_keeps_text_pipeline_available(self):
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123", "business_account_id": "ba-123"},
+                                "messages": [
+                                    {
+                                        "id": "wa-image-caption",
+                                        "from": "+34600000000",
+                                        "type": "image",
+                                        "image": {"id": "image-caption", "mime_type": "image/jpeg", "caption": "Consulta sobre el pedido"},
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+
+        event = parse_payload_events(payload)[0]
+
+        self.assertTrue(whatsapp_event_has_processable_content(event))
+
     def test_malformed_media_size_does_not_break_ingestion(self):
         payload = {
             "entry": [
@@ -453,6 +512,86 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertIn("Pedido 10 cajas", attachment.extracted_text or "")
         self.assertTrue(result["ready_for_processing"])
         self.assertTrue(Path(attachment.storage_path).is_file())
+        db.close()
+
+    def test_media_retry_preserves_completed_attachments(self):
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123", "business_account_id": "ba-123"},
+                                "messages": [
+                                    {
+                                        "id": "wa-media-retry-message",
+                                        "from": "+34600000000",
+                                        "type": "document",
+                                        "document": {"id": "media-retry-2", "filename": "primero.txt", "mime_type": "text/plain", "file_size": 7},
+                                    },
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+        db = self.TenantSession()
+        message = persist_event(db, 1, parse_payload_events(payload)[0])
+        db.add(
+            MessageAttachment(
+                company_id=1,
+                inbound_message_id=message.id,
+                filename="segundo.txt",
+                content_type="text/plain",
+                size_bytes=7,
+                is_pdf=False,
+                is_image=False,
+                is_audio=False,
+                extraction_status="pending",
+            )
+        )
+        db.commit()
+        media_requests = 0
+        second_media_attempts = 0
+
+        def handler(request):
+            nonlocal media_requests, second_media_attempts
+            if request.url.host == "graph.facebook.com" and request.url.path.endswith("/media-retry-2"):
+                media_requests += 1
+                if media_requests == 2 and second_media_attempts == 0:
+                    second_media_attempts += 1
+                    raise httpx.ReadTimeout("temporary timeout", request=request)
+                return httpx.Response(200, json={"url": "https://lookaside.fbsbx.com/media-retry-2", "mime_type": "text/plain", "file_size": 7})
+            if request.url.host == "lookaside.fbsbx.com":
+                return httpx.Response(200, content=b"pedido")
+            return httpx.Response(404, json={"error": {"message": "unexpected request"}})
+
+        storage_root = Path(self.tempdir.name) / "storage"
+        with patch.dict(os.environ, {"TEMP_STORAGE_DIR": str(storage_root)}):
+            async def run_download():
+                async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                    return await download_whatsapp_media(db, company_id=1, inbound_message_id=message.id, client=client)
+
+            with self.assertRaises(WhatsAppEmbeddedSignupError):
+                asyncio.run(run_download())
+
+            db.expire_all()
+            attachments = db.scalars(
+                select(MessageAttachment)
+                .where(MessageAttachment.inbound_message_id == message.id)
+                .order_by(MessageAttachment.id)
+            ).all()
+            self.assertEqual(len(attachments), 2)
+            self.assertIsNotNone(attachments[0].storage_path)
+            self.assertEqual(attachments[0].extraction_status, "extracted")
+            self.assertIsNone(attachments[1].storage_path)
+
+            result = asyncio.run(run_download())
+
+        self.assertEqual(result["downloaded"], 1)
+        self.assertEqual(result["skipped"], 1)
+        self.assertTrue(result["ready_for_processing"])
         db.close()
 
     def test_attachment_extraction_supports_text_and_docx_without_llm(self):

@@ -506,9 +506,11 @@ async def download_whatsapp_media(
                 attachment.extraction_status = "unsupported"
                 attachment.extraction_error = "Tipo de adjunto no soportado por la integración de WhatsApp."
                 skipped += 1
+                db.commit()
                 continue
             if attachment.storage_path and attachment.extraction_status in {"extracted", "no_text_found", "transcription_pending"}:
                 skipped += 1
+                db.commit()
                 continue
 
             if attachment.storage_path:
@@ -521,11 +523,13 @@ async def download_whatsapp_media(
                     skipped += 1
                     if status == "extraction_error":
                         failed += 1
+                    db.commit()
                     continue
             media_id = _meta_media_id(message, attachment)
             if not media_id:
                 _persist_media_failure(attachment, "Meta no proporcionÃ³ un identificador de media.")
                 failed += 1
+                db.commit()
                 continue
             try:
                 media_info = await _meta_request(
@@ -553,6 +557,7 @@ async def download_whatsapp_media(
                     raise
                 _persist_media_failure(attachment, str(exc))
                 failed += 1
+                db.commit()
                 continue
             filename = _safe_media_filename(attachment.filename, media_id)
             content_type = str(media_info.get("mime_type") or attachment.content_type or "application/octet-stream")[:120]
@@ -566,6 +571,7 @@ async def download_whatsapp_media(
                 _persist_storage_failure(attachment, f"No se pudo guardar el adjunto de WhatsApp: {exc}")
                 failed += 1
                 retryable_failure = True
+                db.commit()
                 continue
             attachment.filename = filename
             attachment.content_type = content_type
@@ -575,7 +581,9 @@ async def download_whatsapp_media(
             if status == "extraction_error":
                 failed += 1
             downloaded += 1
-        db.commit()
+            # Keep completed attachments durable before the next Meta request so a retry
+            # resumes from the first incomplete attachment instead of repeating work.
+            db.commit()
     finally:
         if owns_client:
             await graph_client.aclose()
@@ -1937,15 +1945,15 @@ def _extract_message_text(message: dict[str, Any]) -> str | None:
         return (message.get("text") or {}).get("body")
     if message.get("type") == "document":
         document = message.get("document") or {}
-        return document.get("caption") or document.get("filename")
+        return document.get("caption")
     if message.get("type") == "image":
         image = message.get("image") or {}
-        return image.get("caption") or "Imagen adjunta"
+        return image.get("caption")
     if message.get("type") == "audio":
-        return "Audio adjunto"
+        return (message.get("audio") or {}).get("caption")
     if message.get("type") == "video":
         video = message.get("video") or {}
-        return video.get("caption") or "Vídeo adjunto"
+        return video.get("caption")
     if message.get("type") == "revoke":
         return "Mensaje eliminado desde WhatsApp Business App"
     if message.get("type") == "edit":
@@ -2007,6 +2015,20 @@ def _message_attachments(message: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     return attachments
+
+
+def whatsapp_event_requires_media_download(event: dict[str, Any]) -> bool:
+    attachments = event.get("attachments") if isinstance(event, dict) else None
+    return any(
+        isinstance(attachment, dict) and bool(attachment.get("downloadable"))
+        for attachment in (attachments if isinstance(attachments, list) else [])
+    )
+
+
+def whatsapp_event_has_processable_content(event: dict[str, Any]) -> bool:
+    if not isinstance(event, dict) or whatsapp_event_requires_media_download(event):
+        return False
+    return bool(str(event.get("text_content") or "").strip())
 
 
 def _as_bool(value: str | None, default: bool = False) -> bool:

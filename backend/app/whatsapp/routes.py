@@ -20,6 +20,8 @@ from app.whatsapp.service import (
     resolve_company_from_slug,
     resolve_company_from_whatsapp_identifiers,
     whatsapp_event_matches_config,
+    whatsapp_event_has_processable_content,
+    whatsapp_event_requires_media_download,
     whatsapp_ingress_is_ready,
     verify_signature,
     verify_webhook_token,
@@ -83,10 +85,13 @@ async def receive_default_webhook(
             if message:
                 stored.append(message.id)
                 if event.get("kind") == "message":
-                    if any(attachment.get("downloadable") for attachment in event.get("attachments", [])):
+                    if whatsapp_event_requires_media_download(event):
                         enqueue_whatsapp_media_download(config_db, company.id, message.id)
-                    else:
+                    elif whatsapp_event_has_processable_content(event):
                         enqueue_whatsapp_processing(config_db, company.id, message.id)
+                    else:
+                        message.processing_step = "received_without_processable_content"
+                        message.processing_error = "El mensaje no contiene texto procesable ni un adjunto compatible."
             config_db.commit()
         finally:
             config_db.close()
@@ -147,10 +152,13 @@ async def receive_webhook(
             message = persist_event(config_db, company.id, event)
             stored.append(message.id if message else None)
             if message and event.get("kind") == "message":
-                if any(attachment.get("downloadable") for attachment in event.get("attachments", [])):
+                if whatsapp_event_requires_media_download(event):
                     enqueue_whatsapp_media_download(config_db, company.id, message.id)
-                else:
+                elif whatsapp_event_has_processable_content(event):
                     enqueue_whatsapp_processing(config_db, company.id, message.id)
+                else:
+                    message.processing_step = "received_without_processable_content"
+                    message.processing_error = "El mensaje no contiene texto procesable ni un adjunto compatible."
         config_db.commit()
         return {"ok": True, "company_id": company.id, "events": len(events), "stored": [item for item in stored if item is not None], "ignored": ignored}
     finally:
