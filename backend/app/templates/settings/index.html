@@ -557,7 +557,13 @@
             ("mark_doubtful_below_threshold","Marcar dudoso"),
             ("mark_no_order_if_detected","Marcar sin pedido")
           ] %}
-            <label>{{ label }}<input name="{{ field }}" type="checkbox" {% if email|attr(field) %}checked{% endif %}></label>
+            <label class="{% if field == 'always_human_review' %}checkbox-card{% endif %}">
+              {{ label }}
+              <input name="{{ field }}" type="checkbox" {% if email|attr(field) %}checked{% endif %}>
+              {% if field == "always_human_review" %}
+                <span class="muted">{{ "Activada" if email.always_human_review else "Desactivada" }}</span>
+              {% endif %}
+            </label>
           {% endfor %}
           <label>Carpeta procesados<input name="processed_folder" value="{{ email.processed_folder or '' }}" placeholder="Procesados"></label>
           <label>Carpeta errores<input name="error_folder" value="{{ email.error_folder or '' }}" placeholder="Errores"></label>
@@ -913,7 +919,11 @@
         <label>Frecuencia mínima histórico<input name="min_history_frequency" type="number" value="{{ decision.min_history_frequency }}"></label>
         <label>Frecuencia mínima producto<input name="min_product_frequency" type="number" value="{{ decision.min_product_frequency }}"></label>
         <label>Máx. líneas dudosas<input name="max_doubtful_lines" type="number" value="{{ decision.max_doubtful_lines }}"></label>
-        <label>Revisión humana<input name="always_human_review" type="checkbox" {% if decision.always_human_review %}checked{% endif %}></label>
+        <label class="checkbox-card">
+          Revisión humana
+          <input name="always_human_review" type="checkbox" {% if decision.always_human_review %}checked{% endif %}>
+          <span class="muted">{{ "Activada" if decision.always_human_review else "Desactivada" }}</span>
+        </label>
         <label>Aprobar alias automáticos<input name="auto_approve_aliases" type="checkbox" {% if decision.auto_approve_aliases %}checked{% endif %}></label>
         <label>Bloquear cliente nuevo<input name="block_new_customer" type="checkbox" {% if decision.block_new_customer %}checked{% endif %}></label>
         <label>Bloquear conflictos alias<input name="block_conflicting_aliases" type="checkbox" {% if decision.block_conflicting_aliases %}checked{% endif %}></label>
