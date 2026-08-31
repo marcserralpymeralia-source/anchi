@@ -1227,6 +1227,14 @@ def _event_timestamp(value: Any) -> datetime | None:
         return None
 
 
+def _normalize_whatsapp_address(value: Any) -> str:
+    """Canonicalize Meta phone addresses without changing other identifiers."""
+    normalized = str(value or "").strip()
+    if re.fullmatch(r"\d{6,15}", normalized):
+        return f"+{normalized}"
+    return normalized
+
+
 def _message_event(
     *,
     kind: str,
@@ -1241,11 +1249,15 @@ def _message_event(
     thread_id: str | None = None,
     sync_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    fallback_contact = contacts[0].get("wa_id") if contacts else None
-    sender = message.get("from") or (display_phone_number if direction == "outbound" else fallback_contact)
-    remote_recipient = message.get("to") or thread_id or fallback_contact
+    fallback_contact = _normalize_whatsapp_address(contacts[0].get("wa_id")) if contacts else None
+    sender = _normalize_whatsapp_address(message.get("from") or (display_phone_number if direction == "outbound" else fallback_contact))
+    remote_recipient = _normalize_whatsapp_address(message.get("to") or thread_id or fallback_contact)
     recipients = (
-        [remote_recipient] if direction == "outbound" and remote_recipient else [display_phone_number] if display_phone_number else []
+        [remote_recipient]
+        if direction == "outbound" and remote_recipient
+        else [_normalize_whatsapp_address(display_phone_number)]
+        if display_phone_number
+        else []
     )
     external_thread_id = remote_recipient if direction == "outbound" else (thread_id or sender)
     history_context = message.get("history_context") if isinstance(message.get("history_context"), dict) else {}
@@ -1316,7 +1328,9 @@ def parse_payload_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
                         "external_id": status.get("id"),
                         "external_thread_id": status.get("conversation", {}).get("id") if isinstance(status.get("conversation"), dict) else status.get("id"),
                         "sender": None,
-                        "recipients": [status.get("recipient_id")] if status.get("recipient_id") else ([display_phone_number] if display_phone_number else []),
+                        "recipients": [_normalize_whatsapp_address(status.get("recipient_id"))]
+                        if status.get("recipient_id")
+                        else ([_normalize_whatsapp_address(display_phone_number)] if display_phone_number else []),
                         "phone_number_id": phone_number_id,
                         "business_account_id": business_account_id,
                         "text_content": None,

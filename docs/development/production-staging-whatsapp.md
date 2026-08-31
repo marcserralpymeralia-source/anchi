@@ -26,7 +26,7 @@
 - `GET|POST /webhooks/whatsapp` queda como callback base y fallback para la configuracion de la aplicacion de Meta.
 - La verificacion usa un token global para el callback base y un token aleatorio cifrado por tenant para el callback asignado.
 - La firma usa `X-Hub-Signature-256` con el App Secret global, que permanece exclusivamente en servidor.
-- Los mensajes entrantes en vivo se normalizan en `InboundMessage` y `Conversation` y se encolan como `process_inbound_message` para reutilizar el pipeline comun.
+- Los mensajes entrantes en vivo se normalizan en `InboundMessage` y `Conversation` y se encolan como `process_inbound_message` para reutilizar el pipeline comun. Las direcciones telefonicas que Meta envia como `wa_id`/`from` numerico se canonizan con prefijo `+`, para que coincidan con los contactos internacionales guardados y con los destinatarios de las respuestas.
 - Los mensajes enviados desde WhatsApp Business App (`smb_message_echoes`) se guardan como salientes y nunca se procesan como pedidos nuevos.
 - El historial compartido durante el alta (`history`) se importa conservando direccion y estado, sin reejecutar pedidos antiguos. Los eventos de contactos (`smb_app_state_sync`) se reconocen y auditan sin crear clientes automaticamente.
 

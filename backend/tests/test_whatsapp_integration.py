@@ -198,6 +198,94 @@ class WhatsAppIntegrationTests(unittest.TestCase):
 
         self.assertEqual([event["external_id"] for event in events], ["wa-valid-id"])
 
+    def test_parser_normalizes_meta_wa_id_for_customer_resolution_and_replies(self):
+        payload = {
+            "entry": [
+                {
+                    "id": "ba-123",
+                    "changes": [
+                        {
+                            "field": "messages",
+                            "value": {
+                                "metadata": {
+                                    "phone_number_id": "pn-123",
+                                    "display_phone_number": "34910000000",
+                                },
+                                "contacts": [{"wa_id": "34600000000"}],
+                                "messages": [
+                                    {
+                                        "id": "wa-no-plus-1",
+                                        "from": "34600000000",
+                                        "type": "text",
+                                        "text": {"body": "Hola, envío pedido de 5 unidades de P-100."},
+                                    }
+                                ],
+                                "message_echoes": [
+                                    {
+                                        "id": "wa-no-plus-echo-1",
+                                        "to": "34600000000",
+                                        "type": "text",
+                                        "text": {"body": "Respuesta"},
+                                    }
+                                ],
+                            },
+                        }
+                    ],
+                }
+            ]
+        }
+
+        events = parse_payload_events(payload)
+        event = events[0]
+
+        self.assertEqual(event["sender"], "+34600000000")
+        self.assertEqual(event["external_thread_id"], "+34600000000")
+        self.assertEqual(event["recipients"], ["+34910000000"])
+        self.assertEqual(events[1]["recipients"], ["+34600000000"])
+
+        db = self.TenantSession()
+        message = persist_event(db, 1, event)
+        self.assertEqual(message.sender, "+34600000000")
+
+        classification = json.dumps(
+            {"tipo_correo": "pedido", "confianza": 0.97, "motivo": "Pedido claro"},
+            ensure_ascii=False,
+        )
+        extraction = json.dumps(
+            {
+                "cliente": {
+                    "nombre_detectado": "Cliente WhatsApp SL",
+                    "codigo_cliente_detectado": "C001",
+                },
+                "pedido": {
+                    "lineas": [
+                        {
+                            "texto_original": "5 unidades de P-100",
+                            "referencia_detectada": "P-100",
+                            "producto_detectado": "Producto WhatsApp",
+                            "cantidad": 5,
+                            "unidad": "uds",
+                        }
+                    ]
+                },
+            },
+            ensure_ascii=False,
+        )
+        with patch(
+            "app.agent.platform.classify_sample",
+            return_value={"ok": True, "content": classification},
+        ), patch(
+            "app.agent.platform.extract_sample",
+            return_value={"ok": True, "content": extraction},
+        ):
+            result = UnifiedOrderPipelineService().process_inbound_message(db, message)
+
+        self.assertTrue(result["ok"])
+        order = db.get(Order, result["order_id"])
+        self.assertIsNotNone(order)
+        self.assertEqual(order.customer_id, 1)
+        db.close()
+
     def test_pipeline_marks_meta_messages_as_whatsapp_source(self):
         db = self.TenantSession()
         message = upsert_inbound_message(
