@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
@@ -296,6 +297,25 @@ def _should_advance_delivery_status(current: str | None, incoming: str) -> bool:
     if current_key not in _DELIVERY_STATUS_RANK:
         return True
     return _DELIVERY_STATUS_RANK.get(incoming_key, -1) > _DELIVERY_STATUS_RANK[current_key]
+
+
+def _find_existing_whatsapp_message(db: Session, company_id: int, external_id: str) -> InboundMessage | None:
+    channel = db.scalar(
+        select(InputChannel).where(
+            InputChannel.company_id == company_id,
+            InputChannel.key == WHATSAPP_CHANNEL_KEY,
+        )
+    )
+    if not channel:
+        return None
+    return db.scalar(
+        select(InboundMessage).where(
+            InboundMessage.company_id == company_id,
+            InboundMessage.channel_id == channel.id,
+            InboundMessage.provider == WHATSAPP_PROVIDER,
+            InboundMessage.source_external_id == external_id,
+        )
+    )
 
 
 def embedded_signup_public_config(settings: Settings | None = None) -> dict[str, Any]:
@@ -1316,6 +1336,7 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
     metadata = dict(event.get("metadata") or {})
     metadata.setdefault("whatsapp", True)
     event_kind = str(event.get("kind") or "")
+    external_id = str(event.get("external_id") or "").strip()
     if event_kind in {"message", "message_echo", "history_message", "status"} and not str(event.get("external_id") or "").strip():
         # Meta IDs are the only stable deduplication key available for these
         # events. Persisting an event without one would create an orphan entry
@@ -1365,7 +1386,6 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
         )
         return None
     if event_kind == "status":
-        external_id = str(event.get("external_id") or "").strip()
         message = db.scalar(
             select(InboundMessage).where(
                 InboundMessage.company_id == company_id,
@@ -1374,34 +1394,47 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
                 InboundMessage.source_external_id == external_id,
             )
         ) if external_id else None
-        if not message:
-            message = upsert_inbound_message(
-                db,
-                company_id=company_id,
-                channel_key=WHATSAPP_CHANNEL_KEY,
-                provider=WHATSAPP_PROVIDER,
-                external_id=external_id or None,
-                sender=event.get("sender"),
-                recipients=event.get("recipients"),
-                subject="Estado WhatsApp",
-                text_content=event.get("text_content"),
-                external_thread_id=event.get("external_thread_id"),
-                metadata=metadata,
-                content_type="whatsapp_status",
-                direction="outbound",
-                received_at=event.get("occurred_at"),
-            )[0]
+        try:
+            if not message:
+                message = upsert_inbound_message(
+                    db,
+                    company_id=company_id,
+                    channel_key=WHATSAPP_CHANNEL_KEY,
+                    provider=WHATSAPP_PROVIDER,
+                    external_id=external_id or None,
+                    sender=event.get("sender"),
+                    recipients=event.get("recipients"),
+                    subject="Estado WhatsApp",
+                    text_content=event.get("text_content"),
+                    external_thread_id=event.get("external_thread_id"),
+                    metadata=metadata,
+                    content_type="whatsapp_status",
+                    direction="outbound",
+                    received_at=event.get("occurred_at"),
+                )[0]
+        except IntegrityError:
+            db.rollback()
+            existing = _find_existing_whatsapp_message(db, company_id, external_id) if external_id else None
+            if existing:
+                return existing
+            raise
         status_value = str((metadata.get("payload") or {}).get("status") or "sent").lower()
         if _should_advance_delivery_status(message.status, status_value):
             message.status = status_value
             message.processing_step = f"delivery_{status_value}"
             message.last_processed_at = datetime.now(timezone.utc)
-        db.commit()
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            existing = _find_existing_whatsapp_message(db, company_id, external_id) if external_id else None
+            if existing:
+                return existing
+            raise
         log_action(db, company_id=company_id, user=user, action="whatsapp.status_received", entity_type="inbound_message", entity_id=message.id, message=f"Estado WhatsApp recibido: {status_value}")
         return message
 
     existing_message = None
-    external_id = str(event.get("external_id") or "").strip()
     if external_id:
         existing_message = db.scalar(
             select(InboundMessage).where(
@@ -1411,48 +1444,55 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
                 InboundMessage.source_external_id == external_id,
             )
         )
-    if event_kind in {"message_echo", "history_message"}:
-        message, conversation = upsert_inbound_message(
-            db,
-            company_id=company_id,
-            channel_key=WHATSAPP_CHANNEL_KEY,
-            provider=WHATSAPP_PROVIDER,
-            external_id=event.get("external_id"),
-            sender=event.get("sender"),
-            recipients=normalize_recipients(event.get("recipients")),
-            subject="WhatsApp",
-            text_content=event.get("text_content"),
-            external_thread_id=event.get("external_thread_id"),
-            metadata=metadata,
-            content_type=event.get("message_type") or "whatsapp",
-            direction=str(event.get("direction") or "inbound"),
-            received_at=event.get("occurred_at"),
-            sent_at=event.get("occurred_at") if event.get("direction") == "outbound" else None,
-            has_attachments=bool(event.get("attachments")),
-            has_pdf=any(attachment.get("is_pdf") for attachment in event.get("attachments", [])),
-            has_audio=any(attachment.get("is_audio") for attachment in event.get("attachments", [])),
-        )
-    else:
-        normalized = NormalizedMessage(
-            company_id=company_id,
-            channel_key=WHATSAPP_CHANNEL_KEY,
-            provider=WHATSAPP_PROVIDER,
-            external_id=event.get("external_id"),
-            sender=event.get("sender"),
-            recipients=normalize_recipients(event.get("recipients")),
-            subject="WhatsApp",
-            text_content=event.get("text_content"),
-            external_thread_id=event.get("external_thread_id"),
-            metadata=metadata,
-        )
-        message, conversation = persist_normalized_message(
-            db,
-            normalized,
-            content_type=event.get("message_type") or "whatsapp",
-            has_attachments=bool(event.get("attachments")),
-            has_pdf=any(attachment.get("is_pdf") for attachment in event.get("attachments", [])),
-            has_audio=any(attachment.get("is_audio") for attachment in event.get("attachments", [])),
-        )
+    try:
+        if event_kind in {"message_echo", "history_message"}:
+            message, conversation = upsert_inbound_message(
+                db,
+                company_id=company_id,
+                channel_key=WHATSAPP_CHANNEL_KEY,
+                provider=WHATSAPP_PROVIDER,
+                external_id=event.get("external_id"),
+                sender=event.get("sender"),
+                recipients=normalize_recipients(event.get("recipients")),
+                subject="WhatsApp",
+                text_content=event.get("text_content"),
+                external_thread_id=event.get("external_thread_id"),
+                metadata=metadata,
+                content_type=event.get("message_type") or "whatsapp",
+                direction=str(event.get("direction") or "inbound"),
+                received_at=event.get("occurred_at"),
+                sent_at=event.get("occurred_at") if event.get("direction") == "outbound" else None,
+                has_attachments=bool(event.get("attachments")),
+                has_pdf=any(attachment.get("is_pdf") for attachment in event.get("attachments", [])),
+                has_audio=any(attachment.get("is_audio") for attachment in event.get("attachments", [])),
+            )
+        else:
+            normalized = NormalizedMessage(
+                company_id=company_id,
+                channel_key=WHATSAPP_CHANNEL_KEY,
+                provider=WHATSAPP_PROVIDER,
+                external_id=event.get("external_id"),
+                sender=event.get("sender"),
+                recipients=normalize_recipients(event.get("recipients")),
+                subject="WhatsApp",
+                text_content=event.get("text_content"),
+                external_thread_id=event.get("external_thread_id"),
+                metadata=metadata,
+            )
+            message, conversation = persist_normalized_message(
+                db,
+                normalized,
+                content_type=event.get("message_type") or "whatsapp",
+                has_attachments=bool(event.get("attachments")),
+                has_pdf=any(attachment.get("is_pdf") for attachment in event.get("attachments", [])),
+                has_audio=any(attachment.get("is_audio") for attachment in event.get("attachments", [])),
+            )
+    except IntegrityError:
+        db.rollback()
+        existing = _find_existing_whatsapp_message(db, company_id, external_id) if external_id else None
+        if existing:
+            return existing
+        raise
 
     message.channel_id = channel.id
     is_new_message = existing_message is None
@@ -1492,7 +1532,14 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
                     extraction_status="pending",
                 )
             )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = _find_existing_whatsapp_message(db, company_id, external_id) if external_id else None
+        if existing:
+            return existing
+        raise
     action = {
         "message_echo": "whatsapp.message_echoed",
         "history_message": "whatsapp.history_message_synced",

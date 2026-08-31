@@ -16,6 +16,7 @@ from zipfile import ZipFile
 
 import httpx
 from sqlalchemy import create_engine, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
@@ -342,6 +343,46 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertEqual(db.scalar(select(func.count()).select_from(InboundMessage)) or 0, 1)
         self.assertEqual(db.scalar(select(func.count()).select_from(BackgroundJob)) or 0, 1)
         db.close()
+
+    def test_duplicate_insert_race_reuses_existing_message(self):
+        payload = {
+            "entry": [
+                {
+                    "id": "ba-123",
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123"},
+                                "messages": [
+                                    {
+                                        "id": "wa-race-1",
+                                        "from": "+34600000000",
+                                        "type": "text",
+                                        "text": {"body": "Pedido concurrente"},
+                                    }
+                                ],
+                            }
+                        }
+                    ],
+                }
+            ]
+        }
+        event = parse_payload_events(payload)[0]
+        first_db = self.TenantSession()
+        first = persist_event(first_db, 1, event)
+        first_id = first.id
+        first_db.close()
+
+        second_db = self.TenantSession()
+        try:
+            duplicate_error = IntegrityError("INSERT", {"source_external_id": "wa-race-1"}, Exception("duplicate"))
+            with patch("app.whatsapp.service.persist_normalized_message", side_effect=duplicate_error):
+                duplicate = persist_event(second_db, 1, event)
+
+            self.assertEqual(first_id, duplicate.id)
+            self.assertEqual(second_db.scalar(select(func.count()).select_from(InboundMessage)), 1)
+        finally:
+            second_db.close()
 
     def test_repeated_media_webhook_does_not_duplicate_attachments(self):
         payload = {
