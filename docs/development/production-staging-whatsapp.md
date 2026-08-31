@@ -30,6 +30,33 @@
 - Los mensajes enviados desde WhatsApp Business App (`smb_message_echoes`) se guardan como salientes y nunca se procesan como pedidos nuevos.
 - El historial compartido durante el alta (`history`) se importa conservando direccion y estado, sin reejecutar pedidos antiguos. Los eventos de contactos (`smb_app_state_sync`) se reconocen y auditan sin crear clientes automaticamente.
 
+## Hito C
+
+- Los adjuntos permitidos de WhatsApp se descargan desde dominios de Meta, se validan por tipo y tamano, y se persisten antes de extraer su contenido.
+- Los documentos compatibles (`PDF`, `DOC`, `DOCX` y `TXT`) entran en el pipeline comun mediante `MessageAttachment`; los audios quedan almacenados y pendientes de transcripcion si no hay proveedor configurado.
+- El pipeline comun identifica WhatsApp por canal y mantiene la misma ruta de clasificacion, resolucion, score y `Order` que el resto de entradas.
+- Las respuestas manuales y automaticas usan reservas persistentes con clave de idempotencia antes de llamar a Meta. Un resultado incierto queda en `send_unknown` y no se reintenta automaticamente.
+- Las respuestas de texto respetan la ventana de conversacion; fuera de ella se exige una plantilla aprobada. Los estados `sent`, `delivered`, `read` y `failed` se reconcilian mediante los webhooks de estado.
+
+## Checklist UAT MULET
+
+Validado localmente con pruebas automatizadas:
+
+1. Verificacion de tenant, aislamiento por WABA/numero y firma HMAC.
+2. Ingesta de texto, deduplicacion, encolado y reintento del job.
+3. Descarga/persistencia de documentos y tratamiento de adjuntos no compatibles.
+4. Pipeline comun hasta resolucion de cliente/producto, score y `Order`/revision.
+5. Envio de texto, plantilla y media con idempotencia, estados de entrega y fallos seguros.
+
+Pendiente de ejecutar con la cuenta MULET real:
+
+1. Recibir un mensaje real y confirmar su aparicion en la bandeja.
+2. Recibir un documento y un audio reales y comprobar persistencia y lectura/transcripcion.
+3. Reenviar el mismo webhook y confirmar que no se duplica el mensaje ni el job.
+4. Procesar un pedido real hasta `Order`/revision y validar cliente y productos.
+5. Responder desde Anchi y confirmar en Meta el mensaje y sus estados de entrega.
+6. Repetir un fallo controlado de proveedor y comprobar que no duplica el envio.
+
 ## Configuracion de Meta
 
 1. Crear una aplicacion de tipo Business en Meta, anadir WhatsApp y habilitar Facebook Login for Business.
@@ -56,6 +83,6 @@ META_OAUTH_REDIRECT_URI=""
 
 - No se ha levantado Docker ni PostgreSQL en este entorno de trabajo.
 - La validacion PostgreSQL y la restauracion real quedan preparadas, pero no ejecutadas aqui.
-- El envio saliente de WhatsApp queda como siguiente capa natural para una iteracion posterior.
+- El envio saliente y su idempotencia ya estan implementados; falta comprobarlos contra la cuenta y los callbacks reales de MULET.
 - La elegibilidad final del numero para coexistencia la decide Meta durante Embedded Signup. El cliente debe usar una version compatible de WhatsApp Business App y aceptar, si lo desea, compartir contactos e historial.
 
