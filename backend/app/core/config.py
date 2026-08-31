@@ -312,8 +312,27 @@ class Settings(BaseSettings):
         return missing
 
     @property
+    def meta_whatsapp_embedded_signup_missing_configuration(self) -> list[str]:
+        """Return only the settings required to complete Embedded Signup.
+
+        Tenant webhooks receive a verify token generated during the signup and
+        stored with that tenant.  The global token is kept for the legacy
+        callback at ``/webhooks/whatsapp`` and must not make the tenant-scoped
+        Embedded Signup unavailable.
+        """
+        required = {
+            "META_APP_ID": self.meta_app_id,
+            "META_APP_SECRET": self.meta_app_secret,
+            "META_EMBEDDED_SIGNUP_CONFIG_ID": self.meta_embedded_signup_config_id,
+        }
+        missing = [name for name, value in required.items() if not str(value or "").strip()]
+        if not (self.app_url or "").strip().lower().startswith("https://"):
+            missing.append("APP_URL (HTTPS)")
+        return missing
+
+    @property
     def meta_whatsapp_embedded_signup_ready(self) -> bool:
-        return not self.meta_whatsapp_missing_configuration
+        return not self.meta_whatsapp_embedded_signup_missing_configuration
 
     def __repr__(self) -> str:
         parts = {

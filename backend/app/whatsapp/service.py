@@ -273,7 +273,7 @@ def embedded_signup_public_config(settings: Settings | None = None) -> dict[str,
         "graph_api_version": settings.meta_graph_api_version,
         "embedded_signup_version": settings.meta_embedded_signup_version,
         "feature_type": WHATSAPP_COEXISTENCE_FEATURE_TYPE,
-        "missing": settings.meta_whatsapp_missing_configuration,
+        "missing": settings.meta_whatsapp_embedded_signup_missing_configuration,
     }
 
 

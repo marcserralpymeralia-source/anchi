@@ -118,6 +118,21 @@ class SecurityConfigurationTests(unittest.TestCase):
         self.assertFalse(local_settings.meta_whatsapp_embedded_signup_ready)
         self.assertIn("APP_URL (HTTPS)", local_settings.meta_whatsapp_missing_configuration)
 
+    def test_embedded_signup_does_not_require_global_legacy_webhook_token(self):
+        settings = _load_settings(
+            {
+                "APP_ENV": "development",
+                "APP_URL": "https://anchi.example.com",
+                "META_APP_ID": "12345000000",
+                "META_APP_SECRET": "meta-server-secret-for-test",
+                "META_EMBEDDED_SIGNUP_CONFIG_ID": "22345000000",
+            }
+        )
+
+        self.assertTrue(settings.meta_whatsapp_embedded_signup_ready)
+        self.assertEqual(settings.meta_whatsapp_embedded_signup_missing_configuration, [])
+        self.assertIn("META_WHATSAPP_VERIFY_TOKEN", settings.meta_whatsapp_missing_configuration)
+
     def test_demo_environment_keeps_demo_bootstrap(self):
         settings = _load_settings({"APP_ENV": "demo"})
         self.assertEqual(settings.environment, "demo")
