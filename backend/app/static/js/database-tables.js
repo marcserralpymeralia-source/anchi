@@ -34,6 +34,9 @@
   }
 
   function metaFor(column) {
+    if (column.dataset.column === "table_settings") {
+      return { defaultWidth: 36, min: 36, max: 36, fixed: true };
+    }
     const fallback = Math.max(DEFAULT_MIN_WIDTH, numberFrom(column.dataset.defaultWidth, 160));
     const min = Math.max(DEFAULT_MIN_WIDTH, numberFrom(column.dataset.minWidth, DEFAULT_MIN_WIDTH));
     const max = Math.max(min, numberFrom(column.dataset.maxWidth, DEFAULT_MAX_WIDTH));
@@ -41,7 +44,7 @@
       defaultWidth: Math.max(min, Math.min(max, fallback)),
       min,
       max,
-      fixed: column.dataset.resizable === "false" || column.dataset.column === "action",
+      fixed: column.dataset.resizable === "false" || column.dataset.column === "action" || column.dataset.column === "table_settings",
     };
   }
 
@@ -68,7 +71,7 @@
   function saveWidths(table) {
     const widths = {};
     columnsFor(table).forEach((column) => {
-      if (column.dataset.column === "action") return;
+      if (column.dataset.column === "action" || column.dataset.column === "table_settings") return;
       const width = parseStoredWidth(column.style.width, column);
       if (width !== null) widths[column.dataset.column] = width;
     });
@@ -235,7 +238,7 @@
 
   function addResizeHandles(table) {
     table.querySelectorAll(".table-column-resizer").forEach((handle) => handle.remove());
-    const headers = headersFor(table);
+    const headers = headersFor(table).filter((header) => header.dataset.column !== "table_settings" && header.dataset.column !== "action");
     headers.slice(0, -1).forEach((header) => {
       const column = columnFor(table, header.dataset.column);
       if (!column || metaFor(column).fixed) return;
@@ -583,6 +586,13 @@
     });
     document.querySelectorAll("[data-context-menu-container]").forEach((root) => {
       bindContextMenu(root, ".webmail-item");
+    });
+    document.addEventListener("pointerdown", (event) => {
+      document.querySelectorAll(".column-toggle-panel[open]").forEach((panel) => {
+        if (!panel.contains(event.target)) {
+          panel.removeAttribute("open");
+        }
+      });
     });
     document.querySelectorAll("[data-table-reset]").forEach((button) => {
       if (button.dataset.tableResetBound === "true") return;

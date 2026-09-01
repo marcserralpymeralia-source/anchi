@@ -2,22 +2,8 @@
 {% set tabs = workbench["tab_counts"] %}
 <section class="workbench-shell page-section">
   <section class="workbench-queue-panel">
-    <header class="workbench-view-header page-content-header">
-      <div class="page-context">
-        <span class="page-kicker">Gestion operativa</span>
-      </div>
-      <div class="page-header-actions">
-        {% include "components/view_toggle.html" %}
-        <form method="post" action="/orders/mock" style="margin:0;">
-          <button type="submit" style="display:inline-flex;align-items:center;gap:6px;">
-            {{ icon_plus(14) }}
-            <span>{{ request.state.branding.microcopy.create_test_order }}</span>
-          </button>
-        </form>
-      </div>
-    </header>
-    <details class="workbench-filters-panel" open>
-      <summary>Filtros rápidos</summary>
+    {% include "components/view_toggle.html" %}
+    <div class="workbench-filters-panel">
       <div class="workbench-filter-controls">
       <div class="workbench-tabs">
         {% for key, label, count in [
@@ -63,7 +49,7 @@
         </form>
       </details>
       </div>
-    </details>
+    </div>
 
     <div class="work-queue">
       {% for item in workbench["items"] %}

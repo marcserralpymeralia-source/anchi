@@ -744,6 +744,14 @@ table.database-table-compact .wide-cell {
   border-bottom: 1px solid var(--line);
 }
 
+.view-toggle,
+.database-view-toggle {
+  width: fit-content !important;
+  max-width: max-content !important;
+  justify-self: start !important;
+  align-self: start !important;
+}
+
 .database-compact-head .view-toggle {
   margin-left: auto;
 }
@@ -840,4 +848,73 @@ table.database-table-compact .wide-cell {
   .column-toggle-panel > summary {
     width: 100%;
   }
+}
+
+/* Table corner settings button / column toggle */
+th.table-settings-th,
+td.table-settings-td {
+  width: 36px !important;
+  min-width: 36px !important;
+  max-width: 36px !important;
+  padding: 4px 6px !important;
+  text-align: center !important;
+  vertical-align: middle !important;
+  box-sizing: border-box !important;
+  border-left: none !important;
+}
+
+th.table-settings-th {
+  background: #f6f8f7 !important;
+  background-color: #f6f8f7 !important;
+  position: relative !important;
+  border-left: none !important;
+  border-right: none !important;
+  box-shadow: none !important;
+}
+
+.table-settings-th .column-toggle-panel {
+  position: relative !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: auto !important;
+  margin: 0 !important;
+}
+
+.table-settings-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 26px !important;
+  height: 26px !important;
+  min-height: 26px !important;
+  padding: 0 !important;
+  border-radius: 5px !important;
+  border: 1px solid transparent !important;
+  background: transparent !important;
+  color: #5f6f75 !important;
+  cursor: pointer !important;
+  transition: all 0.15s ease !important;
+  list-style: none !important;
+}
+
+.table-settings-btn::-webkit-details-marker {
+  display: none !important;
+}
+
+.table-settings-btn:hover {
+  background: #e6ece9 !important;
+  color: var(--accent, #0f766e) !important;
+  border-color: var(--line, #d4ded9) !important;
+}
+
+.table-settings-th .column-toggle-menu {
+  position: absolute !important;
+  right: 0 !important;
+  top: calc(100% + 6px) !important;
+  z-index: 100 !important;
+  text-align: left !important;
+  text-transform: none !important;
+  font-weight: normal !important;
+  letter-spacing: normal !important;
 }

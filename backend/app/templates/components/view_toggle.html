@@ -1,12 +1,11 @@
-{% from "components/icons.html" import icon_dashboard, icon_entries %}
+{% from "components/icons.html" import icon_dashboard, icon_list %}
 <nav class="view-toggle" aria-label="Vista de trabajo">
-  <span class="view-toggle-label">Vista</span>
   <a class="view-toggle-option {% if current_view == 'cards' %}is-active{% endif %}" href="{{ view_cards_url }}" {% if current_view == 'cards' %}aria-current="page"{% endif %}>
     {{ icon_dashboard(14) }}
     <span>Tarjetas</span>
   </a>
   <a class="view-toggle-option {% if current_view == 'list' %}is-active{% endif %}" href="{{ view_list_url }}" {% if current_view == 'list' %}aria-current="page"{% endif %}>
-    {{ icon_entries(14) }}
+    {{ icon_list(14) }}
     <span>Lista</span>
   </a>
 </nav>

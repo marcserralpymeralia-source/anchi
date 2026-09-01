@@ -1494,6 +1494,177 @@ table.workbench-table .wide-cell { min-width: 220px; max-width: 360px; }
 }
 
 .settings-shell { display: grid; gap: 12px; }
+/* Settings System Progress Banner (Sketch design) */
+.settings-progress-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 20px;
+  background: #ffffff;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.02);
+  margin-bottom: 2px;
+}
+
+.settings-progress-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.settings-progress-ring-wrap {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-progress-ring {
+  width: 44px;
+  height: 44px;
+  transform: rotate(-90deg);
+}
+
+.settings-progress-ring-bg {
+  fill: none;
+  stroke: #f1f5f9;
+  stroke-width: 3.4;
+}
+
+.settings-progress-ring-fg {
+  fill: none;
+  stroke: #0f766e;
+  stroke-width: 3.4;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.6s ease;
+}
+
+.settings-progress-value {
+  position: absolute;
+  font-size: 11px;
+  font-weight: 700;
+  color: #0f766e;
+  letter-spacing: -0.02em;
+}
+
+.settings-progress-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-progress-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #0f172a;
+  line-height: 1.2;
+}
+
+.settings-progress-subtitle {
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 450;
+  line-height: 1.2;
+}
+
+.settings-progress-divider {
+  width: 1px;
+  height: 30px;
+  background: var(--line, #e2e8f0);
+  flex-shrink: 0;
+  margin: 0 4px;
+}
+
+.settings-progress-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+}
+
+.settings-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.settings-status-dot.status-dot-warning {
+  background: #f59e0b;
+  box-shadow: 0 0 0 3px rgba(245, 158, 11, 0.15);
+}
+
+.settings-status-dot.status-dot-error {
+  background: #ef4444;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.15);
+}
+
+.settings-status-dot.status-dot-ok {
+  background: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.15);
+}
+
+.settings-status-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-status-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #0f172a;
+  line-height: 1.2;
+}
+
+.settings-status-subtitle {
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 450;
+  line-height: 1.2;
+}
+
+.settings-progress-action {
+  flex-shrink: 0;
+}
+
+.settings-progress-action .button {
+  background: #ffffff;
+  border: 1px solid var(--line, #e2e8f0);
+  color: #0f172a;
+  font-weight: 500;
+  font-size: 12px;
+  padding: 6px 14px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.settings-progress-action .button:hover {
+  background: #f8fafc;
+  border-color: #cbd5e1;
+}
+
+@media (max-width: 768px) {
+  .settings-progress-banner {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .settings-progress-divider {
+    display: none;
+  }
+}
+
 .settings-header { display: flex; justify-content: space-between; align-items: center; gap: 14px; padding: 14px 16px; }
 .settings-title { display: grid; gap: 8px; }
 .settings-title h2 { margin: 0; font-size: 22px; }
@@ -1502,9 +1673,193 @@ table.workbench-table .wide-cell { min-width: 220px; max-width: 360px; }
 .settings-status-pill.status-doubtful { background: #ffedd5; color: #9a3412; }
 .settings-status-pill.status-error { background: #fee2e2; color: #991b1b; }
 .settings-header-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+.settings-top-bar {
+  display: flex !important;
+  justify-content: flex-start !important;
+  align-items: center !important;
+  width: 100% !important;
+  margin-bottom: 4px !important;
+}
+.settings-search-wrap {
+  position: relative !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  width: 320px !important;
+  max-width: 100% !important;
+  margin-left: 0 !important;
+  margin-right: auto !important;
+}
+.settings-search-wrap .ui-icon,
+.settings-search-wrap .settings-search-icon {
+  position: absolute !important;
+  left: 10px !important;
+  top: 50% !important;
+  transform: translateY(-50%) !important;
+  color: var(--muted, #64748b) !important;
+  pointer-events: none !important;
+  z-index: 2 !important;
+}
+.settings-search-wrap input {
+  width: 100% !important;
+  height: 34px !important;
+  min-height: 34px !important;
+  padding: 0 12px 0 32px !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 8px !important;
+  background: #ffffff !important;
+  font-size: 13px !important;
+  color: var(--text, #0f172a) !important;
+  transition: all 0.15s ease !important;
+  box-sizing: border-box !important;
+  margin: 0 !important;
+}
+.settings-search-wrap input:focus {
+  outline: none !important;
+  border-color: var(--accent, #0f766e) !important;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.1) !important;
+}
 .settings-search { display: grid; gap: 4px; min-width: min(320px, 48vw); }
 .settings-search input { min-height: 36px; }
 .settings-checklist { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; padding: 12px; }
+/* Checklist Panel */
+.settings-checklist-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: #ffffff;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 10px;
+  padding: 16px 20px;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.02);
+  margin-bottom: 4px;
+}
+
+.settings-checklist-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line, #e2e8f0);
+}
+
+.settings-checklist-head-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-checklist-title {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.settings-checklist-subtitle {
+  font-size: 12px;
+  color: #64748b;
+}
+
+
+.settings-checklist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 10px;
+}
+
+.checklist-item-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 8px;
+  background: #f8fafc;
+  transition: all 0.15s ease;
+}
+
+.checklist-item-card:hover {
+  background: #ffffff;
+  border-color: #cbd5e1;
+}
+
+.checklist-item-card.pending {
+  background: #fffbeb;
+  border-color: #fef3c7;
+}
+
+.checklist-item-card.pending:hover {
+  background: #fffdf5;
+  border-color: #fde68a;
+}
+
+.checklist-item-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.checklist-badge-icon {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.checklist-badge-icon.is-done {
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.checklist-badge-icon.is-pending {
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.checklist-pulse-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f59e0b;
+}
+
+.checklist-item-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.checklist-item-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #0f172a;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.checklist-item-hint {
+  font-size: 11px;
+  color: #64748b;
+}
+
+.checklist-item-right {
+  flex-shrink: 0;
+}
+
+.checklist-item-right .button {
+  font-size: 11.5px;
+  padding: 4px 10px;
+  border-radius: 6px;
+}
+
 .check-step { display: grid; gap: 4px; border: 1px solid var(--line); border-radius: 8px; padding: 10px 11px; background: white; min-height: 72px; }
 .check-step strong { font-size: 13px; line-height: 1.25; }
 .check-step span { color: var(--muted); font-size: 12px; }
@@ -3750,7 +4105,7 @@ form.stack, .stack { gap: 9px; }
 }
 
 .page-kicker {
-  display: block;
+  display: none;
   margin: 0;
   color: var(--text);
   font-size: 15px;
@@ -3784,6 +4139,10 @@ form.stack, .stack { gap: 9px; }
   display: inline-flex;
   align-items: center;
   gap: 3px;
+  width: fit-content;
+  max-width: max-content;
+  justify-self: start;
+  align-self: start;
   min-width: max-content;
   padding: 3px;
   border: 1px solid var(--line);

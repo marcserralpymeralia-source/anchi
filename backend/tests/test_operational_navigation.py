@@ -111,6 +111,7 @@ class OperationalNavigationTests(unittest.TestCase):
             with performance_test_client(fixture) as client:
                 products = client.get("/products")
                 customers = client.get("/customers?view=list")
+                customer_knowledge = client.get("/customers?view=knowledge&status=all&page=1")
 
             self.assertEqual(products.status_code, 200)
             self.assertIn("<span>Nuevo producto</span>", products.text)
@@ -133,6 +134,14 @@ class OperationalNavigationTests(unittest.TestCase):
             self.assertIn(">Localidad<", customers.text)
             self.assertIn("data-table__actions", customers.text)
             self.assertNotIn("<span>Importación</span>", customers.text)
+
+            self.assertEqual(customer_knowledge.status_code, 200)
+            self.assertIn("database-compact-page", customer_knowledge.text)
+            self.assertIn("database-compact-toolbar", customer_knowledge.text)
+            self.assertIn('id="customers-knowledge-filter-form"', customer_knowledge.text)
+            self.assertIn("Más filtros", customer_knowledge.text)
+            self.assertIn("knowledge-folder-grid", customer_knowledge.text)
+            self.assertNotIn('class="panel stack compact-filter-panel"', customer_knowledge.text)
         finally:
             fixture.cleanup()
 

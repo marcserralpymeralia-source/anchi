@@ -268,13 +268,13 @@ def build_settings_dashboard(db: Session, user: TenantUser, metrics: dict, llm: 
     progress = round((configured * 100) / len(visible_modules)) if visible_modules else 0
     module_map = {module["key"]: module for module in modules}
     checklist = [
-        {"label": "Empresa e identidad básica", "state": "done" if module_map.get("general", {}).get("state") == "ready" and module_map.get("identity", {}).get("state") in ("ready", "warning") else "pending"},
-        {"label": "Canal de entrada conectado", "state": "done" if module_map.get("channels", {}).get("state") == "ready" else "pending"},
-        {"label": "Agente IA configurado", "state": "done" if module_map.get("ai", {}).get("state") in ("ready", "warning") else "pending"},
-        {"label": "Clientes y productos cargados", "state": "done" if module_map.get("customers-products", {}).get("state") in ("ready", "warning") else "pending"},
-        {"label": "Scoring definido", "state": "done" if module_map.get("scoring", {}).get("state") == "ready" else "pending"},
-        {"label": "Motor de decisión activo", "state": "done" if module_map.get("decision", {}).get("state") in ("ready", "warning") else "pending"},
-        {"label": "Exportación configurada", "state": "done" if module_map.get("export", {}).get("state") == "ready" else "pending"},
+        {"key": "general", "label": "Empresa e identidad básica", "state": "done" if module_map.get("general", {}).get("state") == "ready" and module_map.get("identity", {}).get("state") in ("ready", "warning") else "pending", "open_settings": "general"},
+        {"key": "channels", "label": "Canal de entrada conectado", "state": "done" if module_map.get("channels", {}).get("state") == "ready" else "pending", "url": "/settings/channels"},
+        {"key": "ai", "label": "Agente IA configurado", "state": "done" if module_map.get("ai", {}).get("state") in ("ready", "warning") else "pending", "open_settings": "ai"},
+        {"key": "customers-products", "label": "Clientes y productos cargados", "state": "done" if module_map.get("customers-products", {}).get("state") in ("ready", "warning") else "pending", "url": "/products"},
+        {"key": "scoring", "label": "Scoring definido", "state": "done" if module_map.get("scoring", {}).get("state") == "ready" else "pending", "open_settings": "scoring"},
+        {"key": "decision", "label": "Motor de decisión activo", "state": "done" if module_map.get("decision", {}).get("state") in ("ready", "warning") else "pending", "open_settings": "decision"},
+        {"key": "export", "label": "Exportación configurada", "state": "done" if module_map.get("export", {}).get("state") == "ready" else "pending", "open_settings": "export"},
     ]
     return {
         "progress": progress,

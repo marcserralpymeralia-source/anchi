@@ -43,25 +43,10 @@
 {%- endmacro %}
 
 <section class="database-compact-page">
-  <header class="database-compact-head page-content-header">
-    <div class="page-context">
-      <span class="page-kicker">{{ "Histórico operativo" if archived_view else "Gestión operativa" }}</span>
-    </div>
-    {% if archived_view %}
-      <span class="database-archive-view-label">Solo pedidos archivados</span>
-    {% else %}
-      <div class="page-header-actions">
-        {% set current_view = "list" %}
-        {% include "components/view_toggle.html" %}
-        <form method="post" action="/orders/mock" style="margin:0;">
-          <button type="submit" style="display:inline-flex;align-items:center;gap:6px;">
-            {{ icon_plus(14) }}
-            <span>{{ request.state.branding.microcopy.create_test_order }}</span>
-          </button>
-        </form>
-      </div>
-    {% endif %}
-  </header>
+  {% if not archived_view %}
+    {% set current_view = "list" %}
+    {% include "components/view_toggle.html" %}
+  {% endif %}
 
   <div class="orders-compact-toolbar">
     <form class="orders-filter-form-row" method="get" action="/orders" id="orders-main-filter-form">
@@ -179,6 +164,14 @@
     </details>
 
     <span class="database-compact-count">{{ pagination.total_items }} {{ "archivados" if archived_view else "pedidos" }}</span>
+    {% if not archived_view %}
+      <form method="post" action="/orders/mock" style="margin:0;display:inline-flex;">
+        <button type="submit" class="compact-button" style="display:inline-flex;align-items:center;gap:6px;">
+          {{ icon_plus(14) }}
+          <span>{{ request.state.branding.microcopy.create_test_order }}</span>
+        </button>
+      </form>
+    {% endif %}
   </div>
 
   {# Active Filter Pills #}

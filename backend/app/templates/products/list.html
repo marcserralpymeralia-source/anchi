@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_edit, icon_filter, icon_plus %}
+{% from "components/icons.html" import icon_edit, icon_filter, icon_plus, icon_sliders %}
 {% set title = "Productos" %}
 {% block head_extra %}<link rel="stylesheet" href="{{ asset_url('database-compact.css') }}"><script src="{{ asset_url('js/database-tables.js') }}" defer></script>{% endblock %}
 {% block content %}
@@ -42,14 +42,6 @@
 </section>
 {% endif %}
 <section class="database-compact-page">
-  <header class="database-compact-head page-content-header">
-    <div class="page-context">
-      <span class="page-kicker">Catalogo de productos</span>
-    </div>
-    <div class="page-header-actions">
-      <button type="button" onclick="document.getElementById('create-product').showModal()">{{ icon_plus(14) }} <span>Nuevo producto</span></button>
-    </div>
-  </header>
 
   <div class="database-compact-toolbar">
     <form class="database-compact-filter-form" method="get" action="/products" id="products-main-filter-form">
@@ -104,28 +96,9 @@
         </form>
       </div>
     </details>
-    <details class="column-toggle-panel">
-      <summary class="button secondary compact-button">Columnas</summary>
-      <div class="column-toggle-menu" data-table-key="productsCompact">
-        {% for key, label, checked in [
-          ("name","Producto", true),
-          ("reference","Referencia", true),
-          ("sale_unit","Unidad", true),
-          ("price","Precio", true),
-          ("status","Estado", true),
-          ("family","Familia", false),
-          ("aliases","Alias", false),
-          ("customers","Clientes", false),
-          ("description_cont","Descripción larga", false),
-          ("supplier","Proveedor", false),
-          ("last_import","Última importación", false),
-          ("notes","Observaciones", false)
-        ] %}
-          <label class="column-toggle-item"><input type="checkbox" data-column-checkbox="{{ key }}" {% if checked %}checked{% endif %}> <span>{{ label }}</span></label>
-        {% endfor %}
-      </div>
-    </details>
+
     <span class="database-compact-count">{{ pagination.total_items }} productos</span>
+    <button type="button" class="compact-button" onclick="document.getElementById('create-product').showModal()">{{ icon_plus(14) }} <span>Nuevo producto</span></button>
   </div>
 
 <div class="database-table-wrap">
@@ -143,6 +116,7 @@
     <col data-column="supplier" data-default-width="190" data-min-width="140" data-max-width="400">
     <col data-column="last_import" data-default-width="160" data-min-width="126" data-max-width="320">
     <col data-column="notes" data-default-width="260" data-min-width="180" data-max-width="640">
+    <col data-column="table_settings" data-resizable="false" data-default-width="36" data-min-width="36" data-max-width="36" class="table-settings-col">
   </colgroup>
   <thead>
     <tr>
@@ -158,6 +132,31 @@
       {{ render_sort_th("supplier", "Proveedor", "supplier_asc", "supplier_desc") }}
       {{ render_sort_th("last_import", "Última importación", "created_asc", "created_desc") }}
       {{ render_sort_th("notes", "Observaciones", "notes_asc", "notes_desc") }}
+      <th class="table-settings-th" data-column="table_settings">
+        <details class="column-toggle-panel table-column-toggle-panel">
+          <summary class="table-settings-btn" title="Configurar columnas" aria-label="Configurar columnas">
+            {{ icon_sliders(14) }}
+          </summary>
+          <div class="column-toggle-menu" data-table-key="productsCompact">
+            {% for key, label, checked in [
+              ("name","Producto", true),
+              ("reference","Referencia", true),
+              ("sale_unit","Unidad", true),
+              ("price","Precio", true),
+              ("status","Estado", true),
+              ("family","Familia", false),
+              ("aliases","Alias", false),
+              ("customers","Clientes", false),
+              ("description_cont","Descripción larga", false),
+              ("supplier","Proveedor", false),
+              ("last_import","Última importación", false),
+              ("notes","Observaciones", false)
+            ] %}
+              <label class="column-toggle-item"><input type="checkbox" data-column-checkbox="{{ key }}" {% if checked %}checked{% endif %}> <span>{{ label }}</span></label>
+            {% endfor %}
+          </div>
+        </details>
+      </th>
     </tr>
   </thead>
   <tbody>
@@ -191,9 +190,10 @@
       <td data-column="supplier" class="cell-ellipsis" title="{{ product.usual_supplier or '—' }}">{{ product.usual_supplier or "—" }}</td>
       <td data-column="last_import">{{ stats.last_import or (product.created_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M")) }}</td>
       <td data-column="notes" class="cell-ellipsis" title="{{ product.notes or '—' }}">{{ (product.notes or "—")[:120] }}</td>
+      <td data-column="table_settings" class="table-settings-td"></td>
     </tr>
   {% else %}
-    <tr><td colspan="12" class="muted">No hay productos para los filtros seleccionados.</td></tr>
+    <tr><td colspan="13" class="muted">No hay productos para los filtros seleccionados.</td></tr>
   {% endfor %}
   </tbody>
 </table>
@@ -271,6 +271,7 @@
     const apply = () => {
       const visible = checkboxes.filter((checkbox) => checkbox.checked).map((checkbox) => checkbox.dataset.columnCheckbox);
       visible.push("action");
+      visible.push("table_settings");
       localStorage.setItem(storageKey, JSON.stringify(visible));
       table.querySelectorAll("[data-column]").forEach((cell) => { cell.hidden = !visible.includes(cell.dataset.column); });
     };

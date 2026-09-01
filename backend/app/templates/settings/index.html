@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "components/icons.html" import icon_search %}
 {% set title = "Configuración" %}
 {% macro state_label(state) -%}
   {%- if state == "ready" -%}Configurado
@@ -10,31 +11,110 @@
 {%- endmacro %}
 {% block content %}
 <section class="settings-shell">
-  <header class="settings-header page-section-header">
-    <div class="settings-title">
-      <span class="page-kicker">Preferencias del sistema</span>
-      <span class="settings-status-pill {{ 'status-confirmed' if dashboard.errors == 0 else 'status-doubtful' if dashboard.pending else 'status-error' }}">
-        {{ dashboard.progress }}% completa · {{ dashboard.configured }} módulos configurados · {{ dashboard.pending }} pendientes{% if dashboard.errors %} · {{ dashboard.errors }} bloqueados{% endif %}
-      </span>
+  <div class="settings-top-bar">
+    <div class="settings-search-wrap">
+      {{ icon_search(15, "settings-search-icon") }}
+      <input id="settings-search" type="search" placeholder="Buscar ajuste..." aria-label="Buscar ajuste">
     </div>
-    <div class="settings-header-actions">
-      <label class="settings-search">
-        <span class="muted">Buscar ajuste</span>
-        <input id="settings-search" type="search" placeholder="Buscar ajuste...">
-      </label>
-      <span class="badge">{{ user.name }} · {{ user.role.name }}</span>
-      <form method="post" action="/logout"><button class="secondary compact-button">Salir</button></form>
-    </div>
-  </header>
+  </div>
 
-  <section class="settings-checklist">
-    {% for step in dashboard.checklist %}
-      <article class="check-step {{ step.state }}">
-        <span class="check-dot"></span>
-        <strong>{{ step.label }}</strong>
-        <span>{{ "Hecho" if step.state == "done" else "Pendiente" }}</span>
-      </article>
-    {% endfor %}
+  {# Progress Banner based on user sketch #}
+  <article class="settings-progress-banner">
+    <div class="settings-progress-main">
+      <div class="settings-progress-ring-wrap">
+        <svg class="settings-progress-ring" viewBox="0 0 36 36">
+          <path class="settings-progress-ring-bg"
+            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+          />
+          <path class="settings-progress-ring-fg"
+            stroke-dasharray="{{ dashboard.progress }}, 100"
+            d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+          />
+        </svg>
+        <span class="settings-progress-value">{{ dashboard.progress }}%</span>
+      </div>
+      <div class="settings-progress-info">
+        <strong class="settings-progress-title">Configuración del sistema</strong>
+        <span class="settings-progress-subtitle">{{ dashboard.progress }}% completa</span>
+      </div>
+    </div>
+
+    <div class="settings-progress-divider" aria-hidden="true"></div>
+
+    <div class="settings-progress-status">
+      <span class="settings-status-dot {% if dashboard.errors > 0 %}status-dot-error{% elif dashboard.pending > 0 %}status-dot-warning{% else %}status-dot-ok{% endif %}"></span>
+      <div class="settings-status-info">
+        <strong class="settings-status-title">
+          {% if dashboard.pending > 0 %}
+            {{ dashboard.pending }} pendiente{% if dashboard.pending != 1 %}s{% endif %}
+          {% elif dashboard.errors > 0 %}
+            {{ dashboard.errors }} con error
+          {% else %}
+            Todo completado
+          {% endif %}
+        </strong>
+        <span class="settings-status-subtitle">
+          {% if dashboard.pending > 0 or dashboard.errors > 0 %}
+            Requieren atención
+          {% else %}
+            Sin acciones pendientes
+          {% endif %}
+        </span>
+      </div>
+    </div>
+
+    <div class="settings-progress-action">
+      <button type="button" class="button secondary compact-button" onclick="togglePendingChecklist()" id="btn-toggle-pending">
+        Ver pendientes
+      </button>
+    </div>
+  </article>
+
+  {# Detailed Checklist Panel #}
+  <section class="settings-checklist-panel" id="settings-checklist-section" style="display: none;">
+    <div class="settings-checklist-header">
+      <div class="settings-checklist-head-info">
+        <h4 class="settings-checklist-title">Estado de los requisitos del sistema</h4>
+        <span class="settings-checklist-subtitle">
+          {% if dashboard.pending > 0 %}
+            {{ dashboard.pending }} de {{ dashboard.checklist|length }} requisitos requieren atención
+          {% else %}
+            Todos los {{ dashboard.checklist|length }} requisitos están configurados
+          {% endif %}
+        </span>
+      </div>
+    </div>
+
+    <div class="settings-checklist-grid">
+      {% for step in dashboard.checklist %}
+        <div class="checklist-item-card {{ step.state }}" data-step-state="{{ step.state }}">
+          <div class="checklist-item-left">
+            <span class="checklist-badge-icon {{ 'is-done' if step.state == 'done' else 'is-pending' }}">
+              {% if step.state == "done" %}
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              {% else %}
+                <span class="checklist-pulse-dot"></span>
+              {% endif %}
+            </span>
+            <div class="checklist-item-content">
+              <strong class="checklist-item-title">{{ step.label }}</strong>
+              <span class="checklist-item-hint">{{ "Configurado" if step.state == "done" else "Pendiente de configurar" }}</span>
+            </div>
+          </div>
+          <div class="checklist-item-right">
+            {% if step.open_settings %}
+              <button type="button" class="button secondary compact-button" data-open-settings="{{ step.open_settings }}">
+                {{ "Editar" if step.state == "done" else "Configurar" }}
+              </button>
+            {% elif step.url %}
+              <a href="{{ step.url }}" class="button secondary compact-button">
+                {{ "Ver" if step.state == "done" else "Abrir" }}
+              </a>
+            {% endif %}
+          </div>
+        </div>
+      {% endfor %}
+    </div>
   </section>
 
   <section class="settings-modules">
@@ -1066,6 +1146,20 @@
 </dialog>
 
 <script>
+  function togglePendingChecklist() {
+    const checklist = document.getElementById("settings-checklist-section");
+    const btn = document.getElementById("btn-toggle-pending");
+    if (!checklist) return;
+    const isHidden = checklist.style.display === "none";
+    checklist.style.display = isHidden ? "flex" : "none";
+    if (btn) {
+      btn.textContent = isHidden ? "Ocultar pendientes" : "Ver pendientes";
+    }
+    if (isHidden) {
+      checklist.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+  }
+
   const settingsSearch = document.getElementById("settings-search");
   if (settingsSearch) {
     settingsSearch.addEventListener("input", () => {
