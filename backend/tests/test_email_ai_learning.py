@@ -27,6 +27,7 @@ from app.db.database import Base  # noqa: E402
 from app.db.models import Email, EmailAttachment, EmailSettings, LLMSettings, MessageAttachment, PromptExecution, PromptTemplate, PromptVersion  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import EmailSyncState, MasterCompany  # noqa: E402
+from app.agent.model_catalog import LEGACY_OPENAI_MODEL_FALLBACK  # noqa: E402
 from app.agent.prompt_runtime import run_prompt_execution, validate_prompt_output  # noqa: E402
 import app.settings.integrations as integrations  # noqa: E402
 from app.settings.integrations import backfill_imap_emails, preview_initial_imap_sync, read_latest_imap_emails, run_initial_imap_sync  # noqa: E402
@@ -191,7 +192,7 @@ class EmailAiLearningTests(unittest.TestCase):
 
         def fake_provider(settings, messages, model):  # noqa: ANN001
             calls["count"] += 1
-            self.assertEqual(model, "gpt-4.1-mini")
+            self.assertEqual(model, "gpt-5.6-luna")
             self.assertTrue(messages[1]["content"].startswith("Pedido"))
             return {
                 "ok": True,
@@ -216,6 +217,50 @@ class EmailAiLearningTests(unittest.TestCase):
         executions = db.scalars(select(PromptExecution)).all()
         self.assertEqual(len(executions), 1)
         self.assertEqual(executions[0].output_status, "valid")
+        db.close()
+
+    def test_extraction_prompt_uses_legacy_runtime_fallback_when_setting_is_blank(self):
+        db = self.TenantSession()
+        db.add(
+            LLMSettings(
+                company_id=1,
+                provider="openai",
+                api_key_encrypted=encrypt_secret("dummy-key"),
+                extraction_model="",
+                classification_model="gpt-4.1-mini",
+                validation_model="gpt-4.1-mini",
+            )
+        )
+        db.commit()
+
+        calls = {"count": 0}
+
+        def fake_provider(settings, messages, model):  # noqa: ANN001
+            calls["count"] += 1
+            self.assertEqual(model, LEGACY_OPENAI_MODEL_FALLBACK)
+            self.assertTrue(messages[1]["content"].startswith("Pedido"))
+            return {
+                "ok": True,
+                "content": '{"pedido":{"lineas":[{"texto_original":"10 cajas","producto_detectado":"Producto demo","cantidad":10,"unidad":"cajas","confianza_extraccion":0.9}]}}',
+                "usage": {"prompt_tokens": 11, "completion_tokens": 5, "estimated_cost": 0.0015},
+            }
+
+        result = run_prompt_execution(
+            db,
+            1,
+            "extraction",
+            db.scalar(select(LLMSettings).where(LLMSettings.company_id == 1)),
+            "Pedido urgente de 10 unidades.",
+            provider_call=fake_provider,
+            input_reference="mail-2",
+        )
+
+        self.assertTrue(result["validation_ok"])
+        self.assertEqual(result["prompt_purpose"], "extraction")
+        self.assertEqual(calls["count"], 1)
+        executions = db.scalars(select(PromptExecution)).all()
+        self.assertEqual(len(executions), 1)
+        self.assertEqual(executions[0].model, LEGACY_OPENAI_MODEL_FALLBACK)
         db.close()
 
     def test_backfill_imap_updates_checkpoint_and_deduplicates(self):

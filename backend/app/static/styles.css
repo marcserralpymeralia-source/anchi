@@ -1536,6 +1536,10 @@ table.workbench-table .wide-cell { min-width: 220px; max-width: 360px; }
 .compact-backfill-form input { min-width: 0; }
 .drawer-card { display: grid; gap: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: white; }
 .drawer-card h4, .drawer-card h5 { margin: 0; }
+.model-preview-card { display: grid; gap: 2px; padding: 10px 11px; border: 1px solid var(--line); border-radius: 8px; background: #f8fafb; }
+.model-preview-card strong { font-size: 14px; }
+.model-preview-card span,
+.model-preview-card small { color: var(--muted); font-size: 12px; }
 .drawer-subsection { border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; background: #f8fafb; }
 .drawer-subsection summary { cursor: pointer; font-weight: 800; }
 .settings-kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }

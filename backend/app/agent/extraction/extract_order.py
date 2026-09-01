@@ -7,6 +7,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
+from app.agent.model_catalog import DEFAULT_OPENAI_MODEL
 from app.agent.extraction.prompts import ORDER_EXTRACTION_SYSTEM_PROMPT
 from app.agent.extraction.schema import (
     ORDER_EXTRACTION_SCHEMA_VERSION,
@@ -18,7 +19,7 @@ from app.agent.extraction.schema import (
 )
 
 
-DEFAULT_ORDER_EXTRACTION_MODEL = "gpt-4.1-mini"
+DEFAULT_ORDER_EXTRACTION_MODEL = DEFAULT_OPENAI_MODEL
 
 
 class OrderExtractionError(RuntimeError):

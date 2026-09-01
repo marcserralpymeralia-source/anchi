@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, LEGACY_OPENAI_MODEL_FALLBACK, resolve_openai_model_choice, resolve_openai_runtime_model
 from app.core.config import get_settings
 from app.core.encryption import mask_secret
 from app.db.models import AuditLog, BackgroundJob, BrandingSettings, Company, Customer, DecisionSettings, Email, EmailSettings, ExportSettings, FTPSettings, InputChannel, InboundMessage, LLMSettings, Order, Product, PromptTemplate, PromptVersion, ScoringSettings
@@ -82,7 +83,7 @@ def build_settings_dashboard(db: Session, user: TenantUser, metrics: dict, llm: 
         state("general", "General", "ready" if company and company.name else "pending", f"{company.name if company else 'Sin empresa'} · {(company.currency or 'EUR') if company else 'EUR'} · {('activa' if company and company.active else 'inactiva')}", "Editar"),
         state("identity", "Identidad", "ready" if branding.app_name and (branding.logo_url or branding.dark_logo_url) else "warning" if branding.app_name else "pending", f"{branding.app_name} · {branding.secondary_claim or 'sin claim secundario'}", "Editar"),
         state("channels", "Canales", "ready" if active_channels_count else "pending", f"{active_channels_count} canal activo" if active_channels_count == 1 else f"{active_channels_count} canales activos", "Abrir"),
-        state("ai", "Agente IA", "ready" if llm.provider != "disabled" and llm.api_key_encrypted and llm.last_test_ok is not False else "warning" if llm.api_key_encrypted else "pending", f"{llm.provider or 'sin proveedor'} · {llm.classification_model} · {llm.last_test_message or 'sin prueba reciente'}", "Editar"),
+        state("ai", "Agente IA", "ready" if llm.provider != "disabled" and llm.api_key_encrypted and llm.last_test_ok is not False else "warning" if llm.api_key_encrypted else "pending", f"{llm.provider or 'sin proveedor'} · {resolve_openai_runtime_model(llm.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK)} · {llm.last_test_message or 'sin prueba reciente'}", "Editar"),
         state("customers-products", "Clientes y productos", "ready" if customer_count and product_count else "warning" if customer_count or product_count else "pending", f"{customer_count} clientes · {product_count} productos", "Abrir"),
         state("scoring", "Confianza y automatización", "ready", f"Alta confianza desde {scoring.safe_threshold}% · auto-confirmar {'sí' if llm.allow_auto_confirm else 'no'}", "Editar"),
         state("decision", "Motor de decisión", "ready" if decision.enable_exact_match else "warning", f"Prioridad {decision.exact_priority} a {decision.llm_priority} · modo {decision.learning_mode}", "Configurar"),
@@ -239,9 +240,15 @@ async def update_settings_section_async(section: str, request: Request, db: Sess
         ]
         for field in bool_fields:
             form.setdefault(field, "off")
+        extracted_model = resolve_openai_model_choice(
+            form.get("extraction_model_mode"),
+            form.get("extraction_model_custom"),
+            form.get("extraction_model") or resolve_openai_runtime_model(instance.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK),
+        )
+        form["extraction_model"] = extracted_model
         if form.get("use_same_model_for_all") == "on":
-            model = form.get("classification_model") or instance.classification_model
-            form["extraction_model"] = model
+            model = extracted_model or form.get("classification_model") or instance.classification_model or DEFAULT_OPENAI_MODEL
+            form["classification_model"] = model
             form["validation_model"] = model
         update_with_form(instance, form, {"api_key_encrypted"})
         if instance.provider == "disabled" or instance.agent_mode == "desactivado":

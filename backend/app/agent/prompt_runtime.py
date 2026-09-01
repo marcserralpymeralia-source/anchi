@@ -11,6 +11,7 @@ from typing import Any, Callable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, LEGACY_OPENAI_MODEL_FALLBACK, resolve_openai_runtime_model
 from app.db.models import PromptExecution, PromptTemplate, PromptVersion
 
 
@@ -65,7 +66,7 @@ PROMPT_REGISTRY: dict[str, dict[str, Any]] = {
     "extraction": {
         "name": "Extraccion de pedido",
         "purpose": "extraction",
-        "default_model": "gpt-4.1-mini",
+        "default_model": LEGACY_OPENAI_MODEL_FALLBACK,
         "default_parameters": {"temperature": 0.1, "max_tokens": 2400},
         "expected_schema": {
             "type": "object",
@@ -115,7 +116,7 @@ def resolve_prompt_definition(db: Session, company_id: int, purpose: str) -> Pro
         name=(template.name if template else str(spec.get("name") or purpose.title())),
         purpose=purpose,
         content=content,
-        default_model=str(spec.get("default_model") or "gpt-4.1-mini"),
+        default_model=str(spec.get("default_model") or LEGACY_OPENAI_MODEL_FALLBACK),
         default_parameters=dict(spec.get("default_parameters") or {}),
         expected_schema=dict(spec.get("expected_schema") or {}),
         input_limit=int(spec.get("input_limit") or 12000),
@@ -134,7 +135,7 @@ def prompt_registry_snapshot(db: Session, company_id: int) -> list[dict[str, Any
                 "name": template.name,
                 "purpose": template.purpose,
                 "version": version.version if version else 0,
-                "model": spec.get("default_model", "gpt-4.1-mini"),
+                "model": spec.get("default_model", LEGACY_OPENAI_MODEL_FALLBACK),
                 "parameters": dict(spec.get("default_parameters") or {}),
                 "expected_schema": dict(spec.get("expected_schema") or {}),
             }
@@ -281,7 +282,11 @@ def run_prompt_execution(
     definition = resolve_prompt_definition(db, company_id, purpose)
     prompt_text = prompt_override or definition.content
     prompt_name = prompt_name_override or definition.name
-    model = getattr(settings, "classification_model" if purpose == "classification" else "extraction_model", None) or definition.default_model
+    configured_model = getattr(settings, "classification_model" if purpose == "classification" else "extraction_model", None)
+    if purpose == "extraction":
+        model = resolve_openai_runtime_model(configured_model, fallback=definition.default_model)
+    else:
+        model = configured_model or definition.default_model
     messages = [
         {"role": "system", "content": prompt_text},
         {"role": "user", "content": text[: definition.input_limit]},

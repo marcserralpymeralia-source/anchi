@@ -14,6 +14,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.agent.extraction import OrderExtractionInput, OrderExtractionResult, extract_order
+from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, LEGACY_OPENAI_MODEL_FALLBACK, resolve_openai_runtime_model
 from app.core.channel_identity import inbound_channel_key
 from app.core.encryption import decrypt_secret
 from app.db.models import (
@@ -1705,7 +1706,7 @@ class UnifiedOrderPipelineService:
             {
                 "source": "legacy_extraction",
                 "schemaVersion": None,
-                "model": settings.extraction_model or "gpt-4.1-mini",
+                "model": resolve_openai_runtime_model(settings.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK),
                 "structuredFallbackReason": structured_error,
             },
         )
@@ -1721,7 +1722,7 @@ class UnifiedOrderPipelineService:
                     sourceType=self._source_type_for_extraction(inbound_message),
                     sourceId=str(inbound_message.id) if inbound_message and inbound_message.id else None,
                 ),
-                model=settings.extraction_model or "gpt-4.1-mini",
+                model=resolve_openai_runtime_model(settings.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK),
                 api_key=decrypt_secret(settings.api_key_encrypted),
                 base_url=settings.base_url or "https://api.openai.com/v1",
                 timeout_seconds=settings.timeout_seconds,
@@ -1747,7 +1748,7 @@ class UnifiedOrderPipelineService:
                     sourceType=self._source_type_for_extraction(inbound_message),
                     sourceId=str(inbound_message.id) if inbound_message and inbound_message.id else None,
                 ),
-                model=settings.extraction_model or "gpt-4.1-mini",
+                model=resolve_openai_runtime_model(settings.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK),
                 api_key=decrypt_secret(settings.api_key_encrypted),
                 base_url=settings.base_url or "https://api.openai.com/v1",
                 timeout_seconds=settings.timeout_seconds,
