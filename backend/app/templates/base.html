@@ -6,8 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title or app_settings.app_name }}</title>
   {% if request.state.branding.favicon_url %}<link rel="icon" href="{{ request.state.branding.favicon_url }}">{% endif %}
-  <link rel="stylesheet" href="/static/styles.css?v=31">
-  <script src="/static/js/database-tables.js?v=4" defer></script>
+  <link rel="stylesheet" href="/static/styles.css?v=32">
+  <script src="/static/js/database-tables.js?v=6" defer></script>
   {% block head_extra %}{% endblock %}
   <style>{{ branding_css_vars(request.state.branding)|safe }}</style>
 </head>

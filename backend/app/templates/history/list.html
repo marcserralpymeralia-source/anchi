@@ -65,7 +65,7 @@
   </header>
 
   {# Master-Detail Split Workspace #}
-  <main id="webmail-workspace" class="webmail-workspace {% if selected_email or selected_order %}has-split-view{% endif %}">
+  <main id="webmail-workspace" class="webmail-workspace {% if selected_email or selected_order %}has-split-view{% endif %}" data-context-menu-container>
     {# Left Pane: Mail & Order List #}
     {% include "history/_list_pane.html" %}
 

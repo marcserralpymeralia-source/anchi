@@ -308,17 +308,24 @@
       ["line", {x1: "14", y1: "11", x2: "14", y2: "17"}],
     ],
     archive: [
-      ["path", {d: "M3 6h18"}],
-      ["path", {d: "M5 6v14h14V6"}],
-      ["path", {d: "M9 10h6"}],
-      ["path", {d: "m9 3 1 3h4l1-3"}],
+      ["rect", {width: "20", height: "5", x: "2", y: "3", rx: "1"}],
+      ["path", {d: "M4 8v11a2 2 0 0 0 2 2h12"}],
+      ["path", {d: "M20 8v11a2 2 0 0 1-2 2h-2"}],
+      ["path", {d: "M10 12h4"}],
+    ],
+    star: [
+      ["path", {d: "m12 3 2.78 5.63 6.22.9-4.5 4.39 1.06 6.2L12 17.2l-5.56 2.92 1.06-6.2-4.5-4.39 6.22-.9L12 3z"}],
+    ],
+    mail: [
+      ["rect", {x: "3", y: "5", width: "18", height: "14", rx: "2"}],
+      ["path", {d: "m3 7 9 6 9-6"}],
     ],
     "archive-restore": [
-      ["path", {d: "M3 6h18"}],
-      ["path", {d: "M5 6v14h14V6"}],
-      ["path", {d: "M9 10h6"}],
-      ["path", {d: "m12 17-3-3 3-3"}],
-      ["path", {d: "M9 14h6"}],
+      ["rect", {width: "20", height: "5", x: "2", y: "3", rx: "1"}],
+      ["path", {d: "M4 8v11a2 2 0 0 0 2 2h2"}],
+      ["path", {d: "M20 8v11a2 2 0 0 1-2 2h-2"}],
+      ["path", {d: "m9 15 3-3 3 3"}],
+      ["path", {d: "M12 12v9"}],
     ],
     copy: [
       ["rect", {width: "14", height: "14", x: "8", y: "8", rx: "2"}],
@@ -375,6 +382,8 @@
     const normalized = cleanActionLabel(label).toLocaleLowerCase();
     if (normalized.includes("desarchiv")) return "archive-restore";
     if (normalized.includes("archiv")) return "archive";
+    if (normalized.includes("favorit")) return "star";
+    if (normalized.includes("leíd") || normalized.includes("leido")) return "mail";
     if (normalized.includes("elimin") || normalized.includes("borr")) return "trash-2";
     if (normalized.includes("duplic") || normalized.includes("copi")) return "copy";
     if (normalized.includes("editar") || normalized === "edición" || normalized === "edicion") return "pencil";
@@ -524,14 +533,14 @@
     return true;
   }
 
-  function bindContextMenu(table) {
-    if (table.dataset.contextMenuBound === "true") return;
-    table.dataset.contextMenuBound = "true";
-    table.addEventListener("contextmenu", (event) => {
+  function bindContextMenu(root, rowSelector) {
+    if (root.dataset.contextMenuBound === "true") return;
+    root.dataset.contextMenuBound = "true";
+    root.addEventListener("contextmenu", (event) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
-      const row = target.closest("tbody tr");
-      if (!row || row.closest("table") !== table) return;
+      const row = target.closest(rowSelector);
+      if (!row || !root.contains(row)) return;
       if (openContextMenu(event, row)) {
         event.preventDefault();
         event.stopPropagation();
@@ -562,7 +571,7 @@
   function bindTable(table) {
     if (!columnsFor(table).length) return;
     initializeLayout(table);
-    bindContextMenu(table);
+    bindContextMenu(table, "tbody tr");
 
     const observer = new MutationObserver(() => refreshLayout(table));
     observer.observe(table, {subtree: true, attributes: true, attributeFilter: ["hidden"]});
@@ -571,7 +580,12 @@
 
   document.addEventListener("DOMContentLoaded", () => {
     bindGlobalContextMenuEvents();
-    document.querySelectorAll("table[data-resizable-table]").forEach(bindTable);
+    document.querySelectorAll("table[data-resizable-table]").forEach((table) => {
+      bindTable(table);
+    });
+    document.querySelectorAll("[data-context-menu-container]").forEach((root) => {
+      bindContextMenu(root, ".webmail-item");
+    });
     document.querySelectorAll("[data-table-reset]").forEach((button) => {
       if (button.dataset.tableResetBound === "true") return;
       button.dataset.tableResetBound = "true";

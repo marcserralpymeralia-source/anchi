@@ -646,68 +646,6 @@ table.database-table-compact .wide-cell {
   box-sizing: border-box;
 }
 
-.table-context-menu {
-  position: fixed;
-  z-index: 1000;
-  display: grid;
-  gap: 2px;
-  min-width: 190px;
-  max-width: min(280px, calc(100vw - 16px));
-  max-height: min(420px, calc(100vh - 16px));
-  overflow: auto;
-  padding: 6px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #ffffff;
-  box-shadow: 0 14px 32px rgba(15, 23, 42, .16);
-}
-
-.table-context-menu[hidden] {
-  display: none;
-}
-
-.table-context-menu__item {
-  display: flex !important;
-  align-items: center;
-  gap: 10px;
-  justify-content: flex-start !important;
-  width: 100% !important;
-  min-height: 32px;
-  padding: 7px 10px !important;
-  border: 0 !important;
-  border-radius: 6px !important;
-  background: transparent !important;
-  box-shadow: none !important;
-  color: var(--text) !important;
-  font-size: 12px;
-  font-weight: 650;
-  line-height: 1.2;
-  text-align: left;
-  white-space: normal;
-  cursor: pointer;
-}
-
-.table-context-menu__icon {
-  flex: 0 0 16px;
-  color: var(--muted, #64748b);
-}
-
-.table-context-menu__label {
-  min-width: 0;
-}
-
-.table-context-menu__item:hover,
-.table-context-menu__item:focus-visible {
-  background: #eef6f3 !important;
-  color: var(--accent-dark, #0f766e) !important;
-  outline: 0;
-}
-
-.table-context-menu__item:hover .table-context-menu__icon,
-.table-context-menu__item:focus-visible .table-context-menu__icon {
-  color: currentColor;
-}
-
 .database-table-compact tbody tr.context-menu-active > td {
   background: #f1f8f5;
 }

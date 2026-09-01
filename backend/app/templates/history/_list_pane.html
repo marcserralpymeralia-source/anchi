@@ -28,6 +28,20 @@
         data-item-kind="{{ item.kind }}"
         onclick="openMailDetail('{{ item.kind }}', '{{ real_id }}', this)"
       >
+        <div class="row-context-actions" hidden>
+          <button type="button" aria-label="Abrir" onclick="event.stopPropagation(); openMailDetail('{{ item.kind }}', '{{ real_id }}', this.closest('.webmail-item'))">Abrir</button>
+          {% if email_id %}
+            <form class="js-loading-form" method="post" action="/mail/{{ email_id }}/favorite">
+              <button type="submit" aria-label="{% if item.is_favorite %}Quitar de favoritos{% else %}Añadir a favoritos{% endif %}">{% if item.is_favorite %}Quitar de favoritos{% else %}Añadir a favoritos{% endif %}</button>
+            </form>
+            <form class="js-loading-form" method="post" action="/mail/{{ email_id }}/mark-read">
+              <button type="submit" aria-label="Marcar como leído" {% if item.is_read %}hidden{% endif %}>Marcar como leído</button>
+            </form>
+            <form class="js-loading-form" method="post" action="/mail/{{ email_id }}/archive" data-confirm="¿Archivar este correo?">
+              <button type="submit" aria-label="Archivar">Archivar</button>
+            </form>
+          {% endif %}
+        </div>
         {% if email_id %}
           <div class="webmail-item-controls" onclick="event.stopPropagation();">
             <input class="webmail-item-select" type="checkbox" value="{{ email_id }}" aria-label="Seleccionar correo {{ item.title or item.subject or email_id }}" onchange="toggleMailSelection(this)" onclick="event.stopPropagation();">
