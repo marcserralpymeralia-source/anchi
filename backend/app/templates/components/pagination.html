@@ -9,7 +9,7 @@
     <a class="button secondary {% if not pagination.has_next %}disabled{% endif %}" href="{{ page_url(request, pagination.total_pages or 1) }}">Ultima</a>
     <form method="get" action="{{ request.url.path }}" class="page-size-form">
       {% for key, value in request.query_params.items() %}
-        {% if key not in ["page", "page_size"] and value %}
+        {% if key not in ["page", "page_size", "partial"] and value %}
           <input type="hidden" name="{{ key }}" value="{{ value }}">
         {% endif %}
       {% endfor %}

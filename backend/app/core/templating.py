@@ -10,6 +10,7 @@ from starlette.background import BackgroundTask
 from starlette.responses import HTMLResponse
 from starlette.templating import _TemplateResponse
 
+from app.core.assets import versioned_asset_url
 from app.core.performance import performance_profiling_enabled, record_template_render
 from app.core.timezones import DEFAULT_TIMEZONE, format_local_datetime, resolve_timezone_name
 
@@ -93,7 +94,7 @@ def status_class(value: str | None) -> str:
 
 
 def page_url(request: Request, page: int | None = None, page_size: int | None = None) -> str:
-    params = dict(request.query_params)
+    params = {key: value for key, value in request.query_params.items() if key != "partial"}
     if page is not None:
         params["page"] = str(page)
     if page_size is not None:
@@ -241,3 +242,4 @@ templates.env.filters["local_dt"] = format_local_datetime
 templates.env.filters["status_label"] = status_label
 templates.env.filters["status_class"] = status_class
 templates.env.globals["page_url"] = page_url
+templates.env.globals["asset_url"] = versioned_asset_url

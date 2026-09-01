@@ -1,0 +1,80 @@
+{% from "components/icons.html" import icon_paperclip, icon_star %}
+<section class="webmail-list-pane">
+  <div class="webmail-list-header">
+    <div class="webmail-list-header-main">
+      <label class="webmail-select-all" title="Seleccionar todos los correos de esta página">
+        <input id="mail-select-all" type="checkbox" aria-label="Seleccionar todos los correos de esta página" onchange="toggleAllMailSelection(this)">
+      </label>
+      <span class="muted">Bandeja de mensajes ({{ pagination.start_item }}-{{ pagination.end_item }} de {{ pagination.total_items }})</span>
+      <span id="mail-async-status" class="webmail-async-status" role="status" aria-live="polite" hidden></span>
+    </div>
+    <form id="mail-bulk-form" class="webmail-bulk-toolbar" method="post" action="/mail/bulk-action" hidden onsubmit="return handleMailBulkSubmit(event, this)">
+      <span aria-live="polite"><strong id="mail-selected-count">0</strong> seleccionados</span>
+      <div class="webmail-bulk-actions">
+        <button type="submit" name="action" value="mark_read" class="button secondary compact-button">Marcar leído</button>
+        <button type="submit" name="action" value="archive" class="button secondary compact-button" onclick="return confirm('¿Archivar los correos seleccionados?')">Archivar</button>
+      </div>
+    </form>
+  </div>
+  <div class="webmail-list-body" role="list">
+    {% for item in items %}
+      {% set real_id = item.id.split('-')[-1] if ('-' in item.id|string) else item.id %}
+      {% set email_id = item.email_id if item.email_id else none %}
+      {% set item_is_selected = (selected_id and (selected_id|string == real_id|string) and (selected_kind == item.kind)) %}
+      <article
+        class="webmail-item {% if item_is_selected %}is-active-row{% endif %} {% if not item.is_read %}is-unread{% endif %}"
+        role="listitem"
+        data-item-id="{{ real_id }}"
+        data-item-kind="{{ item.kind }}"
+        onclick="openMailDetail('{{ item.kind }}', '{{ real_id }}', this)"
+      >
+        {% if email_id %}
+          <div class="webmail-item-controls" onclick="event.stopPropagation();">
+            <input class="webmail-item-select" type="checkbox" value="{{ email_id }}" aria-label="Seleccionar correo {{ item.title or item.subject or email_id }}" onchange="toggleMailSelection(this)" onclick="event.stopPropagation();">
+            <form class="webmail-favorite-form" method="post" action="/mail/{{ email_id }}/favorite" onsubmit="return handleMailFavoriteSubmit(event, this)">
+              <button type="submit" class="webmail-favorite-button {% if item.is_favorite %}is-favorite{% endif %}" title="{% if item.is_favorite %}Quitar de favoritos{% else %}Añadir a favoritos{% endif %}" aria-label="{% if item.is_favorite %}Quitar de favoritos{% else %}Añadir a favoritos{% endif %}" onclick="event.stopPropagation();">
+                {{ icon_star(16) }}
+              </button>
+            </form>
+          </div>
+        {% endif %}
+        <div class="webmail-item-main">
+          <div class="webmail-item-top">
+            <strong class="webmail-item-sender">{{ item.customer_name or item.sender or "Remitente desconocido" }}</strong>
+            <span class="webmail-item-time">{{ item.date | local_dt(tenant_timezone, "%d %b %H:%M", "--") }}</span>
+          </div>
+          <div class="webmail-item-subject">
+            {{ item.title or item.subject or "(Sin asunto)" }}
+          </div>
+          <div class="webmail-item-bottom">
+            <div class="webmail-item-tags">
+              <span class="badge {% if item.kind == 'order' %}{{ item.order_status|status_class }}{% else %}{{ item.agent_status|status_class }}{% endif %}">
+                {{ item.order_status_label if item.kind == 'order' else item.agent_status_label }}
+              </span>
+              {% if item.kind == 'order' %}
+                <span class="badge status-confirmed">Pedido #{{ real_id }}</span>
+              {% endif %}
+              {% if item.score is not none %}
+                <span class="score-badge">{{ "%.0f"|format(item.score) }}%</span>
+              {% endif %}
+              {% if item.has_pdf %}
+                <span class="badge">PDF</span>
+              {% elif item.has_attachments %}
+                <span class="badge">{{ icon_paperclip(12) }}</span>
+              {% endif %}
+            </div>
+            <span class="webmail-open-hint">Abrir &rarr;</span>
+          </div>
+        </div>
+      </article>
+    {% else %}
+      <div class="webmail-empty-list">
+        <p class="muted">No hay mensajes ni pedidos para los filtros seleccionados.</p>
+      </div>
+    {% endfor %}
+  </div>
+
+  <div class="webmail-list-footer">
+    {% include "components/pagination.html" %}
+  </div>
+</section>

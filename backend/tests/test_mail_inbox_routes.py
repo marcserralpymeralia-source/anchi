@@ -43,6 +43,8 @@ class MailInboxRoutesTests(unittest.TestCase):
         expected = {
             ("/mail", ("GET",)),
             ("/mail/{email_id}", ("GET",)),
+            ("/mail/bulk-action", ("POST",)),
+            ("/mail/{email_id}/favorite", ("POST",)),
             ("/mail/{email_id}/process", ("POST",)),
             ("/cron/email-sync", ("GET", "POST")),
             ("/cron/jobs", ("GET", "POST")),
@@ -94,12 +96,80 @@ class MailInboxRoutesTests(unittest.TestCase):
             with performance_test_client(fixture) as client:
                 inbox = client.get("/mail", follow_redirects=False)
                 detail = client.get(f"/mail/{email_id}")
+                dashboard_fragment = client.get("/?partial=workbench", headers={"X-Requested-With": "fetch"})
 
             self.assertEqual(inbox.status_code, 303)
             self.assertEqual(inbox.headers["location"], "/")
             self.assertEqual(detail.status_code, 200)
             self.assertIn("Detalle de correo", detail.text)
             self.assertNotIn("Internal Server Error", detail.text)
+            self.assertEqual(dashboard_fragment.status_code, 200)
+            self.assertIn('class="workbench-shell', dashboard_fragment.text)
+            self.assertNotIn("<!doctype html>", dashboard_fragment.text.lower())
+        finally:
+            fixture.cleanup()
+
+    def test_mail_read_favorite_and_bulk_actions_update_selected_emails(self):
+        fixture = build_performance_fixture("small")
+        SessionLocal = _tenant_session(fixture.tenant_path)
+        try:
+            with SessionLocal() as db:
+                email_ids = db.scalars(
+                    select(Email.id)
+                    .where(Email.company_id == fixture.company_id)
+                    .order_by(Email.id)
+                    .limit(2)
+                ).all()
+            self.assertEqual(len(email_ids), 2)
+
+            with performance_test_client(fixture) as client:
+                favorite = client.post(
+                    f"/mail/{email_ids[0]}/favorite",
+                    headers={"referer": "/history"},
+                    follow_redirects=False,
+                )
+                favorite_async = client.post(
+                    f"/mail/{email_ids[0]}/favorite",
+                    headers={"X-Requested-With": "fetch", "Accept": "application/json"},
+                )
+                pane = client.get(f"/history/pane/email/{email_ids[0]}")
+                bulk_read = client.post(
+                    "/mail/bulk-action",
+                    data={"action": "mark_read", "email_ids": [str(email_ids[0]), str(email_ids[1])]},
+                    headers={"referer": "/history"},
+                    follow_redirects=False,
+                )
+                bulk_archive = client.post(
+                    "/mail/bulk-action",
+                    data={"action": "archive", "email_ids": [str(email_ids[0]), str(email_ids[1])]},
+                    headers={"referer": "/history"},
+                    follow_redirects=False,
+                )
+                fragment = client.get(
+                    "/history?partial=list",
+                    headers={"X-Requested-With": "fetch", "Accept": "text/html"},
+                )
+
+            self.assertEqual(favorite.status_code, 303)
+            self.assertEqual(favorite_async.status_code, 200)
+            self.assertFalse(favorite_async.json()["is_favorite"])
+            self.assertEqual(pane.status_code, 200)
+            self.assertEqual(bulk_read.status_code, 303)
+            self.assertEqual(bulk_archive.status_code, 303)
+            self.assertEqual(fragment.status_code, 200)
+            self.assertIn('class="webmail-list-pane"', fragment.text)
+            self.assertNotIn("<!doctype html>", fragment.text.lower())
+
+            with SessionLocal() as db:
+                first, second = [db.get(Email, email_id) for email_id in email_ids]
+                self.assertIsNotNone(first)
+                self.assertIsNotNone(second)
+                assert first is not None and second is not None
+                self.assertFalse(first.is_favorite)
+                self.assertTrue(first.is_read)
+                self.assertTrue(second.is_read)
+                self.assertTrue(first.archived)
+                self.assertTrue(second.archived)
         finally:
             fixture.cleanup()
 

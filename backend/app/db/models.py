@@ -932,6 +932,7 @@ class Email(Base):
     agent_status: Mapped[str] = mapped_column(String(80), default="not_processed")
     detected_type: Mapped[str | None] = mapped_column(String(80))
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_favorite: Mapped[bool] = mapped_column(Boolean, default=False)
     archived: Mapped[bool] = mapped_column(Boolean, default=False)
     has_attachments: Mapped[bool] = mapped_column(Boolean, default=False)
     has_pdf: Mapped[bool] = mapped_column(Boolean, default=False)

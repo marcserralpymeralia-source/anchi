@@ -381,6 +381,9 @@ def order_workbench_item(order: Order, settings: ScoringSettings, *, include_lin
         "channel": channel_label(channel_key),
         "email_id": order.email_id,
         "order_id": order.id,
+        # An order without a linked email is not an unread email.
+        "is_read": True if order.email is None else bool(order.email.is_read),
+        "is_favorite": bool(order.email and getattr(order.email, "is_favorite", False)),
         "received_at": order.email.received_at if order.email else order.created_at,
         "from_email": order_sender(order),
         "sender_domain": _safe_sender_domain(order_sender(order) if order.email else None),
@@ -424,6 +427,8 @@ def email_workbench_item(email: Email) -> dict:
         "channel_key": "email",
         "email_id": email.id,
         "order_id": None,
+        "is_read": bool(getattr(email, "is_read", False)),
+        "is_favorite": bool(getattr(email, "is_favorite", False)),
         "received_at": email.received_at,
         "channel": "Email",
         "from_email": email.sender,

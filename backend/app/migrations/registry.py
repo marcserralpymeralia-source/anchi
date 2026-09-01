@@ -200,6 +200,7 @@ TENANT_COMPAT_COLUMNS = {
         "imap_uidvalidity": "VARCHAR(120)",
         "imap_uid": "VARCHAR(120)",
         "is_read": "BOOLEAN DEFAULT false",
+        "is_favorite": "BOOLEAN DEFAULT false",
         "archived": "BOOLEAN DEFAULT false",
         "has_attachments": "BOOLEAN DEFAULT false",
         "has_pdf": "BOOLEAN DEFAULT false",
@@ -818,6 +819,10 @@ def _apply_tenant_order_archiving(engine, dry_run: bool) -> list[str]:  # noqa: 
     return ensure_columns(engine, "orders", {"archived": "BOOLEAN DEFAULT false"}, dry_run=dry_run)
 
 
+def _apply_tenant_email_favorites(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    return ensure_columns(engine, "emails", {"is_favorite": "BOOLEAN DEFAULT false"}, dry_run=dry_run)
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -866,6 +871,12 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant order archiving",
         checksum=checksum_text("tenant", "order_archiving", "orders", "archived"),
         upgrade=_apply_tenant_order_archiving,
+    ),
+    MigrationSpec(
+        version="2026.09.01.1",
+        name="tenant email favorites",
+        checksum=checksum_text("tenant", "email_favorites", "emails", "is_favorite"),
+        upgrade=_apply_tenant_email_favorites,
     ),
 ]
 

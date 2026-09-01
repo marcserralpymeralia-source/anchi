@@ -1185,8 +1185,13 @@ tbody tr:hover { background: var(--table-row-hover); }
 .brand { display: flex; flex-direction: column; justify-content: center; min-width: 0; margin: 0; font-size: 18px; font-weight: 700; line-height: 1.2; }
 .brand span { line-height: 1; font-size: 18px; font-weight: 700; color: #ffffff; }
 .brand small { color: var(--sidebar-muted, #8ea6a3); font-size: 11px; font-weight: 500; margin-top: 2px; }
-.sidebar-toggle { width: 36px; min-width: 36px; height: 36px; min-height: 36px; padding: 0; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; color: #172026; background: #e8eef0; border: none; cursor: pointer; flex-shrink: 0; transition: all 0.15s ease; }
-.sidebar-toggle:hover { background: #dbe2e6; color: #0f172a; }
+.sidebar-toggle { position: relative; width: 36px; min-width: 36px; height: 36px; min-height: 36px; padding: 0; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; color: #172026; background: #e8eef0; border: none; cursor: pointer; flex-shrink: 0; transition: background 0.18s ease, color 0.18s ease, transform 0.15s ease; overflow: hidden; }
+.sidebar-toggle:hover { background: #dbe2e6; color: #0f172a; transform: translateY(-1px); }
+.sidebar-toggle:active { transform: translateY(0) scale(0.95); }
+.sidebar-toggle .icon-chevron,
+.sidebar-toggle .icon-menu { position: absolute; top: 50%; left: 50%; width: 18px; height: 18px; margin-top: -9px; margin-left: -9px; transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.22s ease; will-change: transform, opacity; }
+.sidebar-toggle .icon-chevron { opacity: 1; transform: rotate(0deg) scale(1); }
+.sidebar-toggle .icon-menu { opacity: 0; transform: rotate(-90deg) scale(0.4); pointer-events: none; }
 .nav { display: flex; flex-direction: column; gap: 4px; }
 .nav a { display: flex; align-items: center; gap: 10px; height: 36px; min-height: 36px; padding: 0 10px; border-radius: 8px; color: #d8e7e5; font-size: 13px; font-weight: 500; transition: all 0.15s ease; text-decoration: none; box-sizing: border-box; }
 .nav a:hover { background: rgba(255, 255, 255, 0.08); color: #ffffff; }
@@ -1199,6 +1204,8 @@ tbody tr:hover { background: var(--table-row-hover); }
 .sidebar-collapsed .nav-label { display: none !important; }
 .sidebar-collapsed .brand-row { width: 100%; display: flex; justify-content: center; align-items: center; margin-bottom: 18px; min-height: 36px; gap: 0; padding: 0; }
 .sidebar-collapsed .sidebar-toggle { width: 36px; min-width: 36px; height: 36px; min-height: 36px; border-radius: 8px; margin: 0 auto; flex-shrink: 0; }
+.sidebar-collapsed .sidebar-toggle .icon-chevron { opacity: 0; transform: rotate(90deg) scale(0.4); pointer-events: none; }
+.sidebar-collapsed .sidebar-toggle .icon-menu { opacity: 1; transform: rotate(0deg) scale(1); }
 .sidebar-collapsed .nav { width: 100%; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 0; margin: 0; }
 .sidebar-collapsed .nav a { width: 36px; min-width: 36px; height: 36px; min-height: 36px; padding: 0; border-radius: 8px; display: flex; align-items: center; justify-content: center; margin: 0 auto; box-sizing: border-box; flex-shrink: 0; }
 .sidebar-collapsed .nav-icon { width: 22px; min-width: 22px; height: 22px; margin: 0; display: inline-flex; align-items: center; justify-content: center; }
@@ -3027,6 +3034,58 @@ form.stack, .stack { gap: 9px; }
   min-width: 0;
   overflow: hidden;
   background: #ffffff;
+  position: relative;
+}
+
+.webmail-list-pane.is-refreshing {
+  opacity: .68;
+  pointer-events: none;
+}
+
+.webmail-list-pane.is-refreshing::after,
+.workbench-shell.is-refreshing::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 22px;
+  height: 22px;
+  margin: -11px 0 0 -11px;
+  border: 3px solid color-mix(in srgb, var(--accent, #0f766e) 22%, transparent);
+  border-top-color: var(--accent, #0f766e);
+  border-radius: 50%;
+  animation: anchi-spin .7s linear infinite;
+  z-index: 20;
+}
+
+.webmail-async-status {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.webmail-async-status.is-error {
+  color: #b42318;
+}
+
+.loading-spinner {
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  border: 2px solid color-mix(in srgb, currentColor 24%, transparent);
+  border-top-color: currentColor;
+  border-radius: 50%;
+  animation: anchi-spin .7s linear infinite;
+  vertical-align: middle;
+}
+
+.loading-spinner-inline {
+  width: 13px;
+  height: 13px;
+  border-width: 2px;
+}
+
+@keyframes anchi-spin {
+  to { transform: rotate(360deg); }
 }
 
 .webmail-split-resizer {
@@ -3095,6 +3154,99 @@ form.stack, .stack { gap: 9px; }
   flex-shrink: 0;
 }
 
+.webmail-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.webmail-list-header-main,
+.webmail-bulk-toolbar,
+.webmail-bulk-actions,
+.webmail-item-controls,
+.webmail-favorite-form {
+  display: flex;
+  align-items: center;
+}
+
+.webmail-list-header-main {
+  gap: 8px;
+  min-width: 0;
+}
+
+.webmail-select-all,
+.webmail-item-controls {
+  flex: 0 0 auto;
+}
+
+.webmail-select-all {
+  display: inline-flex;
+  align-items: center;
+}
+
+.webmail-select-all input,
+.webmail-item-select {
+  width: 16px !important;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent, #0f766e);
+}
+
+.webmail-bulk-toolbar {
+  gap: 10px;
+}
+
+.webmail-bulk-toolbar[hidden] {
+  display: none;
+}
+
+.webmail-bulk-toolbar > span {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.webmail-bulk-actions {
+  gap: 6px;
+}
+
+.webmail-item-controls {
+  gap: 6px;
+  padding-top: 1px;
+}
+
+.webmail-favorite-form {
+  margin: 0;
+}
+
+.webmail-favorite-button {
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 5px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+}
+
+.webmail-favorite-button:hover,
+.webmail-favorite-button:focus-visible {
+  background: #fffbeb;
+  color: #b7791f;
+  outline: none;
+}
+
+.webmail-favorite-button.is-favorite {
+  color: #d18b00;
+}
+
+.webmail-favorite-button.is-favorite .ui-icon {
+  fill: currentColor;
+}
+
 .webmail-list-body {
   flex: 1;
   overflow-y: auto;
@@ -3157,11 +3309,15 @@ form.stack, .stack { gap: 9px; }
 
 .webmail-item-sender {
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 450;
   color: #1e293b;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.webmail-item.is-unread .webmail-item-sender {
+  font-weight: 650;
 }
 
 .webmail-item-time {
@@ -3183,6 +3339,10 @@ form.stack, .stack { gap: 9px; }
 .webmail-item.is-unread .webmail-item-subject {
   color: #0f172a;
   font-weight: 600;
+}
+
+.webmail-item:not(.is-unread) .webmail-item-subject {
+  font-weight: 400;
 }
 
 .webmail-item-bottom {
@@ -3217,6 +3377,18 @@ form.stack, .stack { gap: 9px; }
   border-top: 1px solid var(--line);
   background: #ffffff;
   flex-shrink: 0;
+}
+
+@media (max-width: 680px) {
+  .webmail-list-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .webmail-bulk-toolbar {
+    justify-content: space-between;
+    width: 100%;
+  }
 }
 
 .webmail-detail-pane {
@@ -3699,6 +3871,12 @@ form.stack, .stack { gap: 9px; }
 /* Bandeja follows the same flat page rhythm as the list views. */
 .workbench-shell {
   gap: 12px;
+  position: relative;
+}
+
+.workbench-shell.is-refreshing {
+  opacity: .68;
+  pointer-events: none;
 }
 
 .workbench-shell > .workbench-queue-panel {
@@ -4017,6 +4195,29 @@ form.stack, .stack { gap: 9px; }
 .channel-chat-placeholder { display: grid; place-content: center; justify-items: center; gap: 8px; min-height: 100%; padding: 30px; text-align: center; }
 .channel-chat-placeholder h3 { margin: 4px 0 0; font-size: 16px; }
 .channel-chat-placeholder p { max-width: 300px; margin: 0; font-size: 12px; line-height: 1.45; }
+
+/* Native checks and radios must not inherit the full-size form-control box. */
+input[type="checkbox"],
+input[type="radio"] {
+  box-sizing: border-box;
+  width: 16px !important;
+  height: 16px;
+  min-height: 16px !important;
+  margin: 0;
+  padding: 0 !important;
+  flex: 0 0 auto;
+  accent-color: var(--accent, #0f766e);
+}
+
+/* These controls are intentionally visually hidden and must remain so. */
+.quick-chip input[type="checkbox"],
+.quick-chip input[type="radio"] {
+  width: auto !important;
+  height: auto;
+  min-height: 0 !important;
+  padding: 0 !important;
+}
+
 @media (max-width: 880px) {
   .channel-inbox-workspace { grid-template-columns: minmax(235px, 300px) minmax(0, 1fr); }
   .channel-chat-message { width: min(88%, 650px); }

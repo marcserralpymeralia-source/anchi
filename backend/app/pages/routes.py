@@ -334,6 +334,7 @@ def root_page(
     sender: str = "",
     search: str = "",
     reason: str = "",
+    partial: str = "",
     page: int = 1,
     page_size: int = 25,
     db: Session = Depends(get_tenant_db),
@@ -365,6 +366,7 @@ def root_page(
         sender=sender,
         search=search,
         reason=reason,
+        partial=partial,
         page=page,
         page_size=page_size,
         db=db,
@@ -399,6 +401,7 @@ def dashboard(
     sender: str = "",
     search: str = "",
     reason: str = "",
+    partial: str = "",
     page: int = 1,
     page_size: int = 25,
     db: Session = Depends(get_tenant_db),
@@ -440,8 +443,9 @@ def dashboard(
     if workbench["items"]:
         featured_process_item = _normalize_featured_process_item(workbench["items"][0])
 
+    template_name = "dashboard/_workbench.html" if partial == "workbench" else "dashboard.html"
     return templates.TemplateResponse(
-        "dashboard.html",
+        template_name,
         {
             "request": request,
             "user": user,
@@ -469,6 +473,7 @@ def history_page(
     page_size: int = 50,
     selected_id: int | None = None,
     selected_kind: str = "email",
+    partial: str = "",
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
@@ -637,6 +642,9 @@ def history_page(
                     {
                         "kind_label": "Pedido",
                         "date": _aware(order.created_at),
+                        # An order without a linked email is not an unread email.
+                        "is_read": True if order.email is None else bool(order.email.is_read),
+                        "is_favorite": bool(order.email and getattr(order.email, "is_favorite", False)),
                         "url": f"/orders/{order.id}",
                         "secondary_url": f"/?tab=processed&date_range=30d&search={quote_plus(order.email.subject or order.email.sender or order.customer_detected_name or '')}" if order.email else "/orders",
                         "title": item["customer_name"] or order.customer_detected_name or "Pedido",
@@ -653,6 +661,8 @@ def history_page(
                     {
                         "kind_label": "Correo",
                         "date": _aware(email.received_at),
+                        "is_read": bool(email.is_read),
+                        "is_favorite": bool(getattr(email, "is_favorite", False)),
                         "url": f"/?tab=processed&date_range=30d&search={quote_plus(email.subject or email.sender or '')}",
                         "secondary_url": f"/?tab=email&date_range=30d&search={quote_plus(email.sender or email.subject or '')}",
                         "title": email.subject or "Correo sin asunto",
@@ -696,9 +706,17 @@ def history_page(
                     )
                 )
 
+    if selected_email and not selected_email.is_read:
+        selected_email.is_read = True
+        db.commit()
+        for row_item in paged_items:
+            if row_item.get("email_id") == selected_email.id:
+                row_item["is_read"] = True
+
     customers = db.scalars(select(Customer).where(Customer.company_id == user.company_id).order_by(Customer.fiscal_name)).all()
+    template_name = "history/_list_pane.html" if partial == "list" else "history/list.html"
     return templates.TemplateResponse(
-        "history/list.html",
+        template_name,
         {
             "request": request,
             "user": user,
@@ -775,6 +793,10 @@ def history_detail_pane(
                 item["order_status"] = order.status
                 item["order_status_label"] = order.status
                 item["score"] = order.score
+
+    if email and not email.is_read:
+        email.is_read = True
+        db.commit()
 
     return templates.TemplateResponse(
         "history/_mail_detail_pane.html",

@@ -377,23 +377,40 @@ function anyWorkbenchModalOpen() {
   return Array.from(document.querySelectorAll(".order-review-modal")).some((dialog) => dialog.open || dialog.dataset.dirty === "true");
 }
 
+let workbenchRefreshInFlight = false;
+
 async function softRefreshWorkbench() {
-  if (anyWorkbenchModalOpen()) return;
+  if (workbenchRefreshInFlight || document.visibilityState === "hidden" || anyWorkbenchModalOpen()) return;
+  const currentShell = document.querySelector(".workbench-shell");
+  if (!currentShell) return;
+  workbenchRefreshInFlight = true;
+  currentShell.classList.add("is-refreshing");
+  currentShell.setAttribute("aria-busy", "true");
+  const url = new URL(window.location.href);
+  url.searchParams.set("partial", "workbench");
   try {
-    const response = await fetch(window.location.href, {headers: {"X-Requested-With": "fetch"}});
+    const response = await fetch(url.toString(), {
+      headers: {"X-Requested-With": "fetch", "Accept": "text/html"},
+      credentials: "same-origin",
+    });
     if (!response.ok) return;
     const html = await response.text();
     const doc = new DOMParser().parseFromString(html, "text/html");
-    [".workbench-shell"].forEach((selector) => {
-      const current = document.querySelector(selector);
-      const next = doc.querySelector(selector);
-      if (current && next) current.replaceWith(next);
-    });
+    const next = doc.querySelector(".workbench-shell");
+    if (!next) return;
+    currentShell.replaceWith(next);
     syncWorkbenchSelectionStates();
     const stamp = document.getElementById("workbench-last-refresh");
     if (stamp) stamp.textContent = `Ultima actualizacion: ${new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}`;
   } catch (error) {
     console.warn("No se pudo actualizar la bandeja", error);
+  } finally {
+    workbenchRefreshInFlight = false;
+    const refreshedShell = document.querySelector(".workbench-shell");
+    if (refreshedShell) {
+      refreshedShell.classList.remove("is-refreshing");
+      refreshedShell.removeAttribute("aria-busy");
+    }
   }
 }
 

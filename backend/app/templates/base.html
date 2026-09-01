@@ -1,4 +1,4 @@
-{% from "components/icons.html" import icon_menu, icon_dashboard, icon_entries, icon_mail, icon_whatsapp, icon_customers, icon_products, icon_settings, icon_book_open, icon_bell, icon_plus, icon_logout, icon_paperclip, icon_search, icon_close, icon_check, icon_refresh, icon_trash, icon_copy, icon_folder %}
+{% from "components/icons.html" import icon_menu, icon_chevron_left, icon_dashboard, icon_entries, icon_mail, icon_whatsapp, icon_customers, icon_products, icon_settings, icon_book_open, icon_bell, icon_plus, icon_logout, icon_paperclip, icon_search, icon_close, icon_check, icon_refresh, icon_trash, icon_copy, icon_folder %}
 <!doctype html>
 <html lang="es">
 <head>
@@ -6,13 +6,34 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title or app_settings.app_name }}</title>
   {% if request.state.branding.favicon_url %}<link rel="icon" href="{{ request.state.branding.favicon_url }}">{% endif %}
-  <link rel="stylesheet" href="/static/styles.css?v=29">
+  <link rel="stylesheet" href="/static/styles.css?v=31">
   <script src="/static/js/database-tables.js?v=4" defer></script>
   {% block head_extra %}{% endblock %}
   <style>{{ branding_css_vars(request.state.branding)|safe }}</style>
 </head>
 <body>
-  <div class="app" id="app-shell">
+  {% set cookie_sidebar_key = app_settings.app_slug ~ '.sidebarExpanded' %}
+  {% set cookie_sidebar_val = request.cookies.get(cookie_sidebar_key) %}
+  {% set is_sidebar_collapsed = (cookie_sidebar_val == 'false') if cookie_sidebar_val is not none else (user.role.name != "Administrador") %}
+  <div class="app{% if is_sidebar_collapsed %} sidebar-collapsed{% endif %}" id="app-shell">
+    <script>
+      (function() {
+        try {
+          var key = "{{ app_settings.app_slug }}.sidebarExpanded";
+          var stored = localStorage.getItem(key);
+          var def = {{ "true" if user.role.name == "Administrador" else "false" }};
+          var expanded = stored === null ? def : (stored === "true");
+          var shell = document.getElementById("app-shell");
+          if (shell) {
+            if (!expanded) {
+              shell.classList.add("sidebar-collapsed");
+            } else {
+              shell.classList.remove("sidebar-collapsed");
+            }
+          }
+        } catch(e) {}
+      })();
+    </script>
     <aside class="sidebar">
       <div class="brand-row">
         <div class="brand">
@@ -22,7 +43,7 @@
           {% if request.state.branding.show_app_name_sidebar %}<span>{{ request.state.branding.app_name }}</span>{% endif %}
           {% if request.state.branding.show_claim_sidebar %}<small>{{ request.state.branding.secondary_claim }}</small>{% endif %}
         </div>
-        <button class="sidebar-toggle secondary" type="button" title="Contraer menu" aria-label="Contraer menu" onclick="toggleSidebar()">{{ icon_menu(18) }}</button>
+        <button class="sidebar-toggle secondary" type="button" title="{{ 'Expandir menú' if is_sidebar_collapsed else 'Contraer menú' }}" aria-label="{{ 'Expandir menú' if is_sidebar_collapsed else 'Contraer menú' }}" onclick="toggleSidebar()">{{ icon_chevron_left(18, "icon-chevron") }}{{ icon_menu(18, "icon-menu") }}</button>
       </div>
       {% set href_orders = '/orders?view=list' %}
       {% set href_archived_orders = '/orders?view=list&archived=true' %}
@@ -173,10 +194,20 @@
     const storedSidebar = localStorage.getItem(sidebarStorageKey);
     const defaultExpanded = {{ "true" if user.role.name == "Administrador" else "false" }};
     const sidebarExpanded = storedSidebar === null ? defaultExpanded : storedSidebar === "true";
-    shell.classList.toggle("sidebar-collapsed", !sidebarExpanded);
+    function updateSidebarToggleLabel(collapsed) {
+      const toggleBtn = document.querySelector(".sidebar-toggle");
+      if (toggleBtn) {
+        const label = collapsed ? "Expandir menú" : "Contraer menú";
+        toggleBtn.setAttribute("title", label);
+        toggleBtn.setAttribute("aria-label", label);
+      }
+    }
+    updateSidebarToggleLabel(!sidebarExpanded);
     function toggleSidebar() {
       const collapsed = shell.classList.toggle("sidebar-collapsed");
       localStorage.setItem(sidebarStorageKey, String(!collapsed));
+      document.cookie = sidebarStorageKey + "=" + (!collapsed) + ";path=/;max-age=31536000;SameSite=Lax";
+      updateSidebarToggleLabel(collapsed);
     }
     document.querySelectorAll(".js-loading-form").forEach((form) => {
       form.addEventListener("submit", (event) => {

@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% set title = "Buzón de correo" %}
+{% from "components/icons.html" import icon_star %}
 {% block content %}
 <div class="webmail-shell">
   {# Topbar / Toolbar #}
@@ -66,64 +67,7 @@
   {# Master-Detail Split Workspace #}
   <main id="webmail-workspace" class="webmail-workspace {% if selected_email or selected_order %}has-split-view{% endif %}">
     {# Left Pane: Mail & Order List #}
-    <section class="webmail-list-pane">
-      <div class="webmail-list-header">
-        <span class="muted">Bandeja de mensajes ({{ pagination.start_item }}-{{ pagination.end_item }} de {{ pagination.total_items }})</span>
-      </div>
-      <div class="webmail-list-body" role="list">
-        {% for item in items %}
-          {% set real_id = item.id.split('-')[-1] if ('-' in item.id|string) else item.id %}
-          {% set item_is_selected = (selected_id and (selected_id|string == real_id|string) and (selected_kind == item.kind)) %}
-          <article
-            class="webmail-item {% if item_is_selected %}is-active-row{% endif %} {% if not item.is_read %}is-unread{% endif %}"
-            role="listitem"
-            data-item-id="{{ real_id }}"
-            data-item-kind="{{ item.kind }}"
-            onclick="openMailDetail('{{ item.kind }}', '{{ real_id }}', this)"
-          >
-            <div class="webmail-item-avatar">
-              {{ (item.customer_name[:2] if item.customer_name else item.sender[:2] if item.sender else "EM") | upper }}
-            </div>
-            <div class="webmail-item-main">
-              <div class="webmail-item-top">
-                <strong class="webmail-item-sender">{{ item.customer_name or item.sender or "Remitente desconocido" }}</strong>
-                <span class="webmail-item-time">{{ item.date | local_dt(tenant_timezone, "%d %b %H:%M", "--") }}</span>
-              </div>
-              <div class="webmail-item-subject">
-                {{ item.title or item.subject or "(Sin asunto)" }}
-              </div>
-              <div class="webmail-item-bottom">
-                <div class="webmail-item-tags">
-                  <span class="badge {% if item.kind == 'order' %}{{ item.order_status|status_class }}{% else %}{{ item.agent_status|status_class }}{% endif %}">
-                    {{ item.order_status_label if item.kind == 'order' else item.agent_status_label }}
-                  </span>
-                  {% if item.kind == 'order' %}
-                    <span class="badge status-confirmed">Pedido #{{ real_id }}</span>
-                  {% endif %}
-                  {% if item.score is not none %}
-                    <span class="score-badge">{{ "%.0f"|format(item.score) }}%</span>
-                  {% endif %}
-                  {% if item.has_pdf %}
-                    <span class="badge">PDF</span>
-                  {% elif item.has_attachments %}
-                    <span class="badge">{{ icon_paperclip(12) }}</span>
-                  {% endif %}
-                </div>
-                <span class="webmail-open-hint">Abrir &rarr;</span>
-              </div>
-            </div>
-          </article>
-        {% else %}
-          <div class="webmail-empty-list">
-            <p class="muted">No hay mensajes ni pedidos para los filtros seleccionados.</p>
-          </div>
-        {% endfor %}
-      </div>
-
-      <div class="webmail-list-footer">
-        {% include "components/pagination.html" %}
-      </div>
-    </section>
+    {% include "history/_list_pane.html" %}
 
     {# Draggable Split Screen Divider Handle #}
     <div
@@ -245,6 +189,162 @@ function initWebmailSplitResizer() {
   });
 }
 
+function selectedMailCheckboxes() {
+  return Array.from(document.querySelectorAll('.webmail-item-select:checked'));
+}
+
+function updateMailSelection() {
+  const checkboxes = Array.from(document.querySelectorAll('.webmail-item-select'));
+  const selected = selectedMailCheckboxes();
+  const toolbar = document.getElementById('mail-bulk-form');
+  const count = document.getElementById('mail-selected-count');
+  const selectAll = document.getElementById('mail-select-all');
+
+  if (count) count.textContent = String(selected.length);
+  if (toolbar) toolbar.hidden = selected.length === 0;
+  if (selectAll) {
+    selectAll.checked = checkboxes.length > 0 && selected.length === checkboxes.length;
+    selectAll.indeterminate = selected.length > 0 && selected.length < checkboxes.length;
+  }
+}
+
+function toggleMailSelection() {
+  updateMailSelection();
+}
+
+function toggleAllMailSelection(selectAll) {
+  document.querySelectorAll('.webmail-item-select').forEach((checkbox) => {
+    checkbox.checked = selectAll.checked;
+  });
+  updateMailSelection();
+}
+
+function syncMailBulkInputs(event, form) {
+  form.querySelectorAll('input[data-mail-bulk-id]').forEach((input) => input.remove());
+  const selected = selectedMailCheckboxes();
+  if (!selected.length) {
+    event.preventDefault();
+    return false;
+  }
+  selected.forEach((checkbox) => {
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'email_ids';
+    input.value = checkbox.value;
+    input.dataset.mailBulkId = 'true';
+    form.appendChild(input);
+  });
+  return true;
+}
+
+function setMailButtonBusy(form, busy) {
+  form.querySelectorAll('button[type="submit"], button:not([type])').forEach((button) => {
+    if (busy) {
+      if (!button.dataset.originalHtml) button.dataset.originalHtml = button.innerHTML;
+      button.innerHTML = '<span class="loading-spinner loading-spinner-inline" aria-hidden="true"></span><span>Procesando...</span>';
+    } else if (button.dataset.originalHtml) {
+      button.innerHTML = button.dataset.originalHtml;
+    }
+    button.disabled = busy;
+    button.setAttribute('aria-busy', busy ? 'true' : 'false');
+  });
+}
+
+function setMailAsyncStatus(message, isError = false) {
+  const status = document.getElementById('mail-async-status');
+  if (!status) return;
+  status.textContent = message;
+  status.hidden = !message;
+  status.classList.toggle('is-error', isError);
+}
+
+async function refreshHistoryList() {
+  const listPane = document.querySelector('.webmail-list-pane');
+  if (!listPane || listPane.dataset.refreshing === 'true') return false;
+  listPane.dataset.refreshing = 'true';
+  listPane.classList.add('is-refreshing');
+  listPane.setAttribute('aria-busy', 'true');
+  const url = new URL(window.location.href);
+  url.searchParams.set('partial', 'list');
+  try {
+    const response = await fetch(url.toString(), {
+      headers: { 'X-Requested-With': 'fetch', 'Accept': 'text/html' },
+      credentials: 'same-origin',
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const doc = new DOMParser().parseFromString(await response.text(), 'text/html');
+    const nextPane = doc.querySelector('.webmail-list-pane');
+    if (!nextPane) throw new Error('La respuesta no contiene la bandeja');
+    listPane.replaceWith(nextPane);
+    updateMailSelection();
+    return true;
+  } catch (error) {
+    console.warn('No se pudo actualizar la bandeja', error);
+    setMailAsyncStatus('No se ha podido actualizar la bandeja. Reintenta.', true);
+    return false;
+  } finally {
+    const currentPane = document.querySelector('.webmail-list-pane');
+    if (currentPane) {
+      currentPane.dataset.refreshing = 'false';
+      currentPane.classList.remove('is-refreshing');
+      currentPane.removeAttribute('aria-busy');
+    }
+  }
+}
+
+async function handleMailFavoriteSubmit(event, form) {
+  event.preventDefault();
+  const button = form.querySelector('button[type="submit"]');
+  if (!button || button.disabled) return false;
+  setMailButtonBusy(form, true);
+  try {
+    const response = await fetch(form.action, {
+      method: 'POST',
+      headers: { 'X-Requested-With': 'fetch', 'Accept': 'application/json' },
+      credentials: 'same-origin',
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) throw new Error(payload.message || 'No se pudo actualizar el favorito');
+    button.classList.toggle('is-favorite', !!payload.is_favorite);
+    const label = payload.is_favorite ? 'Quitar de favoritos' : 'Añadir a favoritos';
+    button.title = label;
+    button.setAttribute('aria-label', label);
+  } catch (error) {
+    console.warn('No se pudo actualizar el favorito', error);
+    setMailAsyncStatus('No se ha podido actualizar el favorito. Reintenta.', true);
+  } finally {
+    setMailButtonBusy(form, false);
+  }
+  return false;
+}
+
+async function handleMailBulkSubmit(event, form) {
+  if (!syncMailBulkInputs(event, form)) return false;
+  event.preventDefault();
+  const submitter = event.submitter;
+  if (!submitter) return false;
+  setMailButtonBusy(form, true);
+  try {
+    const formData = new FormData(form);
+    formData.set('action', submitter.value);
+    const response = await fetch(form.action, {
+      method: 'POST',
+      body: formData,
+      headers: { 'X-Requested-With': 'fetch', 'Accept': 'application/json' },
+      credentials: 'same-origin',
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) throw new Error(payload.message || 'No se pudo aplicar la acción');
+    if (!await refreshHistoryList()) throw new Error('No se pudo refrescar la bandeja');
+  } catch (error) {
+    console.warn('No se pudo aplicar la acción masiva', error);
+    setMailAsyncStatus('No se ha podido aplicar la acción. Reintenta.', true);
+  } finally {
+    setMailButtonBusy(form, false);
+  }
+  return false;
+}
+
 function openMailDetail(kind, rawId, element) {
   const workspace = document.getElementById('webmail-workspace');
   const detailPane = document.getElementById('webmail-detail-pane');
@@ -276,6 +376,7 @@ function openMailDetail(kind, rawId, element) {
     })
     .then(html => {
       detailPane.innerHTML = html;
+      if (row) row.classList.remove('is-unread');
       // Update URL without page reload
       const url = new URL(window.location);
       url.searchParams.set('selected_id', cleanId);
@@ -332,9 +433,13 @@ document.addEventListener('click', (e) => {
 
 // Initialize resizer
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', initWebmailSplitResizer);
+  document.addEventListener('DOMContentLoaded', () => {
+    initWebmailSplitResizer();
+    updateMailSelection();
+  });
 } else {
   initWebmailSplitResizer();
+  updateMailSelection();
 }
 </script>
 {% endblock %}

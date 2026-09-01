@@ -116,6 +116,7 @@ def list_orders(
     sort: str = "date_desc",
     page: int = 1,
     page_size: int = 25,
+    partial: str = "",
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
@@ -138,6 +139,7 @@ def list_orders(
             requires_review=requires_review,
             page=page,
             page_size=page_size,
+            partial=partial,
             db=db,
             user=user,
         )

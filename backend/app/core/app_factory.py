@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging
@@ -14,6 +12,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.core.config import get_settings
+from app.core.assets import STATIC_DIR, versioned_asset_url
 from app.core.logging import configure_logging
 from app.core.performance import configure_performance
 from app.core.lifespan import app_lifespan
@@ -23,6 +22,21 @@ from app.core.templating import templates
 from app.settings.branding import branding_css_vars
 
 logger = logging.getLogger(__name__)
+
+
+class CachedStaticFiles(StaticFiles):
+    """Cache bundled assets for a long time while keeping uploads refreshable."""
+
+    def file_response(self, full_path, stat_result, scope, status_code=200):  # noqa: ANN001
+        response = super().file_response(full_path, stat_result, scope, status_code)
+        request_path = (scope.get("path") or "").lower()
+        if "/uploads/" in request_path:
+            response.headers["Cache-Control"] = "public, max-age=3600"
+        elif request_path.endswith((".css", ".js")):
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        else:
+            response.headers["Cache-Control"] = "public, max-age=3600"
+        return response
 
 
 def internal_server_error_response(request) -> JSONResponse:  # noqa: ANN001
@@ -108,10 +122,10 @@ def create_app() -> FastAPI:
             allow_headers=["*"],
         )
     app.middleware("http")(branding_middleware)
-    static_dir = Path(__file__).resolve().parents[1] / "static"
-    app.mount("/static", StaticFiles(directory=static_dir.as_posix()), name="static")
+    app.mount("/static", CachedStaticFiles(directory=STATIC_DIR.as_posix()), name="static")
     templates.env.globals["branding_css_vars"] = branding_css_vars
     templates.env.globals["app_settings"] = settings
+    templates.env.globals["asset_url"] = versioned_asset_url
 
     for router in get_registered_routers():
         app.include_router(router)
