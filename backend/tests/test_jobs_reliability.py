@@ -757,6 +757,7 @@ class JobsReliabilityTests(unittest.TestCase):
         db.refresh(message)
 
         self.assertEqual(extract_order_mock.call_count, 1)
+        self.assertEqual(extract_order_mock.call_args.kwargs["model"], "gpt-5.6-luna")
         self.assertEqual(no_call.call_count, 0)
         self.assertEqual(order_count, expected_order_count)
         self.assertEqual(result["status"], expected_status)

@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.agent.model_catalog import DEFAULT_OPENAI_MODEL
 from app.db.database import Base
 
 
@@ -230,9 +231,9 @@ class LLMSettings(Base):
     provider: Mapped[str] = mapped_column(String(50), default="openai")
     api_key_encrypted: Mapped[str | None] = mapped_column(Text)
     base_url: Mapped[str | None] = mapped_column(String(500))
-    classification_model: Mapped[str] = mapped_column(String(100), default="gpt-4.1-mini")
-    extraction_model: Mapped[str] = mapped_column(String(100), default="gpt-4.1-mini")
-    validation_model: Mapped[str] = mapped_column(String(100), default="gpt-4.1-mini")
+    classification_model: Mapped[str] = mapped_column(String(100), default=DEFAULT_OPENAI_MODEL)
+    extraction_model: Mapped[str] = mapped_column(String(100), default=DEFAULT_OPENAI_MODEL)
+    validation_model: Mapped[str] = mapped_column(String(100), default=DEFAULT_OPENAI_MODEL)
     use_same_model_for_all: Mapped[bool] = mapped_column(Boolean, default=True)
     can_read_email: Mapped[bool] = mapped_column(Boolean, default=True)
     can_extract_pdf: Mapped[bool] = mapped_column(Boolean, default=True)

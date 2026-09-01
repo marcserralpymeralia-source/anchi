@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.templating import templates
 from app.core.config import get_settings
 from app.auth.dependencies import current_user
+from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, LEGACY_OPENAI_MODEL_FALLBACK, openai_model_description, openai_model_label, openai_model_option_payload, OPENAI_MODEL_PRESET_VALUES, resolve_openai_runtime_model
 from app.master.database import get_master_db
 from app.master.service import TenantUser
 from app.master.models import EmailSyncState
@@ -202,7 +203,11 @@ def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: 
         "agent_status": agent_status(llm_settings, metrics),
         "agent_metrics": metrics,
         "agent_improvements": improvement_suggestions(db, user.company_id),
-        "model_options": ["gpt-4.1-mini", "gpt-4.1", "gpt-4o-mini", "gpt-4o"],
+        "extraction_model_options": openai_model_option_payload(),
+        "extraction_model_values": sorted(OPENAI_MODEL_PRESET_VALUES),
+        "extraction_model_value": resolve_openai_runtime_model(llm_settings.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK),
+        "extraction_model_label": openai_model_label(resolve_openai_runtime_model(llm_settings.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK)),
+        "extraction_model_description": openai_model_description(resolve_openai_runtime_model(llm_settings.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK)),
         "ftp": get_or_create_settings(db, FTPSettings, user.company_id),
         "export": get_or_create_settings(db, ExportSettings, user.company_id),
         "scoring": scoring_settings,
@@ -246,7 +251,7 @@ def build_settings_dashboard(db: Session, user: TenantUser, metrics: dict, llm: 
         ),
         state("identity", "Identidad", "ready" if branding.app_name and (branding.logo_url or branding.dark_logo_url) else "warning" if branding.app_name else "pending", f"{branding.app_name} · {branding.secondary_claim or 'sin claim secundario'}", "Editar"),
         state("channels", "Canales", "ready" if active_channels_count else "pending", f"{active_channels_count} canal activo" if active_channels_count == 1 else f"{active_channels_count} canales activos", "Abrir"),
-        state("ai", "Agente IA", "ready" if llm.provider != "disabled" and llm.api_key_encrypted and llm.last_test_ok is not False else "warning" if llm.api_key_encrypted else "pending", f"{llm.provider or 'sin proveedor'} · {llm.classification_model} · {llm.last_test_message or 'sin prueba reciente'}", "Editar"),
+        state("ai", "Agente IA", "ready" if llm.provider != "disabled" and llm.api_key_encrypted and llm.last_test_ok is not False else "warning" if llm.api_key_encrypted else "pending", f"{llm.provider or 'sin proveedor'} · {resolve_openai_runtime_model(llm.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK)} · {llm.last_test_message or 'sin prueba reciente'}", "Editar"),
         state("customers-products", "Clientes y productos", "ready" if customer_count and product_count else "warning" if customer_count or product_count else "pending", f"{customer_count} clientes · {product_count} productos", "Abrir"),
         state("scoring", "Confianza y automatización", "ready", f"Alta confianza desde {scoring.safe_threshold}% · auto-confirmar {'sí' if llm.allow_auto_confirm else 'no'}", "Editar"),
         state("decision", "Motor de decisión", "ready" if decision.enable_exact_match else "warning", f"Prioridad {decision.exact_priority} a {decision.llm_priority} · modo {decision.learning_mode}", "Configurar"),

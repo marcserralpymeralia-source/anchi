@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import current_user
 from app.channels.service import get_or_create_channel
 from app.core.encryption import encrypt_secret
+from app.agent.model_catalog import DEFAULT_OPENAI_MODEL
 from app.core.templating import templates
 from app.db.models import Company, Customer, EmailSettings, InputChannel, LLMSettings, Setting
 from app.imports.service import create_preview, read_preview, validate_import, confirm_import
@@ -354,9 +355,9 @@ def setup_openai_save(api_key: str = Form(""), db: Session = Depends(get_tenant_
     llm = get_or_create_settings(db, LLMSettings, user.company_id)
     llm.provider = "openai"
     llm.api_key_encrypted = encrypt_secret(value)
-    llm.classification_model = "gpt-4.1-mini"
-    llm.extraction_model = "gpt-4.1-mini"
-    llm.validation_model = "gpt-4.1-mini"
+    llm.classification_model = DEFAULT_OPENAI_MODEL
+    llm.extraction_model = DEFAULT_OPENAI_MODEL
+    llm.validation_model = DEFAULT_OPENAI_MODEL
     llm.last_test_ok = True
     llm.last_test_message = "OpenAI conectado correctamente"
     db.commit()

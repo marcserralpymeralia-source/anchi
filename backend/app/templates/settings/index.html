@@ -718,7 +718,24 @@
         <div class="form-grid">
           <label class="span-2">Usar mismo modelo para todo<input name="use_same_model_for_all" type="checkbox" {% if llm.use_same_model_for_all %}checked{% endif %}></label>
           <label>Clasificación<input name="classification_model" value="{{ llm.classification_model }}"></label>
-          <label>Extracción<input name="extraction_model" value="{{ llm.extraction_model }}"></label>
+          <input type="hidden" name="extraction_model" value="{{ extraction_model_value }}" data-extraction-model-value>
+          <label>Modelo de extracción
+            <select name="extraction_model_mode" data-extraction-model-select>
+              {% for option in extraction_model_options %}
+                <option value="{{ option.value }}" data-label="{{ option.label }}" data-description="{{ option.description }}" {% if extraction_model_value == option.value %}selected{% endif %}>{{ option.label }}</option>
+              {% endfor %}
+              <option value="custom" data-label="Personalizado" data-description="Introduce un model ID manualmente" {% if extraction_model_value not in extraction_model_values %}selected{% endif %}>Personalizado</option>
+            </select>
+          </label>
+          <label data-extraction-model-custom-wrap {% if extraction_model_value in extraction_model_values %}hidden{% endif %}>
+            Model ID personalizado
+            <input name="extraction_model_custom" value="{% if extraction_model_value not in extraction_model_values %}{{ extraction_model_value }}{% endif %}" data-extraction-model-custom placeholder="gpt-5.6-mi-modelo">
+          </label>
+          <div class="span-2 model-preview-card" data-extraction-model-preview>
+            <strong data-extraction-model-preview-label>{{ extraction_model_label }}</strong>
+            <span data-extraction-model-preview-id>{{ extraction_model_value }}</span>
+            <small data-extraction-model-preview-description>{{ extraction_model_description }}</small>
+          </div>
           <label>Validación<input name="validation_model" value="{{ llm.validation_model }}"></label>
         </div>
       </section>
@@ -1057,6 +1074,45 @@
         card.style.display = !value || (card.dataset.search || "").toLowerCase().includes(value) ? "" : "none";
       });
     });
+  }
+  const extractionModelSelect = document.querySelector("[data-extraction-model-select]");
+  const extractionModelHidden = document.querySelector("[data-extraction-model-value]");
+  const extractionModelCustomWrap = document.querySelector("[data-extraction-model-custom-wrap]");
+  const extractionModelCustom = document.querySelector("[data-extraction-model-custom]");
+  const extractionModelPreviewLabel = document.querySelector("[data-extraction-model-preview-label]");
+  const extractionModelPreviewId = document.querySelector("[data-extraction-model-preview-id]");
+  const extractionModelPreviewDescription = document.querySelector("[data-extraction-model-preview-description]");
+  function syncExtractionModelPreview() {
+    if (!extractionModelSelect) {
+      return;
+    }
+    const selected = extractionModelSelect.selectedOptions[0];
+    const isCustom = extractionModelSelect.value === "custom";
+    const selectedLabel = selected?.dataset?.label || selected?.textContent?.trim() || "GPT-5.6 Luna";
+    const selectedDescription = selected?.dataset?.description || "Modelo recomendado para extracción.";
+    const currentValue = isCustom ? (extractionModelCustom?.value?.trim() || extractionModelHidden?.value || "gpt-5.6-luna") : extractionModelSelect.value;
+    if (extractionModelCustomWrap) {
+      extractionModelCustomWrap.hidden = !isCustom;
+    }
+    if (extractionModelHidden) {
+      extractionModelHidden.value = currentValue;
+    }
+    if (extractionModelPreviewLabel) {
+      extractionModelPreviewLabel.textContent = isCustom ? "Modelo personalizado" : selectedLabel;
+    }
+    if (extractionModelPreviewId) {
+      extractionModelPreviewId.textContent = currentValue;
+    }
+    if (extractionModelPreviewDescription) {
+      extractionModelPreviewDescription.textContent = isCustom ? "Se guardará exactamente el model ID indicado." : selectedDescription;
+    }
+  }
+  if (extractionModelSelect) {
+    extractionModelSelect.addEventListener("change", syncExtractionModelPreview);
+    syncExtractionModelPreview();
+  }
+  if (extractionModelCustom) {
+    extractionModelCustom.addEventListener("input", syncExtractionModelPreview);
   }
   function openSettingsDrawer(id) {
     const dialog = document.getElementById(`settings-${id}`);

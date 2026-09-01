@@ -19,6 +19,7 @@ from app.core import lifespan as lifespan_module  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.core.encryption import decrypt_secret, encrypt_secret  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
+from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, LEGACY_OPENAI_MODEL_FALLBACK, resolve_openai_runtime_model  # noqa: E402
 from app.db.database import Base  # noqa: E402
 from app.db.models import ChannelSetting, Company, Customer, EmailSettings, InputChannel, LLMSettings, Product, Role, User  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
@@ -436,6 +437,169 @@ class SetupOnboardingTests(unittest.TestCase):
             self.assertIn("/settings/channels", response.text)
             self.assertIn("/settings/email/receive", response.text)
             self.assertNotIn("Información adicional", response.text)
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+    def test_llm_extraction_model_selector_supports_presets_custom_and_company_isolation(self):
+        fixture = SetupFixture()
+        client, cleanup = fixture.client()
+        try:
+            self._login(client)
+
+            page = client.get("/settings")
+            self.assertEqual(page.status_code, 200)
+            for label in ["GPT-5.6 Luna", "GPT-5.6 Terra", "GPT-5.6 Sol", "GPT-4.1 mini", "GPT-4.1", "Personalizado"]:
+                self.assertIn(label, page.text)
+
+            with fixture.TenantSession() as db:
+                llm = get_or_create_settings(db, LLMSettings, 1)
+                self.assertEqual(llm.extraction_model, DEFAULT_OPENAI_MODEL)
+                db.add(Company(id=2, name="Otra empresa", legal_name="Otra empresa", country="España", language="es", timezone="Europe/Madrid", active=True))
+                other = LLMSettings(company_id=2, provider="openai", api_key_encrypted=encrypt_secret("other-api-key"), extraction_model="gpt-4.1", classification_model="gpt-4.1", validation_model="gpt-4.1")
+                db.add(other)
+                db.commit()
+
+            response = client.post(
+                "/settings/llm",
+                data={
+                    "agent_enabled": "on",
+                    "use_same_model_for_all": "on",
+                    "provider": "openai",
+                    "api_key_encrypted": "tenant-api-key",
+                    "classification_model": "gpt-4.1-mini",
+                    "extraction_model_mode": "gpt-5.6-luna",
+                    "extraction_model": "gpt-5.6-luna",
+                    "validation_model": "gpt-4.1-mini",
+                    "can_read_email": "on",
+                    "can_extract_pdf": "on",
+                    "can_classify_email": "on",
+                    "can_extract_order": "on",
+                    "can_suggest_customer": "on",
+                    "can_suggest_products": "on",
+                    "can_calculate_score": "on",
+                    "can_create_pending_order": "on",
+                    "can_mark_no_order": "on",
+                    "allow_auto_confirm": "",
+                    "allow_auto_export": "",
+                },
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 303)
+            with fixture.TenantSession() as db:
+                current = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 1))
+                other = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 2))
+                assert current is not None
+                assert other is not None
+                self.assertEqual(current.extraction_model, "gpt-5.6-luna")
+                self.assertEqual(current.classification_model, "gpt-5.6-luna")
+                self.assertEqual(current.validation_model, "gpt-5.6-luna")
+                self.assertEqual(other.extraction_model, "gpt-4.1")
+
+            response = client.post(
+                "/settings/llm",
+                data={
+                    "agent_enabled": "on",
+                    "use_same_model_for_all": "on",
+                    "provider": "openai",
+                    "api_key_encrypted": "tenant-api-key",
+                    "classification_model": "gpt-4.1-mini",
+                    "extraction_model_mode": "gpt-5.6-terra",
+                    "extraction_model": "gpt-5.6-terra",
+                    "validation_model": "gpt-4.1-mini",
+                    "can_read_email": "on",
+                    "can_extract_pdf": "on",
+                    "can_classify_email": "on",
+                    "can_extract_order": "on",
+                    "can_suggest_customer": "on",
+                    "can_suggest_products": "on",
+                    "can_calculate_score": "on",
+                    "can_create_pending_order": "on",
+                    "can_mark_no_order": "on",
+                    "allow_auto_confirm": "",
+                    "allow_auto_export": "",
+                },
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(response.headers["location"], "/settings#agent-ai")
+
+            with fixture.TenantSession() as db:
+                current = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 1))
+                other = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 2))
+                assert current is not None
+                assert other is not None
+                self.assertEqual(current.extraction_model, "gpt-5.6-terra")
+                self.assertEqual(current.classification_model, "gpt-5.6-terra")
+                self.assertEqual(current.validation_model, "gpt-5.6-terra")
+                self.assertEqual(other.extraction_model, "gpt-4.1")
+
+            response = client.post(
+                "/settings/llm",
+                data={
+                    "agent_enabled": "on",
+                    "use_same_model_for_all": "on",
+                    "provider": "openai",
+                    "api_key_encrypted": "tenant-api-key",
+                    "classification_model": "gpt-5.6-terra",
+                    "extraction_model_mode": "custom",
+                    "extraction_model_custom": "gpt-5.6-orion",
+                    "extraction_model": "gpt-5.6-orion",
+                    "validation_model": "gpt-5.6-terra",
+                    "can_read_email": "on",
+                    "can_extract_pdf": "on",
+                    "can_classify_email": "on",
+                    "can_extract_order": "on",
+                    "can_suggest_customer": "on",
+                    "can_suggest_products": "on",
+                    "can_calculate_score": "on",
+                    "can_create_pending_order": "on",
+                    "can_mark_no_order": "on",
+                },
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 303)
+
+            with fixture.TenantSession() as db:
+                current = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 1))
+                other = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 2))
+                assert current is not None
+                assert other is not None
+                self.assertEqual(current.extraction_model, "gpt-5.6-orion")
+                self.assertEqual(current.classification_model, "gpt-5.6-orion")
+                self.assertEqual(current.validation_model, "gpt-5.6-orion")
+                self.assertEqual(other.extraction_model, "gpt-4.1")
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+    def test_legacy_blank_extraction_model_uses_runtime_fallback_without_rewriting(self):
+        fixture = SetupFixture()
+        client, cleanup = fixture.client()
+        try:
+            self._login(client)
+            with fixture.TenantSession() as db:
+                llm = get_or_create_settings(db, LLMSettings, 1)
+                llm.provider = "openai"
+                llm.api_key_encrypted = encrypt_secret("tenant-api-key")
+                llm.extraction_model = ""
+                llm.classification_model = "gpt-4.1-mini"
+                llm.validation_model = "gpt-4.1-mini"
+                db.commit()
+
+            self.assertEqual(resolve_openai_runtime_model(None), LEGACY_OPENAI_MODEL_FALLBACK)
+            self.assertEqual(resolve_openai_runtime_model(""), LEGACY_OPENAI_MODEL_FALLBACK)
+
+            page = client.get("/settings")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn(f'name="extraction_model" value="{LEGACY_OPENAI_MODEL_FALLBACK}"', page.text)
+
+            with fixture.TenantSession() as db:
+                llm = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 1))
+                assert llm is not None
+                self.assertEqual(llm.extraction_model, "")
+                self.assertEqual(llm.classification_model, "gpt-4.1-mini")
+                self.assertEqual(llm.validation_model, "gpt-4.1-mini")
         finally:
             cleanup()
             fixture.cleanup()

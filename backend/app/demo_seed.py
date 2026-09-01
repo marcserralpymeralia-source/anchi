@@ -8,6 +8,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.core.encryption import encrypt_secret
+from app.agent.model_catalog import DEFAULT_OPENAI_MODEL
 from app.core.permissions import DEFAULT_ROLE_PERMISSIONS
 from app.core.security import hash_password
 from app.db.models import (
@@ -428,9 +429,9 @@ def seed_demo_base(db: Session) -> dict[str, int]:
     llm.agent_mode = "semiautomatico"
     llm.safety_level = "equilibrado"
     llm.provider = "disabled"
-    llm.classification_model = "gpt-4.1-mini"
-    llm.extraction_model = "gpt-4.1-mini"
-    llm.validation_model = "gpt-4.1-mini"
+    llm.classification_model = DEFAULT_OPENAI_MODEL
+    llm.extraction_model = DEFAULT_OPENAI_MODEL
+    llm.validation_model = DEFAULT_OPENAI_MODEL
     llm.use_same_model_for_all = True
     llm.can_read_email = True
     llm.can_extract_pdf = True
