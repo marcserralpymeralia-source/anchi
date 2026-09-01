@@ -271,7 +271,7 @@ def _process_job(db, job: BackgroundJob) -> dict:
         processed = 0
         total = len(emails) or 1
         for index, email in enumerate(emails, start=1):
-            processor.process_email(db, email)
+            processor.process_email_fast(db, email)
             processed += 1
             update_job_progress(db, job, int((index / total) * 100))
         return {"ok": True, "processed": processed, "message": f"{processed} correos procesados"}
@@ -281,7 +281,7 @@ def _process_job(db, job: BackgroundJob) -> dict:
         if not email or email.company_id != job.company_id:
             raise RuntimeError("No se encontró el correo a procesar.")
         force_order = bool(payload.get("force"))
-        result = AgentProcessingService().process_email(
+        result = AgentProcessingService().process_email_fast(
             db,
             email,
             force_order=force_order,
@@ -293,7 +293,7 @@ def _process_job(db, job: BackgroundJob) -> dict:
         if not order or order.company_id != job.company_id:
             raise RuntimeError("No se encontró el pedido a procesar.")
         if order.email:
-            result = AgentProcessingService().process_email(
+            result = AgentProcessingService().process_email_fast(
                 db,
                 order.email,
                 force_order=True,

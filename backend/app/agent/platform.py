@@ -1284,6 +1284,7 @@ class UnifiedOrderPipelineService:
         force_order: bool = False,
         email: Email | None = None,
         source_text_override: str | None = None,
+        email_fast_path: bool = False,
     ) -> dict[str, Any]:
         self.decision.reset_runtime_state()
 
@@ -1345,46 +1346,125 @@ class UnifiedOrderPipelineService:
             )
             db.flush()
 
-            classification = self._classify(db, llm_settings, inbound_message.company_id, normalized)
+            if email_fast_path:
+                if not llm_settings.can_extract_order and not force_order:
+                    inbound_message.status = "order_detected"
+                    inbound_message.processing_step = "order_detected_no_extraction"
+                    inbound_message.last_processed_at = datetime.now(timezone.utc)
+                    db.commit()
+                    return {"ok": True, "status": "order_detected", "message": "Pedido detectado. Extraccion desactivada por configuracion."}
+                structured, fast_state, fast_message = self._extract_structured_fast_path(llm_settings, normalized, inbound_message)
+                if fast_state == "no_order":
+                    inbound_message.classification_json = json.dumps(
+                        {
+                            "tipo_correo": "no_pedido",
+                            "confianza": 0.99,
+                            "motivo": fast_message or "Extraccion estructurada no detecto pedido.",
+                        },
+                        ensure_ascii=False,
+                    )
+                    inbound_message.detected_type = "no_pedido"
+                    inbound_message.status = "no_order"
+                    inbound_message.processing_step = "classified_non_order"
+                    inbound_message.last_processed_at = datetime.now(timezone.utc)
+                    db.commit()
+                    return {"ok": True, "message": fast_message or "Entrada clasificada como no pedido.", "status": "no_order"}
+                if fast_state == "doubtful":
+                    inbound_message.classification_json = json.dumps(
+                        {
+                            "tipo_correo": "pedido",
+                            "confianza": 0.62,
+                            "motivo": fast_message or "Pedido detectado pero no se pudieron extraer lineas validas.",
+                        },
+                        ensure_ascii=False,
+                    )
+                    inbound_message.detected_type = "pedido"
+                    inbound_message.status = "doubtful"
+                    inbound_message.processing_step = "structured_doubtful"
+                    inbound_message.processing_error = fast_message or "Pedido detectado pero no se pudieron extraer lineas validas."
+                    inbound_message.last_processed_at = datetime.now(timezone.utc)
+                    db.commit()
+                    self.alerts.raise_alert(
+                        db,
+                        company_id=inbound_message.company_id,
+                        alert_type="doubtful_classification",
+                        title="Entrada dudosa",
+                        message=inbound_message.processing_error,
+                        severity="medium",
+                        inbound_message_id=inbound_message.id,
+                    )
+                    return {"ok": False, "message": inbound_message.processing_error, "status": "doubtful"}
+                if fast_state == "processing_error":
+                    inbound_message.classification_json = json.dumps(
+                        {
+                            "tipo_correo": "pedido",
+                            "confianza": 0.0,
+                            "motivo": fast_message or "Error de extraccion estructurada.",
+                        },
+                        ensure_ascii=False,
+                    )
+                    inbound_message.detected_type = "pedido"
+                    inbound_message.status = "error"
+                    inbound_message.processing_step = "structured_extraction_error"
+                    inbound_message.processing_error = fast_message or "Error de extraccion estructurada."
+                    inbound_message.last_processed_at = datetime.now(timezone.utc)
+                    db.commit()
+                    return {"ok": False, "message": inbound_message.processing_error, "status": "error"}
+                extraction = self._legacy_payload_from_structured(structured)
+                extraction_source = (
+                    (extraction.get("_extraction_meta") or {}).get("source")
+                    if isinstance(extraction.get("_extraction_meta"), dict)
+                    else None
+                ) or "structured_order_extraction"
+                tipo = "pedido"
+                confidence = 0.99
+                classification = {
+                    "tipo_correo": tipo,
+                    "confianza": confidence,
+                    "motivo": "Extraccion estructurada de correo procesada sin clasificacion adicional.",
+                    "_extraction_source": extraction_source,
+                }
+            else:
+                classification = self._classify(db, llm_settings, inbound_message.company_id, normalized)
+                tipo = str(classification.get("tipo_correo") or classification.get("type") or classification.get("tipo") or "").lower()
+                confidence = _confidence(classification.get("confianza") or classification.get("confidence"), 0.0)
+                if not force_order and (tipo in {"no_pedido", "consulta", "incidencia"} or ("pedido" not in tipo and confidence < 0.75)):
+                    inbound_message.status = "no_order"
+                    inbound_message.processing_step = "classified_non_order"
+                    inbound_message.last_processed_at = datetime.now(timezone.utc)
+                    db.commit()
+                    return {"ok": True, "message": "Entrada clasificada como no pedido.", "status": "no_order"}
+
+                if not force_order and (tipo == "dudoso" or confidence < 0.45):
+                    inbound_message.status = "doubtful"
+                    inbound_message.processing_step = "classified_doubtful"
+                    inbound_message.processing_error = classification.get("motivo") or "Clasificacion dudosa."
+                    inbound_message.last_processed_at = datetime.now(timezone.utc)
+                    db.commit()
+                    self.alerts.raise_alert(
+                        db,
+                        company_id=inbound_message.company_id,
+                        alert_type="doubtful_classification",
+                        title="Entrada dudosa",
+                        message=inbound_message.processing_error,
+                        severity="medium",
+                        inbound_message_id=inbound_message.id,
+                    )
+                    return {"ok": False, "message": inbound_message.processing_error}
+
+                if not llm_settings.can_extract_order and not force_order:
+                    inbound_message.status = "order_detected"
+                    inbound_message.processing_step = "order_detected_no_extraction"
+                    inbound_message.last_processed_at = datetime.now(timezone.utc)
+                    db.commit()
+                    return {"ok": True, "status": "order_detected", "message": "Pedido detectado. Extraccion desactivada por configuracion."}
+
+                extraction = self._extract(db, llm_settings, inbound_message.company_id, normalized, inbound_message)
+                extraction_source = (extraction.get("_extraction_meta") or {}).get("source") if isinstance(extraction.get("_extraction_meta"), dict) else None
+            extraction_meta = extraction.get("_extraction_meta") if isinstance(extraction.get("_extraction_meta"), dict) else {}
             inbound_message.classification_json = json.dumps(classification, ensure_ascii=False)
-            tipo = str(classification.get("tipo_correo") or classification.get("type") or classification.get("tipo") or "").lower()
-            confidence = _confidence(classification.get("confianza") or classification.get("confidence"), 0.0)
             inbound_message.detected_type = tipo or None
             log_action(db, company_id=inbound_message.company_id, user=user, action="agent.classification_completed", entity_type="inbound_message", entity_id=inbound_message.id, message=f"Clasificacion: {tipo or 'sin tipo'} ({confidence:.2f})")
-
-            if not force_order and (tipo in {"no_pedido", "consulta", "incidencia"} or ("pedido" not in tipo and confidence < 0.75)):
-                inbound_message.status = "no_order"
-                inbound_message.processing_step = "classified_non_order"
-                inbound_message.last_processed_at = datetime.now(timezone.utc)
-                db.commit()
-                return {"ok": True, "message": "Entrada clasificada como no pedido.", "status": "no_order"}
-
-            if not force_order and (tipo == "dudoso" or confidence < 0.45):
-                inbound_message.status = "doubtful"
-                inbound_message.processing_step = "classified_doubtful"
-                inbound_message.processing_error = classification.get("motivo") or "Clasificacion dudosa."
-                inbound_message.last_processed_at = datetime.now(timezone.utc)
-                db.commit()
-                self.alerts.raise_alert(
-                    db,
-                    company_id=inbound_message.company_id,
-                    alert_type="doubtful_classification",
-                    title="Entrada dudosa",
-                    message=inbound_message.processing_error,
-                    severity="medium",
-                    inbound_message_id=inbound_message.id,
-                )
-                return {"ok": False, "message": inbound_message.processing_error}
-
-            if not llm_settings.can_extract_order and not force_order:
-                inbound_message.status = "order_detected"
-                inbound_message.processing_step = "order_detected_no_extraction"
-                inbound_message.last_processed_at = datetime.now(timezone.utc)
-                db.commit()
-                return {"ok": True, "status": "order_detected", "message": "Pedido detectado. Extraccion desactivada por configuracion."}
-
-            extraction = self._extract(db, llm_settings, inbound_message.company_id, normalized, inbound_message)
-            extraction_meta = extraction.get("_extraction_meta") if isinstance(extraction.get("_extraction_meta"), dict) else {}
             log_action(
                 db,
                 company_id=inbound_message.company_id,
@@ -1392,7 +1472,7 @@ class UnifiedOrderPipelineService:
                 action="agent.extraction_completed",
                 entity_type="inbound_message",
                 entity_id=inbound_message.id,
-                message=f"Extraccion: {extraction_meta.get('source') or 'legacy_extraction'}",
+                message=f"Extraccion: {extraction_meta.get('source') or extraction_source or 'legacy_extraction'}",
             )
             existing_order = None
             if force_order and inbound_message.order_id:
@@ -1410,14 +1490,25 @@ class UnifiedOrderPipelineService:
                         "order_id": existing_order.id,
                     }
 
-            order = self._create_order(
-                db,
-                inbound_message,
-                email,
-                extraction,
-                normalized,
-                existing_order=existing_order,
-            )
+            if email_fast_path:
+                order = self._create_order(
+                    db,
+                    inbound_message,
+                    email,
+                    extraction,
+                    normalized,
+                    existing_order=existing_order,
+                    fast_path=True,
+                )
+            else:
+                order = self._create_order(
+                    db,
+                    inbound_message,
+                    email,
+                    extraction,
+                    normalized,
+                    existing_order=existing_order,
+                )
             score_result = self.scoring.score_order(db, order)
             order.score = score_result.total_score
             order.status = self.scoring.status_for_score(db, inbound_message.company_id, order.score)
@@ -1641,6 +1732,38 @@ class UnifiedOrderPipelineService:
             return None, "structured_no_order_or_without_lines"
         return result, None
 
+    def _extract_structured_fast_path(
+        self,
+        settings: LLMSettings,
+        text: str,
+        inbound_message: InboundMessage | None = None,
+    ) -> tuple[OrderExtractionResult | None, str, str | None]:
+        if not settings.api_key_encrypted:
+            return None, "processing_error", "API key OpenAI no configurada."
+        try:
+            result = extract_order(
+                OrderExtractionInput(
+                    text=text[:16000],
+                    sourceType=self._source_type_for_extraction(inbound_message),
+                    sourceId=str(inbound_message.id) if inbound_message and inbound_message.id else None,
+                ),
+                model=settings.extraction_model or "gpt-4.1-mini",
+                api_key=decrypt_secret(settings.api_key_encrypted),
+                base_url=settings.base_url or "https://api.openai.com/v1",
+                timeout_seconds=settings.timeout_seconds,
+            )
+        except Exception as exc:
+            message = str(exc) or "Error llamando al proveedor IA."
+            lowered = message.lower()
+            if "un pedido debe incluir al menos una linea" in lowered or "pedido debe incluir al menos una linea" in lowered:
+                return None, "doubtful", "Pedido detectado pero no se pudieron extraer lineas validas."
+            return None, "processing_error", f"Extraccion estructurada fallida: {message[:180]}"
+        if not result.extracted_data.is_order:
+            return result, "no_order", "La entrada no es un pedido."
+        if not result.extracted_data.lines:
+            return None, "doubtful", "Pedido detectado pero no se pudieron extraer lineas validas."
+        return result, "order", None
+
     def _source_type_for_extraction(self, inbound_message: InboundMessage | None) -> str:
         if not inbound_message:
             return "unknown"
@@ -1758,6 +1881,7 @@ class UnifiedOrderPipelineService:
         source_text: str,
         *,
         existing_order: Order | None = None,
+        fast_path: bool = False,
     ) -> Order:
         customer_data = self._customer_from_extraction(extracted)
         order_data = self._order_from_extraction(extracted)
@@ -1775,38 +1899,53 @@ class UnifiedOrderPipelineService:
         matching_detected_name = None if detected_customer_is_tenant else (detected_name or None)
         matching_tax_id = None if detected_customer_is_tenant else (tax_id or None)
 
-        customer_decision = self.decision.customer_decision(
-            db,
-            inbound_message.company_id,
-            detected_name=matching_detected_name,
-            detected_code=detected_code or None,
-            sender=sender or None,
-            tax_id=matching_tax_id,
-            text=source_text,
-        )
-        customer, method, customer_score = self.matching.match(
-            db,
-            inbound_message.company_id,
-            sender=sender,
-            detected_name=matching_detected_name,
-            detected_code=detected_code,
-        )
-        if customer_decision["selected"] and customer_decision["selected"].customer_id:
-            candidate_customer = db.get(Customer, customer_decision["selected"].customer_id)
-            candidate_confidence = customer_decision["selected"].confidence
-            if (
-                candidate_customer
-                and not customer_decision["requires_review"]
-                and (not customer or candidate_confidence >= customer_score)
-            ):
-                customer = candidate_customer
-                method = customer_decision["selected"].source
-                customer_score = candidate_confidence
+        if fast_path:
+            customer, method, customer_score = self.matching.match(
+                db,
+                inbound_message.company_id,
+                sender=sender,
+                detected_name=matching_detected_name,
+                detected_code=detected_code,
+            )
+            customer_decision = {
+                "selected": None,
+                "alternatives": [],
+                "requires_review": customer is None or customer_score < 0.9,
+                "evidence": [],
+            }
+        else:
+            customer_decision = self.decision.customer_decision(
+                db,
+                inbound_message.company_id,
+                detected_name=matching_detected_name,
+                detected_code=detected_code or None,
+                sender=sender or None,
+                tax_id=matching_tax_id,
+                text=source_text,
+            )
+            customer, method, customer_score = self.matching.match(
+                db,
+                inbound_message.company_id,
+                sender=sender,
+                detected_name=matching_detected_name,
+                detected_code=detected_code,
+            )
+            if customer_decision["selected"] and customer_decision["selected"].customer_id:
+                candidate_customer = db.get(Customer, customer_decision["selected"].customer_id)
+                candidate_confidence = customer_decision["selected"].confidence
+                if (
+                    candidate_customer
+                    and not customer_decision["requires_review"]
+                    and (not customer or candidate_confidence >= customer_score)
+                ):
+                    customer = candidate_customer
+                    method = customer_decision["selected"].source
+                    customer_score = candidate_confidence
 
-        if customer_decision["requires_review"]:
-            customer = None
-            method = customer_decision["selected"].source if customer_decision["selected"] else method
-            customer_score = customer_decision["selected"].confidence if customer_decision["selected"] else customer_score
+            if customer_decision["requires_review"]:
+                customer = None
+                method = customer_decision["selected"].source if customer_decision["selected"] else method
+                customer_score = customer_decision["selected"].confidence if customer_decision["selected"] else customer_score
         if existing_order:
             order = existing_order
             order.lines.clear()
@@ -1867,51 +2006,61 @@ class UnifiedOrderPipelineService:
             product_name = raw_line.get("producto_detectado") or raw_line.get("producto") or raw_line.get("description") or raw_line.get("descripcion")
             reference = raw_line.get("referencia_detectada") or raw_line.get("referencia") or raw_line.get("reference")
             ean = raw_line.get("ean") or raw_line.get("sku")
-            product_decision = self.decision.product_decision(
-                db,
-                inbound_message.company_id,
-                customer_id=customer.id if customer else None,
-                reference=reference or None,
-                detected_name=product_name or None,
-                ean=ean or None,
-                text=raw_line.get("texto_original") or raw_line.get("original_text") or source_text,
-            )
-            semantic_candidates = product_decision.get("semantic_candidates") or []
             quantity = raw_line.get("cantidad") if "cantidad" in raw_line else raw_line.get("quantity")
             product, product_method, product_score = self.product_matching.match(db, inbound_message.company_id, reference=reference, detected_name=product_name)
-            if product_decision["selected"] and product_decision["selected"].product_id:
-                candidate_product = db.get(Product, product_decision["selected"].product_id)
-                candidate_confidence = product_decision["selected"].confidence
-                if candidate_product and (not product or candidate_confidence >= product_score):
-                    product = candidate_product
-                    product_method = product_decision["selected"].source
-                    product_score = candidate_confidence
+            semantic_candidates = []
+            if not fast_path:
+                product_decision = self.decision.product_decision(
+                    db,
+                    inbound_message.company_id,
+                    customer_id=customer.id if customer else None,
+                    reference=reference or None,
+                    detected_name=product_name or None,
+                    ean=ean or None,
+                    text=raw_line.get("texto_original") or raw_line.get("original_text") or source_text,
+                )
+                semantic_candidates = product_decision.get("semantic_candidates") or []
+                if product_decision["selected"] and product_decision["selected"].product_id:
+                    candidate_product = db.get(Product, product_decision["selected"].product_id)
+                    candidate_confidence = product_decision["selected"].confidence
+                    if candidate_product and (not product or candidate_confidence >= product_score):
+                        product = candidate_product
+                        product_method = product_decision["selected"].source
+                        product_score = candidate_confidence
             confidence = _confidence(raw_line.get("confianza_extraccion") or raw_line.get("confidence"), 0.7)
             parsed_quantity, quantity_issue = _parse_positive_quantity(quantity)
-            selected_product = product_decision["selected"]
-            deterministic_sources = {
-                "exact_reference",
-                "exact_ean",
-                "exact_sku",
-                "approved_alias",
-                "learned_alias",
-            }
-            product_is_deterministic = bool(
-                product
-                and selected_product
-                and selected_product.product_id == product.id
-                and not product_decision["requires_review"]
-                and selected_product.source in deterministic_sources
-            )
-            # Keep the legacy matcher's safe unique-reference behaviour when
-            # the decision engine has no candidate (for example a partial
-            # reference).
-            product_is_deterministic = product_is_deterministic or product_method in {
-                "referencia_exacta",
-                "referencia_parcial_unica",
-                "alias",
-                "alias_aprendido",
-            }
+            if fast_path:
+                product_is_deterministic = product_method in {
+                    "referencia_exacta",
+                    "referencia_parcial_unica",
+                    "alias",
+                    "alias_aprendido",
+                }
+            else:
+                selected_product = product_decision["selected"]
+                deterministic_sources = {
+                    "exact_reference",
+                    "exact_ean",
+                    "exact_sku",
+                    "approved_alias",
+                    "learned_alias",
+                }
+                product_is_deterministic = bool(
+                    product
+                    and selected_product
+                    and selected_product.product_id == product.id
+                    and not product_decision["requires_review"]
+                    and selected_product.source in deterministic_sources
+                )
+                # Keep the legacy matcher's safe unique-reference behaviour when
+                # the decision engine has no candidate (for example a partial
+                # reference).
+                product_is_deterministic = product_is_deterministic or product_method in {
+                    "referencia_exacta",
+                    "referencia_parcial_unica",
+                    "alias",
+                    "alias_aprendido",
+                }
             doubt_parts: list[str] = []
             if not product:
                 doubt_parts.append(f"Producto no encontrado por {product_method}")

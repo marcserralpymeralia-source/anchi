@@ -6,7 +6,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fastapi import UploadFile
 from sqlalchemy import create_engine, select, func
@@ -19,13 +19,16 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.agent.services import AgentProcessingService  # noqa: E402
+from app.agent.platform import UnifiedOrderPipelineService  # noqa: E402
 from app.channels.service import get_or_create_channel  # noqa: E402
+from app.agent.extraction.schema import ExtractedCustomer, ExtractedOrderLine, OrderExtraction, OrderExtractionInput, OrderExtractionResult  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import BackgroundJob, Customer, Email, EmailSettings, ImportJob, InputChannel, JobAttempt, LLMSettings, Order, OrderLine  # noqa: E402
+from app.db.models import BackgroundJob, Customer, Email, EmailSettings, ImportJob, InputChannel, InboundMessage, JobAttempt, LLMSettings, Order, OrderLine, Product  # noqa: E402
 from app.imports.service import create_preview  # noqa: E402
 from app.jobs.service import claim_next_job, enqueue_job, execute_job_inline, fail_job, finish_job, recover_stale_jobs, retry_job, get_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
+from app.core.encryption import encrypt_secret  # noqa: E402
 from app.tenancy.migrations import upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import _process_import_job, _process_job, run_worker_cycle  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
@@ -61,9 +64,41 @@ class JobsReliabilityTests(unittest.TestCase):
 
     def _seed_llm(self):
         db = self.TenantSession()
-        db.add(LLMSettings(company_id=1, api_key_encrypted="encrypted-token"))
+        db.add(
+            LLMSettings(
+                company_id=1,
+                api_key_encrypted=encrypt_secret("test-token"),
+                agent_enabled=True,
+                can_extract_order=True,
+                can_classify_email=True,
+                can_calculate_score=True,
+            )
+        )
         db.commit()
         db.close()
+
+    def _seed_fast_path_message(self, *, body: str, subject: str = "Pedido directo", sender: str = "compras@example.com"):
+        self._seed_master()
+        self._seed_llm()
+        upgrade_tenant_schema(self.tenant_engine, company_id=1, application_version="1.2.3")
+
+        db = self.TenantSession()
+        db.add(Product(company_id=1, reference="P-100", name="Producto demo"))
+        channel = get_or_create_channel(db, 1, "email")
+        channel.is_active = True
+        message = InboundMessage(
+            company_id=1,
+            channel_id=channel.id,
+            provider="imap",
+            source_external_id="mail-fast-path",
+            sender=sender,
+            subject=subject,
+            original_content=body,
+            content_type="email",
+        )
+        db.add(message)
+        db.commit()
+        return db, message
 
     def test_email_sync_job_skips_when_email_channel_is_disabled(self):
         db = self.TenantSession()
@@ -577,7 +612,7 @@ class JobsReliabilityTests(unittest.TestCase):
             "app.workers.jobs_worker.MasterSessionLocal",
             new=self.MasterSession,
         ), patch(
-            "app.workers.jobs_worker.AgentProcessingService.process_email",
+            "app.workers.jobs_worker.AgentProcessingService.process_email_fast",
             new=fake_process_email,
         ):
             summary = run_worker_cycle()
@@ -642,7 +677,7 @@ class JobsReliabilityTests(unittest.TestCase):
             "app.workers.jobs_worker.MasterSessionLocal",
             new=self.MasterSession,
         ), patch(
-            "app.workers.jobs_worker.AgentProcessingService.process_email",
+            "app.workers.jobs_worker.AgentProcessingService.process_email_fast",
             new=fake_process_email,
         ):
             summary = run_worker_cycle()
@@ -670,20 +705,15 @@ class JobsReliabilityTests(unittest.TestCase):
         job = enqueue_job(db, company_id=1, job_type="process_email", payload={"email_id": email.id}, created_by_user_id=1)
         db.close()
 
-        def fake_process_inbound_message(_self, session, inbound_message, user=None, force_order=False, email=None):  # noqa: ANN001
-            if inbound_message.order_id:
-                return {"ok": True, "status": "order_detected", "message": f"Pedido {inbound_message.order_id} ya habia sido creado.", "order_id": inbound_message.order_id, "score": 88}
-            order = Order(company_id=inbound_message.company_id, email_id=email.id if email else None, customer_detected_name="Cliente worker", status="pedido_pendiente_revision", score=88)
+        def fake_process_email_fast(_self, session, current_email, user=None, force_order=False):  # noqa: ANN001
+            order = Order(company_id=current_email.company_id, email_id=current_email.id if current_email else None, customer_detected_name="Cliente worker", status="pedido_pendiente_revision", score=88)
             session.add(order)
             session.flush()
-            session.add(OrderLine(company_id=inbound_message.company_id, order_id=order.id, original_text="3 cajas", quantity=3, unit="cajas", extraction_confidence=0.9, validation_status="validated"))
-            inbound_message.order_id = order.id
-            inbound_message.status = "order_detected"
-            inbound_message.processing_step = "completed"
+            session.add(OrderLine(company_id=current_email.company_id, order_id=order.id, original_text="3 cajas", quantity=3, unit="cajas", extraction_confidence=0.9, validation_status="validated"))
             session.commit()
             return {"ok": True, "status": "order_detected", "message": f"Pedido {order.id} creado.", "order_id": order.id, "score": 88}
 
-        with patch("app.workers.jobs_worker.MasterSessionLocal", new=self.MasterSession), patch("app.agent.platform.UnifiedOrderPipelineService.process_inbound_message", new=fake_process_inbound_message):
+        with patch("app.workers.jobs_worker.MasterSessionLocal", new=self.MasterSession), patch("app.workers.jobs_worker.AgentProcessingService.process_email_fast", new=fake_process_email_fast):
             summary = run_worker_cycle()
 
         self.assertEqual(summary["tenants"], 1)
@@ -694,6 +724,158 @@ class JobsReliabilityTests(unittest.TestCase):
         self.assertEqual(processed_job.status, "success")
         self.assertEqual(db.scalar(select(func.count()).select_from(Order)) or 0, 1)
         self.assertEqual(db.scalar(select(func.count()).select_from(JobAttempt).where(JobAttempt.job_id == job.id)) or 0, 1)
+        db.close()
+
+    def _run_fast_path_case(
+        self,
+        *,
+        extract_order_mock: Mock,
+        expected_status: str,
+        expected_ok: bool,
+        expected_order_count: int,
+        expected_message_contains: str,
+    ):
+        db, message = self._seed_fast_path_message(
+            body="Necesitamos 10 cajas de producto demo.",
+        )
+        pipeline = UnifiedOrderPipelineService()
+        no_call = Mock(side_effect=AssertionError("No se esperaba una llamada legacy/classification en el fast path de correo."))
+
+        with (
+            patch("app.agent.platform.extract_order", new=extract_order_mock),
+            patch("app.agent.platform.classify_sample", new=no_call),
+            patch("app.agent.platform.extract_sample", new=no_call),
+            patch("app.agent.platform.retrieve_product_knowledge", new=no_call),
+            patch("app.agent.platform.find_product_candidates", new=no_call),
+            patch.object(pipeline.decision, "customer_decision", new=no_call),
+            patch.object(pipeline.decision, "product_decision", new=no_call),
+        ):
+            result = pipeline.process_inbound_message(db, message, email_fast_path=True)
+
+        order_count = db.scalar(select(func.count()).select_from(Order)) or 0
+        order = db.scalar(select(Order).where(Order.company_id == 1))
+        db.refresh(message)
+
+        self.assertEqual(extract_order_mock.call_count, 1)
+        self.assertEqual(no_call.call_count, 0)
+        self.assertEqual(order_count, expected_order_count)
+        self.assertEqual(result["status"], expected_status)
+        self.assertEqual(result["ok"], expected_ok)
+        self.assertIn(expected_message_contains, result["message"])
+        return db, message, order
+
+    def test_email_fast_path_uses_single_structured_extraction_without_fallback(self):
+        structured = OrderExtractionResult(
+            raw_input=OrderExtractionInput(
+                text="Asunto: Pedido directo\nRemitente: compras@example.com\n\nNecesitamos 10 cajas de producto demo.",
+                source_type="email",
+                source_id="1",
+            ),
+            extracted_data=OrderExtraction(
+                is_order=True,
+                customer=ExtractedCustomer(raw_name="Cliente demo", raw_name_source="expressed"),
+                lines=[
+                    ExtractedOrderLine(
+                        raw_text="10 cajas de producto demo",
+                        raw_description="Producto demo",
+                        raw_description_source="expressed",
+                        reference="P-100",
+                        reference_source="expressed",
+                        quantity=10,
+                        quantity_source="expressed",
+                        unit="cajas",
+                        unit_source="expressed",
+                        notes=[],
+                        uncertainties=[],
+                        requires_review=False,
+                    )
+                ],
+                notes=[],
+                uncertainties=[],
+                requires_review=False,
+            ),
+            model="gpt-4.1-mini",
+        )
+        extract_mock = Mock(return_value=structured)
+
+        db, message, order = self._run_fast_path_case(
+            extract_order_mock=extract_mock,
+            expected_status="order_detected",
+            expected_ok=True,
+            expected_order_count=1,
+            expected_message_contains="creado",
+        )
+
+        self.assertTrue(order)
+        self.assertEqual(order.customer_detected_name, "Cliente demo")
+        self.assertEqual(order.lines[0].validation_status, "validated")
+        self.assertFalse(message.classification_json and "legacy" in message.classification_json.lower())
+        db.close()
+
+    def test_email_fast_path_explicit_no_order_does_not_create_order(self):
+        structured = OrderExtractionResult(
+            raw_input=OrderExtractionInput(
+                text="Asunto: Consulta\nRemitente: compras@example.com\n\nSolo queria preguntar por un pedido anterior.",
+                source_type="email",
+                source_id="1",
+            ),
+            extracted_data=OrderExtraction(
+                is_order=False,
+                customer=ExtractedCustomer(raw_name=None, raw_name_source="unknown"),
+                lines=[],
+                notes=[],
+                uncertainties=[],
+                requires_review=False,
+            ),
+            model="gpt-4.1-mini",
+        )
+        extract_mock = Mock(return_value=structured)
+
+        db, message, order = self._run_fast_path_case(
+            extract_order_mock=extract_mock,
+            expected_status="no_order",
+            expected_ok=True,
+            expected_order_count=0,
+            expected_message_contains="no es un pedido",
+        )
+
+        self.assertIsNone(order)
+        self.assertEqual(message.status, "no_order")
+        self.assertEqual(message.processing_step, "classified_non_order")
+        db.close()
+
+    def test_email_fast_path_order_without_lines_stays_doubtful_without_legacy_fallback(self):
+        extract_mock = Mock(side_effect=ValueError("Un pedido debe incluir al menos una linea extraida."))
+
+        db, message, order = self._run_fast_path_case(
+            extract_order_mock=extract_mock,
+            expected_status="doubtful",
+            expected_ok=False,
+            expected_order_count=0,
+            expected_message_contains="lineas validas",
+        )
+
+        self.assertIsNone(order)
+        self.assertEqual(message.status, "doubtful")
+        self.assertEqual(message.processing_step, "structured_doubtful")
+        self.assertIn("lineas validas", message.processing_error or "")
+        db.close()
+
+    def test_email_fast_path_structured_failure_fails_fast_without_legacy_fallback(self):
+        extract_mock = Mock(side_effect=RuntimeError("Timeout llamando al proveedor IA."))
+
+        db, message, order = self._run_fast_path_case(
+            extract_order_mock=extract_mock,
+            expected_status="error",
+            expected_ok=False,
+            expected_order_count=0,
+            expected_message_contains="Extraccion estructurada fallida",
+        )
+
+        self.assertIsNone(order)
+        self.assertEqual(message.status, "error")
+        self.assertEqual(message.processing_step, "structured_extraction_error")
+        self.assertIn("Extraccion estructurada fallida", message.processing_error or "")
         db.close()
 
 
