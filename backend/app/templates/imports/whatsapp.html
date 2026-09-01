@@ -29,7 +29,7 @@
             <h3>Entrada</h3>
             <p class="muted">Selecciona el canal y pega el contenido. La previsualización no guarda nada todavía.</p>
           </div>
-          <span class="badge">Canal: {{ channel_label }}</span>
+          <span class="badge" id="manual-channel-badge">Canal: {{ channel_label }}</span>
         </div>
 
         <form class="stack js-loading-form" method="post" action="/imports/manual/preview" enctype="multipart/form-data" id="manual-import-form">
@@ -68,7 +68,7 @@
             </div>
           </div>
 
-          <label>Contenido recibido<textarea name="raw_text" rows="14" placeholder="Pega aquí el correo o la conversación de WhatsApp">{{ raw_text }}</textarea></label>
+          <label>Contenido recibido<textarea id="manual-raw-text" name="raw_text" rows="14" placeholder="{{ 'Pega aquí la conversación o mensajes de WhatsApp' if channel_is_whatsapp else 'Pega aquí el correo recibido' }}">{{ raw_text }}</textarea></label>
           <label>Archivo adjunto<input type="file" name="file" accept=".txt,.csv,.json,.pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.webp"></label>
           <div class="actions">
             <button data-loading-text="Previsualizando...">Previsualizar</button>
@@ -80,7 +80,7 @@
       <article class="subpanel stack">
         <div class="section-title-row">
           <div>
-            <h3>Vista previa</h3>
+            <h3 id="manual-preview-heading">{{ "Vista previa: Conversación WhatsApp" if channel_is_whatsapp else "Vista previa: Correo recibido" }}</h3>
             <p class="muted">Email o chat según el canal seleccionado.</p>
           </div>
           <span class="badge">{{ preview_messages|length }} mensajes</span>
@@ -128,7 +128,14 @@
               </details>
             {% endif %}
           {% else %}
-            <p class="muted">Todavía no has previsualizado ninguna conversación.</p>
+            <details class="review-mail-card review-mail-toggle" open>
+              <summary>Conversación recibida</summary>
+              <div class="review-mail-body-head">
+                <span class="muted review-mail-snippet">{{ (raw_text or "")[:120] }}</span>
+                <button type="button" class="secondary compact-button" onclick="copyText('manual-whatsapp-body')">Copiar</button>
+              </div>
+              <pre id="manual-whatsapp-body" class="doc-text review-email-body">{{ raw_text }}</pre>
+            </details>
           {% endif %}
         {% endif %}
       </article>
@@ -185,24 +192,37 @@
           </div>
           <div class="job-log-list">
             {% for line in result.lines %}
-              <article class="job-log-row">
-                <strong>{{ line.original_text }}</strong>
-                <span>{{ line.reference or "Sin referencia" }} · {{ line.match_method }} · {{ line.confidence }}%</span>
-                <p>{{ line.matched_product }}{% if line.quantity is not none %} · {{ line.quantity }} {{ line.unit }}{% endif %}</p>
+              <article class="job-log-item">
+                <header>
+                  <strong>{{ line.original_text }}</strong>
+                  <span class="badge {% if line.has_match %}status-confirmed{% else %}status-discarded{% endif %}">
+                    {{ "Match" if line.has_match else "Sin match" }}
+                    · {{ line.match_method }} · {{ "%.0f"|format(line.confidence) }}%
+                  </span>
+                </header>
+                <div class="field-diff-list">
+                  <div><span>Producto</span><strong>{{ line.matched_product or line.product_name or "Sin identificar" }}</strong></div>
+                  <div><span>Referencia</span><strong>{{ line.reference or "—" }}</strong></div>
+                  <div><span>Cantidad</span><strong>{{ line.quantity if line.quantity is not none else "—" }}</strong></div>
+                  <div><span>Unidad</span><strong>{{ line.unit or "—" }}</strong></div>
+                </div>
               </article>
             {% else %}
-              <p class="muted">Sin líneas detectadas.</p>
+              <p class="muted">No se detectaron líneas de pedido en la entrada.</p>
             {% endfor %}
           </div>
         {% else %}
-          <p class="muted">Previsualiza la conversación para ver el scoring y la propuesta del agente aquí.</p>
+          <div class="empty-action-card empty-action-card-compact">
+            <strong>Previsualiza la conversación para ver el scoring y la propuesta del agente aquí.</strong>
+            <p>Usa el botón «Previsualizar» para procesar la entrada sin guardar cambios en la base de datos.</p>
+          </div>
         {% endif %}
       </article>
 
       <article class="subpanel stack">
         <div class="section-title-row">
           <div>
-            <h3>Acciones</h3>
+            <h4>Acciones</h4>
             <p class="muted">Primero procesamos la entrada. Después la confirmamos en el tenant.</p>
           </div>
           <span class="badge">Operativo</span>
@@ -251,14 +271,26 @@
   (function() {
     const form = document.getElementById("manual-import-form");
     const channelInput = document.getElementById("manual-channel-input");
+    const channelBadge = document.getElementById("manual-channel-badge");
+    const previewHeading = document.getElementById("manual-preview-heading");
+    const rawTextArea = document.getElementById("manual-raw-text");
     const radios = form ? form.querySelectorAll("input[name='channel_switch']") : [];
     const panes = document.querySelectorAll("[data-channel-pane]");
+
     function syncChannel(value) {
       if (channelInput) channelInput.value = value;
+      if (channelBadge) channelBadge.textContent = value === "whatsapp" ? "Canal: WhatsApp" : "Canal: Email";
+      if (previewHeading) previewHeading.textContent = value === "whatsapp" ? "Vista previa: Conversación WhatsApp" : "Vista previa: Correo recibido";
+      if (rawTextArea) {
+        rawTextArea.placeholder = value === "whatsapp"
+          ? "Pega aquí la conversación o mensajes de WhatsApp (ej: [20/08 10:30] Cliente: Hola...)"
+          : "Pega aquí el correo recibido o pedido...";
+      }
       panes.forEach((pane) => {
         pane.hidden = pane.getAttribute("data-channel-pane") !== value;
       });
     }
+
     radios.forEach((radio) => {
       radio.addEventListener("change", () => syncChannel(radio.value));
     });

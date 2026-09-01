@@ -3,19 +3,11 @@
 {% set title = "Buzón de WhatsApp" %}
 {% block content %}
 <div class="channel-inbox-shell whatsapp-inbox-shell">
-  <header class="channel-inbox-toolbar">
-    <div class="channel-inbox-heading">
-      <div class="channel-inbox-title-line">
-        <span class="channel-inbox-mark whatsapp-mark">{{ icon_whatsapp(18) }}</span>
-        <div>
-          <p class="page-kicker">Conversaciones</p>
-          <h2>Buzón de WhatsApp</h2>
-        </div>
-        <span class="badge channel-inbox-count">{{ summary.conversations }} contactos</span>
-      </div>
-      <p class="muted">Mensajes recibidos en el número conectado, separados del buzón de correo.</p>
+  <header class="channel-inbox-toolbar page-content-header">
+    <div class="channel-inbox-heading page-context">
+      <span class="page-kicker">Conversaciones</span>
     </div>
-    <div class="channel-inbox-toolbar-meta">
+    <div class="channel-inbox-toolbar-meta page-header-actions">
       {% if config.display_phone_number %}<span class="channel-number">{{ config.display_phone_number }}</span>{% endif %}
       <span class="badge {% if ready_to_send %}status-ready{% else %}status-doubtful{% endif %}">{{ "Conectado" if ready_to_send else "Pendiente de conexión" }}</span>
     </div>

@@ -87,6 +87,65 @@ def _learning_status_label(value: str | None) -> str:
     return mapping.get((value or "").lower(), value or "Sin estado")
 
 
+def _record_correction_alias(db: Session, correction: ManualCorrection) -> LearnedAlias | None:
+    """Consolidate a customer/product correction as a usable learned alias."""
+    entity_type = (correction.entity_type or "").strip().lower()
+    if entity_type not in {"customer", "product"} or not correction.corrected_entity_id:
+        return None
+
+    alias = (correction.agent_value or correction.original_value or "").strip()[:255]
+    if not alias:
+        return None
+
+    customer_id = None
+    product_id = None
+    entity = None
+    if entity_type == "customer":
+        entity = db.get(Customer, correction.corrected_entity_id)
+        if entity and entity.company_id == correction.company_id:
+            customer_id = entity.id
+            canonical_value = f"{entity.code} · {entity.fiscal_name}"[:255]
+        else:
+            return None
+    else:
+        entity = db.get(Product, correction.corrected_entity_id)
+        if entity and entity.company_id == correction.company_id:
+            product_id = entity.id
+            canonical_value = f"{entity.reference} · {entity.name}"[:255]
+        else:
+            return None
+
+    existing = db.scalar(
+        select(LearnedAlias).where(
+            LearnedAlias.company_id == correction.company_id,
+            LearnedAlias.alias_type == entity_type,
+            func.lower(LearnedAlias.alias) == alias.lower(),
+        )
+    )
+    if existing:
+        existing.canonical_value = canonical_value
+        existing.customer_id = customer_id
+        existing.product_id = product_id
+        existing.source_correction_id = correction.id
+        existing.source = f"manual_correction:{correction.id}"
+        existing.confidence = max(existing.confidence or 0, 0.9)
+        return existing
+
+    learned = LearningService().record_alias(
+        db,
+        company_id=correction.company_id,
+        alias_type=entity_type,
+        alias=alias,
+        canonical_value=canonical_value,
+        customer_id=customer_id,
+        product_id=product_id,
+        source=f"manual_correction:{correction.id}",
+        confidence=0.9,
+    )
+    learned.source_correction_id = correction.id
+    return learned
+
+
 def learning_overview(db: Session, company_id: int, limit: int = 12) -> dict:
     email_settings = get_or_create_settings(db, EmailSettings, company_id)
     llm_settings = get_or_create_settings(db, LLMSettings, company_id)
@@ -107,9 +166,75 @@ def learning_overview(db: Session, company_id: int, limit: int = 12) -> dict:
     import_jobs_total = 0
     import_jobs_errors = 0
     rag_cases_total = db.scalar(select(func.count()).select_from(RagCase).where(RagCase.company_id == company_id)) or 0
+    pending_alias_rows = db.scalars(select(LearnedAlias).where(LearnedAlias.company_id == company_id, LearnedAlias.approved == False).order_by(LearnedAlias.created_at.desc())).all()
+    pending_correction_rows = db.scalars(select(ManualCorrection).where(ManualCorrection.company_id == company_id, ManualCorrection.should_learn == True).order_by(ManualCorrection.created_at.desc())).all()
+    learned_correction_rows = db.scalars(select(ManualCorrection).where(ManualCorrection.company_id == company_id, ManualCorrection.corrected_value.is_not(None), ManualCorrection.should_learn == False).order_by(ManualCorrection.created_at.desc()).limit(limit)).all()
     document_rows = db.scalars(select(RagDocument).where(RagDocument.company_id == company_id).order_by(RagDocument.created_at.desc()).limit(limit)).all()
     case_rows = db.scalars(select(RagCase).where(RagCase.company_id == company_id).order_by(RagCase.created_at.desc()).limit(limit)).all()
     prompt_rows = db.scalars(select(PromptTemplate).where(PromptTemplate.company_id == company_id).order_by(PromptTemplate.purpose)).all()
+
+    suggestions = []
+    for alias in pending_alias_rows:
+        cust = db.get(Customer, alias.customer_id) if alias.customer_id else None
+        prod = db.get(Product, alias.product_id) if alias.product_id else None
+        suggestions.append({
+            "id": alias.id,
+            "type": "alias",
+            "type_label": f"Alias {alias.alias_type.title()}",
+            "detected": alias.alias,
+            "suggested": alias.canonical_value,
+            "source": alias.source or "Detección",
+            "customer_label": f"{cust.code} · {cust.fiscal_name}" if cust else None,
+            "product_label": f"{prod.reference} · {prod.name}" if prod else None,
+            "order_label": None,
+            "confidence": alias.confidence,
+            "status": "Pendiente",
+            "status_class": "status-doubtful",
+            "accept_href": f"/learning/aliases/{alias.id}/approve",
+            "ignore_href": f"/learning/aliases/{alias.id}/ignore",
+            "action_label": "Aprobar",
+        })
+    for corr in pending_correction_rows:
+        cust = db.get(Customer, corr.customer_id) if corr.customer_id else None
+        ord_obj = db.get(Order, corr.order_id) if corr.order_id else None
+        suggestions.append({
+            "id": corr.id,
+            "type": "correction",
+            "type_label": f"Corrección {corr.field_name.title()}",
+            "detected": corr.original_value or "—",
+            "suggested": corr.corrected_value or "—",
+            "source": corr.reason or "Revisión manual",
+            "customer_label": f"{cust.code} · {cust.fiscal_name}" if cust else None,
+            "product_label": None,
+            "order_label": f"Pedido #{ord_obj.id}" if ord_obj else None,
+            "confidence": 0.9,
+            "status": "Pendiente",
+            "status_class": "status-doubtful",
+            "accept_href": f"/learning/corrections/{corr.id}/accept",
+            "ignore_href": f"/learning/corrections/{corr.id}/ignore",
+            "action_label": "Aprender",
+        })
+
+    corrections = []
+    for corr in learned_correction_rows:
+        cust = db.get(Customer, corr.customer_id) if corr.customer_id else None
+        ord_obj = db.get(Order, corr.order_id) if corr.order_id else None
+        corrections.append({
+            "id": corr.id,
+            "created_at": corr.created_at,
+            "type_label": f"Corrección {corr.field_name.title()}",
+            "field_name": corr.field_name,
+            "before_value": corr.original_value,
+            "after_value": corr.corrected_value,
+            "before": corr.original_value,
+            "after": corr.corrected_value,
+            "customer_label": f"{cust.code} · {cust.fiscal_name}" if cust else None,
+            "order_label": f"Pedido #{ord_obj.id}" if ord_obj else None,
+            "user_label": "Operador",
+            "status": "Consolidada",
+            "status_class": "status-confirmed",
+        })
+
     return {
         "summary": {
             "pending_suggestions": pending_corrections + pending_aliases,
@@ -133,6 +258,8 @@ def learning_overview(db: Session, company_id: int, limit: int = 12) -> dict:
             "review_threshold": scoring_settings.review_threshold,
             "doubtful_threshold": scoring_settings.doubtful_threshold,
         },
+        "suggestions": suggestions,
+        "corrections": corrections,
         "documents": [
             {
                 "id": document.id,
@@ -200,12 +327,20 @@ def accept_learning_correction(correction_id: int, request: Request, db: Session
         return RedirectResponse("/learning", status_code=303)
     correction = db.get(ManualCorrection, correction_id)
     if correction and correction.company_id == user.company_id:
-        if correction.corrected_value:
-            LearningService().record_alias(db, company_id=user.company_id, alias_type=correction.entity_type, alias=correction.original_value or correction.field_name, canonical_value=correction.corrected_value, source=f"manual_correction:{correction.id}", confidence=0.9)
+        _record_correction_alias(db, correction)
         correction.should_learn = False
         db.commit()
-        log_action(db, company_id=user.company_id, user=user, action="learning.correction.accept", entity_type="manual_correction", entity_id=correction.id, message="Correccion aceptada como aprendizaje")
-    return RedirectResponse(f"/learning?tab={request.query_params.get('tab', 'suggestions')}", status_code=303)
+        log_action(
+            db,
+            company_id=user.company_id,
+            user=user,
+            action="learning.correction.accepted",
+            entity_type="manual_correction",
+            entity_id=correction.id,
+            message="Corrección aceptada como aprendizaje",
+            metadata={"field": correction.field_name},
+        )
+    return _redirect_back(request, "/learning?tab=suggestions")
 
 
 @router.post("/learning/corrections/{correction_id}/ignore")
@@ -214,13 +349,24 @@ def ignore_learning_correction(correction_id: int, request: Request, db: Session
         return RedirectResponse("/learning", status_code=303)
     correction = db.get(ManualCorrection, correction_id)
     if correction and correction.company_id == user.company_id:
+        field_name = correction.field_name
         correction.should_learn = False
         db.commit()
-        log_action(db, company_id=user.company_id, user=user, action="learning.correction.ignore", entity_type="manual_correction", entity_id=correction.id, message="Correccion ignorada")
-    return RedirectResponse(f"/learning?tab={request.query_params.get('tab', 'suggestions')}", status_code=303)
+        log_action(
+            db,
+            company_id=user.company_id,
+            user=user,
+            action="learning.correction.ignored",
+            entity_type="manual_correction",
+            entity_id=correction.id,
+            message="Corrección ignorada",
+            metadata={"field": field_name},
+        )
+    return _redirect_back(request, "/learning?tab=suggestions")
 
 
 @router.post("/learning/aliases/{alias_id}/approve")
+@router.post("/learning/aliases/{alias_id}/accept")
 def approve_learning_alias(alias_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not has_admin_access(user):
         return RedirectResponse("/learning", status_code=303)
@@ -239,10 +385,10 @@ def ignore_learning_alias(alias_id: int, request: Request, db: Session = Depends
         return RedirectResponse("/learning", status_code=303)
     alias = db.scalar(select(LearnedAlias).where(LearnedAlias.id == alias_id, LearnedAlias.company_id == user.company_id))
     if alias:
-        alias.approved = False
-        alias.approved_by = None
+        ignored_alias_id = alias.id
+        db.delete(alias)
         db.commit()
-        log_action(db, company_id=user.company_id, user=user, action="learning.alias.ignore", entity_type="learned_alias", entity_id=alias.id, message="Alias ignorado")
+        log_action(db, company_id=user.company_id, user=user, action="learning.alias.ignore", entity_type="learned_alias", entity_id=ignored_alias_id, message="Alias ignorado")
     return RedirectResponse(f"/learning?tab={request.query_params.get('tab', 'suggestions')}", status_code=303)
 
 

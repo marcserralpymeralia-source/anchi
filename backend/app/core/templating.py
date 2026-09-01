@@ -19,16 +19,23 @@ TEMPLATES_DIR = APP_DIR / "templates"
 
 
 def status_label(value: str | None) -> str:
+    if not value:
+        return ""
     labels = {
-        "pedido_pendiente_revision": "Pendiente de revision",
-        "pending_review": "Pendiente de revision",
+        "pedido_pendiente_revision": "Pendiente de revisión",
+        "pending_review": "Pendiente de revisión",
+        "pending": "Pendiente",
         "pedido_confirmado": "Confirmado",
         "pedido_validado": "Confirmado",
+        "confirmed": "Confirmado",
         "pedido_exportado": "Exportado",
-        "error_exportacion": "Error de exportacion",
+        "exported": "Exportado",
+        "error_exportacion": "Error de exportación",
+        "export_failed": "Error de exportación",
         "error_procesamiento": "Error de procesamiento",
         "no_pedido": "No contiene pedido",
         "descartado": "Descartado",
+        "discarded": "Descartado",
         "deleted": "Eliminado",
         "archived_deleted": "Eliminado",
         "cerrado": "Cerrado",
@@ -39,30 +46,48 @@ def status_label(value: str | None) -> str:
         "consulta": "Consulta",
         "incidencia": "Incidencia",
         "no_importable": "No importable",
+        "not_importable": "No importable",
         "dudoso": "Dudoso",
+        "doubtful": "Dudoso",
+        "reviewable": "Revisable",
+        "safe": "Seguro",
+        "ready": "Listo",
         "active": "Activo",
         "inactive": "Inactivo",
+        "processed": "Procesado",
+        "order_review_required": "Revisión requerida",
+        "order_blocked": "Pedido bloqueado",
+        "automation_blocked": "Automatización bloqueada",
+        "confirmar_pedido": "Confirmar pedido",
+        "without_score": "Sin puntuación",
+        "no_score": "Sin puntuación",
+        "draft": "Borrador",
+        "open": "Nueva",
+        "seen": "Vista",
+        "resolved": "Resuelta",
+        "ignored": "Ignorada",
     }
-    return labels.get(value or "", value or "")
+    val_clean = str(value).lower().strip()
+    return labels.get(val_clean, labels.get(value, value.replace("_", " ").title()))
 
 
 def status_class(value: str | None) -> str:
-    value = value or ""
-    if value in {"pedido_pendiente_revision", "pending_review"}:
+    value = (value or "").lower().strip()
+    if value in {"pedido_pendiente_revision", "pending_review", "pending", "draft", "open"}:
         return "status-pending"
-    if value in {"pedido_validado", "pedido_confirmado"}:
+    if value in {"pedido_validado", "pedido_confirmado", "confirmed", "resolved", "safe", "ready"}:
         return "status-confirmed"
-    if value == "pedido_exportado":
+    if value in {"pedido_exportado", "exported", "sent"}:
         return "status-exported"
     if value in {"cerrado", "cancelado"}:
         return "status-confirmed"
-    if value.startswith("error"):
+    if value.startswith("error") or value in {"export_failed", "order_blocked", "automation_blocked"}:
         return "status-error"
     if value == "no_pedido":
         return "status-no-order"
-    if value in {"dudoso", "no_importable"}:
+    if value in {"dudoso", "doubtful", "reviewable", "no_importable", "not_importable"}:
         return "status-doubtful"
-    if value in {"descartado", "deleted", "archived_deleted"}:
+    if value in {"descartado", "discarded", "deleted", "archived_deleted", "ignored"}:
         return "status-discarded"
     return ""
 

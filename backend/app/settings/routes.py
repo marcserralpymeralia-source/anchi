@@ -263,13 +263,13 @@ def build_settings_dashboard(db: Session, user: TenantUser, metrics: dict, llm: 
     progress = round((configured * 100) / len(visible_modules)) if visible_modules else 0
     module_map = {module["key"]: module for module in modules}
     checklist = [
-        {"label": "Empresa e identidad básica", "state": "done" if company and company.name and branding.app_name else "pending"},
-        {"label": "Canal de entrada conectado", "state": "done" if active_channels_count else "pending"},
-        {"label": "Agente IA configurado", "state": "done" if llm.provider != "disabled" and llm.api_key_encrypted else "pending"},
-        {"label": "Clientes y productos cargados", "state": "done" if customer_count and product_count else "pending"},
-        {"label": "Scoring definido", "state": "done" if scoring.safe_threshold and scoring.review_threshold else "pending"},
-        {"label": "Motor de decisión activo", "state": "done" if decision.enable_exact_match or decision.enable_alias_match else "pending"},
-        {"label": "Exportación configurada", "state": "done" if export.file_type and ftp.host else "pending"},
+        {"label": "Empresa e identidad básica", "state": "done" if module_map.get("general", {}).get("state") == "ready" and module_map.get("identity", {}).get("state") in ("ready", "warning") else "pending"},
+        {"label": "Canal de entrada conectado", "state": "done" if module_map.get("channels", {}).get("state") == "ready" else "pending"},
+        {"label": "Agente IA configurado", "state": "done" if module_map.get("ai", {}).get("state") in ("ready", "warning") else "pending"},
+        {"label": "Clientes y productos cargados", "state": "done" if module_map.get("customers-products", {}).get("state") in ("ready", "warning") else "pending"},
+        {"label": "Scoring definido", "state": "done" if module_map.get("scoring", {}).get("state") == "ready" else "pending"},
+        {"label": "Motor de decisión activo", "state": "done" if module_map.get("decision", {}).get("state") in ("ready", "warning") else "pending"},
+        {"label": "Exportación configurada", "state": "done" if module_map.get("export", {}).get("state") == "ready" else "pending"},
     ]
     return {
         "progress": progress,

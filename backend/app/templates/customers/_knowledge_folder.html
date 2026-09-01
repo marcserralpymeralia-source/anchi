@@ -142,12 +142,12 @@
                 <tbody>
                   {% for row in top_articles %}
                     <tr>
-                      <td class="wide-cell">{{ row.product_name }}</td>
+                      <td class="wide-cell" title="{{ row.product_name }}">{{ row.product_name }}</td>
                       <td>{{ row.reference }}</td>
                       <td>{{ row.times_ordered }}</td>
                       <td>{{ row.last_order_at | local_dt(tenant_timezone, "%d/%m/%Y", "—") }}</td>
                       <td>{{ "%.2f"|format(row.average_quantity or 0) }} {{ row.usual_unit or "" }}</td>
-                      <td class="wide-cell">{{ row.comments or "—" }}</td>
+                      <td class="wide-cell" title="{{ row.comments or '' }}">{{ row.comments or "—" }}</td>
                     </tr>
                   {% endfor %}
                 </tbody>

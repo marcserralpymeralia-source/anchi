@@ -58,24 +58,39 @@
 
   <div class="alerts-list page-alerts-list">
     {% for alert in alerts %}
-      <article class="alert-card alert-{{ alert.severity }} alert-status-{{ alert.status }}">
-        <div class="alert-card-main">
-          <div class="alert-card-meta">
-            <span class="badge">{{ alert.severity_label }}</span>
-            <span class="badge">{{ alert.status_label }}</span>
-            <span class="badge">{{ alert.entity_type }}</span>
-            <span class="badge">{{ alert.type }}</span>
+      <article class="alert-card alert-{{ alert.severity }} alert-status-{{ alert.status }}" data-alert-id="{{ alert.id }}">
+        <div class="alert-card-inner">
+          <div class="alert-card-header">
+            <div class="alert-card-tags">
+              <span class="alert-severity-badge severity-{{ alert.severity }}">{{ alert.severity_label }}</span>
+              <span class="badge">{{ alert.type_label }}</span>
+              <span class="badge">{{ alert.status_label }}</span>
+              <span class="badge">{{ alert.entity_type }} #{{ alert.entity_id }}</span>
+            </div>
+            <span class="alert-time">{{ alert.created_label }}</span>
           </div>
-          <strong>{{ alert.title }}</strong>
-          <p>{{ alert.message }}</p>
-          <small>{{ alert.created_label }} · {{ alert.entity_type }} {{ alert.entity_id }}</small>
+          <div class="alert-card-body">
+            <strong class="alert-card-title">{{ alert.title }}</strong>
+            <p class="alert-card-msg">{{ alert.message }}</p>
+          </div>
         </div>
-        <div class="alert-card-actions">
-          <a class="button secondary compact-button" href="{{ alert.action_href }}">{{ alert.action_label }}</a>
-          <form class="js-loading-form" method="post" action="/alerts/{{ alert.id }}/mark-read"><button class="secondary compact-button" data-loading-text="Marcando...">Vista</button></form>
-          <form class="js-loading-form" method="post" action="/alerts/{{ alert.id }}/resolve"><button class="secondary compact-button" data-loading-text="Resolviendo...">Resolver</button></form>
-          <form class="js-loading-form" method="post" action="/alerts/{{ alert.id }}/ignore"><button class="secondary compact-button" data-loading-text="Ignorando...">Ignorar</button></form>
-          <form class="js-loading-form" method="post" action="/alerts/{{ alert.id }}/reopen"><button class="secondary compact-button" data-loading-text="Reabriendo...">Reabrir</button></form>
+        <div class="alert-card-bottom-actions">
+          {% if alert.action_href %}
+            <a class="alert-btn-primary" href="{{ alert.action_href }}">{{ alert.action_label }}</a>
+          {% endif %}
+          {% if alert.secondary_action == "mark-read" %}
+            <form class="js-loading-form" method="post" action="/alerts/{{ alert.id }}/mark-read" style="display:contents;">
+              <button class="alert-btn-secondary" data-loading-text="Marcando...">Marcar vista</button>
+            </form>
+          {% elif alert.secondary_action == "resolve" %}
+            <form class="js-loading-form" method="post" action="/alerts/{{ alert.id }}/resolve" style="display:contents;">
+              <button class="alert-btn-secondary" data-loading-text="Resolviendo...">Resolver</button>
+            </form>
+          {% elif alert.secondary_action == "reopen" %}
+            <form class="js-loading-form" method="post" action="/alerts/{{ alert.id }}/reopen" style="display:contents;">
+              <button class="alert-btn-secondary" data-loading-text="Reabriendo...">Reabrir</button>
+            </form>
+          {% endif %}
         </div>
       </article>
     {% else %}

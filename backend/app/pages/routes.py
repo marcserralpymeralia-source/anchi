@@ -472,41 +472,6 @@ def history_page(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
-    return pedidos_page(
-        request=request,
-        date_range=date_range,
-        date_from=date_from,
-        date_to=date_to,
-        kind=kind,
-        state=state,
-        customer_id=customer_id,
-        search=search,
-        page=page,
-        page_size=page_size,
-        selected_id=selected_id,
-        selected_kind=selected_kind,
-        db=db,
-        user=user,
-    )
-
-
-@router.get("/pedidos")
-def pedidos_page(
-    request: Request,
-    date_range: str = "90d",
-    date_from: str = "",
-    date_to: str = "",
-    kind: str = "all",
-    state: str = "all",
-    customer_id: str = "",
-    search: str = "",
-    page: int = 1,
-    page_size: int = 50,
-    selected_id: int | None = None,
-    selected_kind: str = "email",
-    db: Session = Depends(get_tenant_db),
-    user: TenantUser = Depends(current_user),
-):
     start, end = _history_bounds(date_range, date_from, date_to)
     scoring_settings = get_or_create_settings(db, ScoringSettings, user.company_id)
     allowed_kind = kind if kind in {"all", "orders", "emails"} else "all"
@@ -751,6 +716,16 @@ def pedidos_page(
             "pagination": {"page": page, "page_size": page_size, "total_items": total_items, "total_pages": total_pages, "has_previous": page > 1, "has_next": page < total_pages, "start_item": start_item, "end_item": end_item, "allowed_page_sizes": (10, 25, 50, 100)},
         },
     )
+
+
+@router.get("/pedidos")
+def pedidos_page(
+    request: Request,
+    user: TenantUser = Depends(current_user),
+):
+    query = request.url.query
+    dest = f"/history?{query}" if query else "/history"
+    return RedirectResponse(dest, status_code=303)
 
 
 @router.get("/history/pane/{kind}/{item_id}")

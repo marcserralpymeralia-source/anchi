@@ -1036,7 +1036,7 @@ class LearningService:
         if order and order.id:
             row.last_order_id = order.id
         now = datetime.now(timezone.utc)
-        counts_as_order = source_context in {"pedido_confirmado", "pedido_exportado", "pedido_exportado_ftp", "correccion_linea"}
+        counts_as_order = source_context in {"pedido_confirmado", "pedido_confirmado_auto", "pedido_exportado", "pedido_exportado_ftp", "correccion_linea"}
         if counts_as_order:
             row.times_ordered = (row.times_ordered or 0) + 1
             row.confirmed_count = (row.confirmed_count or 0) + 1
@@ -1543,6 +1543,7 @@ class UnifiedOrderPipelineService:
                 "auto_confirmed": bool(confirmation and confirmation["confirmed"]),
             }
         except Exception as exc:
+            db.rollback()
             return self._mark_error(db, inbound_message, user, str(exc))
 
     def _mark_error(self, db: Session, inbound_message: InboundMessage, user, message: str) -> dict[str, Any]:

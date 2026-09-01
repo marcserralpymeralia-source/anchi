@@ -50,13 +50,38 @@
   </div>
 
   {% if not whatsapp_embedded_signup.configured %}
-    <details class="drawer-subsection whatsapp-signup-requirements">
-      <summary>Configuración pendiente del servidor</summary>
-      <p class="muted">Añade estas variables al entorno y reinicia Anchi:</p>
-      <div class="whatsapp-signup-env-list">
-        {% for item in whatsapp_embedded_signup.missing %}<code>{{ item }}</code>{% endfor %}
+    <section class="drawer-card whatsapp-signup-requirements" style="background:#fefce8;border:1px solid #fef08a;border-radius:8px;padding:14px 16px;margin-top:12px;">
+      <div class="section-title-row" style="margin-bottom:8px;">
+        <strong style="color:#854d0e;font-size:13.5px;display:flex;align-items:center;gap:6px;">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+          Requisitos previos para conectar con Meta
+        </strong>
+        <span class="badge" style="background:#fef08a;color:#713f12;font-size:11px;">Administrador de sistemas</span>
       </div>
-    </details>
+      <p style="margin:0 0 10px;font-size:12.5px;color:#713f12;line-height:1.4;">
+        Para habilitar el botón <strong>«Iniciar sesión con Meta»</strong>, es necesario configurar la aplicación de Meta en el archivo <code>.env</code> del servidor:
+      </p>
+      <div class="whatsapp-signup-checklist" style="display:grid;gap:6px;margin-bottom:12px;">
+        {% for item in ["META_APP_ID", "META_APP_SECRET", "META_EMBEDDED_SIGNUP_CONFIG_ID", "META_WHATSAPP_VERIFY_TOKEN", "APP_URL (HTTPS)"] %}
+          {% set is_missing = item in (whatsapp_embedded_signup.missing or []) %}
+          <div style="display:flex;align-items:center;gap:8px;font-size:12px;background:#ffffff;padding:6px 10px;border-radius:5px;border:1px solid {% if is_missing %}#fed7aa{% else %}#bbf7d0{% endif %};">
+            <span style="font-weight:700;color:{% if is_missing %}#c2410c{% else %}#15803d{% endif %};">{{ "✗ Pendiente" if is_missing else "✓ Configurado" }}</span>
+            <code style="font-size:12px;">{{ item }}</code>
+            <span class="muted" style="font-size:11.5px;margin-left:auto;">
+              {% if item == "META_APP_ID" %}ID de App en Meta for Developers
+              {% elif item == "META_EMBEDDED_SIGNUP_CONFIG_ID" %}ID de Embedded Signup
+              {% elif item == "META_APP_SECRET" %}Secreto de aplicación
+              {% elif item == "META_WHATSAPP_VERIFY_TOKEN" %}Token de verificación del webhook
+              {% elif item == "APP_URL (HTTPS)" %}URL pública HTTPS de Anchi
+              {% endif %}
+            </span>
+          </div>
+        {% endfor %}
+      </div>
+      <p class="muted" style="margin:0;font-size:12px;line-height:1.35;">
+        Una vez guardadas las variables y reiniciado el servidor, el botón se activará automáticamente para vincular tu WhatsApp Business App.
+      </p>
+    </section>
   {% endif %}
 
   <details class="drawer-subsection">

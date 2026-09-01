@@ -274,6 +274,62 @@
   let contextMenuElement = null;
   let contextMenuRow = null;
   let contextMenuRestoreFocus = null;
+  const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+  const LUCIDE_ICON_PATHS = {
+    pencil: [
+      ["path", {d: "M12 20h9"}],
+      ["path", {d: "M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"}],
+    ],
+    "external-link": [
+      ["path", {d: "M15 3h6v6"}],
+      ["path", {d: "M10 14 21 3"}],
+      ["path", {d: "M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"}],
+    ],
+    "book-open": [
+      ["path", {d: "M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"}],
+      ["path", {d: "M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"}],
+    ],
+    "layout-dashboard": [
+      ["rect", {x: "3", y: "3", width: "7", height: "7", rx: "1.5"}],
+      ["rect", {x: "14", y: "3", width: "7", height: "7", rx: "1.5"}],
+      ["rect", {x: "14", y: "14", width: "7", height: "7", rx: "1.5"}],
+      ["rect", {x: "3", y: "14", width: "7", height: "7", rx: "1.5"}],
+    ],
+    "shopping-cart": [
+      ["circle", {cx: "9", cy: "21", r: "1"}],
+      ["circle", {cx: "20", cy: "21", r: "1"}],
+      ["path", {d: "m1 1 4 4 2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"}],
+    ],
+    "trash-2": [
+      ["path", {d: "M3 6h18"}],
+      ["path", {d: "M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"}],
+      ["path", {d: "M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"}],
+      ["line", {x1: "10", y1: "11", x2: "10", y2: "17"}],
+      ["line", {x1: "14", y1: "11", x2: "14", y2: "17"}],
+    ],
+    archive: [
+      ["path", {d: "M3 6h18"}],
+      ["path", {d: "M5 6v14h14V6"}],
+      ["path", {d: "M9 10h6"}],
+      ["path", {d: "m9 3 1 3h4l1-3"}],
+    ],
+    "archive-restore": [
+      ["path", {d: "M3 6h18"}],
+      ["path", {d: "M5 6v14h14V6"}],
+      ["path", {d: "M9 10h6"}],
+      ["path", {d: "m12 17-3-3 3-3"}],
+      ["path", {d: "M9 14h6"}],
+    ],
+    copy: [
+      ["rect", {width: "14", height: "14", x: "8", y: "8", rx: "2"}],
+      ["path", {d: "M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2  .9 2 2"}],
+    ],
+    ellipsis: [
+      ["circle", {cx: "12", cy: "12", r: "1.5", fill: "currentColor", stroke: "none"}],
+      ["circle", {cx: "19", cy: "12", r: "1.5", fill: "currentColor", stroke: "none"}],
+      ["circle", {cx: "5", cy: "12", r: "1.5", fill: "currentColor", stroke: "none"}],
+    ],
+  };
 
   function cleanActionLabel(value) {
     return String(value || "").replace(/\s+/g, " ").trim();
@@ -313,6 +369,42 @@
       action.getAttribute("type") || "button",
       action.getAttribute("onclick") || "",
     ].join(":");
+  }
+
+  function contextMenuIconName(label) {
+    const normalized = cleanActionLabel(label).toLocaleLowerCase();
+    if (normalized.includes("desarchiv")) return "archive-restore";
+    if (normalized.includes("archiv")) return "archive";
+    if (normalized.includes("elimin") || normalized.includes("borr")) return "trash-2";
+    if (normalized.includes("duplic") || normalized.includes("copi")) return "copy";
+    if (normalized.includes("editar") || normalized === "edición" || normalized === "edicion") return "pencil";
+    if (normalized.includes("vista conocimiento")) return "layout-dashboard";
+    if (normalized.includes("conocimiento")) return "book-open";
+    if (normalized.includes("pedido")) return "shopping-cart";
+    if (normalized.includes("abrir") || normalized.includes("ver ") || normalized === "ver") return "external-link";
+    return "ellipsis";
+  }
+
+  function createContextMenuIcon(label) {
+    const svg = document.createElementNS(SVG_NAMESPACE, "svg");
+    svg.classList.add("ui-icon", "table-context-menu__icon");
+    svg.setAttribute("width", "16");
+    svg.setAttribute("height", "16");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "2");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+
+    const iconName = contextMenuIconName(label);
+    for (const [tagName, attributes] of LUCIDE_ICON_PATHS[iconName]) {
+      const element = document.createElementNS(SVG_NAMESPACE, tagName);
+      Object.entries(attributes).forEach(([attribute, value]) => element.setAttribute(attribute, value));
+      svg.appendChild(element);
+    }
+    return svg;
   }
 
   function rowActions(row) {
@@ -407,7 +499,11 @@
       item.type = "button";
       item.className = "table-context-menu__item";
       item.setAttribute("role", "menuitem");
-      item.textContent = actionLabel(action);
+      const label = actionLabel(action);
+      const labelElement = document.createElement("span");
+      labelElement.className = "table-context-menu__label";
+      labelElement.textContent = label;
+      item.append(createContextMenuIcon(label), labelElement);
       item.addEventListener("click", (clickEvent) => {
         clickEvent.preventDefault();
         clickEvent.stopPropagation();

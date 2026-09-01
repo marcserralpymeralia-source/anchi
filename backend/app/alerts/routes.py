@@ -43,6 +43,21 @@ def alert_status_label(status: str) -> str:
     }.get(status, status.title())
 
 
+def alert_type_label(alert_type: str | None) -> str:
+    mapping = {
+        "order_review_required": "Revisión requerida",
+        "order_blocked": "Pedido bloqueado",
+        "automation_blocked": "Automatización bloqueada",
+        "export_failed": "Error de exportación",
+        "extraction_error": "Error de extracción",
+        "llm_failed": "Error de IA",
+        "inbound_failed": "Error de entrada",
+        "general_error": "Incidencia",
+        "info": "Información",
+    }
+    return mapping.get(alert_type or "", (alert_type or "").replace("_", " ").title())
+
+
 def alert_default_action(alert: Alert) -> tuple[str, str]:
     if alert.order_id:
         if alert.alert_type == "export_failed":
@@ -68,6 +83,7 @@ def serialize_alert(alert: Alert) -> dict:
         "status": alert.status,
         "status_label": alert_status_label(alert.status),
         "type": alert.alert_type,
+        "type_label": alert_type_label(alert.alert_type),
         "entity_type": related_entity_type,
         "entity_id": related_entity_id,
         "created_at": alert.created_at,
