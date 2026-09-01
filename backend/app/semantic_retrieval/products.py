@@ -184,8 +184,6 @@ def find_product_candidates(
         return []
     selected_model = model or embedding_model()
     threshold = _minimum_similarity(minimum_similarity)
-    selected_provider = provider or OpenAIEmbeddingProvider()
-    query_vector = selected_provider.generate_embedding(normalized_query, model=selected_model)
     rows = db.execute(
         select(ProductEmbedding, Product)
         .join(Product, Product.id == ProductEmbedding.product_id)
@@ -197,6 +195,11 @@ def find_product_candidates(
             Product.deleted_at.is_(None),
         )
     ).all()
+    if not rows:
+        return []
+
+    selected_provider = provider or OpenAIEmbeddingProvider()
+    query_vector = selected_provider.generate_embedding(normalized_query, model=selected_model)
     candidates: list[ProductCandidate] = []
     for embedding, product in rows:
         similarity = cosine_similarity(query_vector, parse_embedding_json(embedding.embedding_json))
