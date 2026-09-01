@@ -13,6 +13,7 @@ from app.core.entry_workflow import queue_email_processing, mark_email_no_order
 from app.core.templating import templates
 from app.dashboard.service import email_workbench_item
 from app.db.models import Email, Order
+from app.jobs.service import execute_job_inline
 from app.logs.service import log_action
 from app.master.database import get_master_db
 from app.master.models import EmailSyncState
@@ -251,7 +252,16 @@ def mail_process(email_id: int, request: Request, db: Session = Depends(get_tena
     if not email or email.company_id != user.company_id or not _email_matches_active_scope(email, active_scope):
         return PlainTextResponse("No encontrado", status_code=404)
     job = queue_email_processing(db, company_id=user.company_id, user_id=user.id, email_id=email_id)
-    log_action(db, company_id=user.company_id, user=user, action="mail.process", entity_type="job", entity_id=job.id, message=f"Correo encolado para procesar: {email_id}")
+    result = execute_job_inline(db, job)
+    log_action(
+        db,
+        company_id=user.company_id,
+        user=user,
+        action="mail.process",
+        entity_type="job",
+        entity_id=job.id,
+        message=result.get("message") or f"Correo procesado: {email_id}",
+    )
     return _redirect_back(request)
 
 
