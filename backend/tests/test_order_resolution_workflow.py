@@ -39,6 +39,7 @@ class FakeRequest:
     def __init__(self, accept: str = "text/html"):
         self.headers = {"accept": accept}
         self.url = SimpleNamespace(path="/demo")
+        self.cookies = {}
         self.scope = {"session": {}}
         self.state = SimpleNamespace(
             branding=BrandingPayload(

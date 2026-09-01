@@ -182,6 +182,12 @@ class AgentProcessingService:
         self.pipeline = UnifiedOrderPipelineService()
 
     def process_email(self, db: Session, email: Email, user=None, force_order: bool = False) -> dict:
+        return self._process_email(db, email, user=user, force_order=force_order, fast_path=False)
+
+    def process_email_fast(self, db: Session, email: Email, user=None, force_order: bool = False) -> dict:
+        return self._process_email(db, email, user=user, force_order=force_order, fast_path=True)
+
+    def _process_email(self, db: Session, email: Email, user=None, force_order: bool = False, *, fast_path: bool) -> dict:
         channel = get_or_create_channel(
             db,
             email.company_id,
@@ -230,7 +236,18 @@ class AgentProcessingService:
                 return {"ok": True, "message": "Entrada ya clasificada como no pedido.", "status": "no_order"}
             if inbound_message.status == "doubtful":
                 return {"ok": False, "message": inbound_message.processing_error or "Entrada dudosa.", "status": "doubtful"}
-        result = self.pipeline.process_inbound_message(db, inbound_message, user=user, force_order=force_order, email=email)
+        pipeline_kwargs = {
+            "user": user,
+            "force_order": force_order,
+            "email": email,
+        }
+        if fast_path:
+            pipeline_kwargs["email_fast_path"] = True
+        result = self.pipeline.process_inbound_message(
+            db,
+            inbound_message,
+            **pipeline_kwargs,
+        )
         if result.get("order_id") or result.get("status") == "order_detected":
             email.agent_status = "processed_order_detected"
             email.status = "pedido_detectado"
