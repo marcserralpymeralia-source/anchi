@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, sessionmaker  # noqa: E402
 from app.db.database import Base  # noqa: E402
 from app.agent.platform import DecisionEngineService  # noqa: E402
 from app.db.models import BackgroundJob, Company, Product, ProductAlias, ProductEmbedding  # noqa: E402
+from app.semantic_retrieval.embeddings import generate_embeddings  # noqa: E402
 from app.semantic_retrieval.products import (  # noqa: E402
     ProductIndexStats,
     build_product_embedding_text,
@@ -68,6 +69,26 @@ class SemanticProductRetrievalTests(unittest.TestCase):
         self.db.flush()
         return product
 
+    def test_embeddings_use_dedicated_timeout_setting(self):
+        fake_response = unittest.mock.MagicMock()
+        fake_response.__enter__.return_value.read.return_value = b'{"data":[{"index":0,"embedding":[1.0]}]}'
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "OPENAI_API_KEY": "test-key",
+                    "OPENAI_EMBEDDING_TIMEOUT_SECONDS": "7",
+                    "OPENAI_TIMEOUT_SECONDS": "60",
+                },
+            ),
+            patch("urllib.request.urlopen", return_value=fake_response) as mocked_urlopen,
+        ):
+            vectors = generate_embeddings(["vaso"], model="fake")
+
+        self.assertEqual(vectors, [[1.0]])
+        self.assertEqual(mocked_urlopen.call_args.kwargs["timeout"], 7)
+
     def test_embedding_text_is_deterministic_and_uses_stable_fields(self):
         product = self._product(
             "VAS-001",
@@ -110,6 +131,26 @@ class SemanticProductRetrievalTests(unittest.TestCase):
         second_hash = product_embedding_content_hash(second_text, model="fake")
 
         self.assertNotEqual(first_hash, second_hash)
+
+    def test_search_without_product_index_does_not_call_embedding_provider(self):
+        class FailingProvider:
+            def generate_embedding(self, text: str, *, model: str) -> list[float]:
+                raise AssertionError("El proveedor no debe llamarse sin indice de productos.")
+
+            def generate_embeddings(self, texts: Sequence[str], *, model: str) -> list[list[float]]:
+                raise AssertionError("El proveedor no debe llamarse sin indice de productos.")
+
+        self._product("VAS-001", "Vaso cristal azul")
+
+        candidates = find_product_candidates(
+            self.db,
+            company_id=self.company.id,
+            query="necesito vasos",
+            provider=FailingProvider(),
+            model="fake",
+        )
+
+        self.assertEqual(candidates, [])
 
     def test_search_returns_candidates_ordered_by_similarity(self):
         self._seed_search_products()
@@ -208,6 +249,93 @@ class SemanticProductRetrievalTests(unittest.TestCase):
         self.assertEqual(decision["semantic_candidates"][0].source, "semantic_candidate")
         self.assertEqual(decision["semantic_candidates"][0].product_id, product.id)
         self.assertIn("semantic_candidate", {item["source"] for item in decision["evidence"]})
+
+    def test_decision_engine_stops_semantic_calls_after_first_provider_failure(self):
+        product = self._product("VAS-001", "Vaso cristal azul")
+        self.db.add(
+            ProductEmbedding(
+                company_id=self.company.id,
+                product_id=product.id,
+                embedding_json="[1.0, 0.0, 0.0]",
+                embedding_text="Vaso cristal azul",
+                embedding_model="fake",
+                embedding_version="product-v1",
+                content_hash="test",
+                dimensions=3,
+            )
+        )
+        self.db.commit()
+
+        class FailingProvider:
+            def __init__(self):
+                self.calls = 0
+
+            def generate_embedding(self, text: str, *, model: str) -> list[float]:
+                self.calls += 1
+                raise RuntimeError("provider unavailable")
+
+        provider = FailingProvider()
+        engine = DecisionEngineService(semantic_provider=provider)
+
+        with patch.dict(os.environ, {"EMBEDDING_MODEL": "fake"}):
+            engine.product_decision(
+                self.db,
+                self.company.id,
+                detected_name="vasos",
+                text="vasos",
+            )
+            engine.product_decision(
+                self.db,
+                self.company.id,
+                detected_name="cristal",
+                text="cristal",
+            )
+
+        self.assertEqual(provider.calls, 1)
+
+    def test_decision_engine_runtime_reset_allows_semantic_retry(self):
+        product = self._product("VAS-001", "Vaso cristal azul")
+        self.db.add(
+            ProductEmbedding(
+                company_id=self.company.id,
+                product_id=product.id,
+                embedding_json="[1.0, 0.0, 0.0]",
+                embedding_text="Vaso cristal azul",
+                embedding_model="fake",
+                embedding_version="product-v1",
+                content_hash="test",
+                dimensions=3,
+            )
+        )
+        self.db.commit()
+
+        class FailingProvider:
+            def __init__(self):
+                self.calls = 0
+
+            def generate_embedding(self, text: str, *, model: str) -> list[float]:
+                self.calls += 1
+                raise RuntimeError("provider unavailable")
+
+        provider = FailingProvider()
+        engine = DecisionEngineService(semantic_provider=provider)
+
+        with patch.dict(os.environ, {"EMBEDDING_MODEL": "fake"}):
+            engine.product_decision(
+                self.db,
+                self.company.id,
+                detected_name="vasos",
+                text="vasos",
+            )
+            engine.reset_runtime_state()
+            engine.product_decision(
+                self.db,
+                self.company.id,
+                detected_name="cristal",
+                text="cristal",
+            )
+
+        self.assertEqual(provider.calls, 2)
 
     def test_worker_accepts_product_embedding_index_job(self):
         self.assertIn("index_product_embeddings", JOB_TYPES)
