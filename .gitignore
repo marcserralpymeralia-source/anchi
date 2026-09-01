@@ -37,3 +37,5 @@ clients/*.local
 _codex_write_test.txt
 .vercel
 .env*
+.playwright-mcp/
+table-sidebar-collapsed-fixed.png

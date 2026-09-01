@@ -275,6 +275,7 @@ def build_settings_dashboard(db: Session, user: TenantUser, metrics: dict, llm: 
         {"key": "scoring", "label": "Scoring definido", "state": "done" if module_map.get("scoring", {}).get("state") == "ready" else "pending", "open_settings": "scoring"},
         {"key": "decision", "label": "Motor de decisión activo", "state": "done" if module_map.get("decision", {}).get("state") in ("ready", "warning") else "pending", "open_settings": "decision"},
         {"key": "export", "label": "Exportación configurada", "state": "done" if module_map.get("export", {}).get("state") == "ready" else "pending", "open_settings": "export"},
+        {"key": "ftp", "label": "FTP/SFTP configurado", "state": "done" if module_map.get("ftp", {}).get("state") == "ready" else "pending", "open_settings": "ftp"},
     ]
     return {
         "progress": progress,

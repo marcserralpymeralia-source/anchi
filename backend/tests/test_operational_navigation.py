@@ -145,6 +145,20 @@ class OperationalNavigationTests(unittest.TestCase):
         finally:
             fixture.cleanup()
 
+    def test_settings_checklist_exposes_pending_configuration_modules(self):
+        fixture = build_performance_fixture("small")
+        try:
+            with performance_test_client(fixture) as client:
+                response = client.get("/settings")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("1 de 8 requisitos requieren atención", response.text)
+            self.assertIn("FTP/SFTP configurado", response.text)
+            self.assertIn('data-step-state="pending"', response.text)
+            self.assertIn('data-open-settings="ftp"', response.text)
+        finally:
+            fixture.cleanup()
+
     def test_entries_redirects_to_login_without_session(self):
         fixture = build_performance_fixture("small")
         try:
