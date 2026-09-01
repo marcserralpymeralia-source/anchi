@@ -4,6 +4,7 @@ import os
 import unittest
 from pathlib import Path
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from sqlalchemy.exc import SQLAlchemyError
@@ -106,6 +107,38 @@ class MailInboxRoutesTests(unittest.TestCase):
             self.assertEqual(dashboard_fragment.status_code, 200)
             self.assertIn('class="workbench-shell', dashboard_fragment.text)
             self.assertNotIn("<!doctype html>", dashboard_fragment.text.lower())
+        finally:
+            fixture.cleanup()
+
+    def test_mail_process_runs_job_inline_and_redirects_back(self):
+        fixture = build_performance_fixture("small")
+        SessionLocal = _tenant_session(fixture.tenant_path)
+        try:
+            with SessionLocal() as db:
+                email_id = db.scalar(select(Email.id).where(Email.company_id == fixture.company_id).order_by(Email.id))
+            self.assertIsNotNone(email_id)
+
+            queued_job = SimpleNamespace(id=987)
+            with performance_test_client(fixture) as client:
+                with patch("app.mail.routes.queue_email_processing", return_value=queued_job) as queue_mock, patch(
+                    "app.mail.routes.execute_job_inline",
+                    return_value={"ok": True, "message": "Procesado inmediatamente"},
+                ) as inline_mock:
+                    response = client.post(
+                        f"/mail/{email_id}/process",
+                        headers={"referer": "/mail"},
+                        follow_redirects=False,
+                    )
+
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(response.headers["location"], "/mail")
+            queue_mock.assert_called_once_with(
+                unittest.mock.ANY,
+                company_id=fixture.company_id,
+                user_id=unittest.mock.ANY,
+                email_id=email_id,
+            )
+            inline_mock.assert_called_once_with(unittest.mock.ANY, queued_job)
         finally:
             fixture.cleanup()
 
