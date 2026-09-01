@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% set title = "Canales de entrada" %}
+{% block head_extra %}<script src="{{ asset_url('js/settings-email-backfill.js') }}" defer></script>{% endblock %}
 {% block content %}
 <section class="channels-shell">
   <header class="channels-header page-section-header">
@@ -221,12 +222,24 @@
             {% if not can_edit_email %}</fieldset>{% endif %}
           </form>
           <div class="drawer-actions" style="margin-top: 10px;">
-            <form class="js-loading-form compact-backfill-form" method="post" action="/settings/email/backfill">
-              <label>Desde<input type="date" name="from_date" value="{{ email.read_from_date or '' }}"></label>
-              <label>Hasta<input type="date" name="to_date" value=""></label>
-              <label>Límite<input type="number" name="limit" min="1" max="250" value="100"></label>
-              <button class="secondary compact-button" data-loading-text="Recuperando..." data-confirm="Recuperar histórico IMAP con el rango configurado?">Traer rango</button>
-            </form>
+            <div data-email-backfill-root>
+              <form class="compact-backfill-form" method="post" action="/settings/email/backfill" data-email-backfill-form>
+                <label>Desde<input type="date" name="from_date" value="{{ email.read_from_date or '' }}"></label>
+                <label>Hasta<input type="date" name="to_date" value=""></label>
+                <label>Límite<input type="number" name="limit" min="1" max="250" value="100"></label>
+                <button class="secondary compact-button" type="submit" data-loading-text="Recuperando..." data-confirm="Recuperar histórico IMAP con el rango configurado?">Traer rango</button>
+              </form>
+              <div class="settings-kpis" data-email-backfill-status aria-live="polite">
+                <div><span>Estado</span><strong data-email-backfill-state>Pendiente</strong></div>
+                <div><span>Encontrados</span><strong data-email-backfill-found>0</strong></div>
+                <div><span>Importados</span><strong data-email-backfill-saved>0</strong></div>
+                <div><span>Duplicados</span><strong data-email-backfill-duplicates>0</strong></div>
+                <div><span>Errores</span><strong data-email-backfill-errors>0</strong></div>
+                <div><span>Lotes</span><strong data-email-backfill-batches>0</strong></div>
+                <div><span>Restante</span><strong data-email-backfill-remaining>0</strong></div>
+              </div>
+              <p class="muted settings-status-note" data-email-backfill-message>El backfill manual encadena lotes de 5 correos de forma automática hasta completar el rango o alcanzar el límite.</p>
+            </div>
           </div>
         </section>
 

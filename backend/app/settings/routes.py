@@ -27,7 +27,7 @@ from app.settings.integrations import classify_sample, extract_sample, preview_i
 from app.settings.application import run_connection_test, update_settings_section_async
 from app.settings.service import get_or_create_settings, resolve_updated_by_id, update_with_form
 from app.dashboard.service import recent_processed_emails_overview
-from app.jobs.service import enqueue_job, execute_job_inline
+from app.jobs.service import enqueue_job, execute_job_inline, job_payload
 from app.tenancy.database import get_tenant_db
 from app.tenancy.migrations import tenant_migration_report
 
@@ -138,158 +138,68 @@ def _run_email_sync_job_if_needed(request: Request, db: Session, user: TenantUse
     return result
 
 
-def _run_backfill_job_chain_inline(
-    request: Request,
-    db: Session,
-    user: TenantUser,
-    first_job: BackgroundJob,
-    *,
-    requested_limit: int,
-    from_date: str | None,
-    to_date: str | None,
-) -> dict:
+def _backfill_job_response_payload(job: BackgroundJob, result: dict, *, from_date: str | None, to_date: str | None) -> dict:
+    safe_result = result if isinstance(result, dict) else {}
+    continuation_job_id = safe_result.get("continuation_job_id")
+    has_more = bool(safe_result.get("has_more"))
+    remaining = max(int(safe_result.get("remaining") or 0), 0)
+    return {
+        "ok": bool(safe_result.get("ok", True)),
+        "status": "success" if safe_result.get("ok", True) else "failed",
+        "job_id": job.id,
+        "continuation_job_id": continuation_job_id,
+        "has_more": has_more,
+        "remaining": remaining,
+        "found": int(safe_result.get("found") or 0),
+        "saved": int(safe_result.get("saved") or safe_result.get("imported") or 0),
+        "duplicates": int(safe_result.get("duplicates") or 0),
+        "errors": int(safe_result.get("errors") or 0),
+        "from_date": from_date,
+        "to_date": to_date,
+        "message": safe_result.get("message") or "Backfill IMAP completado",
+    }
+
+
+def _backfill_response(request: Request, payload: dict, fallback: str = "/settings#email-diagnostics"):
+    if "application/json" in (request.headers.get("accept") or ""):
+        return JSONResponse(payload)
+    return RedirectResponse(request.headers.get("referer") or fallback, status_code=303)
+
+
+def _run_backfill_job_once(request: Request, db: Session, user: TenantUser, job: BackgroundJob, *, from_date: str | None, to_date: str | None) -> dict:
     request_id = getattr(request.state, "request_id", None)
-    batch_size = 5
-    max_iterations = max(1, (max(int(requested_limit or 1), 1) + batch_size - 1) // batch_size + 2)
-    seen_job_ids = {first_job.id}
-    total_found = total_saved = total_duplicates = total_errors = total_downloaded = total_discarded = 0
-    batches = 0
-    last_job = first_job
-    last_result: dict | None = None
-    current_job = first_job
-    previous_remaining: int | None = None
-
-    while current_job is not None:
-        batches += 1
-        logger.info(
-            "settings.email.backfill.inline.start",
-            extra={
-                "event": "settings.email.backfill.inline.start",
-                "request_id": request_id,
-                "company_id": user.company_id,
-                "user_id": user.id,
-                "job_id": current_job.id,
-                "job_type": current_job.job_type,
-                "batch": batches,
-            },
-        )
-        result = execute_job_inline(db, current_job)
-        if not isinstance(result, dict):
-            result = {"ok": True, "message": str(result) if result is not None else "Trabajo completado"}
-        last_result = result
-        last_job = current_job
-        total_found += int(result.get("found") or 0)
-        total_saved += int(result.get("saved") or result.get("imported") or 0)
-        total_duplicates += int(result.get("duplicates") or 0)
-        total_errors += int(result.get("errors") or 0)
-        total_downloaded += int(result.get("downloaded") or 0)
-        total_discarded += int(result.get("discarded") or 0)
-
-        logger.info(
-            "settings.email.backfill.inline.end",
-            extra={
-                "event": "settings.email.backfill.inline.end",
-                "request_id": request_id,
-                "company_id": user.company_id,
-                "user_id": user.id,
-                "job_id": current_job.id,
-                "job_type": current_job.job_type,
-                "batch": batches,
-                "ok": bool(result.get("ok")),
-                "found": result.get("found"),
-                "saved": result.get("saved"),
-                "duplicates": result.get("duplicates"),
-                "errors": result.get("errors"),
-                "continuation_job_id": result.get("continuation_job_id"),
-            },
-        )
-
-        if not result.get("ok"):
-            break
-
-        continuation_job_id = result.get("continuation_job_id")
-        has_more = bool(result.get("has_more"))
-        remaining = int(result.get("remaining") or 0)
-        if not continuation_job_id or not has_more or remaining <= 0:
-            break
-
-        if batches >= max_iterations:
-            last_result = {
-                **result,
-                "ok": False,
-                "error_type": "backfill_iteration_limit",
-                "message": "La cadena de backfill superó el número máximo de iteraciones.",
-            }
-            break
-
-        try:
-            continuation_job_id_int = int(continuation_job_id)
-        except (TypeError, ValueError):
-            last_result = {
-                **result,
-                "ok": False,
-                "error_type": "backfill_invalid_continuation",
-                "message": "La continuación del backfill es inválida.",
-            }
-            break
-
-        if continuation_job_id_int in seen_job_ids or continuation_job_id_int == current_job.id:
-            last_result = {
-                **result,
-                "ok": False,
-                "error_type": "backfill_loop_detected",
-                "message": "La cadena de backfill no progresa.",
-            }
-            break
-
-        continuation_job = db.get(BackgroundJob, continuation_job_id_int)
-        if (
-            not continuation_job
-            or continuation_job.company_id != user.company_id
-            or continuation_job.job_type != "backfill_imap"
-        ):
-            last_result = {
-                **result,
-                "ok": False,
-                "error_type": "backfill_invalid_continuation",
-                "message": "No se pudo continuar el backfill histórico.",
-            }
-            break
-
-        if previous_remaining is not None and remaining >= previous_remaining:
-            last_result = {
-                **result,
-                "ok": False,
-                "error_type": "backfill_no_progress",
-                "message": "La cadena de backfill no avanza.",
-            }
-            break
-
-        seen_job_ids.add(continuation_job.id)
-        previous_remaining = remaining
-        current_job = continuation_job
-
-    final_result = dict(last_result or {})
-    final_result.update(
-        {
-            "ok": bool(final_result.get("ok", True)),
-            "found": total_found,
-            "saved": total_saved,
-            "imported": total_saved,
-            "duplicates": total_duplicates,
-            "errors": total_errors,
-            "downloaded": total_downloaded,
-            "discarded": total_discarded,
-            "batches": batches,
-            "first_job_id": first_job.id,
-            "last_job_id": last_job.id,
-            "remaining": max(int(final_result.get("remaining") or 0), 0),
-            "from_date": from_date,
-            "to_date": to_date,
-            "message": final_result.get("message") or "Backfill IMAP completado",
-        }
+    logger.info(
+        "settings.email.backfill.inline.start",
+        extra={
+            "event": "settings.email.backfill.inline.start",
+            "request_id": request_id,
+            "company_id": user.company_id,
+            "user_id": user.id,
+            "job_id": job.id,
+            "job_type": job.job_type,
+        },
     )
-    return final_result
+    result = execute_job_inline(db, job)
+    if not isinstance(result, dict):
+        result = {"ok": True, "message": str(result) if result is not None else "Trabajo completado"}
+    logger.info(
+        "settings.email.backfill.inline.end",
+        extra={
+            "event": "settings.email.backfill.inline.end",
+            "request_id": request_id,
+            "company_id": user.company_id,
+            "user_id": user.id,
+            "job_id": job.id,
+            "job_type": job.job_type,
+            "ok": bool(result.get("ok")),
+            "found": result.get("found"),
+            "saved": result.get("saved"),
+            "duplicates": result.get("duplicates"),
+            "errors": result.get("errors"),
+            "continuation_job_id": result.get("continuation_job_id"),
+        },
+    )
+    return _backfill_job_response_payload(job, result, from_date=from_date, to_date=to_date)
 
 
 def _parse_date_input(raw_value: str | None) -> date | None:
@@ -1108,12 +1018,11 @@ def backfill_email_history(
         created_by_user_id=user.id,
     )
     db.commit()
-    result = _run_backfill_job_chain_inline(
+    result = _run_backfill_job_once(
         request,
         db,
         user,
         job,
-        requested_limit=safe_limit,
         from_date=payload.get("from_date"),
         to_date=payload.get("to_date"),
     )
@@ -1133,7 +1042,35 @@ def backfill_email_history(
             f"duplicados={result.get('duplicates')} · errores={result.get('errors')}"
         ),
     )
-    return _queued_job_response(request, job.id, "/settings#email-diagnostics", result=result)
+    return _backfill_response(request, result, "/settings#email-diagnostics")
+
+
+@router.post("/email/backfill/continue/{job_id}")
+def continue_backfill_email_history(
+    job_id: int,
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    if not can_test_email_settings(user):
+        return JSONResponse({"ok": False, "error_type": "permission_denied", "message": "No tienes permisos para continuar el backfill histórico."}, status_code=403)
+    job = db.get(BackgroundJob, job_id)
+    if not job or job.company_id != user.company_id:
+        return JSONResponse({"ok": False, "error_type": "job_not_found", "message": "No se encontró la continuación solicitada."}, status_code=404)
+    if job.job_type != "backfill_imap":
+        return JSONResponse({"ok": False, "error_type": "invalid_job_type", "message": "La continuación solicitada no corresponde a un backfill IMAP."}, status_code=400)
+    if job.status not in {"queued", "retrying"}:
+        return JSONResponse({"ok": False, "error_type": "invalid_job_status", "message": "La continuación del backfill no está lista para ejecutarse."}, status_code=409)
+    payload = job_payload(job)
+    result = _run_backfill_job_once(
+        request,
+        db,
+        user,
+        job,
+        from_date=payload.get("from_date"),
+        to_date=payload.get("to_date"),
+    )
+    return _backfill_response(request, result, "/settings#email-diagnostics")
 
 
 @router.post("/email/initial-sync/preview")

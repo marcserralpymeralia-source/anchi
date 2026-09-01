@@ -69,7 +69,7 @@ class OrdersListOptimizationTests(unittest.TestCase):
                 archived_list_response = client.get("/orders?view=list&archived=true")
                 self.assertNotIn(f'action="/orders/{order_id}/archive"', active_response.text)
                 self.assertIn(f'action="/orders/{order_id}/unarchive"', archived_list_response.text)
-                self.assertIn("Solo pedidos archivados", archived_list_response.text)
+                self.assertIn('name="archived" value="true"', archived_list_response.text)
 
                 restored_response = client.post(
                     f"/orders/{order_id}/unarchive",
