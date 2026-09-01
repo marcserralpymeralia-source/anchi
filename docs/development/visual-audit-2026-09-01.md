@@ -227,6 +227,6 @@ La página es legible y apropiada como documento público, pero no comparte nave
 
 No hay archivos funcionales modificados.
 
-## 9. Entrega y estado de Git
+## 11. Entrega y estado de Git
 
 Este documento y las capturas son los únicos artefactos de esta auditoría. No hay cambios de código funcional. Se publica únicamente `docs/development/visual-audit-2026-09-01.md` y `docs/development/visual-audit/2026-09-01/`; el directorio temporal `.playwright-cli/` queda excluido.
