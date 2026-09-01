@@ -59,6 +59,7 @@ class FakeRequest:
         self.state = SimpleNamespace()
         self.url = SimpleNamespace(path="/demo")
         self.method = "GET"
+        self.cookies = {}
 
 
 class CoreSecurityAndJobsTests(unittest.TestCase):
