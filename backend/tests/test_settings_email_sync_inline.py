@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core.encryption import encrypt_secret  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.db.models import BackgroundJob, Company, Email, EmailSettings  # noqa: E402
+from app.jobs.service import enqueue_job  # noqa: E402
 from app.master.models import EmailSyncState  # noqa: E402
 from scripts.performance_data import build_performance_fixture, performance_test_client  # noqa: E402
 
@@ -62,6 +63,33 @@ class FakeImapClient:
 
 
 class SettingsEmailSyncInlineHttpTests(unittest.TestCase):
+    def _make_backfill_inline_side_effect(self, outcomes: list[dict]):
+        state = {"index": 0}
+
+        def _side_effect(active_db, job):  # noqa: ANN001
+            if state["index"] >= len(outcomes):
+                raise AssertionError("No se esperaba una ejecución adicional del backfill inline.")
+            outcome = outcomes[state["index"]]
+            state["index"] += 1
+            result = dict(outcome.get("result") or {})
+            if outcome.get("continuation_payload") is not None:
+                continuation = enqueue_job(
+                    active_db,
+                    company_id=job.company_id,
+                    job_type="backfill_imap",
+                    payload=outcome["continuation_payload"],
+                    created_by_user_id=job.created_by_user_id,
+                )
+                result["continuation_job_id"] = continuation.id
+            job.status = "success" if result.get("ok", True) else "failed"
+            job.started_at = datetime.now(timezone.utc)
+            job.finished_at = datetime.now(timezone.utc)
+            job.result_json = json.dumps(result, ensure_ascii=False)
+            active_db.commit()
+            return result
+
+        return _side_effect
+
     def test_manual_sync_runs_inline_and_imports_new_mail(self):
         fixture = build_performance_fixture("small")
         master_engine = create_engine(f"sqlite:///{fixture.master_path.as_posix()}", connect_args={"check_same_thread": False})
@@ -151,99 +179,539 @@ class SettingsEmailSyncInlineHttpTests(unittest.TestCase):
             tenant_engine.dispose()
             fixture.cleanup()
 
-    def test_manual_backfill_is_queued_for_worker_processing(self):
+    def test_manual_backfill_runs_inline_without_continuations(self):
         fixture = build_performance_fixture("small")
-        master_engine = create_engine(
-            f"sqlite:///{fixture.master_path.as_posix()}",
-            connect_args={"check_same_thread": False},
-        )
-        tenant_engine = create_engine(
-            f"sqlite:///{fixture.tenant_path.as_posix()}",
-            connect_args={"check_same_thread": False},
-        )
-        MasterSession = sessionmaker(
-            bind=master_engine,
-            autoflush=False,
-            autocommit=False,
-        )
-        TenantSession = sessionmaker(
-            bind=tenant_engine,
-            autoflush=False,
-            autocommit=False,
-        )
-
+        master_engine = create_engine(f"sqlite:///{fixture.master_path.as_posix()}", connect_args={"check_same_thread": False})
+        tenant_engine = create_engine(f"sqlite:///{fixture.tenant_path.as_posix()}", connect_args={"check_same_thread": False})
+        MasterSession = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
+        TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
         try:
             from app.master.models import CompanyMembership
 
             with MasterSession() as master_db:
-                membership = master_db.scalar(
-                    select(CompanyMembership).where(
-                        CompanyMembership.company_id == fixture.company_id
-                    )
-                )
+                membership = master_db.scalar(select(CompanyMembership).where(CompanyMembership.company_id == fixture.company_id))
                 assert membership is not None
                 membership.role_key = "Administrador"
                 master_db.commit()
 
+            result = {
+                "ok": True,
+                "found": 1,
+                "saved": 1,
+                "duplicates": 0,
+                "errors": 0,
+                "downloaded": 1,
+                "discarded": 0,
+                "batch_count": 1,
+                "has_more": False,
+                "remaining": 0,
+                "last_uid": "2",
+                "message": "Backfill completado",
+            }
             with performance_test_client(fixture) as client:
-                first_response = client.post(
-                    "/settings/email/backfill",
-                    data={
-                        "from_date": "2026-08-20",
-                        "to_date": "2026-08-25",
-                        "limit": "5",
-                    },
-                    follow_redirects=True,
-                )
-                second_response = client.post(
-                    "/settings/email/backfill",
-                    data={
-                        "from_date": "2026-08-20",
-                        "to_date": "2026-08-25",
-                        "limit": "5",
-                    },
-                    follow_redirects=True,
-                )
+                with patch("app.settings.routes.execute_job_inline", return_value=result) as inline_mock:
+                    response = client.post(
+                        "/settings/email/backfill",
+                        data={"from_date": "2026-08-20", "to_date": "2026-08-25", "limit": "5"},
+                        headers={"Accept": "application/json"},
+                        follow_redirects=False,
+                    )
 
-            self.assertEqual(first_response.status_code, 200)
-            self.assertEqual(second_response.status_code, 200)
-            self.assertNotIn("internal_error", first_response.text.lower())
-            self.assertNotIn("internal_error", second_response.text.lower())
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["status"], "success")
+            self.assertEqual(payload["result"]["batches"], 1)
+            self.assertEqual(payload["result"]["found"], 1)
+            self.assertEqual(payload["result"]["saved"], 1)
+            self.assertEqual(payload["result"]["duplicates"], 0)
+            self.assertEqual(payload["result"]["errors"], 0)
+            self.assertEqual(payload["result"]["first_job_id"], payload["job_id"])
+            self.assertEqual(payload["result"]["last_job_id"], payload["job_id"])
+            inline_mock.assert_called_once()
 
             with TenantSession() as tenant_db:
                 jobs = tenant_db.scalars(
                     select(BackgroundJob)
-                    .where(
-                        BackgroundJob.company_id == fixture.company_id,
-                        BackgroundJob.job_type == "backfill_imap",
-                    )
+                    .where(BackgroundJob.company_id == fixture.company_id, BackgroundJob.job_type == "backfill_imap")
                     .order_by(BackgroundJob.id)
                 ).all()
+                self.assertEqual(len(jobs), 1)
+        finally:
+            master_engine.dispose()
+            tenant_engine.dispose()
+            fixture.cleanup()
 
+    def test_manual_backfill_runs_inline_through_continuations(self):
+        fixture = build_performance_fixture("small")
+        master_engine = create_engine(f"sqlite:///{fixture.master_path.as_posix()}", connect_args={"check_same_thread": False})
+        tenant_engine = create_engine(f"sqlite:///{fixture.tenant_path.as_posix()}", connect_args={"check_same_thread": False})
+        MasterSession = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
+        TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
+        try:
+            from app.master.models import CompanyMembership
+
+            with MasterSession() as master_db:
+                membership = master_db.scalar(select(CompanyMembership).where(CompanyMembership.company_id == fixture.company_id))
+                assert membership is not None
+                membership.role_key = "Administrador"
+                master_db.commit()
+
+            outcomes = [
+                {
+                    "result": {
+                        "ok": True,
+                        "found": 5,
+                        "saved": 2,
+                        "duplicates": 1,
+                        "errors": 0,
+                        "downloaded": 5,
+                        "discarded": 0,
+                        "batch_count": 5,
+                        "has_more": True,
+                        "remaining": 7,
+                        "last_uid": "105",
+                        "message": "Lote 1",
+                    },
+                    "continuation_payload": {"from_date": "2026-08-20", "to_date": "2026-08-25", "limit": 7, "resume": True},
+                },
+                {
+                    "result": {
+                        "ok": True,
+                        "found": 4,
+                        "saved": 1,
+                        "duplicates": 1,
+                        "errors": 0,
+                        "downloaded": 4,
+                        "discarded": 0,
+                        "batch_count": 4,
+                        "has_more": True,
+                        "remaining": 2,
+                        "last_uid": "110",
+                        "message": "Lote 2",
+                    },
+                    "continuation_payload": {"from_date": "2026-08-20", "to_date": "2026-08-25", "limit": 2, "resume": True},
+                },
+                {
+                    "result": {
+                        "ok": True,
+                        "found": 2,
+                        "saved": 1,
+                        "duplicates": 0,
+                        "errors": 0,
+                        "downloaded": 2,
+                        "discarded": 0,
+                        "batch_count": 2,
+                        "has_more": False,
+                        "remaining": 0,
+                        "last_uid": "112",
+                        "message": "Lote 3",
+                    }
+                },
+            ]
+
+            with performance_test_client(fixture) as client:
+                with patch("app.settings.routes.execute_job_inline", side_effect=self._make_backfill_inline_side_effect(outcomes)) as inline_mock:
+                    response = client.post(
+                        "/settings/email/backfill",
+                        data={"from_date": "2026-08-20", "to_date": "2026-08-25", "limit": "10"},
+                        headers={"Accept": "application/json"},
+                        follow_redirects=False,
+                    )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["status"], "success")
+            self.assertEqual(payload["result"]["batches"], 3)
+            self.assertEqual(payload["result"]["found"], 11)
+            self.assertEqual(payload["result"]["saved"], 4)
+            self.assertEqual(payload["result"]["duplicates"], 2)
+            self.assertEqual(payload["result"]["errors"], 0)
+            self.assertEqual(inline_mock.call_count, 3)
+
+            with TenantSession() as tenant_db:
+                jobs = tenant_db.scalars(
+                    select(BackgroundJob)
+                    .where(BackgroundJob.company_id == fixture.company_id, BackgroundJob.job_type == "backfill_imap")
+                    .order_by(BackgroundJob.id)
+                ).all()
+                self.assertEqual(len(jobs), 3)
+                self.assertTrue(all(job.status == "success" for job in jobs))
+        finally:
+            master_engine.dispose()
+            tenant_engine.dispose()
+            fixture.cleanup()
+
+    def test_manual_backfill_stops_on_remaining_zero(self):
+        fixture = build_performance_fixture("small")
+        master_engine = create_engine(f"sqlite:///{fixture.master_path.as_posix()}", connect_args={"check_same_thread": False})
+        tenant_engine = create_engine(f"sqlite:///{fixture.tenant_path.as_posix()}", connect_args={"check_same_thread": False})
+        MasterSession = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
+        TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
+        try:
+            from app.master.models import CompanyMembership
+
+            with MasterSession() as master_db:
+                membership = master_db.scalar(select(CompanyMembership).where(CompanyMembership.company_id == fixture.company_id))
+                assert membership is not None
+                membership.role_key = "Administrador"
+                master_db.commit()
+
+            result = {
+                "ok": True,
+                "found": 1,
+                "saved": 1,
+                "duplicates": 0,
+                "errors": 0,
+                "downloaded": 1,
+                "discarded": 0,
+                "batch_count": 1,
+                "has_more": True,
+                "remaining": 0,
+                "last_uid": "105",
+                "message": "Lote único",
+            }
+            outcomes = [
+                {
+                    "result": result,
+                    "continuation_payload": {"from_date": "2026-08-20", "to_date": "2026-08-25", "limit": 0, "resume": True},
+                }
+            ]
+
+            with performance_test_client(fixture) as client:
+                with patch("app.settings.routes.execute_job_inline", side_effect=self._make_backfill_inline_side_effect(outcomes)) as inline_mock:
+                    response = client.post(
+                        "/settings/email/backfill",
+                        data={"from_date": "2026-08-20", "to_date": "2026-08-25", "limit": "1"},
+                        headers={"Accept": "application/json"},
+                        follow_redirects=False,
+                    )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["result"]["batches"], 1)
+            self.assertEqual(inline_mock.call_count, 1)
+
+            with TenantSession() as tenant_db:
+                jobs = tenant_db.scalars(
+                    select(BackgroundJob)
+                    .where(BackgroundJob.company_id == fixture.company_id, BackgroundJob.job_type == "backfill_imap")
+                    .order_by(BackgroundJob.id)
+                ).all()
                 self.assertEqual(len(jobs), 2)
+        finally:
+            master_engine.dispose()
+            tenant_engine.dispose()
+            fixture.cleanup()
 
-                first_job, second_job = jobs
+    def test_manual_backfill_stops_on_continuation_error(self):
+        fixture = build_performance_fixture("small")
+        master_engine = create_engine(f"sqlite:///{fixture.master_path.as_posix()}", connect_args={"check_same_thread": False})
+        tenant_engine = create_engine(f"sqlite:///{fixture.tenant_path.as_posix()}", connect_args={"check_same_thread": False})
+        MasterSession = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
+        TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
+        try:
+            from app.master.models import CompanyMembership
 
-                for job in jobs:
-                    self.assertEqual(job.status, "queued")
-                    self.assertIsNone(job.started_at)
-                    self.assertIsNone(job.finished_at)
-                    self.assertEqual(job.attempt_count, 0)
+            with MasterSession() as master_db:
+                membership = master_db.scalar(select(CompanyMembership).where(CompanyMembership.company_id == fixture.company_id))
+                assert membership is not None
+                membership.role_key = "Administrador"
+                master_db.commit()
 
-                first_payload = json.loads(first_job.payload_json or "{}")
-                second_payload = json.loads(second_job.payload_json or "{}")
+            outcomes = [
+                {
+                    "result": {
+                        "ok": True,
+                        "found": 5,
+                        "saved": 1,
+                        "duplicates": 0,
+                        "errors": 0,
+                        "downloaded": 5,
+                        "discarded": 0,
+                        "batch_count": 5,
+                        "has_more": True,
+                        "remaining": 5,
+                        "last_uid": "105",
+                        "message": "Lote inicial",
+                    },
+                    "continuation_payload": {"from_date": "2026-08-20", "to_date": "2026-08-25", "limit": 5, "resume": True},
+                },
+                {
+                    "result": {
+                        "ok": False,
+                        "message": "Error controlado de IMAP",
+                        "error_type": "timeout",
+                        "found": 0,
+                        "saved": 0,
+                        "duplicates": 0,
+                        "errors": 1,
+                    }
+                },
+            ]
 
-                for payload in (first_payload, second_payload):
-                    self.assertEqual(payload.get("from_date"), "2026-08-20")
-                    self.assertEqual(payload.get("to_date"), "2026-08-25")
-                    self.assertEqual(payload.get("limit"), 5)
-                    self.assertTrue(payload.get("run_id"))
+            with performance_test_client(fixture) as client:
+                with patch("app.settings.routes.execute_job_inline", side_effect=self._make_backfill_inline_side_effect(outcomes)) as inline_mock:
+                    response = client.post(
+                        "/settings/email/backfill",
+                        data={"from_date": "2026-08-20", "to_date": "2026-08-25", "limit": "10"},
+                        headers={"Accept": "application/json"},
+                        follow_redirects=False,
+                    )
 
-                self.assertNotEqual(
-                    first_payload.get("run_id"),
-                    second_payload.get("run_id"),
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertEqual(payload["status"], "failed")
+            self.assertFalse(payload["result"]["ok"])
+            self.assertEqual(payload["result"]["batches"], 2)
+            self.assertEqual(payload["result"]["errors"], 1)
+            self.assertEqual(inline_mock.call_count, 2)
+        finally:
+            master_engine.dispose()
+            tenant_engine.dispose()
+            fixture.cleanup()
+
+    def test_manual_backfill_detects_repeated_continuation_job(self):
+        fixture = build_performance_fixture("small")
+        master_engine = create_engine(f"sqlite:///{fixture.master_path.as_posix()}", connect_args={"check_same_thread": False})
+        tenant_engine = create_engine(f"sqlite:///{fixture.tenant_path.as_posix()}", connect_args={"check_same_thread": False})
+        MasterSession = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
+        TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
+        try:
+            from app.master.models import CompanyMembership
+
+            with MasterSession() as master_db:
+                membership = master_db.scalar(select(CompanyMembership).where(CompanyMembership.company_id == fixture.company_id))
+                assert membership is not None
+                membership.role_key = "Administrador"
+                master_db.commit()
+
+            first_job_id = {"value": None}
+
+            def repeat_job_side_effect(active_db, job):  # noqa: ANN001
+                if first_job_id["value"] is None:
+                    first_job_id["value"] = job.id
+                result = {
+                    "ok": True,
+                    "found": 1,
+                    "saved": 1,
+                    "duplicates": 0,
+                    "errors": 0,
+                    "downloaded": 1,
+                    "discarded": 0,
+                    "batch_count": 1,
+                    "has_more": True,
+                    "remaining": 1,
+                    "last_uid": "105",
+                    "message": "Lote repetido",
+                    "continuation_job_id": first_job_id["value"],
+                }
+                job.status = "success"
+                job.started_at = datetime.now(timezone.utc)
+                job.finished_at = datetime.now(timezone.utc)
+                job.result_json = json.dumps(result, ensure_ascii=False)
+                active_db.commit()
+                return result
+
+            with performance_test_client(fixture) as client:
+                with patch("app.settings.routes.execute_job_inline", side_effect=repeat_job_side_effect) as inline_mock:
+                    response = client.post(
+                        "/settings/email/backfill",
+                        data={"from_date": "2026-08-20", "to_date": "2026-08-25", "limit": "10"},
+                        headers={"Accept": "application/json"},
+                        follow_redirects=False,
+                    )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertEqual(payload["status"], "failed")
+            self.assertFalse(payload["result"]["ok"])
+            self.assertEqual(payload["result"]["error_type"], "backfill_loop_detected")
+            self.assertEqual(inline_mock.call_count, 1)
+        finally:
+            master_engine.dispose()
+            tenant_engine.dispose()
+            fixture.cleanup()
+
+    def test_manual_backfill_rejects_continuation_with_wrong_job_type(self):
+        fixture = build_performance_fixture("small")
+        master_engine = create_engine(f"sqlite:///{fixture.master_path.as_posix()}", connect_args={"check_same_thread": False})
+        tenant_engine = create_engine(f"sqlite:///{fixture.tenant_path.as_posix()}", connect_args={"check_same_thread": False})
+        MasterSession = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
+        TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
+        try:
+            from app.master.models import CompanyMembership
+
+            with MasterSession() as master_db:
+                membership = master_db.scalar(select(CompanyMembership).where(CompanyMembership.company_id == fixture.company_id))
+                assert membership is not None
+                membership.role_key = "Administrador"
+                master_db.commit()
+
+            continuation_ids: list[int] = []
+
+            def wrong_type_side_effect(active_db, job):  # noqa: ANN001
+                continuation = enqueue_job(
+                    active_db,
+                    company_id=job.company_id,
+                    job_type="email_sync",
+                    payload={"from_date": "2026-08-20", "to_date": "2026-08-25", "limit": 4, "resume": True},
+                    created_by_user_id=job.created_by_user_id,
                 )
-                self.assertNotEqual(first_job.dedupe_key, second_job.dedupe_key)
+                continuation_ids.append(continuation.id)
+                result = {
+                    "ok": True,
+                    "found": 2,
+                    "saved": 1,
+                    "duplicates": 0,
+                    "errors": 0,
+                    "downloaded": 2,
+                    "discarded": 0,
+                    "batch_count": 2,
+                    "has_more": True,
+                    "remaining": 4,
+                    "last_uid": "105",
+                    "message": "Lote inicial",
+                    "continuation_job_id": continuation.id,
+                }
+                job.status = "success"
+                job.started_at = datetime.now(timezone.utc)
+                job.finished_at = datetime.now(timezone.utc)
+                job.result_json = json.dumps(result, ensure_ascii=False)
+                active_db.commit()
+                return result
+
+            with performance_test_client(fixture) as client:
+                with patch("app.settings.routes.execute_job_inline", side_effect=wrong_type_side_effect) as inline_mock:
+                    response = client.post(
+                        "/settings/email/backfill",
+                        data={"from_date": "2026-08-20", "to_date": "2026-08-25", "limit": "10"},
+                        headers={"Accept": "application/json"},
+                        follow_redirects=False,
+                    )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertEqual(payload["status"], "failed")
+            self.assertFalse(payload["result"]["ok"])
+            self.assertEqual(payload["result"]["error_type"], "backfill_invalid_continuation")
+            self.assertEqual(inline_mock.call_count, 1)
+            self.assertEqual(len(continuation_ids), 1)
+
+            with TenantSession() as tenant_db:
+                jobs = tenant_db.scalars(
+                    select(BackgroundJob)
+                    .where(BackgroundJob.company_id == fixture.company_id)
+                    .order_by(BackgroundJob.id)
+                ).all()
+                self.assertEqual(len(jobs), 2)
+                self.assertEqual(jobs[1].job_type, "email_sync")
+        finally:
+            master_engine.dispose()
+            tenant_engine.dispose()
+            fixture.cleanup()
+
+    def test_manual_backfill_stops_when_remaining_does_not_decrease(self):
+        fixture = build_performance_fixture("small")
+        master_engine = create_engine(f"sqlite:///{fixture.master_path.as_posix()}", connect_args={"check_same_thread": False})
+        tenant_engine = create_engine(f"sqlite:///{fixture.tenant_path.as_posix()}", connect_args={"check_same_thread": False})
+        MasterSession = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
+        TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
+        try:
+            from app.master.models import CompanyMembership
+
+            with MasterSession() as master_db:
+                membership = master_db.scalar(select(CompanyMembership).where(CompanyMembership.company_id == fixture.company_id))
+                assert membership is not None
+                membership.role_key = "Administrador"
+                master_db.commit()
+
+            continuation_ids: list[int] = []
+            outcomes = [
+                {
+                    "result": {
+                        "ok": True,
+                        "found": 3,
+                        "saved": 1,
+                        "duplicates": 0,
+                        "errors": 0,
+                        "downloaded": 3,
+                        "discarded": 0,
+                        "batch_count": 3,
+                        "has_more": True,
+                        "remaining": 5,
+                        "last_uid": "105",
+                        "message": "Lote 1",
+                    },
+                    "continuation_payload": {"from_date": "2026-08-20", "to_date": "2026-08-25", "limit": 5, "resume": True},
+                },
+                {
+                    "result": {
+                        "ok": True,
+                        "found": 2,
+                        "saved": 1,
+                        "duplicates": 0,
+                        "errors": 0,
+                        "downloaded": 2,
+                        "discarded": 0,
+                        "batch_count": 2,
+                        "has_more": True,
+                        "remaining": 5,
+                        "last_uid": "106",
+                        "message": "Lote 2",
+                    },
+                    "continuation_payload": {"from_date": "2026-08-20", "to_date": "2026-08-25", "limit": 5, "resume": True},
+                },
+            ]
+
+            def no_progress_side_effect(active_db, job):  # noqa: ANN001
+                outcome = outcomes.pop(0)
+                result = dict(outcome["result"])
+                continuation = BackgroundJob(
+                    company_id=job.company_id,
+                    job_type="backfill_imap",
+                    status="queued",
+                    payload_json=json.dumps(outcome["continuation_payload"], ensure_ascii=False),
+                    created_by_user_id=job.created_by_user_id,
+                )
+                active_db.add(continuation)
+                active_db.flush()
+                continuation_ids.append(continuation.id)
+                result["continuation_job_id"] = continuation.id
+                job.status = "success"
+                job.started_at = datetime.now(timezone.utc)
+                job.finished_at = datetime.now(timezone.utc)
+                job.result_json = json.dumps(result, ensure_ascii=False)
+                active_db.commit()
+                return result
+
+            with performance_test_client(fixture) as client:
+                with patch("app.settings.routes.execute_job_inline", side_effect=no_progress_side_effect) as inline_mock:
+                    response = client.post(
+                        "/settings/email/backfill",
+                        data={"from_date": "2026-08-20", "to_date": "2026-08-25", "limit": "10"},
+                        headers={"Accept": "application/json"},
+                        follow_redirects=False,
+                    )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertEqual(payload["status"], "failed")
+            self.assertFalse(payload["result"]["ok"])
+            self.assertEqual(payload["result"]["error_type"], "backfill_no_progress")
+            self.assertEqual(inline_mock.call_count, 2)
+            self.assertEqual(len(continuation_ids), 2)
+            self.assertNotEqual(continuation_ids[0], continuation_ids[1])
+
+            with TenantSession() as tenant_db:
+                jobs = tenant_db.scalars(
+                    select(BackgroundJob)
+                    .where(BackgroundJob.company_id == fixture.company_id, BackgroundJob.job_type == "backfill_imap")
+                    .order_by(BackgroundJob.id)
+                ).all()
+                self.assertEqual(len(jobs), 3)
         finally:
             master_engine.dispose()
             tenant_engine.dispose()
