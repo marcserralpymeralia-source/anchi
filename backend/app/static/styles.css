@@ -2937,7 +2937,6 @@ form.stack, .stack { gap: 9px; }
   flex-direction: column;
   gap: 10px;
   padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
   background: #ffffff;
   flex-shrink: 0;
 }

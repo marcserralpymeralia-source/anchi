@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, urlencode
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
@@ -11,9 +11,9 @@ from sqlalchemy.orm import Session, selectinload
 from app.auth.dependencies import current_user
 from app.core.pagination import normalize_page
 from app.core.templating import templates
-from app.dashboard.service import workbench_summary
+from app.dashboard.service import orders_workbench_summary, workbench_summary
 from app.db.models import Customer, Email, Order, OrderLine, ScoringSettings
-from app.dashboard.service import _customer_suggestion_maps, _load_order_line_metrics, email_workbench_item, order_workbench_item, suggest_customer_for_email
+from app.dashboard.service import _customer_suggestion_maps, _load_order_line_metrics, email_workbench_item, load_order_view_data, order_workbench_item, suggest_customer_for_email
 from app.orders.state import ERROR_ORDER_STATUSES, PENDING_ORDER_STATUSES, REVIEW_ORDER_STATUSES, TERMINAL_ORDER_STATUSES
 from app.master.service import TenantUser
 from app.settings.service import get_or_create_settings
@@ -334,6 +334,7 @@ def root_page(
     sender: str = "",
     search: str = "",
     reason: str = "",
+    sort: str = "date_desc",
     partial: str = "",
     page: int = 1,
     page_size: int = 25,
@@ -366,6 +367,7 @@ def root_page(
         sender=sender,
         search=search,
         reason=reason,
+        sort=sort,
         partial=partial,
         page=page,
         page_size=page_size,
@@ -401,6 +403,7 @@ def dashboard(
     sender: str = "",
     search: str = "",
     reason: str = "",
+    sort: str = "date_desc",
     partial: str = "",
     page: int = 1,
     page_size: int = 25,
@@ -432,10 +435,17 @@ def dashboard(
         )
 
     active_mode = mode or tab or "all"
-    filters = {"date_from": date_from, "date_to": date_to, "customer_id": customer_id, "status": status, "email_type": email_type, "score_min": score_min, "score_max": score_max, "scoring_category": scoring_category, "agent_status": agent_status, "date_range": date_range or quick_range or "7d", "customer_or_sender": customer_or_sender, "has_attachments": has_attachments, "order_status": order_status, "mode": active_mode, "tab": active_mode, "work_status": work_status, "quick_range": date_range or quick_range or "7d", "has_pdf": has_pdf, "requires_review": requires_review, "issue_type": issue_type, "origin": origin, "sender": sender, "search": search, "reason": reason, "page": page, "page_size": page_size}
+    is_orders_cards = request.url.path.startswith("/orders")
+    default_date_range = "" if is_orders_cards else "7d"
+    resolved_date_range = date_range or quick_range or default_date_range
+    filters = {"date_from": date_from, "date_to": date_to, "customer_id": customer_id, "status": status, "email_type": email_type, "score_min": score_min, "score_max": score_max, "scoring_category": scoring_category, "agent_status": agent_status, "date_range": resolved_date_range, "customer_or_sender": customer_or_sender, "has_attachments": has_attachments, "order_status": order_status, "mode": active_mode, "tab": active_mode, "work_status": work_status, "quick_range": resolved_date_range, "has_pdf": has_pdf, "requires_review": requires_review, "issue_type": issue_type, "origin": origin, "sender": sender, "search": search, "reason": reason, "page": page, "page_size": page_size, "sort": sort, "archived": False}
 
     try:
-        workbench = workbench_summary(db, user.company_id, filters, include_metrics=False)
+        if is_orders_cards:
+            order_view = load_order_view_data(db, user.company_id, filters)
+            workbench = orders_workbench_summary(order_view, filters)
+        else:
+            workbench = workbench_summary(db, user.company_id, filters, include_metrics=False)
     except Exception:
         workbench = _empty_workbench_summary(filters)
 
@@ -444,6 +454,16 @@ def dashboard(
         featured_process_item = _normalize_featured_process_item(workbench["items"][0])
 
     template_name = "dashboard/_workbench.html" if partial == "workbench" else "dashboard.html"
+    if is_orders_cards:
+        orders_view_query = {key: value for key, value in request.query_params.items() if key != "partial"}
+        orders_view_query["view"] = "cards"
+        view_cards_url = f"/orders?{urlencode(orders_view_query)}"
+        orders_view_query["view"] = "list"
+        view_list_url = f"/orders?{urlencode(orders_view_query)}"
+    else:
+        view_cards_url = "/"
+        view_list_url = "/orders?view=list"
+
     return templates.TemplateResponse(
         template_name,
         {
@@ -454,8 +474,8 @@ def dashboard(
             "filters": filters,
             "pagination": workbench["pagination"],
             "current_view": "cards",
-            "view_cards_url": "/orders?view=cards" if request.url.path.startswith("/orders") else "/",
-            "view_list_url": "/orders?view=list",
+            "view_cards_url": view_cards_url,
+            "view_list_url": view_list_url,
             "dashboard_action": "/orders" if request.url.path.startswith("/orders") else "/",
         },
     )

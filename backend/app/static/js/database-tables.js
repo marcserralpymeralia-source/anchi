@@ -112,9 +112,7 @@
     table.style.width = `${Math.max(tableMinWidth(table, columns), total, tableAvailableWidth(table))}px`;
   }
 
-  function distributeInitialSpace(table, columns, widths, hasSavedWidths) {
-    if (hasSavedWidths) return;
-
+  function distributeAvailableSpace(table, columns, widths) {
     const available = tableAvailableWidth(table);
     const total = Array.from(widths.values()).reduce((sum, width) => sum + width, 0);
     const extra = Math.max(0, available - total);
@@ -152,26 +150,19 @@
 
     const stored = readWidths(table);
     const widths = new Map();
-    let hasSavedWidths = false;
     columns.forEach((column) => {
       const saved = parseStoredWidth(stored[column.dataset.column], column);
-      if (saved !== null && !metaFor(column).fixed) hasSavedWidths = true;
       widths.set(column.dataset.column, saved ?? metaFor(column).defaultWidth);
     });
 
-    distributeInitialSpace(table, columns, widths, hasSavedWidths);
+    distributeAvailableSpace(table, columns, widths);
     columns.forEach((column) => setColumnWidth(column, widths.get(column.dataset.column)));
     applyTableWidth(table, widths);
     addResizeHandles(table);
   }
 
   function refreshLayout(table) {
-    const columns = visibleColumns(table);
-    if (!columns.length) return;
-    const widths = widthsFor(table, columns);
-    columns.forEach((column) => setColumnWidth(column, widths.get(column.dataset.column)));
-    applyTableWidth(table, widths);
-    addResizeHandles(table);
+    initializeLayout(table);
   }
 
   function setBoundary(table, left, right, requestedLeftWidth, startTotal) {
@@ -576,6 +567,13 @@
     const observer = new MutationObserver(() => refreshLayout(table));
     observer.observe(table, {subtree: true, attributes: true, attributeFilter: ["hidden"]});
     table._databaseTableObserver = observer;
+
+    const wrapper = table.closest(".database-table-wrap") || table.parentElement;
+    if (wrapper && typeof ResizeObserver !== "undefined") {
+      const resizeObserver = new ResizeObserver(() => refreshLayout(table));
+      resizeObserver.observe(wrapper);
+      table._databaseTableResizeObserver = resizeObserver;
+    }
   }
 
   document.addEventListener("DOMContentLoaded", () => {

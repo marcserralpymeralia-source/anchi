@@ -42,6 +42,7 @@
             <label>Buscar<input name="customer_or_sender" value="{{ filters.customer_or_sender or filters.search }}" placeholder="Cliente / asunto"></label>
             <label>Fecha
               <select name="date_range">
+                <option value="" {% if not filters.date_range %}selected{% endif %}>Todos</option>
                 <option value="today" {% if filters.date_range == "today" %}selected{% endif %}>Hoy</option>
                 <option value="yesterday" {% if filters.date_range == "yesterday" %}selected{% endif %}>Ayer</option>
                 <option value="7d" {% if filters.date_range == "7d" %}selected{% endif %}>7 días</option>

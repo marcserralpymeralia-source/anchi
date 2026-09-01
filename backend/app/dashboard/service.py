@@ -172,7 +172,7 @@ def _load_order_conversations(db: Session, orders: list[Order], company_id: int)
             Conversation.company_id == company_id,
             Conversation.id.in_(conversation_ids),
         )
-        .options(selectinload(Conversation.messages))
+        .options(selectinload(Conversation.messages).selectinload(InboundMessage.attachments))
     ).unique().all()
     by_id = {conversation.id: conversation for conversation in conversations}
     for order in orders:
@@ -541,6 +541,255 @@ def filter_orders_for_operation(orders: list[Order], settings: ScoringSettings, 
     if requires_review:
         orders = [order for order in orders if (order_operational_category(order, settings, line_metrics_by_order=line_metrics_by_order) in {"review", "blocked", "error"}) == (requires_review == "yes")]
     return orders
+
+
+def _order_view_pagination(total_items: int, page: int, page_size: int) -> tuple[list[int], dict[str, int | bool | tuple[int, ...]]]:
+    page, page_size = normalize_page(page, page_size)
+    total_pages = ceil(total_items / page_size) if total_items else 0
+    if total_pages and page > total_pages:
+        page = total_pages
+    start = (page - 1) * page_size
+    end = min(start + page_size, total_items)
+    return list(range(start, end)), {
+        "page": page,
+        "page_size": page_size,
+        "total_items": total_items,
+        "total_pages": total_pages,
+        "has_next": page < total_pages,
+        "has_previous": page > 1,
+        "start_item": start + 1 if total_items else 0,
+        "end_item": end,
+        "allowed_page_sizes": (10, 25, 50, 100),
+    }
+
+
+def load_order_view_data(db: Session, company_id: int, filters: dict) -> dict:
+    """Load the canonical order dataset used by cards and the table view.
+
+    The inbox/workbench can also display standalone emails, but the two order
+    views must never derive their rows from that mixed dataset. This helper is
+    deliberately order-only and applies the shared filters before either
+    renderer builds its own representation.
+    """
+    settings = get_or_create_settings(db, ScoringSettings, company_id)
+    archived = filters.get("archived") in {True, "true", "1", "yes"}
+    stmt = (
+        select(Order)
+        .where(
+            Order.company_id == company_id,
+            Order.deleted_at.is_(None),
+            Order.archived.is_(archived),
+        )
+    )
+
+    date_range = filters.get("date_range") or filters.get("quick_range")
+    today = datetime.now(timezone.utc).date()
+    if date_range == "today":
+        stmt = stmt.where(Order.created_at >= datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc))
+    elif date_range == "yesterday":
+        yesterday = today.fromordinal(today.toordinal() - 1)
+        stmt = stmt.where(
+            Order.created_at >= datetime.combine(yesterday, datetime.min.time(), tzinfo=timezone.utc),
+            Order.created_at < datetime.combine(today, datetime.min.time(), tzinfo=timezone.utc),
+        )
+    elif date_range == "7d":
+        start = today.fromordinal(today.toordinal() - 6)
+        stmt = stmt.where(Order.created_at >= datetime.combine(start, datetime.min.time(), tzinfo=timezone.utc))
+    if filters.get("date_from"):
+        stmt = stmt.where(Order.created_at >= datetime.fromisoformat(filters["date_from"]).replace(tzinfo=timezone.utc))
+    if filters.get("date_to"):
+        stmt = stmt.where(Order.created_at <= datetime.fromisoformat(f"{filters['date_to']}T23:59:59").replace(tzinfo=timezone.utc))
+    if filters.get("customer_id") and str(filters["customer_id"]) != "0":
+        customer_id = int(filters["customer_id"])
+        stmt = stmt.where((Order.customer_id == customer_id) | (Order.validated_customer_id == customer_id))
+    if filters.get("score_min"):
+        stmt = stmt.where(Order.score >= float(filters["score_min"]))
+    if filters.get("score_max"):
+        stmt = stmt.where(Order.score <= float(filters["score_max"]))
+    if filters.get("status") or filters.get("order_status"):
+        stmt = stmt.where(Order.status == (filters.get("status") or filters.get("order_status")))
+
+    search = filters.get("search") or filters.get("customer_or_sender")
+    needs_email_join = bool(
+        filters.get("email_type")
+        or filters.get("sender")
+        or search
+        or filters.get("sort") in {"sender_asc", "sender_desc", "subject_asc", "subject_desc", "type_asc", "type_desc"}
+    )
+    if needs_email_join:
+        stmt = stmt.outerjoin(Email, Order.email_id == Email.id)
+    if filters.get("email_type"):
+        stmt = stmt.where(Email.detected_type == filters["email_type"])
+    if filters.get("sender"):
+        stmt = stmt.where(Email.sender.ilike(f"%{filters['sender']}%"))
+    if search:
+        like = f"%{search}%"
+        stmt = stmt.where(
+            or_(
+                Email.subject.ilike(like),
+                Email.sender.ilike(like),
+                Email.body.ilike(like),
+                Order.customer_detected_name.ilike(like),
+            )
+        )
+
+    sort = filters.get("sort") or "date_desc"
+    sort_map = {
+        "date_asc": Order.created_at.asc(),
+        "date_desc": Order.created_at.desc(),
+        "score_asc": Order.score.asc(),
+        "score_desc": Order.score.desc(),
+        "status_asc": Order.status.asc(),
+        "status_desc": Order.status.desc(),
+        "customer_asc": Order.customer_detected_name.asc(),
+        "customer_desc": Order.customer_detected_name.desc(),
+        "sender_asc": Email.sender.asc(),
+        "sender_desc": Email.sender.desc(),
+        "subject_asc": Email.subject.asc(),
+        "subject_desc": Email.subject.desc(),
+        "type_asc": Email.detected_type.asc(),
+        "type_desc": Email.detected_type.desc(),
+    }
+    stmt = stmt.options(
+        joinedload(Order.email).selectinload(Email.attachments) if filters.get("has_pdf") else joinedload(Order.email),
+        selectinload(Order.customer),
+        selectinload(Order.validated_customer),
+    ).order_by(sort_map.get(sort, Order.created_at.desc()), Order.id.asc())
+    orders = db.scalars(stmt).unique().all()
+    _load_order_conversations(db, orders, company_id)
+    line_metrics_by_order = _load_order_line_metrics(db, company_id, [order.id for order in orders])
+
+    scoring_filter = filters.get("scoring_category")
+    if scoring_filter and scoring_filter != "all":
+        if scoring_filter == "blocked":
+            orders = [
+                order
+                for order in orders
+                if order_operational_category(order, settings, line_metrics_by_order=line_metrics_by_order) == "blocked"
+            ]
+        else:
+            orders = [order for order in orders if scoring_category(order.score, settings) == scoring_filter]
+    orders = filter_orders_for_operation(orders, settings, filters, line_metrics_by_order)
+    agent_status = filters.get("agent_status")
+    if agent_status and agent_status != "all":
+        orders = [
+            order
+            for order in orders
+            if (email_agent_status(order.email, order) if order.email else "order_detected") == agent_status
+        ]
+    if filters.get("has_attachments"):
+        want_attachments = filters["has_attachments"] == "yes"
+        orders = [order for order in orders if bool(order.email and order.email.has_attachments) == want_attachments]
+    if filters.get("reason"):
+        reason = filters["reason"].lower()
+        orders = [
+            order
+            for order in orders
+            if reason in order_issue_summary(order, settings, line_metrics_by_order=line_metrics_by_order).lower()
+            or reason in str(order.status or "").lower()
+        ]
+
+    page_indexes, pagination = _order_view_pagination(
+        len(orders),
+        int(filters.get("page") or 1),
+        int(filters.get("page_size") or 25),
+    )
+    customers = tuple(
+        db.scalars(
+            select(Customer)
+            .where(Customer.company_id == company_id, Customer.deleted_at.is_(None))
+            .order_by(Customer.fiscal_name)
+        ).all()
+    )
+    statuses = tuple(
+        db.scalars(
+            select(Order.status)
+            .where(Order.company_id == company_id)
+            .distinct()
+            .order_by(Order.status)
+        ).all()
+    )
+    pdf_flags = {
+        order.id: order_has_pdf(order) if filters.get("has_pdf") else bool(order.email and order.email.has_pdf)
+        for order in orders
+    }
+    return {
+        "settings": settings,
+        "all_orders": orders,
+        "orders": [orders[index] for index in page_indexes],
+        "line_metrics": line_metrics_by_order,
+        "pdf_flags": pdf_flags,
+        "customers": customers,
+        "statuses": statuses,
+        "pagination": pagination,
+    }
+
+
+def orders_workbench_summary(order_view: dict, filters: dict) -> dict:
+    """Render the canonical order dataset as workbench cards."""
+    settings = order_view["settings"]
+    line_metrics_by_order = order_view["line_metrics"]
+    all_items = [
+        order_workbench_item(
+            order,
+            settings,
+            include_line_metrics=True,
+            line_metrics_by_order=line_metrics_by_order,
+        )
+        for order in order_view["all_orders"]
+    ]
+    tab_counts = {
+        "all": len(all_items),
+        "not_processed": len([item for item in all_items if item["agent_status"] == "not_processed"]),
+        "processed": len([item for item in all_items if item["agent_status"] in {"processed", "order_detected", "no_order", "doubtful"}]),
+        "order_detected": len([item for item in all_items if item["agent_status"] == "order_detected"]),
+        "attention": len([item for item in all_items if item["agent_status"] in {"doubtful", "error"} or item["scoring_category"] in {"doubtful", "blocked"} or str(item["order_status"]).startswith("error")]),
+        "no_order": len([item for item in all_items if item["agent_status"] in {"no_order", "discarded"}]),
+        "errors": len([item for item in all_items if item["agent_status"] == "error" or str(item["order_status"]).startswith("error")]),
+    }
+
+    items = all_items
+    mode = filters.get("mode") or filters.get("tab") or "all"
+    if mode == "not_processed":
+        items = [item for item in items if item["agent_status"] == "not_processed"]
+    elif mode == "processed":
+        items = [item for item in items if item["agent_status"] in {"processed", "order_detected", "no_order", "doubtful"}]
+    elif mode == "attention":
+        items = [item for item in items if item["agent_status"] in {"doubtful", "error"} or item["scoring_category"] in {"doubtful", "blocked"} or str(item["order_status"]).startswith("error")]
+    elif mode == "errors":
+        items = [item for item in items if item["agent_status"] == "error" or str(item["order_status"]).startswith("error")]
+    elif mode in {"no_order", "discarded_no_order"}:
+        items = [item for item in items if item["agent_status"] in {"no_order", "discarded"}]
+
+    agent_status = filters.get("agent_status")
+    if agent_status and agent_status != "all":
+        items = [item for item in items if item["agent_status"] == agent_status]
+    scoring_filter = filters.get("scoring_category")
+    if scoring_filter and scoring_filter != "all":
+        items = [item for item in items if item["scoring_category"] == scoring_filter]
+    if filters.get("has_attachments"):
+        items = [item for item in items if item["has_attachments"] == (filters["has_attachments"] == "yes")]
+    if filters.get("reason"):
+        reason = filters["reason"].lower()
+        items = [
+            item
+            for item in items
+            if reason in (item.get("score_reason") or "").lower()
+            or reason in (item.get("doubts_summary") or "").lower()
+            or reason in (item.get("order_status_label") or "").lower()
+        ]
+
+    page_indexes, pagination = _order_view_pagination(
+        len(items),
+        int(filters.get("page") or 1),
+        int(filters.get("page_size") or 25),
+    )
+    return {
+        "tab_counts": tab_counts,
+        "items": [items[index] for index in page_indexes],
+        "pagination": pagination,
+        "filters_applied": filters,
+    }
 
 
 def operational_summary(db: Session, company_id: int, filters: dict) -> dict:

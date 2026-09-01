@@ -29,6 +29,25 @@ class OrdersListOptimizationTests(unittest.TestCase):
         finally:
             fixture.cleanup()
 
+    def test_card_and_list_views_share_the_same_order_dataset(self):
+        fixture = build_performance_fixture("small")
+        try:
+            with performance_test_client(fixture) as client:
+                cards_response = client.get("/orders?view=cards&page_size=25")
+                list_response = client.get("/orders?view=list&page_size=25")
+                filtered_cards_response = client.get("/orders?view=cards&search=Cliente&page_size=25")
+                filtered_list_response = client.get("/orders?view=list&search=Cliente&page_size=25")
+
+            card_ids = re.findall(r'data-kind="order"[^>]*data-selection-id="(\d+)"', cards_response.text)
+            list_ids = re.findall(r'data-order-id="(\d+)"', list_response.text)
+            filtered_card_ids = re.findall(r'data-kind="order"[^>]*data-selection-id="(\d+)"', filtered_cards_response.text)
+            filtered_list_ids = re.findall(r'data-order-id="(\d+)"', filtered_list_response.text)
+
+            self.assertEqual(card_ids, list_ids)
+            self.assertEqual(filtered_card_ids, filtered_list_ids)
+        finally:
+            fixture.cleanup()
+
     def test_orders_can_be_archived_and_restored(self):
         fixture = build_performance_fixture("small")
         try:

@@ -1,19 +1,20 @@
 import json
 from datetime import datetime, timezone
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
-from sqlalchemy import case, exists, func, or_, select
+from sqlalchemy import case, or_, select
 from sqlalchemy.orm import Session, load_only, selectinload
 
 from app.agent.extraction.diagnostics import extraction_diagnostics_from_messages
 from app.core.templating import templates
+from app.dashboard.service import load_order_view_data
 from app.agent.platform import LearningService
 from app.agent.services import MockAgentService, ScoringService
 from app.auth.dependencies import current_user
 from app.core.channel_identity import is_whatsapp_provider
 from app.master.service import TenantUser
-from app.core.pagination import paginate
 from app.db.models import Conversation, Customer, CustomerContactPoint, Email, EmailAttachment, ExportFile, FTPSettings, InboundMessage, ManualCorrection, Order, OrderLine, Product, RagCase, ScoringSettings, User, utcnow
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
@@ -110,16 +111,28 @@ def list_orders(
     email_type: str = "",
     sender: str = "",
     search: str = "",
+    customer_or_sender: str = "",
     scoring_category: str = "",
     has_pdf: str = "",
     requires_review: str = "",
     sort: str = "date_desc",
+    date_range: str = "",
+    quick_range: str = "",
+    mode: str = "all",
+    agent_status: str = "",
+    has_attachments: str = "",
+    order_status: str = "",
+    work_status: str = "",
+    issue_type: str = "",
+    origin: str = "",
+    reason: str = "",
     page: int = 1,
     page_size: int = 25,
     partial: str = "",
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
+    effective_search = search or customer_or_sender
     if view == "cards" and not archived:
         # Keep the card view on the same endpoint while delegating to the
         # existing Bandeja renderer and query pipeline.
@@ -134,7 +147,21 @@ def list_orders(
             score_max=score_max,
             status=status,
             email_type=email_type,
-            customer_or_sender=search,
+            scoring_category=scoring_category,
+            sender=sender,
+            search=effective_search,
+            sort=sort,
+            mode=mode or "all",
+            agent_status=agent_status,
+            has_attachments=has_attachments,
+            order_status=order_status,
+            work_status=work_status,
+            issue_type=issue_type,
+            origin=origin,
+            reason=reason,
+            date_range=date_range,
+            quick_range=quick_range,
+            customer_or_sender=effective_search,
             has_pdf=has_pdf,
             requires_review=requires_review,
             page=page,
@@ -144,141 +171,43 @@ def list_orders(
             user=user,
         )
 
-    stmt = select(Order).where(
-        Order.company_id == user.company_id,
-        Order.deleted_at.is_(None),
-        Order.archived.is_(archived),
-    )
-    if date_from:
-        stmt = stmt.where(Order.created_at >= datetime.fromisoformat(date_from).replace(tzinfo=timezone.utc))
-    if date_to:
-        stmt = stmt.where(Order.created_at <= datetime.fromisoformat(f"{date_to}T23:59:59").replace(tzinfo=timezone.utc))
-    if customer_id:
-        stmt = stmt.where((Order.customer_id == customer_id) | (Order.validated_customer_id == customer_id))
-    parsed_score_min = float(score_min) if score_min else None
-    parsed_score_max = float(score_max) if score_max else None
-    if parsed_score_min is not None:
-        stmt = stmt.where(Order.score >= parsed_score_min)
-    if parsed_score_max is not None:
-        stmt = stmt.where(Order.score <= parsed_score_max)
-    if status:
-        stmt = stmt.where(Order.status == status)
-    scoring = get_or_create_settings(db, ScoringSettings, user.company_id)
-    if scoring_category:
-        if scoring_category == "safe":
-            stmt = stmt.where(Order.score >= scoring.safe_threshold)
-        elif scoring_category == "reviewable":
-            stmt = stmt.where(Order.score >= scoring.review_threshold, Order.score < scoring.safe_threshold)
-        elif scoring_category == "doubtful":
-            stmt = stmt.where(Order.score >= scoring.doubtful_threshold, Order.score < scoring.review_threshold)
-        elif scoring_category == "not_importable":
-            stmt = stmt.where(Order.score < scoring.doubtful_threshold)
-        elif scoring_category == "without_score":
-            stmt = stmt.where(Order.score.is_(None))
-    if has_pdf:
-        pdf_exists = exists().where(EmailAttachment.email_id == Order.email_id, EmailAttachment.content_type == "application/pdf")
-        stmt = stmt.where(pdf_exists if has_pdf == "yes" else ~pdf_exists)
-    if requires_review:
-        if requires_review == "yes":
-            stmt = stmt.where(or_(Order.status.in_(("pedido_pendiente_revision", "pending_review", "dudoso", "no_importable")), Order.score < scoring.safe_threshold))
-        else:
-            stmt = stmt.where(Order.status.in_(("pedido_confirmado", "pedido_exportado")))
-    joined_email = False
-    if email_type:
-        stmt = stmt.join(Email, Order.email_id == Email.id).where(Email.detected_type == email_type)
-        joined_email = True
-    if sender:
-        if not joined_email:
-            stmt = stmt.join(Email, Order.email_id == Email.id)
-            joined_email = True
-        stmt = stmt.where(Email.sender.ilike(f"%{sender}%"))
-    if search:
-        if not joined_email:
-            stmt = stmt.join(Email, Order.email_id == Email.id)
-            joined_email = True
-        like = f"%{search}%"
-        stmt = stmt.where(or_(Email.subject.ilike(like), Order.customer_detected_name.ilike(like)))
-    if sort in ("sender_asc", "sender_desc", "subject_asc", "subject_desc", "type_asc", "type_desc"):
-        if not joined_email:
-            stmt = stmt.join(Email, Order.email_id == Email.id)
-            joined_email = True
-
-    sort_map = {
-        "date_asc": Order.created_at.asc(),
-        "date_desc": Order.created_at.desc(),
-        "score_asc": Order.score.asc(),
-        "score_desc": Order.score.desc(),
-        "status_asc": Order.status.asc(),
-        "status_desc": Order.status.desc(),
-        "customer_asc": Order.customer_detected_name.asc(),
-        "customer_desc": Order.customer_detected_name.desc(),
-        "sender_asc": Email.sender.asc() if joined_email else Order.created_at.desc(),
-        "sender_desc": Email.sender.desc() if joined_email else Order.created_at.desc(),
-        "subject_asc": Email.subject.asc() if joined_email else Order.created_at.desc(),
-        "subject_desc": Email.subject.desc() if joined_email else Order.created_at.desc(),
-        "type_asc": Email.detected_type.asc() if joined_email else Order.created_at.desc(),
-        "type_desc": Email.detected_type.desc() if joined_email else Order.created_at.desc(),
+    filters = {
+        "archived": archived,
+        "date_from": date_from,
+        "date_to": date_to,
+        "customer_id": customer_id,
+        "score_min": score_min,
+        "score_max": score_max,
+        "status": status,
+        "email_type": email_type,
+        "sender": sender,
+        "search": effective_search,
+        "scoring_category": scoring_category,
+        "has_pdf": has_pdf,
+        "requires_review": requires_review,
+        "sort": sort,
+        "date_range": date_range,
+        "quick_range": quick_range,
+        "agent_status": agent_status,
+        "has_attachments": has_attachments,
+        "order_status": order_status,
+        "work_status": work_status,
+        "issue_type": issue_type,
+        "origin": origin,
+        "reason": reason,
+        "mode": mode,
+        "customer_or_sender": effective_search,
+        "page": page,
+        "page_size": page_size,
     }
-    stmt = stmt.options(
-        load_only(
-            Order.id,
-            Order.email_id,
-            Order.customer_id,
-            Order.validated_customer_id,
-            Order.customer_detected_name,
-            Order.score,
-            Order.status,
-            Order.archived,
-            Order.notes,
-            Order.created_at,
-        ),
-        selectinload(Order.email).load_only(Email.id, Email.sender, Email.subject, Email.detected_type, Email.received_at, Email.external_id),
-        selectinload(Order.customer).load_only(Customer.id, Customer.code, Customer.fiscal_name),
-        selectinload(Order.validated_customer).load_only(Customer.id, Customer.code, Customer.fiscal_name),
-    ).order_by(sort_map.get(sort, Order.created_at.desc()))
-    orders, pagination = paginate(db, stmt, page=page, page_size=page_size)
-    customers = tuple(db.scalars(select(Customer).where(Customer.company_id == user.company_id, Customer.deleted_at.is_(None)).order_by(Customer.fiscal_name)).all())
-    statuses = tuple(db.scalars(select(Order.status).where(Order.company_id == user.company_id).distinct().order_by(Order.status)).all())
-    order_ids = [order.id for order in orders]
-    line_metrics: dict[int, dict[str, int]] = {}
-    pdf_flags: dict[int, bool] = {}
-    if order_ids:
-        doubtful_case = case(
-            (
-                or_(
-                    OrderLine.validation_status != "validated",
-                    OrderLine.validated_product_id.is_(None),
-                    OrderLine.doubt_reason.is_not(None),
-                ),
-                1,
-            ),
-            else_=0,
-        )
-        for order_id, line_count, doubtful_count in db.execute(
-            select(
-                OrderLine.order_id,
-                func.count(OrderLine.id).label("line_count"),
-                func.coalesce(func.sum(doubtful_case), 0).label("doubtful_count"),
-            )
-            .where(OrderLine.order_id.in_(order_ids))
-            .group_by(OrderLine.order_id)
-        ):
-            line_metrics[int(order_id)] = {
-                "line_count": int(line_count or 0),
-                "doubtful_count": int(doubtful_count or 0),
-            }
-        for order_id, pdf_count in db.execute(
-            select(
-                Order.id,
-                func.count(EmailAttachment.id).label("pdf_count"),
-            )
-            .join(Email, Order.email_id == Email.id)
-            .join(EmailAttachment, EmailAttachment.email_id == Email.id)
-            .where(Order.id.in_(order_ids), EmailAttachment.content_type == "application/pdf")
-            .group_by(Order.id)
-        ):
-            pdf_flags[int(order_id)] = bool(pdf_count)
-    filters = {"archived": archived, "date_from": date_from, "date_to": date_to, "customer_id": customer_id, "score_min": score_min, "score_max": score_max, "status": status, "email_type": email_type, "sender": sender, "search": search, "scoring_category": scoring_category, "has_pdf": has_pdf, "requires_review": requires_review, "sort": sort}
+    order_view = load_order_view_data(db, user.company_id, filters)
+    orders = order_view["orders"]
+    scoring = order_view["settings"]
+    pagination = order_view["pagination"]
+    customers = order_view["customers"]
+    statuses = order_view["statuses"]
+    line_metrics = order_view["line_metrics"]
+    pdf_flags = order_view["pdf_flags"]
     categories = {order.id: order_score_category(order.score, scoring) for order in orders}
     alerts = {
         order.id: order_alerts(
@@ -290,7 +219,20 @@ def list_orders(
         )
         for order in orders
     }
-    return templates.TemplateResponse("orders/list.html", {"request": request, "user": user, "orders": orders, "customers": customers, "statuses": statuses, "pagination": pagination, "filters": filters, "scoring": scoring, "categories": categories, "alerts": alerts})
+    view_query = {
+        key: value
+        for key, value in filters.items()
+        if value not in (None, "", 0, False)
+        and key not in {"page", "partial"}
+        and not (key == "sort" and value == "date_desc")
+        and not (key == "page_size" and value == 25)
+        and not (key == "mode" and value == "all")
+    }
+    view_query["view"] = "cards"
+    view_cards_url = f"/orders?{urlencode(view_query)}"
+    view_query["view"] = "list"
+    view_list_url = f"/orders?{urlencode(view_query)}"
+    return templates.TemplateResponse("orders/list.html", {"request": request, "user": user, "orders": orders, "customers": customers, "statuses": statuses, "pagination": pagination, "filters": filters, "scoring": scoring, "categories": categories, "alerts": alerts, "view_cards_url": view_cards_url, "view_list_url": view_list_url})
 
 
 @router.post("/mock")
