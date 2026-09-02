@@ -404,6 +404,7 @@ def validate_import(
     import_kind: str = "",
 ) -> ImportValidation:
     from app.db.models import Customer, CustomerProductKnowledge, Product
+    from app.master_data.service import find_product_match
 
     rows_new = rows_update = duplicates = rows_error = invalid_emails = invalid_phones = 0
     errors: list[str] = []
@@ -456,9 +457,7 @@ def validate_import(
                 rows_error += 1
                 errors.append(f"Fila {index + 2}: falta articulo/referencia o descripcion.")
                 continue
-            product = db.query(Product).filter(Product.company_id == company_id, Product.reference == data.get("reference")).one_or_none() if data.get("reference") else None
-            if not product and data.get("name"):
-                product = db.query(Product).filter(Product.company_id == company_id, Product.name == data["name"]).one_or_none()
+            product, match_reason = find_product_match(db, company_id, data)
             if not product:
                 rows_error += 1
                 errors.append(f"Fila {index + 2}: no se encontró producto para {data.get('reference') or data.get('name')}.")
@@ -477,10 +476,7 @@ def validate_import(
                 rows_error += 1
                 errors.append(f"Fila {index + 2}: falta articulo/referencia o descripcion.")
                 continue
-            existing = db.query(Product).filter(Product.company_id == company_id, Product.reference == data.get("reference")).one_or_none() if data.get("reference") else None
-            if not existing and data.get("alternative_code"):
-                existing = db.query(Product).filter(Product.company_id == company_id, Product.alternative_code == data["alternative_code"]).one_or_none()
-            match_reason = "reference" if existing else ""
+            existing, match_reason = find_product_match(db, company_id, data)
         if key in seen_keys:
             duplicates += 1
             warnings.append(f"Fila {index + 2}: posible duplicado en el archivo ({key}).")

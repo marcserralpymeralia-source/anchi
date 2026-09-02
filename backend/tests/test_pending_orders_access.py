@@ -114,6 +114,71 @@ class PendingOrdersAccessTests(unittest.TestCase):
             cleanup()
             fixture.cleanup()
 
+    def test_workbench_order_detail_uses_compact_product_search(self):
+        fixture = build_performance_fixture("small")
+        client, cleanup = self._client_for(fixture)
+        try:
+            login = client.post(
+                "/login",
+                data={"email": fixture.admin_email, "password": fixture.admin_password},
+                follow_redirects=False,
+            )
+            self.assertEqual(login.status_code, 303)
+
+            _, TenantSession = _session_factory(fixture.tenant_database_url)
+            with TenantSession() as db:
+                customer = db.query(Customer).filter(Customer.company_id == 1).first()
+                product = db.query(Product).filter(Product.company_id == 1).first()
+                self.assertIsNotNone(customer)
+                self.assertIsNotNone(product)
+
+                order = Order(
+                    company_id=1,
+                    customer_id=customer.id,
+                    validated_customer_id=customer.id,
+                    customer_detected_name="Pedido de prueba UAT",
+                    score=51,
+                    status="pedido_pendiente_revision",
+                    created_at=utcnow(),
+                )
+                db.add(order)
+                db.flush()
+                db.add(
+                    OrderLine(
+                        company_id=1,
+                        order_id=order.id,
+                        product_id=product.id,
+                        validated_product_id=None,
+                        original_text="12 cajas demo",
+                        detected_product="Caja demo",
+                        detected_reference="DEMO-REF",
+                        quantity=12,
+                        unit="cajas",
+                        extraction_confidence=0.75,
+                        line_score=42,
+                        validation_status="pending",
+                        doubt_reason="Linea pendiente de validar",
+                    )
+                )
+                db.commit()
+                order_id = order.id
+
+            response = client.get(f"/workbench/item/order/{order_id}/detail")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('data-line-product-autocomplete', response.text)
+            self.assertIn('data-line-product-input', response.text)
+            self.assertIn('data-line-product-results', response.text)
+            self.assertIn('data-line-product-clear', response.text)
+            self.assertIn('La referencia del cliente es solo una pista', response.text)
+            self.assertNotIn('data-line-product-select', response.text)
+            self.assertNotIn('<option value="0">Sin referencia</option>', response.text)
+            self.assertIn('Ref. interna', response.text)
+            self.assertIn('Detectado:', response.text)
+        finally:
+            cleanup()
+            fixture.cleanup()
+
     def test_next_rejects_external_url(self):
         fixture = build_performance_fixture("small")
         client, cleanup = self._client_for(fixture)

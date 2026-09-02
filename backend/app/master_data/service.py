@@ -66,6 +66,38 @@ def name_similarity(left: str, right: str) -> float:
     return SequenceMatcher(None, normalize_name(left), normalize_name(right)).ratio()
 
 
+def _normalize_match_text(value: str | None) -> str:
+    if not value:
+        return ""
+    normalized = value.lower().strip()
+    normalized = re.sub(r"(?<=\d)(?=[a-z])|(?<=[a-z])(?=\d)", " ", normalized)
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+    return " ".join(normalized.split())
+
+
+def _match_text_similarity(left: str | None, right: str | None) -> float:
+    left_normalized = _normalize_match_text(left)
+    right_normalized = _normalize_match_text(right)
+    if not left_normalized or not right_normalized:
+        return 0.0
+    sequence_score = SequenceMatcher(None, left_normalized, right_normalized).ratio()
+    token_score = SequenceMatcher(
+        None,
+        " ".join(sorted(left_normalized.split())),
+        " ".join(sorted(right_normalized.split())),
+    ).ratio()
+    return max(sequence_score, token_score)
+
+
+def _product_name_is_compatible(detected_name: str | None, product: Product, threshold: float = 0.55) -> bool:
+    if not detected_name:
+        return True
+    score = _match_text_similarity(detected_name, product.name)
+    if product.description:
+        score = max(score, _match_text_similarity(detected_name, product.description))
+    return score >= threshold
+
+
 def _set_value_if_present(target: object, field: str, data: dict[str, str]) -> None:
     value = data.get(field)
     if value is not None and value != "":
@@ -337,11 +369,11 @@ def find_product_match(db: Session, company_id: int, data: dict[str, str]) -> tu
     name = (data.get("name") or "").strip()
     if reference:
         product = db.scalar(select(Product).where(Product.company_id == company_id, Product.reference == reference))
-        if product:
+        if product and _product_name_is_compatible(name, product):
             return product, "reference"
     if alternative_code:
         product = db.scalar(select(Product).where(Product.company_id == company_id, Product.alternative_code == alternative_code))
-        if product:
+        if product and _product_name_is_compatible(name, product):
             return product, "alternative_code"
     if name:
         alias_match = (
@@ -359,7 +391,7 @@ def find_product_match(db: Session, company_id: int, data: dict[str, str]) -> tu
     if name:
         candidates = db.scalars(select(Product).where(Product.company_id == company_id)).all()
         for product in candidates:
-            if name_similarity(product.name, name) >= 0.94 or (product.description and name_similarity(product.description, name) >= 0.94):
+            if _match_text_similarity(product.name, name) >= 0.94 or (product.description and _match_text_similarity(product.description, name) >= 0.94):
                 return product, "name"
     return None, ""
 

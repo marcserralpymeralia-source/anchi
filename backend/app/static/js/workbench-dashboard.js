@@ -121,20 +121,129 @@ function submitWorkbenchBulkAction(action, destructive = false) {
 
 function openLineProductPicker(lineId) {
   const picker = document.getElementById(`line-product-picker-${lineId}`);
-  const select = document.querySelector(`[data-line-product-select="${lineId}"]`);
+  const input = picker?.querySelector("[data-line-product-input]");
   const trigger = document.querySelector(`[data-line-picker-trigger="${lineId}"]`);
-  if (!picker || !select) return;
+  if (!picker || !input) return;
   picker.hidden = false;
   if (trigger) trigger.hidden = true;
-  const form = select.form;
+  const form = input.form || picker.querySelector("[data-line-product-id]")?.form;
   if (form) form.dataset.dirty = "true";
-  select.focus({preventScroll: true});
+  input.focus({preventScroll: true});
   try {
-    if (typeof select.showPicker === "function") {
-      select.showPicker();
-    }
+    input.select();
   } catch (error) {
-    console.warn("No se pudo abrir el selector de producto", error);
+    console.warn("No se pudo abrir el buscador de producto", error);
+  }
+}
+
+function bindLineProductAutocompletes(root) {
+  root.querySelectorAll("[data-line-product-autocomplete]").forEach((container) => {
+    if (container.dataset.bound === "true") return;
+    container.dataset.bound = "true";
+
+    const input = container.querySelector("[data-line-product-input]");
+    const productId = container.querySelector("[data-line-product-id]");
+    const results = container.querySelector("[data-line-product-results]");
+    const clearButton = container.querySelector("[data-line-product-clear]");
+    if (!input || !productId || !results) return;
+
+    let timer;
+
+    function closeResults() {
+      results.hidden = true;
+      results.replaceChildren();
+    }
+
+    input.addEventListener("input", () => {
+      productId.value = "0";
+      clearTimeout(timer);
+
+      const query = input.value.trim();
+      if (query.length < 2) {
+        closeResults();
+        return;
+      }
+
+      timer = setTimeout(async () => {
+        try {
+          const response = await fetch(`/orders/product-search?q=${encodeURIComponent(query)}`, {
+            credentials: "same-origin",
+          });
+          if (!response.ok) return;
+
+          const products = await response.json();
+          results.replaceChildren();
+
+          products.forEach((product) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "product-autocomplete-option";
+
+            const title = document.createElement("strong");
+            title.textContent = product.name;
+            button.appendChild(title);
+
+            const meta = document.createElement("span");
+            const metaParts = [];
+            if (product.reference) metaParts.push(`Ref. ${product.reference}`);
+            if (product.alternative_code) metaParts.push(`Código ${product.alternative_code}`);
+            if (product.sale_price) metaParts.push(`${Number(product.sale_price).toFixed(2)} €`);
+            meta.textContent = metaParts.join(" · ");
+            button.appendChild(meta);
+
+            const detail = document.createElement("small");
+            detail.textContent = product.description && product.description !== product.name ? product.description : "Búsqueda por nombre, alias y referencia interna.";
+            button.appendChild(detail);
+
+            button.addEventListener("click", () => {
+              input.value = product.name;
+              productId.value = String(product.id);
+              closeResults();
+
+              const form = productId.form;
+              if (form) form.requestSubmit();
+            });
+
+            results.appendChild(button);
+          });
+
+          results.hidden = products.length === 0;
+        } catch (error) {
+          console.warn("No se pudo buscar un producto para el workbench", error);
+        }
+      }, 160);
+    });
+
+    input.addEventListener("focus", () => {
+      if (results.childElementCount > 0 && !results.hidden) return;
+      if (input.value.trim().length >= 2) {
+        results.hidden = false;
+      }
+    });
+
+    if (clearButton) {
+      clearButton.addEventListener("click", () => {
+        productId.value = "0";
+        closeResults();
+        const form = productId.form;
+        if (form) form.requestSubmit();
+      });
+    }
+  });
+
+  if (!document.body.dataset.lineProductAutocompleteCloseBound) {
+    document.body.dataset.lineProductAutocompleteCloseBound = "true";
+    document.addEventListener("click", (event) => {
+      document.querySelectorAll("[data-line-product-autocomplete]").forEach((container) => {
+        if (!container.contains(event.target)) {
+          const results = container.querySelector("[data-line-product-results]");
+          if (results) {
+            results.hidden = true;
+            results.replaceChildren();
+          }
+        }
+      });
+    });
   }
 }
 
@@ -172,15 +281,10 @@ function bindAttachmentSelects(root) {
 function bindWorkbenchDetailContent(root, dialog) {
   bindSourceTabs(root);
   bindAttachmentSelects(root);
+  bindLineProductAutocompletes(root);
   root.querySelectorAll("input, textarea, select").forEach((field) => {
     field.addEventListener("change", () => {
       if (dialog) dialog.dataset.dirty = "true";
-    });
-  });
-  root.querySelectorAll("[data-line-product-select]").forEach((select) => {
-    select.addEventListener("change", () => {
-      const form = select.form;
-      if (form) form.requestSubmit();
     });
   });
 }

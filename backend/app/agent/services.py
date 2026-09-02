@@ -122,19 +122,51 @@ class MatchingService:
     def find_product(self, db: Session, company_id: int, *, reference: str | None, detected_name: str | None) -> tuple[Product | None, str, float]:
         if reference:
             product = db.query(Product).filter(Product.company_id == company_id, Product.reference == reference).one_or_none()
-            if product:
+            if product and _product_name_is_compatible(detected_name, product):
                 return product, "referencia_exacta", 1.0
         if detected_name:
             alias = db.query(ProductAlias).filter(ProductAlias.company_id == company_id, ProductAlias.alias.ilike(detected_name)).one_or_none()
             if alias:
                 return db.get(Product, alias.product_id), "alias", 0.92
             products = db.query(Product).filter(Product.company_id == company_id).all()
-            best = max(products, key=lambda p: SequenceMatcher(None, detected_name.lower(), p.name.lower()).ratio(), default=None)
+            best = max(products, key=lambda p: _match_text_similarity(detected_name, p.name), default=None)
             if best:
-                score = SequenceMatcher(None, detected_name.lower(), best.name.lower()).ratio()
+                score = _match_text_similarity(detected_name, best.name)
                 if score >= 0.6:
                     return best, "nombre_aproximado", score
         return None, "sin_referencia", 0
+
+
+def _normalize_match_text(value: str | None) -> str:
+    if not value:
+        return ""
+    normalized = value.lower().strip()
+    normalized = re.sub(r"(?<=\d)(?=[a-z])|(?<=[a-z])(?=\d)", " ", normalized)
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+    return " ".join(normalized.split())
+
+
+def _match_text_similarity(left: str | None, right: str | None) -> float:
+    left_normalized = _normalize_match_text(left)
+    right_normalized = _normalize_match_text(right)
+    if not left_normalized or not right_normalized:
+        return 0.0
+    sequence_score = SequenceMatcher(None, left_normalized, right_normalized).ratio()
+    token_score = SequenceMatcher(
+        None,
+        " ".join(sorted(left_normalized.split())),
+        " ".join(sorted(right_normalized.split())),
+    ).ratio()
+    return max(sequence_score, token_score)
+
+
+def _product_name_is_compatible(detected_name: str | None, product: Product, threshold: float = 0.55) -> bool:
+    if not detected_name:
+        return True
+    score = _match_text_similarity(detected_name, product.name)
+    if product.description:
+        score = max(score, _match_text_similarity(detected_name, product.description))
+    return score >= threshold
 
 
 class ScoringService:

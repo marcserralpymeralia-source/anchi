@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
@@ -183,6 +184,38 @@ def _normalized_identity(value: str | None) -> str:
     return "".join(char for char in value.lower().strip() if char.isalnum())
 
 
+def _normalize_match_text(value: str | None) -> str:
+    if not value:
+        return ""
+    normalized = value.lower().strip()
+    normalized = re.sub(r"(?<=\d)(?=[a-z])|(?<=[a-z])(?=\d)", " ", normalized)
+    normalized = re.sub(r"[^a-z0-9]+", " ", normalized)
+    return " ".join(normalized.split())
+
+
+def _match_text_similarity(left: str | None, right: str | None) -> float:
+    left_normalized = _normalize_match_text(left)
+    right_normalized = _normalize_match_text(right)
+    if not left_normalized or not right_normalized:
+        return 0.0
+    sequence_score = SequenceMatcher(None, left_normalized, right_normalized).ratio()
+    token_score = SequenceMatcher(
+        None,
+        " ".join(sorted(left_normalized.split())),
+        " ".join(sorted(right_normalized.split())),
+    ).ratio()
+    return max(sequence_score, token_score)
+
+
+def _product_name_is_compatible(detected_name: str | None, product: Product, threshold: float = 0.55) -> bool:
+    if not detected_name:
+        return True
+    score = _match_text_similarity(detected_name, product.name)
+    if product.description:
+        score = max(score, _match_text_similarity(detected_name, product.description))
+    return score >= threshold
+
+
 def _detected_customer_is_tenant(
     db: Session,
     company_id: int,
@@ -332,7 +365,7 @@ class ProductMatchingService:
                     Product.reference == reference,
                 )
             )
-            if product:
+            if product and _product_name_is_compatible(detected_name, product):
                 return product, "referencia_exacta", 1.0
 
             normalized_reference = reference.strip()
@@ -344,7 +377,7 @@ class ProductMatchingService:
                     )
                 ).all()
 
-                if len(partial_matches) == 1:
+                if len(partial_matches) == 1 and _product_name_is_compatible(detected_name, partial_matches[0]):
                     return partial_matches[0], "referencia_parcial_unica", 0.95
         if detected_name:
             learned = db.scalar(
@@ -370,8 +403,8 @@ class ProductMatchingService:
                     return product, "alias", 0.92
             products = db.scalars(select(Product).where(Product.company_id == company_id)).all()
             if products:
-                best = max(products, key=lambda product: SequenceMatcher(None, detected_name.lower(), product.name.lower()).ratio())
-                score = SequenceMatcher(None, detected_name.lower(), best.name.lower()).ratio()
+                best = max(products, key=lambda product: _match_text_similarity(detected_name, product.name))
+                score = _match_text_similarity(detected_name, best.name)
                 if score >= 0.6:
                     return best, "nombre_aproximado", score
         return None, "sin_referencia", 0.0
@@ -684,6 +717,7 @@ class DecisionEngineService:
         candidates: dict[int, DecisionCandidate] = {}
         product_catalog = db.scalars(select(Product).where(Product.company_id == company_id)).all()
         product_alias_map: dict[int, list[str]] = {}
+        reference_conflict = False
         for product in product_catalog:
             aliases = db.scalars(select(ProductAlias.alias).where(ProductAlias.company_id == company_id, ProductAlias.product_id == product.id)).all()
             product_alias_map[product.id] = [alias.lower() for alias in aliases if alias]
@@ -723,7 +757,10 @@ class DecisionEngineService:
             if reference:
                 product = db.scalar(select(Product).where(Product.company_id == company_id, Product.reference == reference))
                 if product:
-                    add_candidate(DecisionCandidate(product.name, "exact_reference", 1.0, "Referencia exacta", product_id=product.id, metadata={"reference": product.reference}))
+                    if _product_name_is_compatible(detected_name, product):
+                        add_candidate(DecisionCandidate(product.name, "exact_reference", 1.0, "Referencia exacta", product_id=product.id, metadata={"reference": product.reference}))
+                    else:
+                        reference_conflict = True
             for field_name, value, confidence, reason in [
                 ("ean", ean, 0.99, "EAN exacto"),
                 ("sku", sku, 0.98, "SKU exacto"),
@@ -773,7 +810,7 @@ class DecisionEngineService:
 
         if detected_name and settings.enable_history_match:
             for product in product_catalog:
-                score = SequenceMatcher(None, detected_name.lower(), product.name.lower()).ratio()
+                score = _match_text_similarity(detected_name, product.name)
                 if score >= 0.7:
                     add_candidate(DecisionCandidate(product.name, "fuzzy_name", round(score, 2), "Coincidencia aproximada con catálogo", product_id=product.id))
 
@@ -826,6 +863,8 @@ class DecisionEngineService:
         if selected:
             second = alternatives[0].confidence if alternatives else 0
             requires_review = selected.confidence < 0.9 or (selected.confidence - second) < 0.08
+            if reference_conflict and selected.source != "exact_reference":
+                requires_review = True
         evidence = [
             {
                 "label": item.label,

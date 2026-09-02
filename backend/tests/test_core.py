@@ -9,6 +9,7 @@ import asyncio
 import os
 from unittest.mock import patch
 
+import pandas as pd
 from fastapi import HTTPException
 from sqlalchemy import create_engine, select, func
 from sqlalchemy.exc import OperationalError, ProgrammingError
@@ -24,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.core.security import hash_password  # noqa: E402
 from app.core.config import get_settings  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import BackgroundJob, Customer, CustomerAlias, Email, EmailSettings, LLMSettings, Order, OrderLine, Product, ProductAlias, PromptExecution  # noqa: E402
+from app.db.models import BackgroundJob, Customer, CustomerAlias, CustomerProductKnowledge, Email, EmailSettings, LLMSettings, Order, OrderLine, Product, ProductAlias, PromptExecution  # noqa: E402
 from app.jobs.service import cancel_job, claim_next_job, retry_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
@@ -42,11 +43,14 @@ from app.core.app_factory import create_app  # noqa: E402
 from app.core.app_factory import internal_server_error_response  # noqa: E402
 from app.core.app_factory import sqlalchemy_error_response  # noqa: E402
 from app.core.encryption import encrypt_secret  # noqa: E402
+from app.agent.platform import DecisionEngineService, LearningService, ProductMatchingService  # noqa: E402
+from app.agent.services import MatchingService  # noqa: E402
 from app.pages.routes import dashboard  # noqa: E402
 from app.settings.branding import branding_to_dict, default_branding_payload  # noqa: E402
 from app.dashboard.service import _safe_sender_domain, _safe_sort_timestamp, email_workbench_item, suggest_customer_for_email, workbench_summary  # noqa: E402
 from app.workbench.routes import _inbound_item  # noqa: E402
-from app.master_data.service import normalize_conflict_policy, upsert_customer, upsert_product  # noqa: E402
+from app.imports.service import confirm_import, validate_import  # noqa: E402
+from app.master_data.service import find_product_match, normalize_conflict_policy, upsert_customer, upsert_product  # noqa: E402
 from app.settings.integrations import classify_integration_error, redact_email_config, validate_imap_config, validate_openai_config, validate_smtp_config  # noqa: E402
 
 
@@ -95,6 +99,19 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
             db.add(MasterTenantDatabase(company_id=1, database_key="demo", database_url=f"sqlite:///{self.tenant_path.as_posix()}", is_active=True, health_status="ok"))
         db.commit()
         db.close()
+
+    def _create_product(self, db, *, reference: str, name: str, description: str | None = None, alternative_code: str | None = None) -> Product:
+        product = Product(
+            company_id=1,
+            reference=reference,
+            name=name,
+            description=description or name,
+            alternative_code=alternative_code,
+            status="active",
+        )
+        db.add(product)
+        db.flush()
+        return product
 
     def test_authenticate_master_user_valid_and_invalid(self):
         self.seed_master()
@@ -655,6 +672,298 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.assertEqual(updated_product.name, "Caja Demo Actualizada")
         self.assertEqual(db.scalar(select(func.count()).select_from(CustomerAlias)) or 0, 1)
         self.assertEqual(db.scalar(select(func.count()).select_from(ProductAlias)) or 0, 1)
+        db.close()
+
+    def test_product_match_keeps_name_match_when_reference_does_not_match(self):
+        db = self.TenantSession()
+        product = Product(company_id=1, reference="P001", name="Caja Demo", description="Caja Demo")
+        db.add(product)
+        db.commit()
+
+        matched, method = find_product_match(
+            db,
+            1,
+            {
+                "reference": "WRONG-REF",
+                "name": "Caja Demo",
+            },
+        )
+
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched.id, product.id)
+        self.assertEqual(method, "name")
+        db.close()
+
+    def test_product_match_keeps_exact_reference_when_name_is_compatible(self):
+        db = self.TenantSession()
+        product = self._create_product(db, reference="001842", name="Tomate rama caja 5 kg")
+        db.commit()
+
+        matcher = ProductMatchingService()
+        decision_engine = DecisionEngineService()
+
+        matched, method, score = matcher.match(
+            db,
+            1,
+            reference="001842",
+            detected_name="Tomate rama caja 5 kg",
+        )
+        decision = decision_engine.product_decision(
+            db,
+            1,
+            reference="001842",
+            detected_name="Tomate rama caja 5 kg",
+            text="Tomate rama caja 5 kg",
+        )
+
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched.id, product.id)
+        self.assertEqual(method, "referencia_exacta")
+        self.assertEqual(score, 1.0)
+        self.assertIsNotNone(decision["selected"])
+        self.assertEqual(decision["selected"].product_id, product.id)
+        self.assertEqual(decision["selected"].source, "exact_reference")
+        self.assertFalse(decision["requires_review"])
+        db.close()
+
+    def test_product_match_avoids_conflicting_exact_reference(self):
+        db = self.TenantSession()
+        tomato = self._create_product(db, reference="001842", name="Tomate rama caja 5 kg")
+        onion = self._create_product(db, reference="999", name="Cebolla saco 10 kg")
+        db.commit()
+
+        matcher = ProductMatchingService()
+        decision_engine = DecisionEngineService()
+
+        matched, method, score = matcher.match(
+            db,
+            1,
+            reference="999",
+            detected_name="Tomate rama caja 5 kg",
+        )
+        decision = decision_engine.product_decision(
+            db,
+            1,
+            reference="999",
+            detected_name="Tomate rama caja 5 kg",
+            text="Tomate rama caja 5 kg",
+        )
+
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched.id, tomato.id)
+        self.assertEqual(method, "nombre_aproximado")
+        self.assertGreaterEqual(score, 1.0)
+        self.assertIsNotNone(decision["selected"])
+        self.assertEqual(decision["selected"].product_id, tomato.id)
+        self.assertEqual(decision["selected"].source, "fuzzy_name")
+        self.assertTrue(decision["requires_review"])
+        self.assertNotEqual(decision["selected"].product_id, onion.id)
+        db.close()
+
+    def test_product_match_handles_reordered_tokens_and_spacing(self):
+        db = self.TenantSession()
+        product = self._create_product(db, reference="001842", name="Tomate rama caja 5 kg")
+        db.commit()
+
+        matcher = ProductMatchingService()
+        legacy_matcher = MatchingService()
+
+        matched, method, score = matcher.match(db, 1, reference=None, detected_name="Caja 5kg tomate rama")
+        legacy_matched, legacy_method, legacy_score = legacy_matcher.find_product(db, 1, reference=None, detected_name="Caja 5kg tomate rama")
+
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched.id, product.id)
+        self.assertEqual(method, "nombre_aproximado")
+        self.assertGreaterEqual(score, 0.9)
+        self.assertIsNotNone(legacy_matched)
+        self.assertEqual(legacy_matched.id, product.id)
+        self.assertEqual(legacy_method, "nombre_aproximado")
+        self.assertGreaterEqual(legacy_score, 0.9)
+        db.close()
+
+    def test_product_decision_keeps_similar_products_under_review(self):
+        db = self.TenantSession()
+        product_5 = self._create_product(db, reference="001842", name="Tomate rama caja 5 kg")
+        product_10 = self._create_product(db, reference="001843", name="Tomate rama caja 10 kg")
+        db.commit()
+
+        decision_engine = DecisionEngineService()
+        decision = decision_engine.product_decision(db, 1, detected_name="Tomate rama caja", text="Tomate rama caja")
+
+        self.assertIsNotNone(decision["selected"])
+        self.assertEqual(decision["selected"].product_id, product_5.id)
+        self.assertEqual(decision["selected"].source, "fuzzy_name")
+        self.assertTrue(decision["requires_review"])
+        self.assertIn(decision["alternatives"][0].product_id, {product_5.id, product_10.id})
+        db.close()
+
+    def test_product_match_keeps_exact_alias_as_strong_signal(self):
+        db = self.TenantSession()
+        product = self._create_product(db, reference="001842", name="Tomate rama caja 5 kg")
+        db.add(ProductAlias(company_id=1, product_id=product.id, alias="tomate rama 5kg"))
+        db.commit()
+
+        matcher = ProductMatchingService()
+        legacy_matcher = MatchingService()
+
+        matched, method, score = matcher.match(db, 1, reference=None, detected_name="tomate rama 5kg")
+        legacy_matched, legacy_method, legacy_score = legacy_matcher.find_product(db, 1, reference=None, detected_name="tomate rama 5kg")
+
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched.id, product.id)
+        self.assertEqual(method, "alias")
+        self.assertEqual(score, 0.92)
+        self.assertIsNotNone(legacy_matched)
+        self.assertEqual(legacy_matched.id, product.id)
+        self.assertEqual(legacy_method, "alias")
+        self.assertEqual(legacy_score, 0.92)
+        db.close()
+
+    def test_validate_import_customer_knowledge_articles_prefers_name_over_conflicting_reference(self):
+        db = self.TenantSession()
+        customer = Customer(company_id=1, code="C001", fiscal_name="Cliente Demo", status="active")
+        tomato = self._create_product(db, reference="001842", name="Tomate rama caja 5 kg")
+        onion = self._create_product(db, reference="999", name="Cebolla saco 10 kg")
+        tomato.sale_price = 1.0
+        onion.sale_price = 2.0
+        db.add(customer)
+        db.flush()
+        LearningService().update_customer_product_knowledge(
+            db,
+            company_id=1,
+            customer=customer,
+            product=tomato,
+            quantity=1,
+            unit="cajas",
+            is_manual=True,
+        )
+        db.commit()
+
+        validation = validate_import(
+            db,
+            company_id=1,
+            entity_type="customer_knowledge_articles",
+            df=pd.DataFrame([{ "reference": "999", "name": "Tomate rama caja 5 kg", "quantity": "1" }]),
+            mapping={"reference": "reference", "name": "name", "quantity": "quantity"},
+            customer_id=customer.id,
+        )
+
+        self.assertEqual(validation.rows_error, 0)
+        self.assertEqual(validation.rows_update, 1)
+        self.assertEqual(validation.rows_new, 0)
+        db.close()
+
+    def test_confirm_import_product_import_keeps_reference_when_name_is_compatible(self):
+        db = self.TenantSession()
+        tomato = self._create_product(db, reference="001842", name="Tomate rama caja 5 kg")
+        onion = self._create_product(db, reference="999", name="Cebolla saco 10 kg")
+        tomato.sale_price = 1.0
+        onion.sale_price = 2.0
+        db.commit()
+
+        confirm_import(
+            db,
+            company_id=1,
+            user=SimpleNamespace(id=1),
+            entity_type="products",
+            filename="products.csv",
+            df=pd.DataFrame([{ "reference": "001842", "name": "Tomate rama caja 5 kg", "sale_price": "9.9" }]),
+            mapping={"reference": "reference", "name": "name", "sale_price": "sale_price"},
+            mode="update_existing",
+        )
+
+        db.refresh(tomato)
+        db.refresh(onion)
+        self.assertEqual(tomato.sale_price, 9.9)
+        self.assertEqual(onion.sale_price, 2.0)
+        db.close()
+
+    def test_confirm_import_product_import_prefers_name_over_conflicting_reference(self):
+        db = self.TenantSession()
+        tomato = self._create_product(db, reference="001842", name="Tomate rama caja 5 kg")
+        onion = self._create_product(db, reference="999", name="Cebolla saco 10 kg")
+        tomato.sale_price = 1.0
+        onion.sale_price = 2.0
+        db.commit()
+
+        confirm_import(
+            db,
+            company_id=1,
+            user=SimpleNamespace(id=1),
+            entity_type="products",
+            filename="products.csv",
+            df=pd.DataFrame([{ "reference": "999", "name": "Tomate rama caja 5 kg", "sale_price": "9.9" }]),
+            mapping={"reference": "reference", "name": "name", "sale_price": "sale_price"},
+            mode="update_existing",
+        )
+
+        db.refresh(tomato)
+        db.refresh(onion)
+        self.assertEqual(tomato.sale_price, 9.9)
+        self.assertEqual(onion.sale_price, 2.0)
+        db.close()
+
+    def test_confirm_import_product_import_keeps_alternative_code_when_name_is_compatible(self):
+        db = self.TenantSession()
+        tomato = self._create_product(db, reference="001842", name="Tomate rama caja 5 kg", alternative_code="ALT-TOM")
+        onion = self._create_product(db, reference="999", name="Cebolla saco 10 kg", alternative_code="ALT-99")
+        tomato.sale_price = 1.0
+        onion.sale_price = 2.0
+        db.commit()
+
+        confirm_import(
+            db,
+            company_id=1,
+            user=SimpleNamespace(id=1),
+            entity_type="products",
+            filename="products.csv",
+            df=pd.DataFrame([{ "alternative_code": "ALT-TOM", "name": "Tomate rama caja 5 kg", "sale_price": "9.9" }]),
+            mapping={"alternative_code": "alternative_code", "name": "name", "sale_price": "sale_price"},
+            mode="update_existing",
+        )
+
+        db.refresh(tomato)
+        db.refresh(onion)
+        self.assertEqual(tomato.sale_price, 9.9)
+        self.assertEqual(onion.sale_price, 2.0)
+        db.close()
+
+    def test_confirm_import_product_import_prefers_name_over_conflicting_alternative_code(self):
+        db = self.TenantSession()
+        tomato = self._create_product(db, reference="001842", name="Tomate rama caja 5 kg", alternative_code="ALT-TOM")
+        onion = self._create_product(db, reference="999", name="Cebolla saco 10 kg", alternative_code="ALT-99")
+        tomato.sale_price = 1.0
+        onion.sale_price = 2.0
+        db.commit()
+
+        confirm_import(
+            db,
+            company_id=1,
+            user=SimpleNamespace(id=1),
+            entity_type="products",
+            filename="products.csv",
+            df=pd.DataFrame([{ "alternative_code": "ALT-99", "name": "Tomate rama caja 5 kg", "sale_price": "9.9" }]),
+            mapping={"alternative_code": "alternative_code", "name": "name", "sale_price": "sale_price"},
+            mode="update_existing",
+        )
+
+        db.refresh(tomato)
+        db.refresh(onion)
+        self.assertEqual(tomato.sale_price, 9.9)
+        self.assertEqual(onion.sale_price, 2.0)
+        db.close()
+
+    def test_find_product_match_keeps_exact_alternative_code_without_name(self):
+        db = self.TenantSession()
+        tomato = self._create_product(db, reference="001842", name="Tomate rama caja 5 kg", alternative_code="ALT-TOM")
+        onion = self._create_product(db, reference="999", name="Cebolla saco 10 kg", alternative_code="ALT-99")
+        db.commit()
+
+        matched, method = find_product_match(db, 1, {"alternative_code": "ALT-99"})
+
+        self.assertIsNotNone(matched)
+        self.assertEqual(matched.id, onion.id)
+        self.assertEqual(method, "alternative_code")
         db.close()
 
     def test_integration_validation_and_redaction_helpers(self):

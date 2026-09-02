@@ -379,6 +379,8 @@ def product_search(
             "id": product.id,
             "reference": product.reference or "",
             "name": product.name or product.description or "",
+            "description": product.description or "",
+            "alternative_code": product.alternative_code or "",
             "sale_price": product.sale_price or 0,
         }
         for product in products

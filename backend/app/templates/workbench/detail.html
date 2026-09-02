@@ -234,10 +234,22 @@
           <thead><tr><th>Texto recibido</th><th>Producto propuesto</th><th>Cant.</th><th>U.</th><th>Incidencia</th><th>Acción</th></tr></thead>
           <tbody>
           {% for line in order.lines %}
+            {% set chosen_product = line.validated_product or line.product %}
             {% set line_is_doubtful = line.validation_status != 'validated' or not line.validated_product_id or line.doubt_reason %}
             <tr class="{% if line_is_doubtful %}line-doubtful{% endif %}">
               <td class="line-source-cell">{{ line.original_text or "" }}</td>
-              <td class="product-detected-cell"><strong>{{ line.detected_product or "Producto no identificado" }}</strong><span>{{ line.detected_reference or "Sin referencia detectada" }}</span></td>
+              <td class="product-detected-cell">
+                {% if chosen_product %}
+                  <strong>{{ chosen_product.name or "Producto interno" }}</strong>
+                  <span>Ref. interna {{ chosen_product.reference or "Sin referencia interna" }}</span>
+                  {% if line.detected_product or line.detected_reference %}
+                    <small>Detectado: {{ line.detected_product or "Producto detectado" }}{% if line.detected_reference %} · {{ line.detected_reference }}{% endif %}</small>
+                  {% endif %}
+                {% else %}
+                  <strong>{{ line.detected_product or "Producto no identificado" }}</strong>
+                  <span>{{ line.detected_reference or "Sin referencia detectada" }}</span>
+                {% endif %}
+              </td>
               <td>
                 <form id="line-form-{{ line.id }}" class="js-loading-form" method="post" action="/orders/{{ order.id }}/lines/{{ line.id }}"></form>
                 <input form="line-form-{{ line.id }}" name="quantity" type="number" step="0.01" value="{{ line.quantity or 0 }}">
@@ -251,13 +263,30 @@
                 <div class="line-actions line-actions-v2">
                   {% if not line.validated_product_id %}
                     <button type="button" class="secondary compact-button" title="Asociar producto" data-line-picker-trigger="{{ line.id }}" onclick="openLineProductPicker('{{ line.id }}')">Asociar producto</button>
-                    <div id="line-product-picker-{{ line.id }}" class="line-product-picker" hidden>
-                      <select form="line-form-{{ line.id }}" name="validated_product_id" class="line-product-select" data-line-product-select="{{ line.id }}" title="Elegir producto">
-                        <option value="0">Sin referencia</option>
-                        {% for product in products %}
-                          <option value="{{ product.id }}">{{ product.reference }} - {{ product.name }}</option>
-                        {% endfor %}
-                      </select>
+                    <div id="line-product-picker-{{ line.id }}" class="line-product-picker" hidden data-line-product-autocomplete data-line-id="{{ line.id }}">
+                      <div class="product-autocomplete line-product-autocomplete">
+                        <input
+                          type="search"
+                          class="order-review-product-input line-product-input"
+                          data-line-product-input
+                          value="{{ line.validated_product.name if line.validated_product else line.detected_product or line.original_text or '' }}"
+                          title="{{ line.validated_product.name if line.validated_product else line.detected_product or line.original_text or '' }}"
+                          placeholder="Buscar por nombre, alias o referencia"
+                          autocomplete="off"
+                        >
+                        <input
+                          form="line-form-{{ line.id }}"
+                          type="hidden"
+                          name="validated_product_id"
+                          data-line-product-id
+                          value="{{ line.validated_product.id if line.validated_product else 0 }}"
+                        >
+                        <div class="product-autocomplete-results line-product-results" data-line-product-results hidden></div>
+                      </div>
+                      <small class="line-product-hint">La referencia del cliente es solo una pista; buscamos primero por nombre, alias y referencia interna.</small>
+                      <div class="line-product-picker-actions">
+                        <button type="button" class="secondary compact-button" data-line-product-clear>Ignorar referencia</button>
+                      </div>
                     </div>
                   {% else %}
                     <button form="line-form-{{ line.id }}" class="secondary compact-button" title="Aceptar">Aceptar</button>
