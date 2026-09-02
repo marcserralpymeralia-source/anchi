@@ -26,8 +26,10 @@ import xml.etree.ElementTree as ET
 
 try:
     import dns.resolver as dns_resolver
+    import dns.reversename as dns_reversename
 except ImportError:  # pragma: no cover - exercised only in minimal local installs
     dns_resolver = None
+    dns_reversename = None
 
 
 AUTOCONFIG_TIMEOUT_SECONDS = 4.5
@@ -493,14 +495,12 @@ def _common_candidates(email_address: str, domain: str) -> tuple[list[MailEndpoi
         _endpoint("imap", f"imap.{domain}", 143, "starttls", "common_pattern"),
         _endpoint("imap", f"mail.{domain}", 993, "ssl_tls", "common_pattern"),
         _endpoint("imap", f"mail.{domain}", 143, "starttls", "common_pattern"),
+        _endpoint("pop3", f"mail.{domain}", 995, "ssl_tls", "common_pattern"),
+        _endpoint("pop3", f"mail.{domain}", 110, "starttls", "common_pattern"),
         _endpoint("pop3", f"pop.{domain}", 995, "ssl_tls", "common_pattern"),
         _endpoint("pop3", f"pop.{domain}", 110, "starttls", "common_pattern"),
         _endpoint("pop3", f"pop3.{domain}", 995, "ssl_tls", "common_pattern"),
         _endpoint("pop3", f"pop3.{domain}", 110, "starttls", "common_pattern"),
-        _endpoint("imap", domain, 993, "ssl_tls", "common_pattern"),
-        _endpoint("imap", domain, 143, "starttls", "common_pattern"),
-        _endpoint("pop3", domain, 995, "ssl_tls", "common_pattern"),
-        _endpoint("pop3", domain, 110, "starttls", "common_pattern"),
         _endpoint("smtp", f"smtp.{domain}", 465, "ssl_tls", "common_pattern"),
         _endpoint("smtp", f"smtp.{domain}", 587, "starttls", "common_pattern"),
         _endpoint("smtp", f"mail.{domain}", 587, "starttls", "common_pattern"),
@@ -565,6 +565,23 @@ def _dns_candidates(domain: str) -> tuple[list[MailEndpoint], list[MailEndpoint]
         fingerprints.extend(str(answer).rstrip(".").lower() for answer in ns_answers)
     except Exception:  # noqa: BLE001
         pass
+    # A hosted provider may hide behind a custom MX hostname. Its reverse DNS
+    # often exposes the actual mail platform (for example dinaserver.com),
+    # which is a stronger signal than the domain's nameservers. Keep this
+    # bounded to the primary MX and at most two resolved addresses.
+    if dns_reversename is not None and mx_exchanges:
+        for record_type in ("A", "AAAA"):
+            try:
+                addresses = list(resolver.resolve(mx_exchanges[0], record_type))[:2]
+            except Exception:  # noqa: BLE001
+                continue
+            for address in addresses:
+                try:
+                    reverse_name = dns_reversename.from_address(str(address))
+                    ptr_answers = resolver.resolve(reverse_name, "PTR")
+                    fingerprints.extend(str(answer).rstrip(".").lower() for answer in ptr_answers)
+                except Exception:  # noqa: BLE001
+                    continue
     return incoming, outgoing, mx_exchanges, fingerprints
 
 
@@ -576,6 +593,23 @@ def _preset_from_mx(exchanges: list[str]) -> ProviderPreset | None:
     return None
 
 
+def _provider_from_fingerprints(fingerprints: list[str]) -> ProviderPreset | None:
+    """Identify hosting infrastructure from MX reverse DNS/NS fingerprints."""
+
+    fingerprint_text = " ".join(fingerprints).lower()
+    if re.search(r"(?:dinahosting|dinaserver|correoseguro)\.", fingerprint_text):
+        return PROVIDER_PRESETS["dinahosting"]
+    if re.search(r"(?:\bovh\b|ovh\.net|mail-out\.ovh\.net)", fingerprint_text):
+        return PROVIDER_PRESETS["ovh"]
+    if re.search(r"(?:ionos|1and1)\.", fingerprint_text):
+        return PROVIDER_PRESETS["ionos"]
+    if "hostinger" in fingerprint_text:
+        return PROVIDER_PRESETS["hostinger"]
+    if "titan.email" in fingerprint_text:
+        return PROVIDER_PRESETS["titan"]
+    return None
+
+
 def _hosting_candidates(domain: str, fingerprints: list[str]) -> tuple[list[MailEndpoint], list[MailEndpoint]]:
     """Add provider-specific hosted-mail fallbacks discovered from MX/NS names."""
 
@@ -583,13 +617,13 @@ def _hosting_candidates(domain: str, fingerprints: list[str]) -> tuple[list[Mail
     incoming_hosts: list[tuple[str, str]] = []
     outgoing_hosts: list[str] = []
     domain_slug = domain.replace(".", "-")
-    if re.search(r"(?:dinahosting|dinaserver|correoseguro|ui-dns)\.", fingerprint_text):
+    if re.search(r"(?:dinahosting|dinaserver|correoseguro)\.", fingerprint_text):
         incoming_hosts.extend(((f"{domain_slug}.correoseguro.dinaserver.com", "imap"), (f"{domain_slug}.correoseguro.dinaserver.com", "pop3"), ("correoseguro.dinaserver.com", "imap"), ("correoseguro.dinaserver.com", "pop3")))
         outgoing_hosts.extend((f"{domain_slug}.correoseguro.dinaserver.com", "correoseguro.dinaserver.com"))
     if re.search(r"(?:\bovh\b|ovh\.net|mx\d+\.mail-out\.ovh\.net)", fingerprint_text):
         incoming_hosts.extend((("ssl0.ovh.net", "imap"), ("ssl0.ovh.net", "pop3")))
         outgoing_hosts.append("ssl0.ovh.net")
-    if re.search(r"(?:ionos|1and1|ui-dns)\.", fingerprint_text):
+    if re.search(r"(?:ionos|1and1)\.", fingerprint_text):
         incoming_hosts.extend((("imap.ionos.com", "imap"), ("pop.ionos.com", "pop3"), ("imap.ionos.es", "imap"), ("pop.ionos.es", "pop3")))
         outgoing_hosts.extend(("smtp.ionos.com", "smtp.ionos.es"))
     if "hostinger" in fingerprint_text:
@@ -849,6 +883,9 @@ def detect_email_configuration(email_address: str, password: str) -> dict[str, A
             outgoing.extend(mx_preset.outgoing)
             if not published_found:
                 provider_key, provider_label = mx_preset.name, mx_preset.label
+        fingerprint_provider = _provider_from_fingerprints(fingerprints)
+        if fingerprint_provider and not published_found and not mx_preset:
+            provider_key, provider_label = fingerprint_provider.name, fingerprint_provider.label
         mx_incoming, mx_outgoing = _mx_provider_candidates(mx_provider_domains)
         incoming.extend(mx_incoming)
         outgoing.extend(mx_outgoing)

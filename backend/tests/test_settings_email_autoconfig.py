@@ -12,6 +12,8 @@ from app.settings.autoconfig import (
     _mx_provider_candidates,
     _mx_provider_domains,
     _dns_candidates,
+    _common_candidates,
+    _provider_from_fingerprints,
     detect_email_configuration,
     normalize_email,
 )
@@ -118,6 +120,17 @@ class EmailAutoconfigTests(unittest.TestCase):
         self.assertEqual(outgoing, [])
         self.assertEqual(exchanges, ["mx.customer-mail.example.net"])
         self.assertEqual(fingerprints, exchanges)
+
+    def test_common_fallback_does_not_treat_bare_domain_as_mail_server(self):
+        incoming, _outgoing = _common_candidates("person@pymeralia.com", "pymeralia.com")
+        self.assertTrue(any(item.host == "mail.pymeralia.com" and item.protocol == "pop3" for item in incoming))
+        self.assertFalse(any(item.host == "pymeralia.com" for item in incoming))
+
+    def test_reverse_dns_fingerprint_identifies_dinahosting(self):
+        provider = _provider_from_fingerprints(["vl25087.dinaserver.com"])
+        self.assertIsNotNone(provider)
+        assert provider is not None
+        self.assertEqual(provider.name, "dinahosting")
 
 
 class EmailAutoconfigRouteTests(unittest.TestCase):

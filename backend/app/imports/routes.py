@@ -197,8 +197,13 @@ def quick_import_page(
 
 @router.get("/manual", name="manual_import_page")
 @router.get("/whatsapp")
-def whatsapp_import_page(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
-    default_channel = "whatsapp" if request.url.path.endswith("/whatsapp") else "email"
+def whatsapp_import_page(
+    request: Request,
+    channel: str | None = None,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    default_channel = channel or ("whatsapp" if request.url.path.endswith("/whatsapp") else "email")
     context = _manual_import_context(request, db, user, channel=default_channel, raw_text="", sender="", subject="", phone="")
     return templates.TemplateResponse("imports/whatsapp.html", context)
 
@@ -242,6 +247,18 @@ async def whatsapp_import_preview(
         "dedupe_hash": "",
         "thread_key": "",
     }
+    analysis_sender = sender_value or preview.get("participants", {}).get("client", "")
+    result = analysis_context(
+        db,
+        user,
+        combined_text,
+        analysis_sender,
+        subject,
+        expected_customer,
+        expected_score,
+        expected_status,
+        source_label="Importación manual de WhatsApp" if channel == "whatsapp" else "Importación manual de correo",
+    )
     context = _manual_import_context(
         request,
         db,
@@ -257,6 +274,7 @@ async def whatsapp_import_preview(
         expected_score=expected_score,
         expected_status=expected_status,
         preview=preview,
+        result=result,
         warning=warning,
     )
     return templates.TemplateResponse("imports/whatsapp.html", context)

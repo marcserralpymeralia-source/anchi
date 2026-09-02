@@ -22,9 +22,20 @@ def _tenant_session(database_url: str):
     return sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
+def _route_signatures(routes):
+    signatures = set()
+    for route in routes:
+        if hasattr(route, "path") and hasattr(route, "methods"):
+            signatures.add((route.path, tuple(sorted(route.methods or []))))
+        original_router = getattr(route, "original_router", None)
+        if original_router is not None:
+            signatures.update(_route_signatures(original_router.routes))
+    return signatures
+
+
 class ManualImportRoutesTests(unittest.TestCase):
     def test_expected_ui_routes_are_registered(self):
-        routes = {(route.path, tuple(sorted(route.methods or []))) for route in app.routes if hasattr(route, "methods")}
+        routes = _route_signatures(app.routes)
         expected = {
             ("/imports/manual", ("GET",)),
             ("/imports/manual/preview", ("POST",)),
@@ -45,6 +56,8 @@ class ManualImportRoutesTests(unittest.TestCase):
                 page = client.get("/imports/manual")
                 self.assertEqual(page.status_code, 200)
                 self.assertIn("Importación manual", page.text)
+                self.assertRegex(page.text, r'<button id="manual-process-btn"[^>]*disabled')
+                self.assertRegex(page.text, r'<button id="manual-confirm-btn"[^>]*disabled')
 
                 email_preview = client.post(
                     "/imports/manual/preview",
@@ -57,6 +70,10 @@ class ManualImportRoutesTests(unittest.TestCase):
                 )
                 self.assertEqual(email_preview.status_code, 200)
                 self.assertIn("Correo recibido", email_preview.text)
+                self.assertIn('id="manual-process-btn"', email_preview.text)
+                self.assertIn('id="manual-confirm-btn"', email_preview.text)
+                self.assertNotRegex(email_preview.text, r'<button id="manual-process-btn"[^>]*disabled')
+                self.assertNotRegex(email_preview.text, r'<button id="manual-confirm-btn"[^>]*disabled')
 
                 whatsapp_preview = client.post(
                     "/imports/manual/preview",
@@ -69,6 +86,8 @@ class ManualImportRoutesTests(unittest.TestCase):
                 )
                 self.assertEqual(whatsapp_preview.status_code, 200)
                 self.assertIn("Vista previa", whatsapp_preview.text)
+                self.assertNotRegex(whatsapp_preview.text, r'<button id="manual-process-btn"[^>]*disabled')
+                self.assertNotRegex(whatsapp_preview.text, r'<button id="manual-confirm-btn"[^>]*disabled')
 
                 invalid = client.post("/imports/manual/preview", data={"channel": "bogus", "raw_text": "Hola"})
                 self.assertEqual(invalid.status_code, 422)

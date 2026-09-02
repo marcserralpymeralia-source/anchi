@@ -61,27 +61,27 @@
         <div class="manual-channel-pane" data-channel-pane="email" {% if not channel_is_email %}hidden{% endif %}>
           <div class="manual-form-grid">
             <label class="field-label">
-              <span>Remitente</span>
+              <span class="field-title">Remitente</span>
               <input name="sender" value="{{ sender }}" placeholder="cliente@empresa.com" class="compact-input">
             </label>
             <label class="field-label">
-              <span>Asunto</span>
+              <span class="field-title">Asunto</span>
               <input name="subject" value="{{ subject }}" placeholder="ej. Pedido de material" class="compact-input">
             </label>
             <label class="field-label">
-              <span>Teléfono</span>
+              <span class="field-title">Teléfono</span>
               <input name="phone" value="{{ phone }}" placeholder="+34..." class="compact-input">
             </label>
             <label class="field-label">
-              <span>Cliente esperado (opcional)</span>
+              <span class="field-title">Cliente esperado (opcional)</span>
               <input name="expected_customer" value="{{ expected_customer }}" placeholder="Nombre o código" class="compact-input">
             </label>
             <label class="field-label">
-              <span>Scoring esperado (opcional)</span>
+              <span class="field-title">Scoring esperado (opcional)</span>
               <input name="expected_score" value="{{ expected_score }}" placeholder="ej. 90" class="compact-input">
             </label>
             <label class="field-label">
-              <span>Estado esperado (opcional)</span>
+              <span class="field-title">Estado esperado (opcional)</span>
               <input name="expected_status" value="{{ expected_status }}" placeholder="ej. confirmado" class="compact-input">
             </label>
           </div>
@@ -91,27 +91,27 @@
         <div class="manual-channel-pane" data-channel-pane="whatsapp" {% if not channel_is_whatsapp %}hidden{% endif %}>
           <div class="manual-form-grid">
             <label class="field-label">
-              <span>Cliente participante</span>
+              <span class="field-title">Cliente participante</span>
               <input name="client_participant" value="{{ client_participant }}" placeholder="Nombre del cliente" class="compact-input">
             </label>
             <label class="field-label">
-              <span>Empresa participante</span>
+              <span class="field-title">Empresa participante</span>
               <input name="company_participant" value="{{ company_participant }}" placeholder="Nombre de la empresa" class="compact-input">
             </label>
             <label class="field-label">
-              <span>Teléfono</span>
+              <span class="field-title">Teléfono</span>
               <input name="phone" value="{{ phone }}" placeholder="+34..." class="compact-input">
             </label>
             <label class="field-label">
-              <span>Remitente detectado (opcional)</span>
+              <span class="field-title">Remitente detectado (opcional)</span>
               <input name="sender_hint" value="{{ sender }}" placeholder="Opcional" class="compact-input">
             </label>
             <label class="field-label">
-              <span>Cliente esperado (opcional)</span>
+              <span class="field-title">Cliente esperado (opcional)</span>
               <input name="expected_customer" value="{{ expected_customer }}" placeholder="Nombre o código" class="compact-input">
             </label>
             <label class="field-label">
-              <span>Scoring esperado (opcional)</span>
+              <span class="field-title">Scoring esperado (opcional)</span>
               <input name="expected_score" value="{{ expected_score }}" placeholder="ej. 90" class="compact-input">
             </label>
           </div>
@@ -297,7 +297,35 @@
           {% endif %}
         </div>
 
-        {# Action Buttons Dock #}
+        {% if duplicate_message %}
+          <div style="padding:10px 14px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;font-size:12px;color:#991b1b;margin-top:8px;">
+            <strong>Importación existente detectada:</strong> Entrada reutilizada #{{ duplicate_message.id }} (no duplicada).
+          </div>
+        {% endif %}
+      {% else %}
+        {# Empty State when waiting for preview #}
+        <div class="manual-empty-preview">
+          <div class="manual-empty-preview-icon">
+            {{ icon_entries(24) }}
+          </div>
+          <strong>Previsualización en espera</strong>
+          <p>Pega el texto o adjunta un archivo en el panel izquierdo y haz clic en <strong>«Previsualizar con IA»</strong> para extraer los datos de forma segura sin guardar cambios.</p>
+        </div>
+      {% endif %}
+
+      {# Actions stay visible, but cannot be used until the AI analysis returns. #}
+      <div class="manual-actions-section" id="manual-actions-section">
+        <div class="manual-actions-header">
+          <div>
+            <h4>Acciones</h4>
+            <p class="muted">Procesa la entrada y confirma la importación cuando la propuesta esté lista.</p>
+          </div>
+          {% if result %}
+            <span class="badge status-confirmed">IA lista</span>
+          {% else %}
+            <span class="badge status-muted">Esperando IA</span>
+          {% endif %}
+        </div>
         <div class="manual-action-dock">
           <form class="js-loading-form" method="post" action="/imports/manual/process" style="flex:1;">
             <input type="hidden" name="channel" value="{{ channel }}">
@@ -311,7 +339,7 @@
             <input type="hidden" name="expected_customer" value="{{ expected_customer }}">
             <input type="hidden" name="expected_score" value="{{ expected_score }}">
             <input type="hidden" name="expected_status" value="{{ expected_status }}">
-            <button type="submit" class="button secondary compact-button" style="width:100%;" data-loading-text="Procesando...">
+            <button id="manual-process-btn" type="submit" class="button secondary compact-button" style="width:100%;" data-loading-text="Procesando..." {% if not result %}disabled aria-disabled="true" title="Disponible cuando termine el análisis de IA"{% endif %}>
               <span>Procesar entrada</span>
             </button>
           </form>
@@ -328,27 +356,12 @@
             <input type="hidden" name="expected_customer" value="{{ expected_customer }}">
             <input type="hidden" name="expected_score" value="{{ expected_score }}">
             <input type="hidden" name="expected_status" value="{{ expected_status }}">
-            <button type="submit" class="dock-primary-btn" style="width:100%;" data-loading-text="Confirmando...">
+            <button id="manual-confirm-btn" type="submit" class="dock-primary-btn" style="width:100%;" data-loading-text="Confirmando..." {% if not result %}disabled aria-disabled="true" title="Disponible cuando termine el análisis de IA"{% endif %}>
               <span>Confirmar e importar</span>
             </button>
           </form>
         </div>
-
-        {% if duplicate_message %}
-          <div style="padding:10px 14px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;font-size:12px;color:#991b1b;margin-top:8px;">
-            <strong>Importación existente detectada:</strong> Entrada reutilizada #{{ duplicate_message.id }} (no duplicada).
-          </div>
-        {% endif %}
-      {% else %}
-        {# Empty State when waiting for preview #}
-        <div class="manual-empty-preview">
-          <div class="manual-empty-preview-icon">
-            {{ icon_entries(24) }}
-          </div>
-          <strong>Previsualización en espera</strong>
-          <p>Pega el texto o adjunta un archivo en el panel izquierdo y haz clic en <strong>«Previsualizar con IA»</strong> para extraer los datos de forma segura sin guardar cambios.</p>
-        </div>
-      {% endif %}
+      </div>
     </div>
   </div>
 </section>
@@ -364,8 +377,12 @@
     const panes = document.querySelectorAll("[data-channel-pane]");
 
     if (channelInput) channelInput.value = channel;
-    if (channelBadge) channelBadge.textContent = channel === "whatsapp" ? "Canal: WhatsApp" : "Canal: Email";
-    if (panelTitle) panelTitle.textContent = channel === "whatsapp" ? "Entrada de WhatsApp" : "Entrada de Correo Electrónico";
+    if (channelBadge) {
+      channelBadge.textContent = channel === "whatsapp" ? "Canal: WhatsApp" : "Canal: Email";
+    }
+    if (panelTitle) {
+      panelTitle.textContent = channel === "whatsapp" ? "Entrada de WhatsApp" : "Entrada de Correo Electrónico";
+    }
 
     if (tabEmail && tabWhatsapp) {
       if (channel === "whatsapp") {
