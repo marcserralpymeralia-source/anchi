@@ -101,6 +101,10 @@ def create_app() -> FastAPI:
     configure_performance()
     settings = get_settings()
     app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=app_lifespan)
+    # The branding middleware needs the decoded session to resolve the tenant.
+    # Register it before SessionMiddleware so Starlette executes the session
+    # middleware first on incoming requests.
+    app.middleware("http")(branding_middleware)
     app.add_middleware(
         SessionMiddleware,
         secret_key=settings.app_secret_key,
@@ -121,7 +125,6 @@ def create_app() -> FastAPI:
             allow_methods=["*"],
             allow_headers=["*"],
         )
-    app.middleware("http")(branding_middleware)
     app.mount("/static", CachedStaticFiles(directory=STATIC_DIR.as_posix()), name="static")
     templates.env.globals["branding_css_vars"] = branding_css_vars
     templates.env.globals["app_settings"] = settings

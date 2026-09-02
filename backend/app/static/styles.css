@@ -5,8 +5,9 @@
   --text: #172026;
   --muted: #63717b;
   --line: #dbe2e6;
-  --accent: #0f766e;
-  --accent-dark: #115e59;
+  --accent: #123A32;
+  --accent-dark: #0B2924;
+  --accent-hover: color-mix(in srgb, var(--accent) 86%, #ffffff);
   --warn: #b45309;
   --danger: #b91c1c;
 }
@@ -365,7 +366,7 @@ a { color: inherit; text-decoration: none; }
 }
 
 .alert-btn-primary:hover {
-  background: var(--accent-dark, #0d655e) !important;
+  background: var(--accent-hover, color-mix(in srgb, var(--accent) 86%, #ffffff)) !important;
 }
 
 .alert-btn-secondary {
@@ -407,7 +408,7 @@ a { color: inherit; text-decoration: none; }
 .muted { color: var(--muted); }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 button, .button { border: 0; background: var(--accent); color: white; border-radius: 6px; padding: 6px 9px; font-weight: 650; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; min-height: 30px; font-size: 12px; }
-button:hover, .button:hover { background: var(--accent-dark); }
+button:not(.secondary):not(.danger):hover, .button:not(.secondary):not(.danger):hover { background: var(--accent-hover, color-mix(in srgb, var(--accent) 86%, #ffffff)); }
 .button.secondary, button.secondary { background: #e8eef0; color: #172026; }
 .button.danger { background: var(--danger); }
 .button.disabled { pointer-events: none; opacity: .45; }
@@ -1175,12 +1176,12 @@ button.danger-soft:hover, .button.danger-soft:hover { background: #fecaca; }
 
 body { font-family: var(--font-family); }
 .app { grid-template-columns: var(--sidebar-width, 240px) 1fr; }
-.sidebar { background: var(--sidebar-bg); color: var(--sidebar-text); }
+.sidebar { background: var(--accent); color: var(--button-primary-text, #ffffff); }
 .brand { display: grid; gap: 6px; }
-.brand small { color: var(--sidebar-muted); font-size: 12px; font-weight: 500; }
+.brand small { color: color-mix(in srgb, var(--button-primary-text, #ffffff) 76%, transparent); font-size: 12px; font-weight: 500; }
 .brand-logo { max-width: 160px; max-height: 56px; object-fit: contain; }
-.nav a { border-radius: var(--button-radius); color: var(--sidebar-muted); }
-.nav a:hover { background: var(--sidebar-hover); color: var(--sidebar-text); }
+.nav a { border-radius: var(--button-radius); color: color-mix(in srgb, var(--button-primary-text, #ffffff) 84%, transparent); }
+.nav a:hover { background: color-mix(in srgb, var(--button-primary-text, #ffffff) 16%, transparent); color: var(--button-primary-text, #ffffff); }
 .card, .panel { background: var(--card-bg, var(--panel)); border-color: var(--card-border, var(--line)); border-radius: var(--card-radius); padding: var(--card-padding); box-shadow: var(--card-shadow); }
 button, .button { color: var(--button-primary-text); border-radius: var(--button-radius); font-size: var(--button-font-size); }
 .button.secondary, button.secondary { background: var(--button-secondary-bg); color: var(--button-secondary-text); }
@@ -1246,8 +1247,8 @@ tbody tr:hover { background: var(--table-row-hover); }
 .app.sidebar-collapsed { grid-template-columns: 68px 1fr; }
 .brand-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 18px; min-height: 36px; }
 .brand { display: flex; flex-direction: column; justify-content: center; min-width: 0; margin: 0; font-size: 18px; font-weight: 700; line-height: 1.2; }
-.brand span { line-height: 1; font-size: 18px; font-weight: 700; color: #ffffff; }
-.brand small { color: var(--sidebar-muted, #8ea6a3); font-size: 11px; font-weight: 500; margin-top: 2px; }
+.brand span { line-height: 1; font-size: 18px; font-weight: 700; color: var(--button-primary-text, #ffffff); }
+.brand small { color: color-mix(in srgb, var(--button-primary-text, #ffffff) 76%, transparent); font-size: 11px; font-weight: 500; margin-top: 2px; }
 .sidebar-toggle { position: relative; width: 36px; min-width: 36px; height: 36px; min-height: 36px; padding: 0; border-radius: 8px; display: inline-flex; align-items: center; justify-content: center; color: #172026; background: #e8eef0; border: none; cursor: pointer; flex-shrink: 0; transition: background 0.18s ease, color 0.18s ease, transform 0.15s ease; overflow: hidden; }
 .sidebar-toggle:hover { background: #dbe2e6; color: #0f172a; transform: translateY(-1px); }
 .sidebar-toggle:active { transform: translateY(0) scale(0.95); }
@@ -1256,9 +1257,9 @@ tbody tr:hover { background: var(--table-row-hover); }
 .sidebar-toggle .icon-chevron { opacity: 1; transform: rotate(0deg) scale(1); }
 .sidebar-toggle .icon-menu { opacity: 0; transform: rotate(-90deg) scale(0.4); pointer-events: none; }
 .nav { display: flex; flex-direction: column; gap: 4px; }
-.nav a { display: flex; align-items: center; gap: 10px; height: 36px; min-height: 36px; padding: 0 10px; border-radius: 8px; color: #d8e7e5; font-size: 13px; font-weight: 500; transition: all 0.15s ease; text-decoration: none; box-sizing: border-box; }
-.nav a:hover { background: rgba(255, 255, 255, 0.08); color: #ffffff; }
-.nav a.active { background: #ffffff; color: #10262a; font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); }
+.nav a { display: flex; align-items: center; gap: 10px; height: 36px; min-height: 36px; padding: 0 10px; border-radius: 8px; color: color-mix(in srgb, var(--button-primary-text, #ffffff) 84%, transparent); font-size: 13px; font-weight: 500; transition: all 0.15s ease; text-decoration: none; box-sizing: border-box; }
+.nav a:hover { background: color-mix(in srgb, var(--button-primary-text, #ffffff) 16%, transparent); color: var(--button-primary-text, #ffffff); }
+.nav a.active { background: var(--panel, #ffffff); color: var(--accent, #10262a); font-weight: 600; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08); }
 .nav-icon { width: 22px; min-width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .nav-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1; }
 
@@ -1539,7 +1540,7 @@ table.workbench-table .wide-cell { min-width: 220px; max-width: 360px; }
 
 .settings-progress-ring-fg {
   fill: none;
-  stroke: #0f766e;
+  stroke: var(--accent, #0f766e);
   stroke-width: 3.4;
   stroke-linecap: round;
   transition: stroke-dasharray 0.6s ease;
@@ -1549,7 +1550,7 @@ table.workbench-table .wide-cell { min-width: 220px; max-width: 360px; }
   position: absolute;
   font-size: 11px;
   font-weight: 700;
-  color: #0f766e;
+  color: var(--accent, #0f766e);
   letter-spacing: -0.02em;
 }
 
@@ -2360,7 +2361,7 @@ form.stack, .stack { gap: 9px; }
 }
 
 .queue-bottom-action-btn:hover {
-  background: var(--accent-dark, #0d655e) !important;
+  background: var(--accent-hover, color-mix(in srgb, var(--accent) 86%, #ffffff)) !important;
 }
 
 /* Cuerpo de la tarjeta */
@@ -2481,7 +2482,7 @@ form.stack, .stack { gap: 9px; }
 }
 
 .alert-btn-primary:hover {
-  background: var(--accent-dark, #0d655e) !important;
+  background: var(--accent-hover, color-mix(in srgb, var(--accent) 86%, #ffffff)) !important;
 }
 
 .alert-btn-secondary {
@@ -3371,8 +3372,8 @@ form.stack, .stack { gap: 9px; }
 }
 
 .webmail-pill.active {
-  background: #0f766e;
-  color: #ffffff;
+  background: var(--accent, #0f766e);
+  color: var(--button-primary-text, #ffffff);
   font-weight: 600;
 }
 
@@ -3713,8 +3714,8 @@ form.stack, .stack { gap: 9px; }
 }
 
 .webmail-item.is-active-row .webmail-item-avatar {
-  background: #ccfbf1;
-  color: #0f766e;
+  background: color-mix(in srgb, var(--accent, #0f766e) 14%, var(--panel, #ffffff));
+  color: var(--accent, #0f766e);
 }
 
 .webmail-item-main {
@@ -4995,7 +4996,7 @@ input[type="radio"] {
 }
 
 .dock-btn-apply:hover {
-  background: var(--accent-dark, #0d5f58) !important;
+  background: var(--accent-hover, color-mix(in srgb, var(--accent) 86%, #ffffff)) !important;
 }
 
 /* Spacer */
@@ -5045,7 +5046,7 @@ input[type="radio"] {
 }
 
 .dock-primary-btn:hover {
-  background: var(--accent-dark, #0d5f58);
+  background: var(--accent-hover, color-mix(in srgb, var(--accent) 86%, #ffffff));
 }
 
 .dock-primary-btn:active {
@@ -5632,7 +5633,7 @@ dialog.edit-dialog form > button[data-loading-text]:not(.secondary) {
 
 dialog.edit-dialog .actions button:not(.secondary):not(.danger):hover,
 dialog.edit-dialog form > button[data-loading-text]:not(.secondary):hover {
-  background: var(--accent-dark, #0d5f58) !important;
+  background: var(--accent-hover, color-mix(in srgb, var(--accent) 86%, #ffffff)) !important;
 }
 
 dialog.edit-dialog .actions button.secondary {
@@ -5655,4 +5656,1013 @@ dialog.edit-dialog .actions button.danger {
 
 dialog.edit-dialog .actions button.danger:hover {
   background: #b91c1c !important;
+}
+
+/* ==========================================================================
+   UNIVERSAL MODAL & DRAWER BACKDROP BLUR
+   ========================================================================== */
+dialog::backdrop,
+.settings-drawer::backdrop,
+.channel-drawer::backdrop,
+.order-review-modal::backdrop,
+.edit-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.48) !important;
+  backdrop-filter: blur(4px) !important;
+  -webkit-backdrop-filter: blur(4px) !important;
+}
+
+dialog.settings-drawer {
+  position: fixed !important;
+  inset: 0 !important;
+  margin: auto !important;
+  border-radius: 14px !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  box-shadow: 0 24px 48px -12px rgba(15, 23, 42, 0.25), 0 0 0 1px rgba(15, 23, 42, 0.06) !important;
+  overflow: hidden !important;
+}
+
+dialog.settings-drawer .drawer-head {
+  padding: 16px 22px !important;
+  border-bottom: 1px solid var(--line, #e2e8f0) !important;
+  background: #f8faf9 !important;
+}
+
+dialog.settings-drawer .drawer-head button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 28px !important;
+  padding: 0 10px !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 6px !important;
+  background: #ffffff !important;
+  color: #64748b !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  transition: all 0.15s ease !important;
+}
+
+dialog.settings-drawer .drawer-head button:hover {
+  border-color: #cbd5e1 !important;
+  background: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+/* ==========================================================================
+   MODAL & DRAWER CLOSE BUTTON ICON STYLES
+   ========================================================================== */
+.modal-close-btn,
+.dialog-header .modal-close-btn,
+.drawer-head .modal-close-btn,
+.review-modal-header .modal-close-btn,
+.review-summary-close {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 32px !important;
+  height: 32px !important;
+  min-width: 32px !important;
+  padding: 0 !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 7px !important;
+  background: #ffffff !important;
+  color: #64748b !important;
+  cursor: pointer !important;
+  box-sizing: border-box !important;
+  transition: all 0.15s ease !important;
+}
+
+.modal-close-btn svg,
+.review-summary-close svg {
+  display: block !important;
+  stroke: currentColor !important;
+}
+
+.modal-close-btn:hover,
+.review-summary-close:hover {
+  border-color: #cbd5e1 !important;
+  background: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+/* ==========================================================================
+   SETTINGS DRAWER CLEAN SECTIONS (Line Separators instead of nested boxes)
+   ========================================================================== */
+dialog.settings-drawer .drawer-body {
+  padding: 24px 28px 32px !important;
+  max-height: calc(92vh - 72px) !important;
+  overflow-y: auto !important;
+  background: #ffffff !important;
+}
+
+dialog.settings-drawer .drawer-card {
+  display: grid !important;
+  gap: 16px !important;
+  padding: 0 0 24px 0 !important;
+  margin: 0 0 24px 0 !important;
+  border: none !important;
+  border-bottom: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+dialog.settings-drawer .drawer-card:last-child,
+dialog.settings-drawer form > .drawer-card:last-child {
+  border-bottom: none !important;
+  margin-bottom: 0 !important;
+  padding-bottom: 8px !important;
+}
+
+dialog.settings-drawer .section-title-row {
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: baseline !important;
+  gap: 12px !important;
+  margin-bottom: 2px !important;
+}
+
+dialog.settings-drawer .section-title-row h4,
+dialog.settings-drawer .drawer-card h4 {
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  color: #0f172a !important;
+  letter-spacing: -0.01em !important;
+}
+
+dialog.settings-drawer .section-title-row .muted,
+dialog.settings-drawer .drawer-card p.muted {
+  font-size: 12.5px !important;
+  color: #64748b !important;
+  margin-top: 3px !important;
+}
+
+dialog.settings-drawer .settings-kpis {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 12px !important;
+}
+
+dialog.settings-drawer .settings-kpis div {
+  display: grid !important;
+  gap: 4px !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 8px !important;
+  padding: 12px 14px !important;
+  background: #f8fafc !important;
+}
+
+dialog.settings-drawer .settings-kpis span {
+  color: #64748b !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.03em !important;
+}
+
+dialog.settings-drawer .settings-kpis strong {
+  font-size: 16px !important;
+  font-weight: 700 !important;
+  color: #0f172a !important;
+}
+
+dialog.settings-drawer .form-grid {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)) !important;
+  gap: 14px 16px !important;
+}
+
+dialog.settings-drawer .form-grid label {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 5px !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: #475569 !important;
+}
+
+dialog.settings-drawer .form-grid label input[type="text"],
+dialog.settings-drawer .form-grid label input[type="password"],
+dialog.settings-drawer .form-grid label input[type="number"],
+dialog.settings-drawer .form-grid label input[type="email"],
+dialog.settings-drawer .form-grid label input:not([type]),
+dialog.settings-drawer .form-grid label select {
+  height: 36px !important;
+  padding: 0 11px !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 7px !important;
+  background: #ffffff !important;
+  font-size: 13px !important;
+  color: #0f172a !important;
+  box-sizing: border-box !important;
+  transition: all 0.15s ease !important;
+}
+
+dialog.settings-drawer .form-grid label select {
+  padding-right: 28px !important;
+  appearance: none !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 9px center !important;
+}
+
+dialog.settings-drawer .form-grid label input:focus,
+dialog.settings-drawer .form-grid label select:focus,
+dialog.settings-drawer .form-grid label textarea:focus {
+  outline: none !important;
+  border-color: var(--accent, #0f766e) !important;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12) !important;
+}
+
+dialog.settings-drawer .form-grid label input[type="checkbox"] {
+  width: 18px !important;
+  height: 18px !important;
+  margin-top: 4px !important;
+  accent-color: var(--accent, #0f766e) !important;
+  cursor: pointer !important;
+}
+
+dialog.settings-drawer .drawer-actions {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  gap: 10px !important;
+  padding-top: 10px !important;
+}
+
+dialog.settings-drawer .drawer-actions button {
+  height: 34px !important;
+  padding: 0 16px !important;
+  border-radius: 7px !important;
+  font-size: 12.5px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  transition: all 0.15s ease !important;
+}
+
+dialog.settings-drawer .drawer-actions button:not(.secondary):not(.danger) {
+  border: none !important;
+  background: var(--accent, #0f766e) !important;
+  color: #ffffff !important;
+}
+
+dialog.settings-drawer .drawer-actions button:not(.secondary):not(.danger):hover {
+  background: var(--accent-hover, color-mix(in srgb, var(--accent) 86%, #ffffff)) !important;
+}
+
+dialog.settings-drawer .drawer-actions button.secondary {
+  border: 1px solid var(--line, #e2e8f0) !important;
+  background: #ffffff !important;
+  color: #475569 !important;
+}
+
+dialog.settings-drawer .drawer-actions button.secondary:hover {
+  border-color: #cbd5e1 !important;
+  background: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+dialog.settings-drawer .drawer-subsection {
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 8px !important;
+  background: #f8fafc !important;
+  padding: 12px 14px !important;
+}
+
+dialog.settings-drawer .model-preview-card {
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 8px !important;
+  background: #f8fafc !important;
+  padding: 12px 14px !important;
+}
+
+dialog.settings-drawer .logo-tile {
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 8px !important;
+  background: #f8fafc !important;
+  padding: 14px !important;
+}
+
+/* ==========================================================================
+   ANIMATED TOGGLE SWITCHES (Interruptores con animación)
+   ========================================================================== */
+dialog.settings-drawer input[type="checkbox"],
+dialog.edit-dialog input[type="checkbox"],
+.settings-drawer input[type="checkbox"],
+.edit-dialog input[type="checkbox"],
+.form-grid input[type="checkbox"]:not(.table-checkbox):not(.webmail-item-select):not([data-column-checkbox]),
+.learning-toggle-grid input[type="checkbox"] {
+  position: relative !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  width: 38px !important;
+  height: 22px !important;
+  min-width: 38px !important;
+  max-width: 38px !important;
+  border-radius: 9999px !important;
+  background-color: #cbd5e1 !important;
+  border: 1px solid transparent !important;
+  outline: none !important;
+  cursor: pointer !important;
+  vertical-align: middle !important;
+  transition: background-color 0.2s ease, box-shadow 0.2s ease !important;
+  margin: 0 !important;
+  display: inline-block !important;
+  box-sizing: border-box !important;
+  flex-shrink: 0 !important;
+}
+
+dialog.settings-drawer input[type="checkbox"]::before,
+dialog.edit-dialog input[type="checkbox"]::before,
+.settings-drawer input[type="checkbox"]::before,
+.edit-dialog input[type="checkbox"]::before,
+.form-grid input[type="checkbox"]:not(.table-checkbox):not(.webmail-item-select):not([data-column-checkbox])::before,
+.learning-toggle-grid input[type="checkbox"]::before {
+  content: "" !important;
+  position: absolute !important;
+  top: 2px !important;
+  left: 2px !important;
+  width: 16px !important;
+  height: 16px !important;
+  border-radius: 50% !important;
+  background-color: #ffffff !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2), 0 1px 2px rgba(0, 0, 0, 0.1) !important;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+dialog.settings-drawer input[type="checkbox"]:checked,
+dialog.edit-dialog input[type="checkbox"]:checked,
+.settings-drawer input[type="checkbox"]:checked,
+.edit-dialog input[type="checkbox"]:checked,
+.form-grid input[type="checkbox"]:not(.table-checkbox):not(.webmail-item-select):not([data-column-checkbox]):checked,
+.learning-toggle-grid input[type="checkbox"]:checked {
+  background-color: var(--accent, #0f766e) !important;
+}
+
+dialog.settings-drawer input[type="checkbox"]:checked::before,
+dialog.edit-dialog input[type="checkbox"]:checked::before,
+.settings-drawer input[type="checkbox"]:checked::before,
+.edit-dialog input[type="checkbox"]:checked::before,
+.form-grid input[type="checkbox"]:not(.table-checkbox):not(.webmail-item-select):not([data-column-checkbox]):checked::before,
+.learning-toggle-grid input[type="checkbox"]:checked::before {
+  transform: translateX(16px) !important;
+}
+
+dialog.settings-drawer input[type="checkbox"]:focus-visible,
+dialog.edit-dialog input[type="checkbox"]:focus-visible,
+.settings-drawer input[type="checkbox"]:focus-visible,
+.edit-dialog input[type="checkbox"]:focus-visible,
+.form-grid input[type="checkbox"]:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #0f766e) 25%, transparent) !important;
+}
+
+/* Layout for labels containing switches */
+dialog.settings-drawer .form-grid label:has(input[type="checkbox"]),
+dialog.edit-dialog .form-grid label:has(input[type="checkbox"]),
+.settings-drawer .form-grid label:has(input[type="checkbox"]),
+.edit-dialog .form-grid label:has(input[type="checkbox"]) {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  min-height: 38px !important;
+  cursor: pointer !important;
+  padding: 4px 0 !important;
+}
+
+/* ==========================================================================
+   GLOBAL SVG CHEVRONS FOR COLLAPSIBLE SECTIONS & DETAILS/SUMMARY
+   ========================================================================== */
+details summary {
+  list-style: none !important;
+  cursor: pointer !important;
+}
+
+details summary::-webkit-details-marker {
+  display: none !important;
+}
+
+details summary::marker {
+  display: none !important;
+}
+
+/* Add modern SVG Chevron ONLY to expandable collapsible sections */
+.drawer-subsection > summary,
+dialog.settings-drawer details > summary,
+.settings-drawer details > summary,
+.knowledge-accordion > summary,
+details.collapsible-box > summary,
+details.accordion-section > summary {
+  display: flex !important;
+  align-items: center !important;
+  gap: 8px !important;
+  font-weight: 600 !important;
+  color: #334155 !important;
+  user-select: none !important;
+  transition: color 0.15s ease !important;
+}
+
+.drawer-subsection > summary:hover,
+dialog.settings-drawer details > summary:hover,
+.settings-drawer details > summary:hover,
+.knowledge-accordion > summary:hover,
+details.collapsible-box > summary:hover,
+details.accordion-section > summary:hover {
+  color: #0f172a !important;
+}
+
+.drawer-subsection > summary::before,
+dialog.settings-drawer details > summary::before,
+.settings-drawer details > summary::before,
+.knowledge-accordion > summary::before,
+details.collapsible-box > summary::before,
+details.accordion-section > summary::before {
+  content: "" !important;
+  display: inline-block !important;
+  width: 14px !important;
+  height: 14px !important;
+  min-width: 14px !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23475569' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='9 18 15 12 9 6'%3E%3C/polyline%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-position: center !important;
+  background-size: contain !important;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  flex-shrink: 0 !important;
+}
+
+.drawer-subsection[open] > summary::before,
+dialog.settings-drawer details[open] > summary::before,
+.settings-drawer details[open] > summary::before,
+.knowledge-accordion[open] > summary::before,
+details.collapsible-box[open] > summary::before,
+details.accordion-section[open] > summary::before {
+  transform: rotate(90deg) !important;
+}
+
+/* Explicitly guarantee NO chevron on table headers, popovers, docks, toolbars */
+.table-settings-btn::before,
+.table-settings-th summary::before,
+.column-toggle-panel > summary::before,
+.dock-filter-trigger::before,
+.dock-popover-panel > summary::before,
+.row-more-actions > summary::before,
+.knowledge-more-menu > summary::before,
+.review-actions-menu > summary::before,
+summary.button::before,
+summary.compact-button::before {
+  content: none !important;
+  display: none !important;
+}
+
+/* Enhanced styling for subsection collapsible boxes in drawers & settings */
+.drawer-subsection,
+dialog.settings-drawer details,
+.settings-drawer details {
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 8px !important;
+  background: #f8fafc !important;
+  padding: 10px 14px !important;
+  box-sizing: border-box !important;
+}
+
+.drawer-subsection > summary,
+dialog.settings-drawer details > summary,
+.settings-drawer details > summary {
+  padding: 2px 0 !important;
+  font-size: 13px !important;
+}
+
+.drawer-subsection[open],
+dialog.settings-drawer details[open],
+.settings-drawer details[open] {
+  background: #ffffff !important;
+  border-color: #cbd5e1 !important;
+}
+
+/* ==========================================================================
+   EMAIL SYNC & BACKFILL FULL-WIDTH FIX
+   ========================================================================== */
+[data-email-backfill-root],
+.email-backfill-container {
+  display: grid !important;
+  gap: 14px !important;
+  width: 100% !important;
+  margin-top: 16px !important;
+  box-sizing: border-box !important;
+}
+
+.compact-backfill-form {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) auto !important;
+  gap: 12px !important;
+  align-items: end !important;
+  width: 100% !important;
+}
+
+.compact-backfill-form label {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 5px !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: #475569 !important;
+}
+
+.compact-backfill-form input {
+  width: 100% !important;
+  height: 36px !important;
+  padding: 0 11px !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 7px !important;
+  background: #ffffff !important;
+  font-size: 13px !important;
+  color: #0f172a !important;
+  box-sizing: border-box !important;
+}
+
+.compact-backfill-form button {
+  height: 36px !important;
+  padding: 0 16px !important;
+  border-radius: 7px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  white-space: nowrap !important;
+}
+
+[data-email-backfill-root] .settings-kpis {
+  display: grid !important;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr)) !important;
+  gap: 10px !important;
+  width: 100% !important;
+}
+
+dialog.settings-drawer .drawer-actions,
+.email-sync-actions {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  justify-content: flex-start !important;
+  gap: 10px !important;
+  width: 100% !important;
+  padding-top: 8px !important;
+}
+
+dialog.settings-drawer .model-preview-card,
+.model-preview-card {
+  grid-column: 1 / -1 !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 8px !important;
+  background: #f8fafc !important;
+  padding: 10px 14px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 3px !important;
+  width: 100% !important;
+  box-sizing: border-box !important;
+  margin-top: 4px !important;
+}
+
+dialog.settings-drawer .model-preview-card strong {
+  font-size: 13px !important;
+  font-weight: 700 !important;
+  color: #0f172a !important;
+}
+
+dialog.settings-drawer .model-preview-card span {
+  font-size: 12px !important;
+  color: var(--accent, #0f766e) !important;
+  font-weight: 600 !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+}
+
+dialog.settings-drawer .model-preview-card small {
+  font-size: 12px !important;
+  color: #64748b !important;
+}
+
+/* ==========================================================================
+   AGENT AI MODELS SECTION: TOP TOGGLE + 4-COLUMN INPUT ROW
+   ========================================================================== */
+.modelos-top-toggle {
+  display: flex !important;
+  align-items: center !important;
+  margin-bottom: 16px !important;
+  width: fit-content !important;
+  min-width: 280px !important;
+}
+
+.modelos-top-toggle label {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 16px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  color: #334155 !important;
+  cursor: pointer !important;
+  width: 100% !important;
+  padding: 4px 0 !important;
+}
+
+.grid-4-cols,
+dialog.settings-drawer .grid-4-cols {
+  display: grid !important;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+  gap: 14px 16px !important;
+  width: 100% !important;
+}
+
+@media (max-width: 900px) {
+  .grid-4-cols,
+  dialog.settings-drawer .grid-4-cols {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+/* ==========================================================================
+   SETTINGS MODULE OVERVIEW CARDS: MODERN REFINED CARDS
+   ========================================================================== */
+.settings-modules {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 16px !important;
+  margin-top: 18px !important;
+}
+
+@media (max-width: 1100px) {
+  .settings-modules {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  }
+}
+
+@media (max-width: 720px) {
+  .settings-modules {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+.module-card {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+  padding: 18px 20px !important;
+  background: #ffffff !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03), 0 1px 2px rgba(15, 23, 42, 0.02) !important;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s ease !important;
+  position: relative !important;
+  box-sizing: border-box !important;
+}
+
+.module-card:hover {
+  transform: translateY(-2px) !important;
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 8px 20px -4px rgba(15, 23, 42, 0.08), 0 3px 8px -2px rgba(15, 23, 42, 0.04) !important;
+}
+
+.module-card-head {
+  display: flex !important;
+  align-items: flex-start !important;
+  justify-content: space-between !important;
+  gap: 12px !important;
+}
+
+.module-card-head h3 {
+  margin: 0 !important;
+  font-size: 15px !important;
+  font-weight: 700 !important;
+  color: #0f172a !important;
+  letter-spacing: -0.01em !important;
+  line-height: 1.25 !important;
+}
+
+.module-state {
+  display: inline-flex !important;
+  align-items: center !important;
+  width: fit-content !important;
+  border-radius: 9999px !important;
+  padding: 2px 9px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.01em !important;
+  margin-top: 6px !important;
+}
+
+.module-state.ready {
+  background: #ecfdf5 !important;
+  color: #065f46 !important;
+  border: 1px solid #a7f3d0 !important;
+}
+
+.module-state.warning {
+  background: #fffbeb !important;
+  color: #92400e !important;
+  border: 1px solid #fde68a !important;
+}
+
+.module-state.pending {
+  background: #f1f5f9 !important;
+  color: #475569 !important;
+  border: 1px solid #e2e8f0 !important;
+}
+
+.module-state.locked {
+  background: #f8fafc !important;
+  color: #64748b !important;
+  border: 1px solid #e2e8f0 !important;
+}
+
+.module-state.optional {
+  background: #eff6ff !important;
+  color: #1e40af !important;
+  border: 1px solid #bfdbfe !important;
+}
+
+.module-card p {
+  margin: 0 !important;
+  color: #64748b !important;
+  font-size: 12.5px !important;
+  line-height: 1.45 !important;
+  flex: 1 1 auto !important;
+}
+
+.module-card-head button.compact-button,
+.module-card-head .button.compact-button,
+.module-card-footer .button.compact-button {
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  padding: 5px 12px !important;
+  border-radius: 8px !important;
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #334155 !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04) !important;
+  transition: all 0.15s ease !important;
+  cursor: pointer !important;
+  text-decoration: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.module-card-head button.compact-button:hover,
+.module-card-head .button.compact-button:hover,
+.module-card-footer .button.compact-button:hover {
+  background: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06) !important;
+}
+
+.module-card-footer {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+  align-items: center !important;
+  margin-top: auto !important;
+  padding-top: 2px !important;
+}
+
+.module-card-footer:empty {
+  display: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* ==========================================================================
+   CHANNELS PAGE REFINED CARDS (Canales de entrada)
+   ========================================================================== */
+.channels-shell {
+  display: grid !important;
+  gap: 16px !important;
+}
+
+.channels-header {
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+  gap: 14px !important;
+  padding: 0 0 4px 0 !important;
+  background: transparent !important;
+  border-bottom: none !important;
+}
+
+.channels-header h2 {
+  margin: 0 !important;
+  font-size: 20px !important;
+  font-weight: 700 !important;
+  color: #0f172a !important;
+  letter-spacing: -0.01em !important;
+}
+
+.channels-grid {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 16px !important;
+  margin-top: 4px !important;
+}
+
+@media (max-width: 900px) {
+  .channels-grid {
+    grid-template-columns: 1fr !important;
+  }
+}
+
+.channel-card {
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: space-between !important;
+  gap: 14px !important;
+  padding: 20px 22px !important;
+  background: #ffffff !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03), 0 1px 2px rgba(15, 23, 42, 0.02) !important;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.2s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.2s ease !important;
+  box-sizing: border-box !important;
+  position: relative !important;
+}
+
+.channel-card:hover {
+  transform: translateY(-2px) !important;
+  border-color: #cbd5e1 !important;
+  box-shadow: 0 8px 20px -4px rgba(15, 23, 42, 0.08), 0 3px 8px -2px rgba(15, 23, 42, 0.04) !important;
+}
+
+.channel-card-head {
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: flex-start !important;
+  gap: 12px !important;
+}
+
+.channel-card-title {
+  display: grid !important;
+  gap: 6px !important;
+}
+
+.channel-card-title h3 {
+  margin: 0 !important;
+  font-size: 16px !important;
+  font-weight: 700 !important;
+  color: #0f172a !important;
+  letter-spacing: -0.01em !important;
+}
+
+.channel-badges {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  gap: 6px !important;
+}
+
+.channel-state {
+  display: inline-flex !important;
+  align-items: center !important;
+  border-radius: 9999px !important;
+  padding: 2px 9px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.01em !important;
+}
+
+.channel-state.ready {
+  background: #ecfdf5 !important;
+  color: #065f46 !important;
+  border: 1px solid #a7f3d0 !important;
+}
+
+.channel-state.pending {
+  background: #fffbeb !important;
+  color: #92400e !important;
+  border: 1px solid #fde68a !important;
+}
+
+.channel-state.inactive {
+  background: #f1f5f9 !important;
+  color: #475569 !important;
+  border: 1px solid #e2e8f0 !important;
+}
+
+.channel-state.error {
+  background: #fef2f2 !important;
+  color: #991b1b !important;
+  border: 1px solid #fecaca !important;
+}
+
+.channel-summary {
+  margin: 0 !important;
+  color: #64748b !important;
+  font-size: 13px !important;
+  line-height: 1.45 !important;
+}
+
+.channel-capabilities {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  align-items: center !important;
+  gap: 6px !important;
+  font-size: 12px !important;
+}
+
+.channel-capabilities .muted {
+  font-size: 12px !important;
+  color: #94a3b8 !important;
+  font-weight: 500 !important;
+}
+
+.channel-capabilities .badge {
+  font-size: 11px !important;
+  padding: 2px 8px !important;
+  border-radius: 6px !important;
+  background: #f8fafc !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #475569 !important;
+}
+
+.channel-meta {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 10px !important;
+}
+
+.channel-meta div {
+  display: grid !important;
+  gap: 3px !important;
+  padding: 10px 14px !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 8px !important;
+  background: #f8fafc !important;
+}
+
+.channel-meta span {
+  color: #64748b !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.03em !important;
+}
+
+.channel-meta strong {
+  font-size: 13.5px !important;
+  font-weight: 700 !important;
+  color: #0f172a !important;
+}
+
+.channel-actions {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+  align-items: center !important;
+  margin-top: auto !important;
+  padding-top: 4px !important;
+}
+
+.channel-card-head button.compact-button,
+.channel-actions .button.compact-button,
+.channel-actions button.compact-button {
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  padding: 5px 12px !important;
+  border-radius: 8px !important;
+  background: #ffffff !important;
+  border: 1px solid #e2e8f0 !important;
+  color: #334155 !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04) !important;
+  transition: all 0.15s ease !important;
+  cursor: pointer !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.channel-card-head button.compact-button:hover,
+.channel-actions .button.compact-button:hover,
+.channel-actions button.compact-button:hover {
+  background: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.06) !important;
+}
+
+.channel-actions button:not(.secondary) {
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  padding: 5px 14px !important;
+  border-radius: 8px !important;
+  background: var(--accent, #0f766e) !important;
+  color: #ffffff !important;
+  border: 1px solid transparent !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08) !important;
+  transition: all 0.15s ease !important;
+  cursor: pointer !important;
+}
+
+.channel-actions button:not(.secondary):hover {
+  background: var(--accent-dark, #115e59) !important;
 }

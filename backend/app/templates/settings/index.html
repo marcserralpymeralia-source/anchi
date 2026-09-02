@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_search %}
+{% from "components/icons.html" import icon_search , icon_close %}
 {% set title = "Configuración" %}
 {% block head_extra %}<script src="{{ asset_url('js/settings-email-backfill.js') }}" defer></script>{% endblock %}
 {% macro state_label(state) -%}
@@ -105,7 +105,7 @@
           <div class="checklist-item-right">
             {% if step.open_settings %}
               <button type="button" class="button secondary compact-button" data-open-settings="{{ step.open_settings }}">
-                {{ "Editar" if step.state == "done" else "Configurar" }}
+                Configurar
               </button>
             {% elif step.url %}
               <a href="{{ step.url }}" class="button secondary compact-button">
@@ -127,7 +127,7 @@
             <span class="module-state {{ module.state }}">{{ state_label(module.state) }}</span>
           </div>
           {% if module.key in ["general", "identity", "ai", "scoring", "decision", "export", "ftp"] or (module.key == "advanced" and user.role.name == "Superadmin") %}
-            <button type="button" class="secondary compact-button" data-open-settings="{{ module.key }}">{{ module.action }}</button>
+            <button type="button" class="secondary compact-button" data-open-settings="{{ module.key }}">Configurar</button>
           {% elif module.key == "advanced" %}
             <span class="muted">Solo Superadmin</span>
           {% endif %}
@@ -143,8 +143,6 @@
             <a class="button secondary compact-button" href="/users">Abrir</a>
           {% elif module.key == "alerts" %}
             <a class="button secondary compact-button" href="/alerts">Ver</a>
-          {% elif module.key == "decision" %}
-            <a class="button secondary compact-button" href="/settings#decision">Abrir</a>
           {% elif module.key == "advanced" and user.role.name != "Superadmin" %}
             <span class="muted">Disponible para Superadmin</span>
           {% endif %}
@@ -158,9 +156,9 @@
   <div class="drawer-head">
     <div>
       <h3>General</h3>
-      <p class="muted">Datos base de la empresa, logo principal y preferencias regionales.</p>
+      <p class="muted">Datos base de la empresa y preferencias regionales.</p>
     </div>
-    <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+    <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
   </div>
   <form class="drawer-body stack js-loading-form" method="post" action="/settings/company" enctype="multipart/form-data">
     <section class="drawer-card">
@@ -200,42 +198,6 @@
     <section class="drawer-card">
       <div class="section-title-row">
         <div>
-          <h4>Logo básico</h4>
-          <p class="muted">Subida local recomendada. La URL externa queda como opción secundaria.</p>
-        </div>
-        {% if company.logo_url %}
-          <span class="badge">Logo actual</span>
-        {% else %}
-          <span class="badge">Sin logo</span>
-        {% endif %}
-      </div>
-      <div class="logo-basic-grid">
-        <div class="logo-preview-card">
-          {% if company.logo_url %}
-            <img src="{{ company.logo_url }}" alt="Logo de empresa">
-            {% if not company.logo_url.startswith('/static/uploads/branding/') %}
-              <small class="muted">Logo actual: URL externa</small>
-            {% endif %}
-          {% else %}
-            <div class="logo-preview-empty">Sin previsualización</div>
-          {% endif %}
-        </div>
-        <div class="form-grid">
-          <label class="span-2">Subir logo<input name="logo_file" type="file" accept=".png,.jpg,.jpeg,.svg,.webp"></label>
-          <label class="span-2">Eliminar logo actual<input name="remove_logo" type="checkbox"></label>
-        </div>
-      </div>
-      <details class="drawer-subsection">
-        <summary>URL externa y compatibilidad</summary>
-        <div class="form-grid">
-          <label class="span-2">Logo externo<input name="logo_url" value="{{ company.logo_url if company.logo_url and not company.logo_url.startswith('/static/uploads/branding/') else '' }}" placeholder="https://..."></label>
-          <p class="muted span-2">Si ya había una ruta antigua guardada, se mantiene hasta que subas un archivo nuevo o la elimines.</p>
-        </div>
-      </details>
-    </section>
-    <section class="drawer-card">
-      <div class="section-title-row">
-        <div>
           <h4>Notificaciones y estado</h4>
           <p class="muted">Alertas internas y situación del tenant.</p>
         </div>
@@ -259,7 +221,7 @@
       <h3>Identidad</h3>
       <p class="muted">Marca, logos y estilo corporativo, sin exponer toda la parte técnica.</p>
     </div>
-    <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+    <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
   </div>
   <form class="drawer-body stack js-loading-form" method="post" action="/settings/branding" enctype="multipart/form-data" data-confirm="Guardar cambios de identidad corporativa?">
     {% if not can_edit_branding %}<fieldset disabled>{% endif %}
@@ -411,7 +373,7 @@
       <h3>Correo</h3>
       <p class="muted">Recepción, envío y pruebas sin mostrar la pantalla entera.</p>
     </div>
-    <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+    <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
   </div>
   <div class="drawer-body stack">
     <section class="drawer-card">
@@ -608,13 +570,12 @@
           <p class="muted">Por defecto solo se importarán correos nuevos desde ahora. La primera sincronización se confirma antes de importar y nunca trae histórico ilimitado.</p>
         </details>
         <p class="muted">En Vercel la sincronización automática queda guardada, pero la ejecución debe venir de un cron o servicio externo.</p>
-        <div class="drawer-actions">
+        <div class="drawer-actions email-sync-actions">
           <button data-loading-text="Guardando...">Guardar configuración</button>
           <button class="secondary js-loading-form" formaction="/settings/email/initial-sync/preview" formmethod="post" data-loading-text="Preparando..." data-confirm="Previsualizar la sincronización inicial con el historial elegido?">Previsualizar importación inicial</button>
           <button class="secondary js-loading-form" formaction="/settings/email/read-unprocessed" formmethod="post" data-loading-text="Buscando...">Buscar correos nuevos ahora</button>
         </div>
-        <div class="drawer-actions" style="margin-top: 10px;">
-          <div data-email-backfill-root>
+        <div data-email-backfill-root class="email-backfill-container">
             <form class="compact-backfill-form" method="post" action="/settings/email/backfill" data-email-backfill-form>
               <label>Desde<input type="date" name="from_date" value="{{ email.read_from_date or '' }}"></label>
               <label>Hasta<input type="date" name="to_date" value=""></label>
@@ -631,7 +592,6 @@
               <div><span>Restante</span><strong data-email-backfill-remaining>0</strong></div>
             </div>
             <p class="muted settings-status-note" data-email-backfill-message>El backfill manual encadena lotes de 5 correos de forma automática hasta completar el rango o alcanzar el límite.</p>
-          </div>
         </div>
         {% if not can_edit_email %}</fieldset>{% endif %}
       </form>
@@ -761,7 +721,7 @@
       <h3>Agente IA</h3>
       <p class="muted">Estado, modelos, funcionamiento y controles técnicos del agente.</p>
     </div>
-    <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+    <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
   </div>
   <div class="drawer-body stack">
     <section class="drawer-card">
@@ -815,8 +775,10 @@
             <p class="muted">Puedes usar un único modelo o especializar por tarea.</p>
           </div>
         </div>
-        <div class="form-grid">
-          <label class="span-2">Usar mismo modelo para todo<input name="use_same_model_for_all" type="checkbox" {% if llm.use_same_model_for_all %}checked{% endif %}></label>
+        <div class="modelos-top-toggle">
+          <label>Usar mismo modelo para todo<input name="use_same_model_for_all" type="checkbox" {% if llm.use_same_model_for_all %}checked{% endif %}></label>
+        </div>
+        <div class="form-grid grid-4-cols">
           <label>Clasificación<input name="classification_model" value="{{ llm.classification_model }}"></label>
           <input type="hidden" name="extraction_model" value="{{ extraction_model_value }}" data-extraction-model-value>
           <label>Modelo de extracción
@@ -831,12 +793,14 @@
             Model ID personalizado
             <input name="extraction_model_custom" value="{% if extraction_model_value not in extraction_model_values %}{{ extraction_model_value }}{% endif %}" data-extraction-model-custom placeholder="gpt-5.6-mi-modelo">
           </label>
-          <div class="span-2 model-preview-card" data-extraction-model-preview>
-            <strong data-extraction-model-preview-label>{{ extraction_model_label }}</strong>
-            <span data-extraction-model-preview-id>{{ extraction_model_value }}</span>
+          <label>Validación<input name="validation_model" value="{{ llm.validation_model }}"></label>
+          <div class="model-preview-card" data-extraction-model-preview>
+            <div style="display: flex; align-items: baseline; gap: 8px;">
+              <strong data-extraction-model-preview-label>{{ extraction_model_label }}</strong>
+              <span data-extraction-model-preview-id>{{ extraction_model_value }}</span>
+            </div>
             <small data-extraction-model-preview-description>{{ extraction_model_description }}</small>
           </div>
-          <label>Validación<input name="validation_model" value="{{ llm.validation_model }}"></label>
         </div>
       </section>
 
@@ -920,7 +884,7 @@
       <h3>Confianza y automatización</h3>
       <p class="muted">{{ dashboard.scoring_module.summary }}</p>
     </div>
-    <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+    <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
   </div>
   <form class="drawer-body stack js-loading-form" method="post" action="/settings/scoring">
     <section class="drawer-card">
@@ -979,7 +943,7 @@
       <h3>Motor de decisión</h3>
       <p class="muted">Prioridad de fuentes, pesos y reglas de aprendizaje para que el agente elija entre candidatos fiables.</p>
     </div>
-    <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+    <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
   </div>
   <form class="drawer-body stack js-loading-form" method="post" action="/settings/decision">
     <section class="drawer-card">
@@ -1061,7 +1025,7 @@
       <h3>Exportación</h3>
       <p class="muted">Formato de archivo para gestión.</p>
     </div>
-    <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+    <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
   </div>
   <form class="drawer-body stack js-loading-form" method="post" action="/settings/export">
     <div class="form-grid">
@@ -1087,7 +1051,7 @@
       <h3>FTP / FTPS</h3>
       <p class="muted">Destino de exportación y credenciales.</p>
     </div>
-    <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+    <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
   </div>
   <form class="drawer-body stack js-loading-form" method="post" action="/settings/ftp">
     <div class="form-grid">
@@ -1127,7 +1091,7 @@
       <h3>Avanzado</h3>
       <p class="muted">Prompts, versiones y ajustes técnicos.</p>
     </div>
-    <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+    <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
   </div>
   <div class="drawer-body stack">
     <section class="drawer-card">

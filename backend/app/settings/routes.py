@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.templating import templates
 from app.core.config import get_settings
+from app.core.middleware import invalidate_branding_cache
 from app.auth.dependencies import current_user
 from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, LEGACY_OPENAI_MODEL_FALLBACK, openai_model_description, openai_model_label, openai_model_option_payload, OPENAI_MODEL_PRESET_VALUES, resolve_openai_runtime_model
 from app.master.database import get_master_db
@@ -21,6 +22,7 @@ from app.db.models import AuditLog, BrandingSettings, Company, Customer, Decisio
 from app.db.models import BackgroundJob
 from app.logs.service import log_action
 from app.settings.agent_config import agent_metrics, agent_status, apply_safety_level, improvement_suggestions
+from app.settings.autoconfig import detect_email_configuration
 from app.settings.branding import branding_to_dict, delete_brand_asset, get_or_create_branding, reset_branding, store_brand_asset, update_branding_from_form
 from app.settings.email_config import TEMPLATE_VARIABLES, email_config_status, email_templates, ensure_default_email_templates, serialize_email_settings
 from app.settings.integrations import classify_sample, extract_sample, preview_initial_imap_sync, run_initial_imap_sync, send_test_email, test_imap_connection, test_smtp_connection
@@ -311,15 +313,15 @@ def build_settings_dashboard(db: Session, user: TenantUser, metrics: dict, llm: 
             "General",
             "ready" if company and company.name else "pending",
             f"{company.name if company else 'Sin empresa'} · {(company.currency or 'EUR') if company else 'EUR'} · {('activa' if company and company.active else 'inactiva')}",
-            "Editar",
+            "Configurar",
         ),
-        state("identity", "Identidad", "ready" if branding.app_name and (branding.logo_url or branding.dark_logo_url) else "warning" if branding.app_name else "pending", f"{branding.app_name} · {branding.secondary_claim or 'sin claim secundario'}", "Editar"),
+        state("identity", "Identidad", "ready" if branding.app_name and (branding.logo_url or branding.dark_logo_url) else "warning" if branding.app_name else "pending", f"{branding.app_name} · {branding.secondary_claim or 'sin claim secundario'}", "Configurar"),
         state("channels", "Canales", "ready" if active_channels_count else "pending", f"{active_channels_count} canal activo" if active_channels_count == 1 else f"{active_channels_count} canales activos", "Abrir"),
-        state("ai", "Agente IA", "ready" if llm.provider != "disabled" and llm.api_key_encrypted and llm.last_test_ok is not False else "warning" if llm.api_key_encrypted else "pending", f"{llm.provider or 'sin proveedor'} · {resolve_openai_runtime_model(llm.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK)} · {llm.last_test_message or 'sin prueba reciente'}", "Editar"),
+        state("ai", "Agente IA", "ready" if llm.provider != "disabled" and llm.api_key_encrypted and llm.last_test_ok is not False else "warning" if llm.api_key_encrypted else "pending", f"{llm.provider or 'sin proveedor'} · {resolve_openai_runtime_model(llm.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK)} · {llm.last_test_message or 'sin prueba reciente'}", "Configurar"),
         state("customers-products", "Clientes y productos", "ready" if customer_count and product_count else "warning" if customer_count or product_count else "pending", f"{customer_count} clientes · {product_count} productos", "Abrir"),
-        state("scoring", "Confianza y automatización", "ready", f"Alta confianza desde {scoring.safe_threshold}% · auto-confirmar {'sí' if llm.allow_auto_confirm else 'no'}", "Editar"),
+        state("scoring", "Confianza y automatización", "ready", f"Alta confianza desde {scoring.safe_threshold}% · auto-confirmar {'sí' if llm.allow_auto_confirm else 'no'}", "Configurar"),
         state("decision", "Motor de decisión", "ready" if decision.enable_exact_match else "warning", f"Prioridad {decision.exact_priority} a {decision.llm_priority} · modo {decision.learning_mode}", "Configurar"),
-        state("export", "Exportación", "ready" if export.file_type and export.filename_template else "pending", f"{export.file_type.upper() if export.file_type else 'Sin formato'} · {export.filename_template or 'sin plantilla'}", "Editar"),
+        state("export", "Exportación", "ready" if export.file_type and export.filename_template else "pending", f"{export.file_type.upper() if export.file_type else 'Sin formato'} · {export.filename_template or 'sin plantilla'}", "Configurar"),
         state("ftp", "FTP/SFTP", "ready" if ftp.host and ftp.username else "pending", f"{ftp.connection_type.upper()} · {ftp.host or 'host pendiente'}", "Configurar"),
         state("alerts", "Alertas", "ready", f"{metrics['llm_errors']} errores · {metrics['doubtful_emails']} dudosos", "Ver"),
         state("users", "Usuarios y permisos", "ready", "Roles y accesos activos", "Abrir"),
@@ -477,6 +479,52 @@ def redirect_or_json(request: Request, payload: dict, anchor: str = "email"):
 @router.get("/email")
 def get_email_settings(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     return JSONResponse(serialize_email_settings(db, user.company_id))
+
+
+@router.post("/email/autoconfig")
+def autoconfigure_email(
+    request: Request,
+    email: str = Form(...),
+    password: str = Form(...),
+    user: TenantUser = Depends(current_user),
+):
+    """Discover and verify a mailbox without persisting its password."""
+
+    if user.role.name not in {"Administrador", "Superadmin"}:
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede configurar el correo."}, status_code=403)
+    try:
+        result = detect_email_configuration(email, password)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+    except Exception:  # noqa: BLE001
+        request_id = getattr(request.state, "request_id", None) if request is not None else None
+        logger.exception(
+            "settings.email.autoconfig.failed",
+            extra={
+                "event": "settings.email.autoconfig.failed",
+                "request_id": request_id,
+                "company_id": user.company_id,
+                "user_id": user.id,
+            },
+        )
+        return JSONResponse(
+            {"ok": False, "message": "No se ha podido comprobar la configuración de correo en este momento."},
+            status_code=502,
+        )
+    logger.info(
+        "settings.email.autoconfig.completed",
+        extra={
+            "event": "settings.email.autoconfig.completed",
+            "request_id": getattr(request.state, "request_id", None) if request is not None else None,
+            "company_id": user.company_id,
+            "user_id": user.id,
+            "domain": result.get("domain"),
+            "provider": result.get("provider"),
+            "detected": result.get("detected"),
+            "can_use_in_anchi": result.get("can_use_in_anchi"),
+        },
+    )
+    return JSONResponse(result)
 
 
 @router.api_route("/email/receive", methods=["PUT", "POST"])
@@ -764,6 +812,7 @@ async def put_branding(request: Request, db: Session = Depends(get_tenant_db), u
         branding.microcopy_json = json.dumps(data["microcopy"])
     branding.updated_by = user.id
     db.commit()
+    invalidate_branding_cache(user.company_id)
     log_action(db, company_id=user.company_id, user=user, action="branding.update", entity_type="branding", entity_id=branding.id, message="Identidad corporativa actualizada via API")
     return JSONResponse(branding_to_dict(branding))
 
@@ -790,6 +839,7 @@ async def update_branding(request: Request, db: Session = Depends(get_tenant_db)
             delete_brand_asset(getattr(branding, field))
             setattr(branding, field, await store_brand_asset(user.company_id, upload, prefix))
     db.commit()
+    invalidate_branding_cache(user.company_id)
     log_action(db, company_id=user.company_id, user=user, action="branding.update", entity_type="branding", entity_id=branding.id, message="Identidad corporativa actualizada")
     return RedirectResponse("/settings#branding", status_code=303)
 
@@ -800,6 +850,7 @@ def reset_branding_default(db: Session = Depends(get_tenant_db), user: TenantUse
         branding = get_or_create_branding(db, user.company_id)
         reset_branding(branding, user.id)
         db.commit()
+        invalidate_branding_cache(user.company_id)
         log_action(db, company_id=user.company_id, user=user, action="branding.reset_default", entity_type="branding", entity_id=branding.id, message="Identidad corporativa restaurada a valores por defecto")
     return RedirectResponse("/settings#branding", status_code=303)
 

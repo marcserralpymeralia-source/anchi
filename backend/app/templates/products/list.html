@@ -325,7 +325,7 @@
 {% macro product_form(product, dialog_id, is_new=False) %}
 <dialog id="{{ dialog_id }}" class="edit-dialog">
   <form class="stack js-loading-form" method="post" action="/products">
-    <div class="dialog-header"><h2>{{ "Crear producto" if is_new else "Editar producto" }}</h2><button type="button" class="secondary" onclick="this.closest('dialog').close()">Cerrar</button></div>
+    <div class="dialog-header"><h2>{{ "Crear producto" if is_new else "Editar producto" }}</h2><button type="button" class="secondary compact-button modal-close-btn" onclick="this.closest('dialog').close()" title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button></div>
     <input type="hidden" name="id" value="{{ product.id if product else 0 }}">
     <div class="form-grid">
       <label>Articulo/referencia<input name="reference" value="{{ product.reference if product else '' }}" required></label>
@@ -358,7 +358,7 @@
 {% for product in products %}
 <dialog id="product-delete-{{ product.id }}" class="edit-dialog">
   <form class="stack js-loading-form" method="post" action="/products/{{ product.id }}/delete" data-confirm="¿Seguro que quieres eliminar este producto? No aparecerá en nuevos pedidos, pero se conservará en el histórico.">
-    <div class="dialog-header"><h2>Eliminar producto</h2><button type="button" class="secondary" onclick="this.closest('dialog').close()">Cerrar</button></div>
+    <div class="dialog-header"><h2>Eliminar producto</h2><button type="button" class="secondary compact-button modal-close-btn" onclick="this.closest('dialog').close()" title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button></div>
     <p>Vas a eliminar <strong>{{ product.reference }} · {{ product.name }}</strong>.</p>
     <p class="muted">No aparecerá en nuevos pedidos y se conservará el histórico.</p>
     <div class="actions">

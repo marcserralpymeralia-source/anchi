@@ -12,6 +12,7 @@ pandas==2.2.3
 psycopg[binary]==3.2.3
 psycopg2-binary==2.9.10
 httpx==0.28.1
+dnspython==2.7.0
 pypdf==6.0.0
 pydantic==2.13.4
 vercel==0.10.0

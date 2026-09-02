@@ -15,6 +15,7 @@ from app.auth.dependencies import current_user
 from app.channels.service import get_or_create_channel
 from app.core.encryption import encrypt_secret
 from app.agent.model_catalog import DEFAULT_OPENAI_MODEL
+from app.core.middleware import invalidate_branding_cache
 from app.core.templating import templates
 from app.db.models import Company, Customer, EmailSettings, InputChannel, LLMSettings, Setting
 from app.imports.service import create_preview, read_preview, validate_import, confirm_import
@@ -165,6 +166,7 @@ async def save_company(
         branding.logo_url = await store_brand_asset(user.company_id, logo, "setup-logo")
     branding.updated_by = resolve_updated_by_id(db, user)
     db.commit()
+    invalidate_branding_cache(user.company_id)
     log_action(db, company_id=user.company_id, user=user, action="setup.company.save", entity_type="company", entity_id=user.company_id, message="Empresa configurada desde onboarding")
     return RedirectResponse("/setup/channels", status_code=303)
 

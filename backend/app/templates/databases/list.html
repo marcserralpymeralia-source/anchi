@@ -1,3 +1,4 @@
+{% from "components/icons.html" import icon_close %}
 {% extends "base.html" %}
 {% set title = "Bases de datos" %}
 {% block head_extra %}<link rel="stylesheet" href="{{ asset_url('database-compact.css') }}">{% endblock %}
@@ -432,7 +433,7 @@
 
 <dialog id="create-customer-panel" class="edit-dialog">
   <form class="stack js-loading-form" method="post" action="/customers">
-    <div class="dialog-header"><h2>Nuevo cliente</h2><button type="button" class="secondary" onclick="this.closest('dialog').close()">Cerrar</button></div>
+    <div class="dialog-header"><h2>Nuevo cliente</h2><button type="button" class="secondary compact-button modal-close-btn" onclick="this.closest('dialog').close()" title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button></div>
     <input type="hidden" name="id" value="0">
     <div class="form-grid">
       <label>Código cliente<input name="code" required></label>
@@ -463,7 +464,7 @@
 
 <dialog id="create-product-panel" class="edit-dialog">
   <form class="stack js-loading-form" method="post" action="/products">
-    <div class="dialog-header"><h2>Nuevo producto</h2><button type="button" class="secondary" onclick="this.closest('dialog').close()">Cerrar</button></div>
+    <div class="dialog-header"><h2>Nuevo producto</h2><button type="button" class="secondary compact-button modal-close-btn" onclick="this.closest('dialog').close()" title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button></div>
     <input type="hidden" name="id" value="0">
     <div class="form-grid">
       <label>Referencia<input name="reference" required></label>

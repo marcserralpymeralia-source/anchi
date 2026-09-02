@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title or app_settings.app_name }}</title>
   {% if request.state.branding.favicon_url %}<link rel="icon" href="{{ request.state.branding.favicon_url }}">{% endif %}
-  <link rel="stylesheet" href="/static/styles.css?v=48">
+  <link rel="stylesheet" href="{{ asset_url('styles.css') }}?v=63">
   <script src="/static/js/database-tables.js?v=8" defer></script>
   {% block head_extra %}{% endblock %}
   <style>{{ branding_css_vars(request.state.branding)|safe }}</style>
@@ -396,6 +396,25 @@
         document.documentElement.style.setProperty(cssVar, value);
       });
     }
+
+
+    // Universal dialog close handler
+    document.addEventListener("click", (event) => {
+      const closeBtn = event.target.closest(".modal-close-btn, [data-close-dialog], [data-close-settings], [data-close-modal]");
+      if (closeBtn) {
+        const dialog = closeBtn.closest("dialog");
+        if (dialog && typeof dialog.close === "function") {
+          event.preventDefault();
+          event.stopPropagation();
+          dialog.close();
+        }
+      }
+    });
+
+    document.addEventListener("input", (event) => {
+      const form = event.target.closest('form[action="/settings/branding"]');
+      if (form) previewBrandingForm(form);
+    });
   </script>
 </body>
 </html>

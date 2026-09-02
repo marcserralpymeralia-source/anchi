@@ -1,4 +1,4 @@
-{% from "components/icons.html" import icon_copy, icon_trash %}
+{% from "components/icons.html" import icon_copy, icon_trash , icon_close %}
 {% macro attachment_kind(attachment) -%}
   {{- "pdf" if attachment.is_pdf or attachment.content_type == "application/pdf" else "image" if attachment.content_type and attachment.content_type.startswith("image/") else "csv" if attachment.filename.lower().endswith(".csv") or attachment.content_type in ["text/csv", "application/csv"] else "text" if attachment.content_type and attachment.content_type.startswith("text/") or attachment.filename.lower().endswith((".txt", ".log", ".md", ".eml", ".json")) else "doc" if attachment.filename.lower().endswith((".doc", ".docx")) else "sheet" if attachment.filename.lower().endswith((".xls", ".xlsx", ".ods")) else "unsupported" -}}
 {%- endmacro %}
@@ -124,7 +124,7 @@
           </form>
         </div>
       </details>
-      <button type="button" class="secondary compact-button review-summary-close" onclick="closeWorkbenchDetailModal()">Cerrar</button>
+      <button type="button" class="secondary compact-button review-summary-close modal-close-btn" onclick="closeWorkbenchDetailModal()" title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
     </div>
   </div>
 
@@ -296,7 +296,7 @@
       <span>Productos</span>
       <strong>{{ item.line_count or 0 }}</strong>
     </div>
-    <button type="button" class="secondary compact-button review-summary-close" onclick="closeWorkbenchDetailModal()">Cerrar</button>
+    <button type="button" class="secondary compact-button review-summary-close modal-close-btn" onclick="closeWorkbenchDetailModal()" title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
   </div>
 
   <div class="review-grid review-grid-v3">

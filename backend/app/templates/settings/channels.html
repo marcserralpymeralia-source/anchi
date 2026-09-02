@@ -1,6 +1,7 @@
+{% from "components/icons.html" import icon_close %}
 {% extends "base.html" %}
 {% set title = "Canales de entrada" %}
-{% block head_extra %}<script src="{{ asset_url('js/settings-email-backfill.js') }}" defer></script>{% endblock %}
+{% block head_extra %}<script src="{{ asset_url('js/settings-email-backfill.js') }}" defer></script><script src="{{ asset_url('js/settings-email-autoconfig.js') }}" defer></script>{% endblock %}
 {% block content %}
 <section class="channels-shell">
   <header class="channels-header page-section-header">
@@ -80,7 +81,7 @@
         <h3>{{ channel.name }}</h3>
         <p class="muted">{{ item.details }}</p>
       </div>
-      <button type="button" class="secondary compact-button" data-close-settings>Cerrar</button>
+      <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
     </div>
 
     <div class="drawer-body stack">
@@ -109,63 +110,76 @@
       </section>
 
       {% if channel.key == "email" %}
-        <section class="drawer-card" id="email-account">
+        <section class="drawer-card" id="email-account" data-email-autoconfig-root>
           <div class="section-title-row">
             <div>
               <h4>Cuenta de correo</h4>
-              <p class="muted">Conecta una cuenta de correo y comprueba que Anchi puede entrar en la bandeja.</p>
-            </div>
-            <div class="actions">
-              {% if can_test_email %}
-                <form class="js-loading-form" method="post" action="/settings/email/imap/test">
-                  <button class="secondary compact-button" data-loading-text="Probando...">Probar conexión</button>
-                </form>
-              {% endif %}
+              <p class="muted">Introduce tu correo y contraseña para detectar y comprobar la conexión.</p>
             </div>
           </div>
-          <form class="stack js-loading-form" method="post" action="/settings/email/receive">
+
+          <form class="stack" method="post" action="/settings/email/autoconfig" data-email-autoconfig-form>
             {% if not can_edit_email %}<fieldset disabled>{% endif %}
             <div class="form-grid">
-              <label>Proveedor de correo
-                <select name="provider">
-                  <option value="imap" {% if email.provider == "imap" %}selected{% endif %}>Otro proveedor</option>
-                  <option value="gmail" {% if email.provider == "gmail" %}selected{% endif %}>Gmail</option>
-                  <option value="microsoft365" {% if email.provider == "microsoft365" %}selected{% endif %}>Microsoft 365</option>
-                </select>
+              <label>Correo
+                <input name="email" type="email" value="{{ email.connected_email or email.imap_username or '' }}" placeholder="cliente@empresa.com" autocomplete="username" required>
               </label>
-              <label>Dirección de correo<input name="connected_email" value="{{ email.connected_email or email.imap_username or '' }}" placeholder="cliente@empresa.com"></label>
-              <label>Nombre de usuario<input name="imap_username" value="{{ email.imap_username or '' }}" placeholder="cliente@empresa.com"></label>
-              <label>Contraseña<input name="imap_password_encrypted" type="password" placeholder="{{ 'Contraseña configurada' if email.imap_password_encrypted else 'Añadir contraseña' }}"></label>
-              <label>Servidor IMAP<input name="imap_host" value="{{ email.imap_host or '' }}" placeholder="imap.ejemplo.com"></label>
-              <label>Puerto<input name="imap_port" type="number" value="{{ email.imap_port }}"></label>
-              <label>Seguridad
-                <select name="imap_security">
-                  {% for value, label in [("ssl_tls", "SSL/TLS"), ("starttls", "STARTTLS"), ("none", "Sin cifrado")] %}
-                    <option value="{{ value }}" {% if email.imap_security == value %}selected{% endif %}>{{ label }}</option>
-                  {% endfor %}
-                </select>
+              <label>Contraseña
+                <input name="password" type="password" placeholder="Contraseña de la cuenta" autocomplete="current-password" required>
               </label>
-              <label>Carpeta de entrada<input name="inbox_folder" value="{{ email.inbox_folder or 'INBOX' }}"></label>
             </div>
-            <details class="drawer-subsection">
-              <summary>Opciones avanzadas (OAuth / Buzón)</summary>
-              <div class="form-grid">
-                <label>Identificador cliente<input name="client_id" value="{{ email.client_id or '' }}" placeholder="Opcional"></label>
-                <label>Secreto cliente<input name="client_secret_encrypted" type="password" placeholder="{{ 'Configurado' if email.client_secret_encrypted else 'Opcional' }}"></label>
-                <label>Tenant<input name="tenant_id" value="{{ email.tenant_id or '' }}" placeholder="Opcional"></label>
-                <label>Redirección<input name="redirect_uri" value="{{ email.redirect_uri or '' }}" placeholder="Opcional"></label>
-                <label>Ámbitos OAuth<textarea name="oauth_scopes" rows="2" placeholder="Opcional">{{ email.oauth_scopes or '' }}</textarea></label>
-                <label>Buzón<input name="mailbox" value="{{ email.mailbox or '' }}" placeholder="Opcional"></label>
-                <label>Token acceso<input name="access_token_encrypted" type="password" placeholder="{{ 'Configurado' if email.access_token_encrypted else 'Opcional' }}"></label>
-                <label>Token refresco<input name="refresh_token_encrypted" type="password" placeholder="{{ 'Configurado' if email.refresh_token_encrypted else 'Opcional' }}"></label>
-              </div>
-            </details>
             <div class="drawer-actions">
-              <button data-loading-text="Guardando...">Guardar cuenta</button>
-              <button class="secondary js-loading-form" formaction="/settings/email/disconnect" formmethod="post" data-loading-text="Desconectando..." data-confirm="Desconectar esta cuenta de correo?">Desconectar cuenta</button>
+              <button type="submit" data-loading-text="Detectando...">Detectar configuración</button>
+              <button type="button" class="secondary" data-email-manual-toggle aria-expanded="false">Configuración manual</button>
             </div>
             {% if not can_edit_email %}</fieldset>{% endif %}
           </form>
+
+          <div class="drawer-subsection settings-notice" data-email-autoconfig-status role="status" aria-live="polite" hidden>
+            <strong data-email-autoconfig-status-title></strong>
+            <p class="muted" data-email-autoconfig-status-message></p>
+            <p class="muted" data-email-autoconfig-details></p>
+          </div>
+
+          <div data-email-manual-panel hidden>
+            <div class="section-title-row">
+              <div>
+                <h4>Configuración manual</h4>
+                <p class="muted">Puedes revisar o completar los datos detectados antes de guardarlos.</p>
+              </div>
+            </div>
+            <form class="stack js-loading-form" method="post" action="/settings/email/receive" data-email-manual-form>
+              {% if not can_edit_email %}<fieldset disabled>{% endif %}
+              <div class="form-grid">
+                <label>Proveedor de correo
+                  <select name="provider" data-email-manual-provider>
+                    <option value="imap" {% if email.provider == "imap" %}selected{% endif %}>Otro proveedor</option>
+                    <option value="gmail" {% if email.provider == "gmail" %}selected{% endif %}>Gmail</option>
+                    <option value="microsoft365" {% if email.provider == "microsoft365" %}selected{% endif %}>Microsoft 365</option>
+                  </select>
+                </label>
+                <label>Dirección de correo<input name="connected_email" value="{{ email.connected_email or email.imap_username or '' }}" data-email-manual-email autocomplete="username"></label>
+                <label>Nombre de usuario<input name="imap_username" value="{{ email.imap_username or '' }}" data-email-manual-username autocomplete="username"></label>
+                <label>Contraseña<input name="imap_password_encrypted" type="password" data-email-manual-password placeholder="{{ 'Contraseña configurada' if email.imap_password_encrypted else 'Añadir contraseña' }}" autocomplete="new-password"></label>
+                <label>Servidor IMAP<input name="imap_host" value="{{ email.imap_host or '' }}" data-email-manual-host placeholder="imap.ejemplo.com"></label>
+                <label>Puerto<input name="imap_port" type="number" value="{{ email.imap_port }}" data-email-manual-port></label>
+                <label>Seguridad
+                  <select name="imap_security" data-email-manual-security>
+                    {% for value, label in [("ssl_tls", "SSL/TLS"), ("starttls", "STARTTLS"), ("none", "Sin cifrado")] %}
+                      <option value="{{ value }}" {% if email.imap_security == value %}selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+                <label>Carpeta de entrada<input name="inbox_folder" value="{{ email.inbox_folder or 'INBOX' }}" data-email-manual-folder></label>
+              </div>
+              <input type="hidden" name="imap_use_ssl" value="{{ 'on' if email.imap_security == 'ssl_tls' else 'off' }}" data-email-manual-use-ssl>
+              <div class="drawer-actions">
+                <button type="submit" data-loading-text="Guardando...">Guardar cuenta</button>
+                <button class="secondary" type="submit" formaction="/settings/email/disconnect" formmethod="post" data-loading-text="Desconectando..." data-confirm="¿Desconectar esta cuenta de correo?">Desconectar cuenta</button>
+              </div>
+              {% if not can_edit_email %}</fieldset>{% endif %}
+            </form>
+          </div>
         </section>
 
         <section class="drawer-card" id="email-receive">
@@ -214,15 +228,14 @@
               </div>
               <p class="muted">Por defecto solo se importarán correos nuevos desde ahora. La primera sincronización se confirma antes de importar y nunca trae histórico ilimitado.</p>
             </details>
-            <div class="drawer-actions">
+            <div class="drawer-actions email-sync-actions">
               <button data-loading-text="Guardando...">Guardar configuración</button>
               <button class="secondary js-loading-form" formaction="/settings/email/initial-sync/preview" formmethod="post" data-loading-text="Preparando..." data-confirm="Previsualizar la sincronización inicial con el historial elegido?">Previsualizar importación inicial</button>
               <button class="secondary js-loading-form" formaction="/settings/email/read-unprocessed" formmethod="post" data-loading-text="Buscando...">Buscar correos nuevos ahora</button>
             </div>
             {% if not can_edit_email %}</fieldset>{% endif %}
           </form>
-          <div class="drawer-actions" style="margin-top: 10px;">
-            <div data-email-backfill-root>
+          <div data-email-backfill-root class="email-backfill-container">
               <form class="compact-backfill-form" method="post" action="/settings/email/backfill" data-email-backfill-form>
                 <label>Desde<input type="date" name="from_date" value="{{ email.read_from_date or '' }}"></label>
                 <label>Hasta<input type="date" name="to_date" value=""></label>

@@ -1,3 +1,4 @@
+{% from "components/icons.html" import icon_close %}
 <dialog id="workbench-detail-modal" class="order-review-modal" data-dirty="false">
   <div id="workbench-detail-modal-body">
     <div class="review-modal-header">
@@ -5,7 +6,7 @@
         <h2>Detalle operativo</h2>
         <p class="muted">Selecciona una tarjeta para cargar el detalle bajo demanda.</p>
       </div>
-      <button type="button" class="secondary" onclick="closeWorkbenchDetailModal()">Cerrar</button>
+      <button type="button" class="secondary compact-button modal-close-btn" onclick="closeWorkbenchDetailModal()" title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
     </div>
   </div>
 </dialog>

@@ -57,6 +57,11 @@ def _set_cached_branding(company_id: int, value: dict) -> None:
     _BRANDING_CACHE[company_id] = (time.time() + _branding_cache_ttl(), value)
 
 
+def invalidate_branding_cache(company_id: int) -> None:
+    """Discard the cached branding after a tenant changes its identity."""
+    _BRANDING_CACHE.pop(company_id, None)
+
+
 async def branding_middleware(request: Request, call_next: Callable[[Request], Awaitable]):
     request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
     correlation_id = request.headers.get("x-correlation-id") or request_id

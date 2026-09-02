@@ -530,7 +530,7 @@
 
 <dialog id="customer-editor" class="edit-dialog">
   <form id="customer-editor-form" class="stack js-loading-form" method="post" action="/customers">
-    <div class="dialog-header"><h2 id="customer-editor-title">Crear cliente</h2><button type="button" class="secondary" onclick="this.closest('dialog').close()">Cerrar</button></div>
+    <div class="dialog-header"><h2 id="customer-editor-title">Crear cliente</h2><button type="button" class="secondary compact-button modal-close-btn" onclick="this.closest('dialog').close()" title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button></div>
     <input type="hidden" name="id" value="0">
     <div class="form-grid">
       <label>Código cliente<input name="code" required></label>
@@ -561,7 +561,7 @@
 {% for row in customers %}
 <dialog id="customer-delete-{{ row.id }}" class="edit-dialog">
   <form class="stack js-loading-form" method="post" action="/customers/{{ row.id }}/delete" data-confirm="¿Seguro que quieres eliminar este cliente? No aparecerá en los listados activos, pero sus pedidos históricos se conservarán.">
-    <div class="dialog-header"><h2>Eliminar cliente</h2><button type="button" class="secondary" onclick="this.closest('dialog').close()">Cerrar</button></div>
+    <div class="dialog-header"><h2>Eliminar cliente</h2><button type="button" class="secondary compact-button modal-close-btn" onclick="this.closest('dialog').close()" title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button></div>
     <p>Vas a eliminar <strong>{{ row.fiscal_name }}</strong>.</p>
     <p class="muted">Se ocultará de los listados activos, pero los pedidos históricos se conservarán.</p>
     <div class="actions">
