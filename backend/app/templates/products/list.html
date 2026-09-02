@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_edit, icon_filter, icon_plus, icon_sliders %}
+{% from "components/icons.html" import icon_close, icon_edit, icon_filter, icon_plus, icon_search, icon_sliders, icon_upload %}
 {% set title = "Productos" %}
 {% block head_extra %}<link rel="stylesheet" href="{{ asset_url('database-compact.css') }}"><script src="{{ asset_url('js/database-tables.js') }}" defer></script>{% endblock %}
 {% block content %}
@@ -41,64 +41,185 @@
   <span>La importación de productos se procesará en segundo plano.</span>
 </section>
 {% endif %}
+{% set active_count = 0 %}
+{% if family %}{% set active_count = active_count + 1 %}{% endif %}
+
 <section class="database-compact-page">
+  <div class="data-dock-wrapper">
+    <div class="data-dock">
+      {# Main interactive filter form #}
+      <form class="dock-main-form" method="get" action="/products" id="products-main-filter-form">
+        <input type="hidden" name="page" value="1">
+        <input type="hidden" name="sort" value="{{ sort or 'reference_asc' }}">
 
-  <div class="database-compact-toolbar">
-    <form class="database-compact-filter-form" method="get" action="/products" id="products-main-filter-form">
-      <input type="hidden" name="page" value="1">
-      <input type="hidden" name="sort" value="{{ sort or 'reference_asc' }}">
-      <input class="database-compact-search" name="q" placeholder="Buscar por código, referencia o nombre..." value="{{ q }}">
-      <select class="database-compact-select" name="obsolete" aria-label="Estado" onchange="this.form.submit()">
-        <option value="">Estado</option>
-        <option value="no" {% if obsolete == "no" %}selected{% endif %}>Activos</option>
-        <option value="yes" {% if obsolete == "yes" %}selected{% endif %}>Obsoletos</option>
-      </select>
-      <button class="secondary compact-button" data-loading-text="Filtrando...">Filtrar</button>
-    </form>
-    <details class="database-inline-panel">
-      <summary class="button secondary compact-button">Importar</summary>
-      <div class="database-inline-popover database-import-popover">
-        <div class="database-inline-head">
-          <strong>Importar productos</strong>
-          <a href="/imports/history">Histórico</a>
+        {# Search Omnibox #}
+        <div class="dock-search-box">
+          <span class="dock-search-icon" aria-hidden="true">{{ icon_search(14) }}</span>
+          <input
+            type="search"
+            class="dock-search-input"
+            name="q"
+            placeholder="Buscar por código, referencia o nombre..."
+            value="{{ q }}"
+            aria-label="Buscar productos"
+          >
+          {% if q %}
+            <button
+              type="button"
+              class="dock-search-clear"
+              title="Borrar búsqueda"
+              onclick="document.querySelector('.dock-search-input').value='';document.getElementById('products-main-filter-form').submit();"
+            >
+              {{ icon_close(12) }}
+            </button>
+          {% endif %}
         </div>
-        <form class="stack js-loading-form js-import-paste-form" method="post" action="/imports/preview" enctype="multipart/form-data">
-          <input type="hidden" name="entity_type" value="products">
-          <label>Archivo<input type="file" name="file" accept=".csv,.xlsx,.xls,.txt" data-import-file></label>
-          <label>Tabla pegada<textarea name="pasted_text" rows="3" placeholder="Pega una tabla desde Excel o texto delimitado"></textarea></label>
-          <label>Codificación
-            <select name="encoding"><option value="utf-8">UTF-8</option><option value="latin-1">ISO-8859-1</option><option value="cp1252">Windows-1252</option></select>
-          </label>
-          <button type="submit" data-loading-text="Cargando columnas...">Mapear columnas</button>
-        </form>
-      </div>
-    </details>
-    <details class="database-inline-panel">
-      <summary class="button secondary compact-button">{{ icon_filter(14) }}<span>Más filtros</span></summary>
-      <div class="database-inline-popover database-filters-popover">
-        <form class="stack" method="get" action="/products">
-          <input type="hidden" name="page" value="1">
-          <input type="hidden" name="q" value="{{ q }}">
-          <input type="hidden" name="obsolete" value="{{ obsolete }}">
-          <input type="hidden" name="sort" value="{{ sort or 'reference_asc' }}">
-          <label>Familia
-            <select name="family">
-              <option value="">Todas</option>
-              {% for item in families %}<option value="{{ item }}" {% if family == item %}selected{% endif %}>{{ item }}</option>{% endfor %}
-            </select>
-          </label>
-          <label>Tamaño página
-            <select name="page_size">
-              {% for size in pagination.allowed_page_sizes %}<option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>{% endfor %}
-            </select>
-          </label>
-          <button class="secondary compact-button" data-loading-text="Filtrando...">Aplicar</button>
-        </form>
-      </div>
-    </details>
 
-    <span class="database-compact-count">{{ pagination.total_items }} productos</span>
-    <button type="button" class="compact-button" onclick="document.getElementById('create-product').showModal()">{{ icon_plus(14) }} <span>Nuevo producto</span></button>
+        {# Quick Status Selector #}
+        <div class="dock-select-box">
+          <select name="obsolete" class="dock-select" aria-label="Filtrar por estado" onchange="this.form.submit()">
+            <option value="">Todos los estados</option>
+            <option value="no" {% if obsolete == "no" %}selected{% endif %}>Activos</option>
+            <option value="yes" {% if obsolete == "yes" %}selected{% endif %}>Obsoletos</option>
+          </select>
+        </div>
+      </form>
+
+      {# Advanced Filters Popover Trigger #}
+      <details class="dock-popover-panel" id="dock-filters-popover">
+        <summary class="dock-filter-trigger {% if active_count > 0 %}has-active-filters{% endif %}" title="Más filtros">
+          {{ icon_filter(14) }}
+          <span>Más filtros</span>
+          {% if active_count > 0 %}
+            <span class="dock-badge-count">{{ active_count }}</span>
+          {% endif %}
+        </summary>
+        <div class="dock-popover-flyout">
+          <form class="dock-flyout-form" method="get" action="/products">
+            <input type="hidden" name="page" value="1">
+            <input type="hidden" name="q" value="{{ q }}">
+            <input type="hidden" name="obsolete" value="{{ obsolete }}">
+            <input type="hidden" name="sort" value="{{ sort or 'reference_asc' }}">
+
+            <div class="dock-flyout-header">
+              <strong>Filtros de productos</strong>
+              {% if active_count > 0 %}
+                <a class="dock-flyout-reset" href="/products">Restablecer</a>
+              {% endif %}
+            </div>
+
+            <div class="dock-flyout-grid">
+              <label class="dock-flyout-field dock-col-span-2">
+                <span class="dock-flyout-label">Familia</span>
+                <select name="family">
+                  <option value="">Todas las familias</option>
+                  {% for item in families %}
+                    <option value="{{ item }}" {% if family == item %}selected{% endif %}>{{ item }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+
+              <label class="dock-flyout-field dock-col-span-2">
+                <span class="dock-flyout-label">Resultados por página</span>
+                <select name="page_size">
+                  {% for size in pagination.allowed_page_sizes %}
+                    <option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }} productos por página</option>
+                  {% endfor %}
+                </select>
+              </label>
+            </div>
+
+            <div class="dock-flyout-footer">
+              <a class="button secondary compact-button" href="/products">Limpiar</a>
+              <button type="submit" class="compact-button dock-btn-apply" data-loading-text="Aplicando...">Aplicar filtros</button>
+            </div>
+          </form>
+        </div>
+      </details>
+
+      {# Import Popover Trigger #}
+      <details class="dock-popover-panel">
+        <summary class="dock-filter-trigger" title="Importar productos desde archivo o texto">
+          {{ icon_upload(14) }}
+          <span>Importar</span>
+        </summary>
+        <div class="dock-popover-flyout" style="width:min(420px, calc(100vw - 32px));">
+          <div class="dock-flyout-header">
+            <strong>Importar productos</strong>
+            <a class="dock-flyout-reset" href="/imports/history">Histórico</a>
+          </div>
+          <form class="stack js-loading-form js-import-paste-form" method="post" action="/imports/preview" enctype="multipart/form-data">
+            <input type="hidden" name="entity_type" value="products">
+            <div class="dock-flyout-grid">
+              <label class="dock-flyout-field dock-col-span-2">
+                <span class="dock-flyout-label">Archivo (.csv, .xlsx, .txt)</span>
+                <input type="file" name="file" accept=".csv,.xlsx,.xls,.txt" data-import-file>
+              </label>
+              <label class="dock-flyout-field dock-col-span-2">
+                <span class="dock-flyout-label">O pegar tabla (Excel/delimitado)</span>
+                <textarea name="pasted_text" rows="3" placeholder="Pega una tabla desde Excel..." style="font-size:12px;padding:6px;border:1px solid var(--line);border-radius:6px;box-sizing:border-box;resize:vertical;"></textarea>
+              </label>
+              <label class="dock-flyout-field dock-col-span-2">
+                <span class="dock-flyout-label">Codificación</span>
+                <select name="encoding">
+                  <option value="utf-8">UTF-8</option>
+                  <option value="latin-1">ISO-8859-1</option>
+                  <option value="cp1252">Windows-1252</option>
+                </select>
+              </label>
+            </div>
+            <div class="dock-flyout-footer">
+              <button type="submit" class="compact-button dock-btn-apply" data-loading-text="Cargando columnas...">Mapear columnas</button>
+            </div>
+          </form>
+        </div>
+      </details>
+
+      <div class="dock-spacer"></div>
+
+      {# Right section: Item Count & Primary Action #}
+      <div class="dock-actions-group">
+        <span class="dock-count-badge">
+          <strong>{{ pagination.total_items }}</strong> productos
+        </span>
+
+        <button type="button" class="dock-primary-btn" onclick="document.getElementById('create-product').showModal()" title="Dar de alta un nuevo producto">
+          {{ icon_plus(14) }}
+          <span>Nuevo producto</span>
+        </button>
+      </div>
+    </div>
+
+    {# Active Filter Pills Strip #}
+    {% if active_count > 0 or q or obsolete %}
+      <div class="dock-active-strip">
+        <span class="dock-strip-label">Filtros aplicados:</span>
+        <div class="dock-chips-list">
+          {% if q %}
+            <span class="dock-chip">
+              <span class="dock-chip-key">Búsqueda:</span>
+              <span class="dock-chip-val">"{{ q }}"</span>
+              <a href="#" onclick="document.querySelector('.dock-search-input').value='';document.getElementById('products-main-filter-form').submit();return false;" class="dock-chip-remove" title="Quitar búsqueda">{{ icon_close(12) }}</a>
+            </span>
+          {% endif %}
+          {% if obsolete %}
+            <span class="dock-chip">
+              <span class="dock-chip-key">Estado:</span>
+              <span class="dock-chip-val">{{ 'Obsoletos' if obsolete == 'yes' else 'Activos' }}</span>
+              <a href="#" onclick="document.querySelector('.dock-select').value='';document.getElementById('products-main-filter-form').submit();return false;" class="dock-chip-remove" title="Quitar estado">{{ icon_close(12) }}</a>
+            </span>
+          {% endif %}
+          {% if family %}
+            <span class="dock-chip">
+              <span class="dock-chip-key">Familia:</span>
+              <span class="dock-chip-val">{{ family }}</span>
+              <a href="/products" class="dock-chip-remove" title="Quitar">{{ icon_close(12) }}</a>
+            </span>
+          {% endif %}
+        </div>
+        <a href="/products" class="dock-clear-all-btn">Restablecer</a>
+      </div>
+    {% endif %}
   </div>
 
 <div class="database-table-wrap">

@@ -918,3 +918,486 @@ th.table-settings-th {
   font-weight: normal !important;
   letter-spacing: normal !important;
 }
+
+/* ==========================================================================
+   DATA CONTROL DOCK ARCHITECTURE (Modern Unified Toolbar)
+   ========================================================================== */
+
+.data-dock-wrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.data-dock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 5px 8px;
+  background: #ffffff;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 9px;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  box-sizing: border-box;
+}
+
+/* Segmented View Switcher */
+.dock-segment-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: #f1f5f4;
+  border-radius: 7px;
+  flex-shrink: 0;
+}
+
+.dock-segment-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 0 9px;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #64748b;
+  text-decoration: none;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.dock-segment-btn:hover {
+  color: #0f172a;
+  background: rgba(255, 255, 255, 0.6);
+}
+
+.dock-segment-btn.is-active {
+  background: #ffffff;
+  color: var(--accent, #0f766e);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  font-weight: 700;
+}
+
+/* Vertical divider inside dock */
+.dock-divider {
+  width: 1px;
+  height: 20px;
+  background: var(--line, #e2e8f0);
+  margin: 0 2px;
+  flex-shrink: 0;
+}
+
+/* Main Form (Search + Quick Select) */
+.dock-main-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+/* Search Box */
+.dock-search-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 260px;
+  max-width: 320px;
+  min-width: 160px;
+  flex-shrink: 0;
+}
+
+.dock-search-icon {
+  position: absolute;
+  left: 9px;
+  color: #94a3b8;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+}
+
+.dock-search-input {
+  width: 100%;
+  height: 32px;
+  padding: 0 28px 0 30px;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 6px;
+  background: #f8faf9;
+  font-size: 13px;
+  color: #0f172a;
+  transition: all 0.15s ease;
+  box-sizing: border-box;
+}
+
+.dock-search-input:focus {
+  outline: none;
+  border-color: var(--accent, #0f766e);
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.1);
+}
+
+.dock-search-clear {
+  position: absolute;
+  right: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  background: #cbd5e1;
+  color: #ffffff;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.dock-search-clear:hover {
+  background: #94a3b8;
+}
+
+/* Quick Select Dropdown */
+.dock-select-box {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.dock-select {
+  height: 32px;
+  padding: 0 28px 0 10px;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 6px;
+  background: #f8faf9;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #334155;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-sizing: border-box;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+}
+
+.dock-select:hover {
+  border-color: #cbd5e1;
+  background-color: #ffffff;
+}
+
+.dock-select:focus {
+  outline: none;
+  border-color: var(--accent, #0f766e);
+  background-color: #ffffff;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.1);
+}
+
+/* Advanced Filters Popover Trigger */
+.dock-popover-panel {
+  position: relative;
+  display: inline-flex;
+}
+
+.dock-filter-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 6px;
+  background: #f8faf9;
+  color: #475569;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  list-style: none;
+  white-space: nowrap;
+  user-select: none;
+}
+
+.dock-filter-trigger::-webkit-details-marker {
+  display: none;
+}
+
+.dock-filter-trigger:hover {
+  border-color: #cbd5e1;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.dock-filter-trigger.has-active-filters {
+  background: #f0fdf9;
+  border-color: #99f6e4;
+  color: var(--accent, #0f766e);
+}
+
+.dock-badge-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 17px;
+  height: 17px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--accent, #0f766e);
+  color: #ffffff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+/* Popover Flyout Menu */
+.dock-popover-flyout {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 120;
+  width: min(460px, calc(100vw - 32px));
+  background: #ffffff;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 10px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.14), 0 2px 4px rgba(15, 23, 42, 0.04);
+  padding: 16px;
+  box-sizing: border-box;
+}
+
+.dock-flyout-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line, #e2e8f0);
+}
+
+.dock-flyout-header strong {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.dock-flyout-reset {
+  font-size: 12px;
+  color: var(--accent, #0f766e);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.dock-flyout-reset:hover {
+  text-decoration: underline;
+}
+
+.dock-flyout-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.dock-col-span-2 {
+  grid-column: span 2;
+}
+
+.dock-flyout-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dock-flyout-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #64748b;
+}
+
+.dock-flyout-field input,
+.dock-flyout-field select {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line, #e2e8f0);
+  border-radius: 6px;
+  background: #ffffff;
+  font-size: 12.5px;
+  color: #0f172a;
+  box-sizing: border-box;
+}
+
+.dock-flyout-field input:focus,
+.dock-flyout-field select:focus {
+  outline: none;
+  border-color: var(--accent, #0f766e);
+  box-shadow: 0 0 0 2px rgba(15, 118, 110, 0.1);
+}
+
+.dock-flyout-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 14px;
+  margin-top: 12px;
+  border-top: 1px solid var(--line, #e2e8f0);
+}
+
+.dock-btn-apply {
+  background: var(--accent, #0f766e) !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+  border: none !important;
+}
+
+.dock-btn-apply:hover {
+  background: var(--accent-dark, #0d5f58) !important;
+}
+
+/* Spacer */
+.dock-spacer {
+  flex: 1 1 auto;
+}
+
+/* Actions Group (Right Wing) */
+.dock-actions-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+
+.dock-count-badge {
+  font-size: 12.5px;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.dock-count-badge strong {
+  color: #0f172a;
+  font-weight: 700;
+}
+
+.dock-action-form {
+  margin: 0;
+  display: inline-flex;
+}
+
+.dock-primary-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 13px;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent, #0f766e);
+  color: #ffffff;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+  white-space: nowrap;
+}
+
+.dock-primary-btn:hover {
+  background: var(--accent-dark, #0d5f58);
+}
+
+.dock-primary-btn:active {
+  transform: translateY(1px);
+}
+
+/* ==========================================================================
+   SMART ACTIVE FILTER PILLS STRIP
+   ========================================================================== */
+
+.dock-active-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 2px 4px;
+}
+
+.dock-strip-label {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #94a3b8;
+  margin-right: 2px;
+}
+
+.dock-chips-list {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.dock-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #eff6ff;
+  font-size: 11.5px;
+  color: #1e40af;
+}
+
+.dock-chip-key {
+  color: #60a5fa;
+  font-weight: 500;
+}
+
+.dock-chip-val {
+  font-weight: 600;
+}
+
+.dock-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-left: 2px;
+  border-radius: 50%;
+  color: #3b82f6;
+  text-decoration: none;
+  transition: all 0.12s ease;
+}
+
+.dock-chip-remove:hover {
+  background: #dbeafe;
+  color: #1e3a8a;
+}
+
+.dock-clear-all-btn {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #64748b;
+  text-decoration: none;
+  margin-left: 4px;
+  transition: color 0.12s ease;
+}
+
+.dock-clear-all-btn:hover {
+  color: #ef4444;
+  text-decoration: underline;
+}
+
+@media (max-width: 900px) {
+  .data-dock {
+    flex-wrap: wrap;
+  }
+  .dock-main-form {
+    order: 3;
+    width: 100%;
+  }
+  .dock-search-box {
+    max-width: none;
+  }
+}

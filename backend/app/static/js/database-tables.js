@@ -588,7 +588,7 @@
       bindContextMenu(root, ".webmail-item");
     });
     document.addEventListener("pointerdown", (event) => {
-      document.querySelectorAll(".column-toggle-panel[open]").forEach((panel) => {
+      document.querySelectorAll(".column-toggle-panel[open], .dock-popover-panel[open]").forEach((panel) => {
         if (!panel.contains(event.target)) {
           panel.removeAttribute("open");
         }

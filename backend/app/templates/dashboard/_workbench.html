@@ -1,53 +1,167 @@
-{% from "components/icons.html" import icon_filter, icon_plus %}
+{% from "components/icons.html" import icon_close, icon_dashboard, icon_filter, icon_list, icon_plus, icon_search %}
 {% set tabs = workbench["tab_counts"] %}
 <section class="workbench-shell page-section">
   <section class="workbench-queue-panel">
-    {% include "components/view_toggle.html" %}
-    <div class="workbench-filters-panel">
-      <div class="workbench-filter-controls">
-      <div class="workbench-tabs">
-        {% for key, label, count in [
-          ("all","Todos", tabs.all),
-          ("not_processed","Pendientes", tabs.not_processed),
-          ("attention","Revisión", tabs.attention),
-          ("processed","Listos", tabs.processed),
-          ("errors","Errores", tabs.errors),
-          ("no_order","Sin pedido", tabs.no_order)
-        ] %}
-          <a class="workbench-tab {% if filters.mode == key %}active{% endif %}" href="{{ dashboard_action }}?{% if dashboard_action == '/orders' %}view=cards&{% endif %}mode={{ key }}">
-            <span>{{ label }}</span><strong>{{ count }}</strong>
+    <div class="data-dock-wrapper">
+      <div class="data-dock">
+        {# Left section: View Switcher #}
+        <nav class="dock-segment-group" aria-label="Cambiar vista">
+          <a class="dock-segment-btn is-active" href="{{ view_cards_url or (dashboard_action + '?view=cards') }}" aria-current="page" title="Vista de tarjetas">
+            {{ icon_dashboard(14) }}
+            <span>Tarjetas</span>
           </a>
-        {% endfor %}
-      </div>
-      <details class="workbench-advanced-filters">
-        <summary>{{ icon_filter(14) }}<span>Más filtros</span></summary>
-        <form method="get" action="{{ dashboard_action }}" class="workbench-filters-form">
+          <a class="dock-segment-btn" href="{{ view_list_url or '/orders?view=list' }}" title="Vista de listado">
+            {{ icon_list(14) }}
+            <span>Lista</span>
+          </a>
+        </nav>
+        <div class="dock-divider" aria-hidden="true"></div>
+
+        {# Main interactive filter form #}
+        <form class="dock-main-form" method="get" action="{{ dashboard_action }}" id="workbench-main-filter-form">
           {% if dashboard_action == "/orders" %}<input type="hidden" name="view" value="cards">{% endif %}
           <input type="hidden" name="page" value="1">
-          <div class="filter-grid workbench-quick-filters">
-            <label>Buscar<input name="customer_or_sender" value="{{ filters.customer_or_sender or filters.search }}" placeholder="Cliente / asunto"></label>
-            <label>Fecha
-              <select name="date_range">
-                <option value="" {% if not filters.date_range %}selected{% endif %}>Todos</option>
-                <option value="today" {% if filters.date_range == "today" %}selected{% endif %}>Hoy</option>
-                <option value="yesterday" {% if filters.date_range == "yesterday" %}selected{% endif %}>Ayer</option>
-                <option value="7d" {% if filters.date_range == "7d" %}selected{% endif %}>7 días</option>
-                <option value="custom" {% if filters.date_range == "custom" %}selected{% endif %}>Personalizado</option>
-              </select>
-            </label>
-            <label>Estado<input name="agent_status" value="{{ filters.agent_status }}" placeholder="pendiente / error"></label>
-            <label>Cliente<input name="customer_id" value="{{ filters.customer_id }}" placeholder="ID"></label>
-            <label>Confianza min.<input type="number" name="score_min" min="0" max="100" step="0.01" value="{{ filters.score_min }}"></label>
-            <label>Confianza max.<input type="number" name="score_max" min="0" max="100" step="0.01" value="{{ filters.score_max }}"></label>
-            <label>Canal<input name="origin" value="{{ filters.origin }}" placeholder="Email / WhatsApp"></label>
-            <label>Tipo<input name="email_type" value="{{ filters.email_type }}" placeholder="pedido / duda"></label>
-            <label>Tamaño<select name="page_size">{% for size in pagination.allowed_page_sizes %}<option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>{% endfor %}</select></label>
-            <button class="secondary compact-button" data-loading-text="Filtrando...">Filtrar</button>
-            <a class="button secondary compact-button" href="{{ view_cards_url }}">Limpiar</a>
+          <input type="hidden" name="mode" value="{{ filters.mode or 'all' }}">
+
+          {# Search Omnibox #}
+          <div class="dock-search-box">
+            <span class="dock-search-icon" aria-hidden="true">{{ icon_search(14) }}</span>
+            <input
+              type="search"
+              class="dock-search-input"
+              name="customer_or_sender"
+              value="{{ filters.customer_or_sender or filters.search or '' }}"
+              placeholder="Buscar cliente, remitente, asunto..."
+              aria-label="Buscar pedidos"
+            >
+            {% if filters.customer_or_sender or filters.search %}
+              <button
+                type="button"
+                class="dock-search-clear"
+                title="Borrar búsqueda"
+                onclick="document.querySelector('.dock-search-input').value='';document.getElementById('workbench-main-filter-form').submit();"
+              >
+                {{ icon_close(12) }}
+              </button>
+            {% endif %}
           </div>
-          <input type="hidden" name="mode" value="{{ filters.mode }}">
         </form>
-      </details>
+
+        {# Advanced Filters Popover Trigger #}
+        <details class="dock-popover-panel" id="dock-filters-popover">
+          <summary class="dock-filter-trigger {% if filters.date_range or filters.customer_id or filters.score_min or filters.score_max or filters.origin or filters.email_type %}has-active-filters{% endif %}" title="Más filtros">
+            {{ icon_filter(14) }}
+            <span>Más filtros</span>
+          </summary>
+          <div class="dock-popover-flyout">
+            <form method="get" action="{{ dashboard_action }}" class="dock-flyout-form">
+              {% if dashboard_action == "/orders" %}<input type="hidden" name="view" value="cards">{% endif %}
+              <input type="hidden" name="page" value="1">
+              <input type="hidden" name="mode" value="{{ filters.mode or 'all' }}">
+              <input type="hidden" name="customer_or_sender" value="{{ filters.customer_or_sender or filters.search or '' }}">
+
+              <div class="dock-flyout-header">
+                <strong>Filtros avanzados</strong>
+                <a class="dock-flyout-reset" href="{{ view_cards_url or (dashboard_action + '?view=cards') }}">Restablecer</a>
+              </div>
+
+              <div class="dock-flyout-grid">
+                <label class="dock-flyout-field">
+                  <span class="dock-flyout-label">Rango de fecha</span>
+                  <select name="date_range">
+                    <option value="" {% if not filters.date_range %}selected{% endif %}>Todos</option>
+                    <option value="today" {% if filters.date_range == "today" %}selected{% endif %}>Hoy</option>
+                    <option value="yesterday" {% if filters.date_range == "yesterday" %}selected{% endif %}>Ayer</option>
+                    <option value="7d" {% if filters.date_range == "7d" %}selected{% endif %}>Últimos 7 días</option>
+                    <option value="custom" {% if filters.date_range == "custom" %}selected{% endif %}>Personalizado</option>
+                  </select>
+                </label>
+
+                <label class="dock-flyout-field">
+                  <span class="dock-flyout-label">Estado agente</span>
+                  <input name="agent_status" value="{{ filters.agent_status or '' }}" placeholder="pendiente / error">
+                </label>
+
+                <label class="dock-flyout-field">
+                  <span class="dock-flyout-label">Cliente (ID)</span>
+                  <input name="customer_id" value="{{ filters.customer_id or '' }}" placeholder="ID del cliente">
+                </label>
+
+                <label class="dock-flyout-field">
+                  <span class="dock-flyout-label">Canal / Origen</span>
+                  <input name="origin" value="{{ filters.origin or '' }}" placeholder="Email / WhatsApp">
+                </label>
+
+                <label class="dock-flyout-field">
+                  <span class="dock-flyout-label">Confianza mínima</span>
+                  <input type="number" name="score_min" min="0" max="100" step="0.01" value="{{ filters.score_min or '' }}" placeholder="0%">
+                </label>
+
+                <label class="dock-flyout-field">
+                  <span class="dock-flyout-label">Confianza máxima</span>
+                  <input type="number" name="score_max" min="0" max="100" step="0.01" value="{{ filters.score_max or '' }}" placeholder="100%">
+                </label>
+
+                <label class="dock-flyout-field">
+                  <span class="dock-flyout-label">Tipo de mensaje</span>
+                  <input name="email_type" value="{{ filters.email_type or '' }}" placeholder="pedido / consulta">
+                </label>
+
+                <label class="dock-flyout-field">
+                  <span class="dock-flyout-label">Resultados por página</span>
+                  <select name="page_size">
+                    {% for size in pagination.allowed_page_sizes %}
+                      <option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }} tarjetas</option>
+                    {% endfor %}
+                  </select>
+                </label>
+              </div>
+
+              <div class="dock-flyout-footer">
+                <a class="button secondary compact-button" href="{{ view_cards_url or (dashboard_action + '?view=cards') }}">Limpiar</a>
+                <button type="submit" class="compact-button dock-btn-apply" data-loading-text="Aplicando...">Aplicar filtros</button>
+              </div>
+            </form>
+          </div>
+        </details>
+
+        <div class="dock-spacer"></div>
+
+        {# Right section: Item Count & Primary Action #}
+        <div class="dock-actions-group">
+          <span class="dock-count-badge">
+            <strong>{{ pagination.total_items }}</strong> pedidos
+          </span>
+
+          <form method="post" action="/orders/mock" class="dock-action-form">
+            <button type="submit" class="dock-primary-btn" title="Crear un pedido de prueba simulado">
+              {{ icon_plus(14) }}
+              <span>{{ request.state.branding.microcopy.create_test_order }}</span>
+            </button>
+          </form>
+        </div>
+      </div>
+
+      {# Status Tabs Strip #}
+      <div class="dock-active-strip" style="padding-top:2px;">
+        <div class="workbench-tabs">
+          {% for key, label, count in [
+            ("all","Todos", tabs.all),
+            ("not_processed","Pendientes", tabs.not_processed),
+            ("attention","Revisión", tabs.attention),
+            ("processed","Listos", tabs.processed),
+            ("errors","Errores", tabs.errors),
+            ("no_order","Sin pedido", tabs.no_order)
+          ] %}
+            <a class="workbench-tab {% if (filters.mode or 'all') == key %}active{% endif %}" href="{{ dashboard_action }}?{% if dashboard_action == '/orders' %}view=cards&{% endif %}mode={{ key }}">
+              <span>{{ label }}</span><strong>{{ count }}</strong>
+            </a>
+          {% endfor %}
+        </div>
+
+        {% if filters.customer_or_sender or filters.search or filters.date_range or filters.customer_id or filters.score_min or filters.score_max or filters.origin or filters.email_type %}
+          <a href="{{ view_cards_url or (dashboard_action + '?view=cards') }}" class="dock-clear-all-btn" style="margin-left:auto;">Restablecer filtros</a>
+        {% endif %}
       </div>
     </div>
 
