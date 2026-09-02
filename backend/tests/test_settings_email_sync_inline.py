@@ -198,6 +198,7 @@ class SettingsEmailSyncInlineHttpTests(unittest.TestCase):
             outcome = {
                 "ok": True,
                 "found": 5,
+                "total_found": 9,
                 "saved": 2,
                 "duplicates": 1,
                 "errors": 0,
@@ -206,6 +207,8 @@ class SettingsEmailSyncInlineHttpTests(unittest.TestCase):
                 "batch_count": 5,
                 "has_more": True,
                 "remaining": 4,
+                "remaining_messages": 4,
+                "remaining_limit": 4,
                 "last_uid": "105",
                 "message": "Lote inicial",
                 "continuation_job_id": 9999,
@@ -228,7 +231,10 @@ class SettingsEmailSyncInlineHttpTests(unittest.TestCase):
             self.assertEqual(payload["continuation_job_id"], 9999)
             self.assertTrue(payload["has_more"])
             self.assertEqual(payload["remaining"], 4)
-            self.assertEqual(payload["found"], 5)
+            self.assertEqual(payload["remaining_messages"], 4)
+            self.assertEqual(payload["batch_count"], 5)
+            self.assertEqual(payload["total_found"], 9)
+            self.assertEqual(payload["found"], 9)
             self.assertEqual(payload["saved"], 2)
             self.assertEqual(payload["duplicates"], 1)
             self.assertEqual(payload["errors"], 0)
@@ -301,6 +307,8 @@ class SettingsEmailSyncInlineHttpTests(unittest.TestCase):
             self.assertTrue(payload["ok"])
             self.assertEqual(payload["job_id"], job_id)
             self.assertEqual(payload["found"], 4)
+            self.assertEqual(payload["total_found"], 4)
+            self.assertEqual(payload["batch_count"], 4)
             self.assertEqual(payload["saved"], 2)
             self.assertEqual(payload["duplicates"], 1)
             self.assertEqual(payload["errors"], 0)
@@ -510,23 +518,28 @@ const nodes = {
   message: { textContent: "" },
 };
 const responses = [
-  { ok: true, status: 200, json: async () => ({ ok: true, job_id: 11, continuation_job_id: 22, has_more: true, remaining: 7, found: 5, saved: 2, duplicates: 1, errors: 0, message: "Lote 1" }) },
-  { ok: true, status: 200, json: async () => ({ ok: true, job_id: 22, continuation_job_id: 33, has_more: true, remaining: 2, found: 4, saved: 1, duplicates: 0, errors: 0, message: "Lote 2" }) },
-  { ok: true, status: 200, json: async () => ({ ok: true, job_id: 33, has_more: false, remaining: 0, found: 2, saved: 1, duplicates: 0, errors: 0, message: "Lote 3" }) },
+  { ok: true, status: 200, json: async () => ({ ok: true, job_id: 11, continuation_job_id: 22, has_more: true, remaining_messages: 7, total_found: 12, batch_count: 5, found: 12, saved: 2, duplicates: 1, errors: 0, message: "Lote 1" }) },
+  { ok: true, status: 200, json: async () => ({ ok: true, job_id: 22, continuation_job_id: 33, has_more: true, remaining_messages: 2, total_found: 12, batch_count: 5, found: 7, saved: 1, duplicates: 0, errors: 0, message: "Lote 2" }) },
+  { ok: true, status: 200, json: async () => ({ ok: true, job_id: 33, has_more: false, remaining_messages: 0, total_found: 12, batch_count: 2, found: 2, saved: 1, duplicates: 0, errors: 0, message: "Lote 3" }) },
 ];
 let index = 0;
-const result = await api.runBackfillSequence(form, async () => responses[index++], nodes);
-return { result, disabled: nodes.buttons[0].disabled, buttonText: nodes.buttons[0].textContent };
+const renderStates = [];
+const trackedNodes = { ...nodes, state: { set textContent(value) { renderStates.push(value); }, get textContent() { return renderStates[renderStates.length - 1] || ""; } } };
+const result = await api.runBackfillSequence(form, async () => responses[index++], trackedNodes);
+return { result, disabled: nodes.buttons[0].disabled, buttonText: nodes.buttons[0].textContent, renderStates };
 """
         )
         self.assertTrue(result["result"]["ok"])
         self.assertEqual(result["result"]["status"], "success")
         self.assertEqual(result["result"]["batches"], 3)
-        self.assertEqual(result["result"]["found"], 11)
+        self.assertEqual(result["result"]["found"], 12)
         self.assertEqual(result["result"]["saved"], 4)
         self.assertEqual(result["result"]["duplicates"], 1)
         self.assertEqual(result["result"]["errors"], 0)
         self.assertEqual(result["result"]["remaining"], 0)
+        self.assertEqual(result["renderStates"][0], "Procesando")
+        self.assertIn("Procesando", result["renderStates"][1:-1])
+        self.assertEqual(result["renderStates"][-1], "Completado")
         self.assertEqual(result["result"]["requests"], [
             "/settings/email/backfill",
             "/settings/email/backfill/continue/22",
@@ -540,8 +553,8 @@ return { result, disabled: nodes.buttons[0].disabled, buttonText: nodes.buttons[
             """
 const api = globalThis.AnchiEmailBackfill;
 const state = api.createBackfillState(10);
-const first = api.applyBackfillBatch(state, { ok: true, job_id: 11, continuation_job_id: 22, has_more: true, remaining: 7, found: 5, saved: 2, duplicates: 1, errors: 0, message: "Lote 1" });
-const second = api.applyBackfillBatch(state, { ok: true, job_id: 22, continuation_job_id: 22, has_more: true, remaining: 5, found: 3, saved: 1, duplicates: 0, errors: 0, message: "Lote 2" });
+const first = api.applyBackfillBatch(state, { ok: true, job_id: 11, continuation_job_id: 22, has_more: true, remaining_messages: 7, total_found: 10, found: 10, saved: 2, duplicates: 1, errors: 0, message: "Lote 1" });
+const second = api.applyBackfillBatch(state, { ok: true, job_id: 22, continuation_job_id: 22, has_more: true, remaining_messages: 5, total_found: 10, found: 5, saved: 1, duplicates: 0, errors: 0, message: "Lote 2" });
 return { first, second };
 """
         )
@@ -554,8 +567,8 @@ return { first, second };
             """
 const api = globalThis.AnchiEmailBackfill;
 const state = api.createBackfillState(10);
-const first = api.applyBackfillBatch(state, { ok: true, job_id: 11, continuation_job_id: 22, has_more: true, remaining: 7, found: 5, saved: 2, duplicates: 1, errors: 0, message: "Lote 1" });
-const second = api.applyBackfillBatch(state, { ok: true, job_id: 22, continuation_job_id: 33, has_more: true, remaining: 7, found: 3, saved: 1, duplicates: 0, errors: 0, message: "Lote 2" });
+const first = api.applyBackfillBatch(state, { ok: true, job_id: 11, continuation_job_id: 22, has_more: true, remaining_messages: 7, total_found: 10, found: 10, saved: 2, duplicates: 1, errors: 0, message: "Lote 1" });
+const second = api.applyBackfillBatch(state, { ok: true, job_id: 22, continuation_job_id: 33, has_more: true, remaining_messages: 7, total_found: 10, found: 7, saved: 1, duplicates: 0, errors: 0, message: "Lote 2" });
 return { first, second };
 """
         )
@@ -584,8 +597,8 @@ const nodes = {
   message: { textContent: "" },
 };
 const responses = [
-  { ok: true, status: 200, json: async () => ({ ok: true, job_id: 11, continuation_job_id: 22, has_more: true, remaining: 7, found: 5, saved: 2, duplicates: 1, errors: 0, message: "Lote 1" }) },
-  { ok: true, status: 200, json: async () => ({ ok: false, job_id: 22, has_more: false, remaining: 7, found: 0, saved: 0, duplicates: 0, errors: 1, error_type: "timeout", message: "Error controlado" }) },
+  { ok: true, status: 200, json: async () => ({ ok: true, job_id: 11, continuation_job_id: 22, has_more: true, remaining_messages: 7, total_found: 10, found: 10, saved: 2, duplicates: 1, errors: 0, message: "Lote 1" }) },
+  { ok: true, status: 200, json: async () => ({ ok: false, job_id: 22, has_more: false, remaining_messages: 7, total_found: 10, found: 7, saved: 0, duplicates: 0, errors: 1, error_type: "timeout", message: "Error controlado" }) },
 ];
 let index = 0;
 const result = await api.runBackfillSequence(form, async () => responses[index++], nodes);
@@ -596,6 +609,25 @@ return { result };
         self.assertEqual(result["result"]["status"], "failed")
         self.assertEqual(result["result"]["error_type"], "timeout")
         self.assertEqual(result["result"]["batches"], 2)
+
+
+    def test_backfill_js_accumulates_batch_totals_but_not_found(self):
+        result = self._run_js(
+            """
+const api = globalThis.AnchiEmailBackfill;
+const state = api.createBackfillState(20);
+state.status = "running";
+const first = api.applyBackfillBatch(state, { ok: true, job_id: 1, continuation_job_id: 2, has_more: true, remaining_messages: 7, total_found: 12, found: 12, saved: 2, duplicates: 1, errors: 0 });
+const second = api.applyBackfillBatch(state, { ok: true, job_id: 2, continuation_job_id: 3, has_more: true, remaining_messages: 2, total_found: 12, found: 7, saved: 1, duplicates: 2, errors: 1 });
+return { first, second, totals: state.totals, remaining: state.remaining, status: state.status };
+"""
+        )
+        self.assertEqual(result["totals"]["found"], 12)
+        self.assertEqual(result["totals"]["saved"], 3)
+        self.assertEqual(result["totals"]["duplicates"], 3)
+        self.assertEqual(result["totals"]["errors"], 1)
+        self.assertEqual(result["remaining"], 2)
+        self.assertEqual(result["status"], "running")
 
     def test_backfill_js_prevents_double_click(self):
         result = self._run_js(

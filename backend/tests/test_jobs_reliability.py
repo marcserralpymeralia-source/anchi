@@ -198,6 +198,7 @@ class JobsReliabilityTests(unittest.TestCase):
                     "has_more": True,
                     "last_uid": "10",
                     "batch_count": 5,
+                    "found": 7,
                     "message": "5 correos procesados",
                 },
             ) as backfill:
@@ -205,6 +206,10 @@ class JobsReliabilityTests(unittest.TestCase):
 
             self.assertTrue(result["ok"])
             self.assertEqual(result["remaining"], 2)
+            self.assertEqual(result["remaining_messages"], 2)
+            self.assertEqual(result["remaining_limit"], 2)
+            self.assertEqual(result["total_found"], 7)
+            self.assertEqual(result["batch_count"], 5)
             self.assertIn("continuation_job_id", result)
 
             backfill.assert_called_once()
@@ -231,11 +236,107 @@ class JobsReliabilityTests(unittest.TestCase):
 
             self.assertEqual(continuation_payload["limit"], 2)
             self.assertTrue(continuation_payload["resume"])
+            self.assertEqual(continuation_payload["total_found"], 7)
+            self.assertEqual(continuation_payload["processed_count"], 5)
             self.assertEqual(
                 continuation_payload["from_date"],
                 "2026-08-20",
             )
             self.assertNotIn("from_uid", continuation_payload)
+        finally:
+            db.close()
+
+    def test_backfill_continuation_enqueues_next_continuation_with_accumulated_progress(self):
+        self._seed_master()
+
+        db = self.TenantSession()
+        try:
+            db.add(
+                InputChannel(
+                    company_id=1,
+                    key="email",
+                    name="Email",
+                    channel_type="message",
+                    is_active=True,
+                    is_default=True,
+                    supports_text=True,
+                    supports_attachments=True,
+                    supports_documents=True,
+                    supports_audio=False,
+                    supports_images=False,
+                )
+            )
+            db.add(
+                EmailSettings(
+                    company_id=1,
+                    auto_sync_enabled=True,
+                )
+            )
+            db.commit()
+
+            job = enqueue_job(
+                db,
+                company_id=1,
+                job_type="backfill_imap",
+                payload={
+                    "from_date": "2026-08-20",
+                    "to_date": None,
+                    "limit": 7,
+                    "total_found": 12,
+                    "processed_count": 5,
+                    "resume": True,
+                },
+                created_by_user_id=None,
+            )
+
+            with patch(
+                "app.workers.jobs_worker.MasterSessionLocal",
+                new=self.MasterSession,
+            ), patch(
+                "app.workers.jobs_worker.backfill_imap_emails",
+                return_value={
+                    "ok": True,
+                    "found": 7,
+                    "batch_count": 5,
+                    "has_more": True,
+                    "message": "5 correos procesados",
+                },
+            ) as backfill:
+                result = _process_job(db, job)
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["remaining_messages"], 2)
+            self.assertEqual(result["remaining_limit"], 2)
+            self.assertEqual(result["total_found"], 12)
+            self.assertEqual(result["batch_count"], 5)
+            self.assertEqual(result["remaining"], 2)
+            self.assertIn("continuation_job_id", result)
+
+            backfill.assert_called_once()
+            kwargs = backfill.call_args.kwargs
+            self.assertEqual(kwargs["batch_size"], 5)
+            self.assertTrue(kwargs["stop_after_batch"])
+            self.assertTrue(kwargs["resume"])
+
+            jobs = db.scalars(
+                select(BackgroundJob)
+                .where(
+                    BackgroundJob.company_id == 1,
+                    BackgroundJob.job_type == "backfill_imap",
+                )
+                .order_by(BackgroundJob.id)
+            ).all()
+
+            self.assertEqual(len(jobs), 2)
+            continuation_payload = __import__(
+                "app.jobs.service",
+                fromlist=["job_payload"],
+            ).job_payload(jobs[1])
+
+            self.assertEqual(continuation_payload["limit"], 2)
+            self.assertEqual(continuation_payload["total_found"], 12)
+            self.assertEqual(continuation_payload["processed_count"], 10)
+            self.assertTrue(continuation_payload["resume"])
         finally:
             db.close()
 

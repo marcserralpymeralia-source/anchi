@@ -25,6 +25,7 @@
       seenJobIds: new Set(),
       previousRemaining: null,
       running: false,
+      totalFoundKnown: false,
       stopped: false,
       status: "idle",
       message: "",
@@ -55,7 +56,8 @@
   }
 
   function renderStatus(nodes, state) {
-    setText(nodes.state, state.status === "running" ? "Procesando" : (state.status === "failed" ? "Error" : "Completado"));
+    const label = state.status === "running" ? "Procesando" : (state.status === "failed" ? "Error" : (state.status === "success" ? "Completado" : "Pendiente"));
+    setText(nodes.state, label);
     setText(nodes.found, state.totals.found);
     setText(nodes.saved, state.totals.saved);
     setText(nodes.duplicates, state.totals.duplicates);
@@ -87,7 +89,11 @@
 
   function mergeBatch(state, response) {
     state.batches += 1;
-    state.totals.found += toCount(response.found);
+    const totalFound = toCount(response.total_found ?? response.found);
+    if (totalFound > 0 && (!state.totalFoundKnown || totalFound > state.totals.found)) {
+      state.totals.found = totalFound;
+      state.totalFoundKnown = true;
+    }
     state.totals.saved += toCount(response.saved ?? response.imported);
     state.totals.duplicates += toCount(response.duplicates);
     state.totals.errors += toCount(response.errors);
@@ -109,7 +115,7 @@
       saved: state.totals.saved,
       duplicates: state.totals.duplicates,
       errors: state.totals.errors,
-      remaining: Math.max(toCount(response?.remaining), 0),
+      remaining: Math.max(toCount(response?.remaining_messages ?? response?.remaining), 0),
     };
   }
 
@@ -124,7 +130,8 @@
     }
 
     mergeBatch(state, response);
-    state.remaining = Math.max(toCount(response?.remaining), 0);
+    state.status = "running";
+    state.remaining = Math.max(toCount(response?.remaining_messages ?? response?.remaining), 0);
 
     if (response?.ok === false || response?.status === "failed") {
       return formatFailedResult(state, response, response?.error_type || "backfill_failed", response?.message || "La petición de backfill falló.");
@@ -146,6 +153,7 @@
         duplicates: state.totals.duplicates,
         errors: state.totals.errors,
         remaining: state.remaining,
+      remaining_messages: state.remaining,
       };
     }
 
@@ -172,6 +180,7 @@
       duplicates: state.totals.duplicates,
       errors: state.totals.errors,
       remaining: state.remaining,
+      remaining_messages: state.remaining,
     };
   }
 
@@ -180,6 +189,7 @@
       return {ok: false, error_type: "already_running", message: "El backfill ya está en ejecución."};
     }
     const tracker = createBackfillState(form.querySelector("[name='limit']")?.value);
+    tracker.status = "running";
     form.dataset.backfillRunning = "true";
     setBusy(nodes, true);
     renderStatus(nodes, tracker);
@@ -208,6 +218,9 @@
           continuation_job_id: serverResult.continuation_job_id,
           has_more: serverResult.has_more,
           remaining: serverResult.remaining,
+          remaining_messages: serverResult.remaining_messages,
+          batch_count: serverResult.batch_count,
+          total_found: serverResult.total_found,
           found: serverResult.found,
           saved: serverResult.saved,
           imported: serverResult.imported,

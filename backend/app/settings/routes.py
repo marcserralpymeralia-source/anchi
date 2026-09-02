@@ -142,15 +142,22 @@ def _backfill_job_response_payload(job: BackgroundJob, result: dict, *, from_dat
     safe_result = result if isinstance(result, dict) else {}
     continuation_job_id = safe_result.get("continuation_job_id")
     has_more = bool(safe_result.get("has_more"))
-    remaining = max(int(safe_result.get("remaining") or 0), 0)
+    remaining_messages = max(int(safe_result.get("remaining_messages", safe_result.get("remaining") or 0) or 0), 0)
+    remaining_limit = max(int(safe_result.get("remaining_limit", safe_result.get("remaining") or 0) or 0), 0)
+    total_found = max(int(safe_result.get("total_found", safe_result.get("found") or 0) or 0), 0)
+    batch_count = max(int(safe_result.get("batch_count") or 0), 0)
     return {
         "ok": bool(safe_result.get("ok", True)),
         "status": "success" if safe_result.get("ok", True) else "failed",
         "job_id": job.id,
         "continuation_job_id": continuation_job_id,
         "has_more": has_more,
-        "remaining": remaining,
-        "found": int(safe_result.get("found") or 0),
+        "remaining": remaining_messages,
+        "remaining_messages": remaining_messages,
+        "remaining_limit": remaining_limit,
+        "batch_count": batch_count,
+        "total_found": total_found,
+        "found": total_found,
         "saved": int(safe_result.get("saved") or safe_result.get("imported") or 0),
         "duplicates": int(safe_result.get("duplicates") or 0),
         "errors": int(safe_result.get("errors") or 0),
