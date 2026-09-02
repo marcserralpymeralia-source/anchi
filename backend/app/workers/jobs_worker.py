@@ -235,14 +235,25 @@ def _process_job(db, job: BackgroundJob) -> dict:
             )
 
             consumed = max(int(result.get("batch_count") or 0), 0)
-            remaining = max(requested_limit - consumed, 0)
+            processed_before = max(int(payload.get("processed_count") or 0), 0)
+            processed_count = processed_before + consumed
+            remaining_limit = max(requested_limit - consumed, 0)
+            total_found = max(int(payload.get("total_found") or result.get("total_found") or result.get("found") or 0), 0)
+            remaining_messages = max(total_found - processed_count, 0)
+            result["batch_count"] = consumed
+            result["total_found"] = total_found
+            result["remaining_limit"] = remaining_limit
+            result["remaining_messages"] = remaining_messages
+            result["remaining"] = remaining_messages
 
-            if result.get("ok") and result.get("has_more") and remaining > 0:
+            if result.get("ok") and result.get("has_more") and remaining_limit > 0 and remaining_messages > 0:
                 continuation_payload = {
                     "from_date": payload.get("from_date"),
                     "to_date": payload.get("to_date"),
-                    "limit": remaining,
+                    "limit": remaining_limit,
                     "resume": True,
+                    "total_found": total_found,
+                    "processed_count": processed_count,
                 }
                 if payload.get("to_uid"):
                     continuation_payload["to_uid"] = payload.get("to_uid")
@@ -255,7 +266,6 @@ def _process_job(db, job: BackgroundJob) -> dict:
                     created_by_user_id=job.created_by_user_id,
                 )
                 result["continuation_job_id"] = continuation.id
-                result["remaining"] = remaining
 
             return result
         finally:
