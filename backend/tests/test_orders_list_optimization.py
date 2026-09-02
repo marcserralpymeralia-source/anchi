@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import re
 import unittest
+from collections import Counter
+from html import unescape
 
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("ENABLE_DEMO_BOOTSTRAP", "false")
@@ -22,10 +24,10 @@ class OrdersListOptimizationTests(unittest.TestCase):
 
             self.assertEqual(cards_response.status_code, 200)
             self.assertIn('class="work-queue"', cards_response.text)
-            self.assertIn('href="/orders?view=list"', cards_response.text)
+            self.assertRegex(unescape(cards_response.text), r'href="/orders\?[^\"]*view=list(?:&|\")')
             self.assertEqual(list_response.status_code, 200)
             self.assertIn("database-table-orders", list_response.text)
-            self.assertIn('href="/orders?view=cards"', list_response.text)
+            self.assertRegex(unescape(list_response.text), r'href="/orders\?[^\"]*view=cards(?:&|\")')
         finally:
             fixture.cleanup()
 
@@ -45,6 +47,41 @@ class OrdersListOptimizationTests(unittest.TestCase):
 
             self.assertEqual(card_ids, list_ids)
             self.assertEqual(filtered_card_ids, filtered_list_ids)
+        finally:
+            fixture.cleanup()
+
+    def test_list_status_counters_match_the_rows(self):
+        fixture = build_performance_fixture("small")
+        try:
+            with performance_test_client(fixture) as client:
+                response = client.get("/orders?view=list&page_size=100")
+
+            self.assertEqual(response.status_code, 200)
+            response_html = unescape(response.text)
+            reported_counts = {
+                status: int(count)
+                for status, count in re.findall(
+                    r'href="/orders\?view=list&status=([^\"]+)"[^>]*>.*?<strong>(\d+)</strong>',
+                    response_html,
+                    re.S,
+                )
+            }
+            row_labels = [
+                re.sub(r"<[^>]+>", "", value).strip()
+                for value in re.findall(r'<td data-column="status"><span[^>]*>(.*?)</span></td>', response_html, re.S)
+            ]
+            status_keys = {
+                "Dudoso": "dudoso",
+                "No importable": "no_importable",
+                "Confirmado": "pedido_confirmado",
+                "Exportado": "pedido_exportado",
+                "Pendiente de revisión": "pedido_pendiente_revision",
+            }
+
+            self.assertEqual(
+                {key: reported_counts[key] for key in status_keys.values()},
+                {status_keys[label]: count for label, count in Counter(row_labels).items()},
+            )
         finally:
             fixture.cleanup()
 

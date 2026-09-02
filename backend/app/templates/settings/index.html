@@ -17,7 +17,8 @@
     <div class="settings-search-row">
       <div class="settings-search-wrap">
         {{ icon_search(15, "settings-search-icon") }}
-        <input id="settings-search" type="search" placeholder="Buscar ajuste..." aria-label="Buscar ajuste">
+        <input id="settings-search" type="search" placeholder="Buscar ajustes y opciones..." aria-label="Buscar ajustes y opciones" autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="settings-search-results" aria-expanded="false">
+        <div id="settings-search-results" class="settings-search-results is-hidden" role="listbox" hidden></div>
       </div>
     </div>
 
@@ -1149,12 +1150,324 @@
   }
 
   const settingsSearch = document.getElementById("settings-search");
-  if (settingsSearch) {
-    settingsSearch.addEventListener("input", () => {
-      const value = settingsSearch.value.trim().toLowerCase();
-      document.querySelectorAll(".module-card").forEach((card) => {
-        card.style.display = !value || (card.dataset.search || "").toLowerCase().includes(value) ? "" : "none";
+  const settingsSearchResults = document.getElementById("settings-search-results");
+  const settingsSearchWrap = settingsSearch?.closest(".settings-search-wrap");
+  if (settingsSearch && settingsSearchResults && settingsSearchWrap) {
+    const moduleCards = [...document.querySelectorAll(".module-card")];
+    const searchCatalog = [];
+    let generatedTargetId = 0;
+
+    const normalizeSearchText = (value) => String(value || "")
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase()
+      .trim();
+
+    const visibleText = (element) => {
+      if (!element) return "";
+      const clone = element.cloneNode(true);
+      clone.querySelectorAll("input, select, textarea, button").forEach((control) => control.remove());
+      return clone.textContent.replace(/\s+/g, " ").trim();
+    };
+
+    const ensureTargetId = (element, prefix) => {
+      if (!element) return "";
+      if (!element.id) {
+        generatedTargetId += 1;
+        element.id = `settings-search-${prefix}-${generatedTargetId}`;
+      }
+      return element.id;
+    };
+
+    const addSearchEntry = (entry) => {
+      entry.normalizedSearchText = normalizeSearchText(entry.searchText);
+      entry.normalizedTitle = normalizeSearchText(entry.title);
+      entry.normalizedDetail = normalizeSearchText(entry.detail);
+      entry.normalizedModule = normalizeSearchText(entry.moduleLabel);
+      searchCatalog.push(entry);
+    };
+
+    moduleCards.forEach((card) => {
+      const opener = card.querySelector("[data-open-settings]");
+      const fallbackLinks = [...card.querySelectorAll("a[href]")];
+      const moduleLabel = card.querySelector("h3")?.textContent.trim() || card.id;
+      const cardSearchText = [card.dataset.search, card.textContent, ...[...card.querySelectorAll("[aria-label], [placeholder]")].map((item) => `${item.getAttribute("aria-label") || ""} ${item.getAttribute("placeholder") || ""}`)].join(" ");
+      const cardDetail = card.querySelector("p")?.textContent.trim() || "";
+      if (opener || fallbackLinks.length <= 1) {
+        addSearchEntry({
+          moduleKey: card.id,
+          moduleLabel,
+          title: moduleLabel,
+          detail: cardDetail,
+          searchText: cardSearchText,
+          dialogId: opener ? `settings-${opener.dataset.openSettings}` : "",
+          href: opener ? "" : fallbackLinks[0]?.href || "",
+          targetId: card.id,
+        });
+      } else {
+        fallbackLinks.forEach((link) => {
+          const linkLabel = link.textContent.trim() || moduleLabel;
+          addSearchEntry({
+            moduleKey: card.id,
+            moduleLabel,
+            title: linkLabel,
+            detail: moduleLabel,
+            searchText: `${cardSearchText} ${linkLabel}`,
+            dialogId: "",
+            href: link.href,
+            targetId: card.id,
+          });
+        });
+      }
+    });
+
+    document.querySelectorAll("dialog.settings-drawer").forEach((dialog) => {
+      const moduleKey = dialog.id.replace(/^settings-/, "");
+      const moduleCard = document.getElementById(moduleKey);
+      const moduleLabel = moduleCard?.querySelector("h3")?.textContent.trim() || dialog.querySelector("h3")?.textContent.trim() || moduleKey;
+      const drawerDescription = dialog.querySelector(".drawer-head .muted")?.textContent.trim() || "";
+      const sections = [...dialog.querySelectorAll(".drawer-card")];
+      if (!sections.length) sections.push(dialog);
+
+      sections.forEach((section, sectionIndex) => {
+        const sectionTitle = section.querySelector("h4, h5, summary")?.textContent.trim() || moduleLabel;
+        const sectionDescription = section.querySelector(".section-title-row .muted")?.textContent.trim() || "";
+        const sectionId = ensureTargetId(section, `section-${moduleKey}-${sectionIndex}`);
+        const sectionSearchText = [moduleLabel, drawerDescription, sectionTitle, sectionDescription, visibleText(section)].join(" ");
+        addSearchEntry({
+          moduleKey,
+          moduleLabel,
+          title: sectionTitle,
+          detail: sectionDescription || drawerDescription,
+          searchText: sectionSearchText,
+          dialogId: dialog.id,
+          targetId: sectionId,
+        });
+
+        section.querySelectorAll("label").forEach((field) => {
+          const control = field.querySelector("input, select, textarea");
+          if (!control) return;
+          const fieldLabel = visibleText(field) || control.getAttribute("aria-label") || control.name || "Opción";
+          const optionLabels = control.tagName === "SELECT"
+            ? [...control.options].map((option) => option.textContent.trim()).join(" ")
+            : "";
+          const fieldKeywords = [
+            moduleLabel,
+            sectionTitle,
+            fieldLabel,
+            control.name,
+            control.id,
+            control.getAttribute("placeholder"),
+            control.getAttribute("aria-label"),
+            optionLabels,
+          ].filter(Boolean).join(" ");
+          addSearchEntry({
+            moduleKey,
+            moduleLabel,
+            title: fieldLabel,
+            detail: sectionTitle,
+            searchText: fieldKeywords,
+            dialogId: dialog.id,
+            targetId: ensureTargetId(control, `field-${moduleKey}`),
+          });
+        });
       });
+    });
+
+    let selectedResultIndex = -1;
+
+    const hideSearchResults = () => {
+      settingsSearchResults.hidden = true;
+      settingsSearchResults.classList.add("is-hidden");
+      settingsSearch.setAttribute("aria-expanded", "false");
+      selectedResultIndex = -1;
+    };
+
+    const openSearchEntry = (entry) => {
+      hideSearchResults();
+      if (entry.href) {
+        window.location.assign(entry.href);
+        return;
+      }
+      const dialog = document.getElementById(entry.dialogId);
+      if (!dialog) {
+        document.getElementById(entry.targetId)?.scrollIntoView({ behavior: "smooth", block: "center" });
+        return;
+      }
+      if (!dialog.open) dialog.showModal();
+      window.requestAnimationFrame(() => {
+        const target = document.getElementById(entry.targetId);
+        if (!target) return;
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        if (typeof target.focus === "function" && target.matches("input, select, textarea")) {
+          target.focus({ preventScroll: true });
+        }
+      });
+    };
+
+    const matchesEntry = (entry, terms) => terms.every((term) => entry.normalizedSearchText.includes(term));
+
+    const escapeHtml = (text) => {
+      const div = document.createElement("div");
+      div.textContent = text || "";
+      return div.innerHTML;
+    };
+
+    const renderSearchResults = () => {
+      selectedResultIndex = -1;
+      const rawVal = settingsSearch.value.trim();
+      const terms = normalizeSearchText(rawVal).split(/\s+/).filter(Boolean);
+      if (!terms.length) {
+        moduleCards.forEach((card) => { card.hidden = false; });
+        hideSearchResults();
+        return;
+      }
+
+      const matches = searchCatalog
+        .map((entry) => {
+          if (!matchesEntry(entry, terms)) return null;
+          let score = 0;
+          terms.forEach((term) => {
+            if (entry.normalizedTitle.includes(term)) score += 10;
+            if (entry.normalizedDetail.includes(term)) score += 5;
+            if (entry.normalizedModule.includes(term)) score += 3;
+          });
+          return { entry, score };
+        })
+        .filter(Boolean)
+        .sort((left, right) => right.score - left.score || left.entry.title.localeCompare(right.entry.title, "es"));
+
+      settingsSearchResults.replaceChildren();
+      if (!matches.length) {
+        const empty = document.createElement("div");
+        empty.className = "settings-search-empty";
+        empty.innerHTML = `
+          <div class="settings-search-empty-icon">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          </div>
+          <p>No se encontraron opciones para "<strong>${escapeHtml(rawVal)}</strong>"</p>
+        `;
+        settingsSearchResults.append(empty);
+      } else {
+        const summary = document.createElement("div");
+        summary.className = "settings-search-summary";
+        summary.innerHTML = `
+          <span>Resultados</span>
+          <span class="settings-search-count-pill">${matches.length} coincidencia${matches.length === 1 ? "" : "s"}</span>
+        `;
+        settingsSearchResults.append(summary);
+
+        const listWrap = document.createElement("div");
+        listWrap.className = "settings-search-list";
+
+        matches.slice(0, 10).forEach(({ entry }, index) => {
+          const result = document.createElement("button");
+          result.type = "button";
+          result.className = "settings-search-result";
+          result.setAttribute("role", "option");
+          result.setAttribute("data-index", String(index));
+          result.setAttribute("aria-label", `${entry.moduleLabel}: ${entry.title}`);
+
+          const titleRow = document.createElement("div");
+          titleRow.className = "settings-search-result-title-row";
+          const title = document.createElement("strong");
+          title.textContent = entry.title;
+          titleRow.append(title);
+
+          const metaRow = document.createElement("div");
+          metaRow.className = "settings-search-result-meta";
+
+          const moduleBadge = document.createElement("span");
+          moduleBadge.className = "settings-search-module-badge";
+          moduleBadge.textContent = entry.moduleLabel;
+          metaRow.append(moduleBadge);
+
+          if (entry.detail && entry.detail !== entry.moduleLabel) {
+            const detail = document.createElement("span");
+            detail.className = "settings-search-detail";
+            detail.textContent = entry.detail;
+            metaRow.append(detail);
+          }
+
+          const arrowIcon = document.createElement("span");
+          arrowIcon.className = "settings-search-arrow";
+          arrowIcon.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>`;
+
+          result.append(titleRow, metaRow, arrowIcon);
+          result.addEventListener("click", () => openSearchEntry(entry));
+          listWrap.append(result);
+        });
+
+        settingsSearchResults.append(listWrap);
+
+        const footer = document.createElement("div");
+        footer.className = "settings-search-footer";
+        footer.innerHTML = `
+          <span><kbd>↑</kbd><kbd>↓</kbd> navegar</span>
+          <span><kbd>↵</kbd> abrir</span>
+          <span><kbd>esc</kbd> cerrar</span>
+        `;
+        settingsSearchResults.append(footer);
+      }
+      settingsSearchResults.hidden = false;
+      settingsSearchResults.classList.remove("is-hidden");
+      settingsSearch.setAttribute("aria-expanded", "true");
+    };
+
+    settingsSearch.addEventListener("input", () => {
+      if (!settingsSearch.value.trim()) {
+        hideSearchResults();
+        [...document.querySelectorAll(".module-card")].forEach((card) => { card.hidden = false; });
+      } else {
+        renderSearchResults();
+      }
+    });
+    settingsSearch.addEventListener("search", () => {
+      if (!settingsSearch.value.trim()) {
+        hideSearchResults();
+        [...document.querySelectorAll(".module-card")].forEach((card) => { card.hidden = false; });
+      }
+    });
+    settingsSearch.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        hideSearchResults();
+        return;
+      }
+      const results = [...settingsSearchResults.querySelectorAll(".settings-search-result")];
+      if (!results.length) return;
+
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        selectedResultIndex = (selectedResultIndex + 1) % results.length;
+        results.forEach((el, idx) => {
+          if (idx === selectedResultIndex) {
+            el.classList.add("is-active");
+            el.scrollIntoView({ block: "nearest" });
+          } else {
+            el.classList.remove("is-active");
+          }
+        });
+      } else if (event.key === "ArrowUp") {
+        event.preventDefault();
+        selectedResultIndex = (selectedResultIndex - 1 + results.length) % results.length;
+        results.forEach((el, idx) => {
+          if (idx === selectedResultIndex) {
+            el.classList.add("is-active");
+            el.scrollIntoView({ block: "nearest" });
+          } else {
+            el.classList.remove("is-active");
+          }
+        });
+      } else if (event.key === "Enter") {
+        if (selectedResultIndex >= 0 && results[selectedResultIndex]) {
+          event.preventDefault();
+          results[selectedResultIndex].click();
+        }
+      }
+    });
+
+    document.addEventListener("click", (event) => {
+      if (!settingsSearchWrap.contains(event.target)) hideSearchResults();
     });
   }
   const extractionModelSelect = document.querySelector("[data-extraction-model-select]");

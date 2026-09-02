@@ -1,300 +1,400 @@
 {% extends "base.html" %}
+{% from "components/icons.html" import icon_mail, icon_whatsapp, icon_entries, icon_paperclip, icon_copy, icon_check, icon_close, icon_refresh %}
 {% set title = "Importación manual" %}
 {% block content %}
-<section class="stack">
-  <header class="page-section-header">
-    <div class="section-title-row">
-      <div>
-        <span class="page-kicker">Entrada manual y WhatsApp</span>
-        <p class="muted">Pega un correo o una conversación WhatsApp y comprueba la propuesta del agente antes de confirmarla.</p>
-      </div>
-      <div class="actions">
-        <span class="badge">{{ company.name }}</span>
-        <a class="button secondary compact-button" href="/entries">Entradas</a>
+<section class="manual-import-shell">
+  {# Top Dock Header #}
+  <div class="data-dock-wrapper">
+    <div class="data-dock-multi">
+      <div class="dock-primary-row">
+        {# Channel Switcher Segment Tabs #}
+        <nav class="dock-segment-group" aria-label="Seleccionar canal de entrada">
+          <button type="button" class="dock-segment-btn {% if channel_is_email %}is-active{% endif %}" id="tab-btn-email" onclick="setManualChannel('email')" title="Entrada por correo electrónico">
+            {{ icon_mail(14) }}
+            <span>Correo electrónico</span>
+          </button>
+          <button type="button" class="dock-segment-btn {% if channel_is_whatsapp %}is-active{% endif %}" id="tab-btn-whatsapp" onclick="setManualChannel('whatsapp')" title="Entrada por conversación WhatsApp">
+            {{ icon_whatsapp(14) }}
+            <span>WhatsApp</span>
+          </button>
+        </nav>
+
+        <div class="dock-divider" aria-hidden="true"></div>
+
+        <span class="dock-count-badge">
+          <strong>{{ company.name }}</strong> · Entrada asistida por IA
+        </span>
+
+        <div class="dock-spacer"></div>
+
+        <div class="dock-actions-group">
+          <a class="button secondary compact-button" href="/entries" title="Ver bandeja de entradas">
+            {{ icon_entries(14) }}
+            <span>Bandeja de entradas</span>
+          </a>
+        </div>
       </div>
     </div>
-  </header>
+  </div>
 
   {% if warning %}
-    <article class="panel" style="border-color:#f59e0b;background:#fffbeb;color:#92400e;">
-      <strong>{{ warning }}</strong>
-    </article>
+    <div class="panel" style="border-color:#f59e0b;background:#fffbeb;color:#92400e;padding:12px 16px;border-radius:10px;font-size:13px;display:flex;align-items:center;gap:8px;">
+      <strong>Advertencia:</strong> {{ warning }}
+    </div>
   {% endif %}
 
-  <section class="review-grid review-grid-v3" style="height:auto;min-height:calc(92vh - 180px);">
-    <section class="review-pane review-entry-pane">
-      <article class="subpanel stack">
-        <div class="section-title-row">
-          <div>
-            <h3>Entrada</h3>
-            <p class="muted">Selecciona el canal y pega el contenido. La previsualización no guarda nada todavía.</p>
+  <div class="manual-import-layout">
+    {# Left Column: Entry Form & Raw Content #}
+    <div class="manual-panel">
+      <div class="manual-panel-header">
+        <div>
+          <h3 id="manual-panel-title">{{ "Entrada de WhatsApp" if channel_is_whatsapp else "Entrada de Correo Electrónico" }}</h3>
+          <p class="muted">Pega el texto recibido o adjunta un archivo para analizarlo con IA sin guardar nada todavía.</p>
+        </div>
+        <span class="badge" id="manual-channel-badge">Canal: {{ channel_label }}</span>
+      </div>
+
+      <form class="stack js-loading-form" method="post" action="/imports/manual/preview" enctype="multipart/form-data" id="manual-import-form">
+        <input type="hidden" name="channel" id="manual-channel-input" value="{{ channel }}">
+
+        {# Email Specific Fields #}
+        <div class="manual-channel-pane" data-channel-pane="email" {% if not channel_is_email %}hidden{% endif %}>
+          <div class="manual-form-grid">
+            <label class="field-label">
+              <span>Remitente</span>
+              <input name="sender" value="{{ sender }}" placeholder="cliente@empresa.com" class="compact-input">
+            </label>
+            <label class="field-label">
+              <span>Asunto</span>
+              <input name="subject" value="{{ subject }}" placeholder="ej. Pedido de material" class="compact-input">
+            </label>
+            <label class="field-label">
+              <span>Teléfono</span>
+              <input name="phone" value="{{ phone }}" placeholder="+34..." class="compact-input">
+            </label>
+            <label class="field-label">
+              <span>Cliente esperado (opcional)</span>
+              <input name="expected_customer" value="{{ expected_customer }}" placeholder="Nombre o código" class="compact-input">
+            </label>
+            <label class="field-label">
+              <span>Scoring esperado (opcional)</span>
+              <input name="expected_score" value="{{ expected_score }}" placeholder="ej. 90" class="compact-input">
+            </label>
+            <label class="field-label">
+              <span>Estado esperado (opcional)</span>
+              <input name="expected_status" value="{{ expected_status }}" placeholder="ej. confirmado" class="compact-input">
+            </label>
           </div>
-          <span class="badge" id="manual-channel-badge">Canal: {{ channel_label }}</span>
         </div>
 
-        <form class="stack js-loading-form" method="post" action="/imports/manual/preview" enctype="multipart/form-data" id="manual-import-form">
-          <input type="hidden" name="channel" id="manual-channel-input" value="{{ channel }}">
-          <div class="manual-channel-switch">
-            <label class="manual-channel-option">
-              <input type="radio" name="channel_switch" value="email" {% if channel_is_email %}checked{% endif %}>
-              <span>Email</span>
+        {# WhatsApp Specific Fields #}
+        <div class="manual-channel-pane" data-channel-pane="whatsapp" {% if not channel_is_whatsapp %}hidden{% endif %}>
+          <div class="manual-form-grid">
+            <label class="field-label">
+              <span>Cliente participante</span>
+              <input name="client_participant" value="{{ client_participant }}" placeholder="Nombre del cliente" class="compact-input">
             </label>
-            <label class="manual-channel-option">
-              <input type="radio" name="channel_switch" value="whatsapp" {% if channel_is_whatsapp %}checked{% endif %}>
-              <span>WhatsApp</span>
+            <label class="field-label">
+              <span>Empresa participante</span>
+              <input name="company_participant" value="{{ company_participant }}" placeholder="Nombre de la empresa" class="compact-input">
+            </label>
+            <label class="field-label">
+              <span>Teléfono</span>
+              <input name="phone" value="{{ phone }}" placeholder="+34..." class="compact-input">
+            </label>
+            <label class="field-label">
+              <span>Remitente detectado (opcional)</span>
+              <input name="sender_hint" value="{{ sender }}" placeholder="Opcional" class="compact-input">
+            </label>
+            <label class="field-label">
+              <span>Cliente esperado (opcional)</span>
+              <input name="expected_customer" value="{{ expected_customer }}" placeholder="Nombre o código" class="compact-input">
+            </label>
+            <label class="field-label">
+              <span>Scoring esperado (opcional)</span>
+              <input name="expected_score" value="{{ expected_score }}" placeholder="ej. 90" class="compact-input">
             </label>
           </div>
-
-          <div class="manual-channel-pane" data-channel-pane="email" {% if not channel_is_email %}hidden{% endif %}>
-            <div class="form-grid">
-              <label>Remitente<input name="sender" value="{{ sender }}" placeholder="cliente@empresa.com"></label>
-              <label>Asunto<input name="subject" value="{{ subject }}" placeholder="Pedido recibido"></label>
-              <label>Teléfono<input name="phone" value="{{ phone }}" placeholder="+34..."></label>
-              <label>Cliente esperado<input name="expected_customer" value="{{ expected_customer }}" placeholder="Opcional"></label>
-              <label>Scoring esperado<input name="expected_score" value="{{ expected_score }}" placeholder="Opcional"></label>
-              <label>Estado esperado<input name="expected_status" value="{{ expected_status }}" placeholder="Opcional"></label>
-            </div>
-          </div>
-
-          <div class="manual-channel-pane" data-channel-pane="whatsapp" {% if not channel_is_whatsapp %}hidden{% endif %}>
-            <div class="form-grid">
-              <label>Cliente participante<input name="client_participant" value="{{ client_participant }}" placeholder="Nombre del cliente"></label>
-              <label>Empresa participante<input name="company_participant" value="{{ company_participant }}" placeholder="Nombre de la empresa"></label>
-              <label>Remitente detectado<input name="sender_hint" value="{{ sender }}" placeholder="Opcional"></label>
-              <label>Teléfono<input name="phone" value="{{ phone }}" placeholder="+34..."></label>
-              <label>Cliente esperado<input name="expected_customer" value="{{ expected_customer }}" placeholder="Opcional"></label>
-              <label>Scoring esperado<input name="expected_score" value="{{ expected_score }}" placeholder="Opcional"></label>
-              <label>Estado esperado<input name="expected_status" value="{{ expected_status }}" placeholder="Opcional"></label>
-            </div>
-          </div>
-
-          <label>Contenido recibido<textarea id="manual-raw-text" name="raw_text" rows="14" placeholder="{{ 'Pega aquí la conversación o mensajes de WhatsApp' if channel_is_whatsapp else 'Pega aquí el correo recibido' }}">{{ raw_text }}</textarea></label>
-          <label>Archivo adjunto<input type="file" name="file" accept=".txt,.csv,.json,.pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.webp"></label>
-          <div class="actions">
-            <button data-loading-text="Previsualizando...">Previsualizar</button>
-            <a class="button secondary compact-button" href="/entries">Cancelar</a>
-          </div>
-        </form>
-      </article>
-
-      <article class="subpanel stack">
-        <div class="section-title-row">
-          <div>
-            <h3 id="manual-preview-heading">{{ "Vista previa: Conversación WhatsApp" if channel_is_whatsapp else "Vista previa: Correo recibido" }}</h3>
-            <p class="muted">Email o chat según el canal seleccionado.</p>
-          </div>
-          <span class="badge">{{ preview_messages|length }} mensajes</span>
         </div>
 
-        {% if channel_is_email %}
-          <div class="review-inline-summary review-inline-summary-tight">
-            <span><strong>Remitente</strong>{{ preview.sender if preview and preview.sender else sender or "Sin definir" }}</span>
-            <span><strong>Asunto</strong>{{ preview.subject if preview and preview.subject else subject or "Sin asunto" }}</span>
-          </div>
-          <details class="review-mail-card review-mail-toggle" open>
-            <summary>Correo recibido</summary>
-            <div class="review-mail-body-head">
-              <span class="muted review-mail-snippet">{{ (preview.body if preview and preview.body else raw_text)[:120] }}</span>
-              <button type="button" class="secondary compact-button" onclick="copyText('manual-email-body')">Copiar</button>
-            </div>
-            <pre id="manual-email-body" class="doc-text review-email-body">{{ preview.body if preview and preview.body else raw_text }}</pre>
-          </details>
-        {% else %}
-          {% if preview %}
-            <div class="review-inline-summary review-inline-summary-tight">
-              <span><strong>Cliente</strong>{{ preview.participants.client or "Sin definir" }}</span>
-              <span><strong>Empresa</strong>{{ preview.participants.company or "Sin definir" }}</span>
-              <span><strong>Hash</strong>{{ preview.dedupe_hash[:12] }}</span>
-            </div>
-            <div class="whatsapp-chat-stack">
-              {% for message in preview.messages %}
-                <article class="whatsapp-chat-bubble {{ message.direction }}">
-                  <div class="whatsapp-chat-bubble-head">
-                    <strong>{{ message.sender }}</strong>
-                    <span>{{ message.timestamp_label or "Sin fecha" }}</span>
-                  </div>
-                  <pre class="whatsapp-chat-text">{{ message.text }}</pre>
-                </article>
-              {% endfor %}
-            </div>
-            {% if preview.warnings %}
-              <details class="compact-export-preview">
-                <summary>Advertencias del parser</summary>
-                <ul class="compact-list">
-                  {% for note in preview.warnings %}
-                    <li>{{ note }}</li>
-                  {% endfor %}
-                </ul>
-              </details>
+        {# Text Area #}
+        <div class="field-label">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <span style="font-weight:600;font-size:13px;color:#0f172a;">Contenido del mensaje</span>
+            {% if raw_text %}
+              <button type="button" class="dock-clear-all-btn" style="font-size:11px;" onclick="document.getElementById('manual-raw-text').value='';">Limpiar texto</button>
             {% endif %}
+          </div>
+          <textarea
+            id="manual-raw-text"
+            name="raw_text"
+            rows="10"
+            class="manual-raw-textarea"
+            placeholder="{{ 'Pega aquí la conversación o mensajes de WhatsApp (ej: [20/08 10:30] Cliente: Hola, quiero pedir...)' if channel_is_whatsapp else 'Pega aquí el correo recibido o cuerpo del pedido...' }}"
+          >{{ raw_text }}</textarea>
+        </div>
+
+        {# Dropzone for File Upload #}
+        <div class="manual-dropzone" onclick="document.getElementById('manual-file-input').click()">
+          <input type="file" id="manual-file-input" name="file" accept=".txt,.csv,.json,.pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.webp" onchange="updateFileName(this)">
+          <div class="manual-dropzone-label">
+            <span style="color:var(--accent, #0f766e);">{{ icon_paperclip(20) }}</span>
+            <span id="manual-file-name-label">Haz clic para adjuntar un archivo o arrástralo aquí</span>
+          </div>
+          <div class="manual-dropzone-formats">
+            <span class="manual-format-chip">PDF</span>
+            <span class="manual-format-chip">CSV</span>
+            <span class="manual-format-chip">TXT</span>
+            <span class="manual-format-chip">XLSX</span>
+            <span class="manual-format-chip">JPG/PNG</span>
+          </div>
+        </div>
+
+        {# Actions #}
+        <div style="display:flex;gap:10px;align-items:center;padding-top:4px;">
+          <button type="submit" class="dock-primary-btn" data-loading-text="Analizando con IA...">
+            <span>Previsualizar con IA</span>
+          </button>
+          <a class="button secondary compact-button" href="/entries">Cancelar</a>
+        </div>
+      </form>
+
+      {# Message Stream / Raw Preview Section #}
+      {% if raw_text or (preview and preview.messages) %}
+        <div style="margin-top:12px;padding-top:16px;border-top:1px solid #f1f5f9;">
+          <div class="section-title-row" style="margin-bottom:8px;">
+            <h4 style="margin:0;font-size:13.5px;font-weight:700;">{{ "Vista previa: Conversación WhatsApp" if channel_is_whatsapp else "Vista previa: Correo recibido" }}</h4>
+            <span class="badge">{{ preview.messages|length if preview and preview.messages else '1 mensaje' }}</span>
+          </div>
+
+          {% if channel_is_email %}
+            <div class="review-inline-summary review-inline-summary-tight" style="margin-bottom:8px;">
+              <span><strong>Remitente:</strong> {{ preview.sender if preview and preview.sender else sender or "Sin definir" }}</span>
+              <span><strong>Asunto:</strong> {{ preview.subject if preview and preview.subject else subject or "Sin asunto" }}</span>
+            </div>
+            <div style="position:relative;">
+              <pre id="manual-email-body" class="doc-text review-email-body" style="max-height:240px;overflow-y:auto;background:#f8fafc;padding:12px;border-radius:8px;font-size:12px;border:1px solid #e2e8f0;">{{ preview.body if preview and preview.body else raw_text }}</pre>
+            </div>
           {% else %}
-            <details class="review-mail-card review-mail-toggle" open>
-              <summary>Conversación recibida</summary>
-              <div class="review-mail-body-head">
-                <span class="muted review-mail-snippet">{{ (raw_text or "")[:120] }}</span>
-                <button type="button" class="secondary compact-button" onclick="copyText('manual-whatsapp-body')">Copiar</button>
+            {% if preview and preview.messages %}
+              <div class="whatsapp-chat-stack" style="max-height:280px;background:#efeae2;padding:12px;border-radius:10px;border:1px solid #d1d7db;">
+                {% for message in preview.messages %}
+                  <article class="whatsapp-chat-bubble {{ message.direction }}">
+                    <div class="whatsapp-chat-bubble-head">
+                      <strong>{{ message.sender }}</strong>
+                      <span>{{ message.timestamp_label or "Sin fecha" }}</span>
+                    </div>
+                    <pre class="whatsapp-chat-text">{{ message.text }}</pre>
+                  </article>
+                {% endfor %}
               </div>
-              <pre id="manual-whatsapp-body" class="doc-text review-email-body">{{ raw_text }}</pre>
-            </details>
-          {% endif %}
-        {% endif %}
-      </article>
-    </section>
-
-    <section class="review-pane review-proposal-pane">
-      <article class="subpanel stack">
-        <div class="section-title-row">
-          <div>
-            <h3>Propuesta del agente</h3>
-            <p class="muted">Calculamos cliente, líneas y scoring antes de persistir la importación.</p>
-          </div>
-          {% if result %}
-            {% if result.classification_type %}
-              <span class="badge">
-                {{ result.classification_type|replace("_", " ")|title }}
-                {% if result.classification_confidence is not none %}
-                  · {{ (result.classification_confidence * 100)|round(0)|int }}%
-                {% endif %}
-              </span>
             {% else %}
-              <span class="badge">Sin clasificación</span>
+              <pre id="manual-whatsapp-body" class="doc-text review-email-body" style="max-height:240px;overflow-y:auto;background:#f8fafc;padding:12px;border-radius:8px;font-size:12px;border:1px solid #e2e8f0;">{{ raw_text }}</pre>
             {% endif %}
-          {% else %}
-            <span class="badge">Pendiente</span>
           {% endif %}
+        </div>
+      {% endif %}
+    </div>
+
+    {# Right Column: AI Extraction Proposal #}
+    <div class="manual-panel">
+      <div class="manual-panel-header">
+        <div>
+          <h3>Propuesta del Agente de IA</h3>
+          <p class="muted">Extracción automática de cliente, productos y puntuación de confianza.</p>
         </div>
         {% if result %}
-          <div class="history-summary">
-            <article class="compact-card compact-card-safe"><span>Cliente</span><strong>{{ result.customer.score }}%</strong><small>{{ result.customer.name }}</small></article>
-            <article class="compact-card compact-card-reviewable"><span>Scoring</span><strong>{{ result.score }}%</strong><small>{{ result.category_label }} · {{ result.suggested_action }}</small></article>
-            <article class="compact-card compact-card-error"><span>Líneas</span><strong>{{ result.lines|length }}</strong><small>{{ result.lines|selectattr("has_match")|list|length }} con match</small></article>
-            <article class="compact-card compact-card-muted"><span>Estado</span><strong>{{ result.status }}</strong><small>{{ result.source_label }}</small></article>
-          </div>
-          <div class="job-card-preview">
-            <strong>Comparación</strong>
-            <p>Cliente esperado: {{ result.expected.customer or "No indicado" }}</p>
-            <p>Score esperado: {{ result.expected.score if result.expected.score is not none else "No indicado" }}</p>
-            <p>Estado esperado: {{ result.expected.status or "No indicado" }}</p>
-            {% if result.expected.customer or result.expected.score is not none or result.expected.status %}
-              <p>
-                {% if result.expected.customer %}
-                  {% if result.comparison.customer_match %}Cliente coincide{% else %}Cliente no coincide{% endif %}
-                {% endif %}
-                {% if result.comparison.score_delta is not none %}
-                  {% if result.expected.customer %} · {% endif %}Delta score {{ result.comparison.score_delta }}
-                {% endif %}
-                {% if result.expected.status %}
-                  {% if result.expected.customer or result.comparison.score_delta is not none %} · {% endif %}
-                  {% if result.comparison.status_match %}Estado coincide{% else %}Estado no coincide{% endif %}
-                {% endif %}
-              </p>
+          <span class="badge status-confirmed">
+            {{ result.classification_type|replace("_", " ")|title if result.classification_type else "Analizado" }}
+            {% if result.classification_confidence is not none %}
+              · {{ (result.classification_confidence * 100)|round(0)|int }}%
             {% endif %}
-          </div>
-          <div class="job-log-list">
-            {% for line in result.lines %}
-              <article class="job-log-item">
-                <header>
-                  <strong>{{ line.original_text }}</strong>
-                  <span class="badge {% if line.has_match %}status-confirmed{% else %}status-discarded{% endif %}">
-                    {{ "Match" if line.has_match else "Sin match" }}
-                    · {{ line.match_method }} · {{ "%.0f"|format(line.confidence) }}%
-                  </span>
-                </header>
-                <div class="field-diff-list">
-                  <div><span>Producto</span><strong>{{ line.matched_product or line.product_name or "Sin identificar" }}</strong></div>
-                  <div><span>Referencia</span><strong>{{ line.reference or "—" }}</strong></div>
-                  <div><span>Cantidad</span><strong>{{ line.quantity if line.quantity is not none else "—" }}</strong></div>
-                  <div><span>Unidad</span><strong>{{ line.unit or "—" }}</strong></div>
-                </div>
-              </article>
-            {% else %}
-              <p class="muted">No se detectaron líneas de pedido en la entrada.</p>
-            {% endfor %}
-          </div>
+          </span>
         {% else %}
-          <div class="empty-action-card empty-action-card-compact">
-            <strong>Previsualiza la conversación para ver el scoring y la propuesta del agente aquí.</strong>
-            <p>Usa el botón «Previsualizar» para procesar la entrada sin guardar cambios en la base de datos.</p>
-          </div>
+          <span class="badge">Pendiente</span>
         {% endif %}
-      </article>
+      </div>
 
-      <article class="subpanel stack">
-        <div class="section-title-row">
-          <div>
-            <h4>Acciones</h4>
-            <p class="muted">Primero procesamos la entrada. Después la confirmamos en el tenant.</p>
+      {% if result %}
+        {# 4-Card Metrics Strip #}
+        <div class="compact-metrics" style="grid-template-columns:repeat(2, minmax(0, 1fr));gap:10px;">
+          <div class="compact-metric-card" style="padding:10px 14px;background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;">
+            <span style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;">Cliente</span>
+            <div style="font-size:16px;font-weight:700;color:#0f172a;margin:2px 0;">{{ result.customer.score }}%</div>
+            <div style="font-size:12px;color:#475569;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{{ result.customer.name }}</div>
           </div>
-          <span class="badge">Operativo</span>
+
+          <div class="compact-metric-card" style="padding:10px 14px;background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;">
+            <span style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;">Confianza</span>
+            <div style="font-size:16px;font-weight:700;color:#0f766e;margin:2px 0;">{{ result.score }}%</div>
+            <div style="font-size:12px;color:#475569;">{{ result.category_label }}</div>
+          </div>
+
+          <div class="compact-metric-card" style="padding:10px 14px;background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;">
+            <span style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;">Líneas</span>
+            <div style="font-size:16px;font-weight:700;color:#0f172a;margin:2px 0;">{{ result.lines|length }}</div>
+            <div style="font-size:12px;color:#475569;">{{ result.lines|selectattr("has_match")|list|length }} con match</div>
+          </div>
+
+          <div class="compact-metric-card" style="padding:10px 14px;background:#ffffff;border:1px solid #e2e8f0;border-radius:10px;">
+            <span style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;">Estado sugerido</span>
+            <div style="margin-top:4px;"><span class="badge {{ result.status|status_class }}">{{ result.status|status_label }}</span></div>
+            <div style="font-size:11px;color:#64748b;margin-top:2px;">{{ result.source_label }}</div>
+          </div>
         </div>
-        <form class="js-loading-form" method="post" action="/imports/manual/process">
-          <input type="hidden" name="channel" value="{{ channel }}">
-          <input type="hidden" name="raw_text" value="{{ raw_text }}">
-          <input type="hidden" name="sender" value="{{ sender }}">
-          <input type="hidden" name="sender_hint" value="{{ sender }}">
-          <input type="hidden" name="subject" value="{{ subject }}">
-          <input type="hidden" name="phone" value="{{ phone }}">
-          <input type="hidden" name="client_participant" value="{{ client_participant }}">
-          <input type="hidden" name="company_participant" value="{{ company_participant }}">
-          <input type="hidden" name="expected_customer" value="{{ expected_customer }}">
-          <input type="hidden" name="expected_score" value="{{ expected_score }}">
-          <input type="hidden" name="expected_status" value="{{ expected_status }}">
-          <button data-loading-text="Procesando...">Procesar</button>
-        </form>
-        <form class="js-loading-form" method="post" action="/imports/manual/confirm" data-confirm="¿Confirmar la importación y encolarla para procesamiento?">
-          <input type="hidden" name="channel" value="{{ channel }}">
-          <input type="hidden" name="raw_text" value="{{ raw_text }}">
-          <input type="hidden" name="sender" value="{{ sender }}">
-          <input type="hidden" name="sender_hint" value="{{ sender }}">
-          <input type="hidden" name="subject" value="{{ subject }}">
-          <input type="hidden" name="phone" value="{{ phone }}">
-          <input type="hidden" name="client_participant" value="{{ client_participant }}">
-          <input type="hidden" name="company_participant" value="{{ company_participant }}">
-          <input type="hidden" name="expected_customer" value="{{ expected_customer }}">
-          <input type="hidden" name="expected_score" value="{{ expected_score }}">
-          <input type="hidden" name="expected_status" value="{{ expected_status }}">
-          <button class="secondary" data-loading-text="Confirmando...">Confirmar e importar</button>
-        </form>
-        {% if duplicate_message %}
-          <article class="job-card-preview">
-            <strong>Importación existente detectada</strong>
-            <p>Entrada reutilizada: #{{ duplicate_message.id }}</p>
-            <p>La importación no se ha duplicado automáticamente.</p>
-          </article>
+
+        {% if result.expected.customer or result.expected.score is not none or result.expected.status %}
+          <div style="padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;color:#475569;">
+            <strong style="color:#0f172a;">Comparativa de expectativas:</strong>
+            <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:4px;">
+              {% if result.expected.customer %}
+                <span>Cliente: <strong>{{ "✓ Coincide" if result.comparison.customer_match else "✗ No coincide" }}</strong></span>
+              {% endif %}
+              {% if result.comparison.score_delta is not none %}
+                <span>Delta Score: <strong>{{ result.comparison.score_delta }}</strong></span>
+              {% endif %}
+              {% if result.expected.status %}
+                <span>Estado: <strong>{{ "✓ Coincide" if result.comparison.status_match else "✗ No coincide" }}</strong></span>
+              {% endif %}
+            </div>
+          </div>
         {% endif %}
-      </article>
-    </section>
-  </section>
+
+        {# Extracted Lines Table #}
+        <div>
+          <h4 style="margin:0 0 8px;font-size:13.5px;font-weight:700;color:#0f172a;">Líneas de pedido detectadas</h4>
+          {% if result.lines %}
+            <div style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+              <table class="manual-lines-table">
+                <thead>
+                  <tr>
+                    <th>Texto original</th>
+                    <th>Producto</th>
+                    <th>Ref</th>
+                    <th>Cant</th>
+                    <th>Coincidencia</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for line in result.lines %}
+                    <tr>
+                      <td style="font-weight:500;">{{ line.original_text }}</td>
+                      <td><strong>{{ line.matched_product or line.product_name or "Sin identificar" }}</strong></td>
+                      <td><code>{{ line.reference or "—" }}</code></td>
+                      <td>{{ line.quantity if line.quantity is not none else "—" }} {{ line.unit or "" }}</td>
+                      <td>
+                        <span class="badge {% if line.has_match %}status-confirmed{% else %}status-discarded{% endif %}" style="font-size:11px;">
+                          {{ "Match" if line.has_match else "Sin match" }} · {{ "%.0f"|format(line.confidence) }}%
+                        </span>
+                      </td>
+                    </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+          {% else %}
+            <p class="muted" style="font-size:13px;padding:12px;background:#f8fafc;border-radius:8px;border:1px solid #e2e8f0;">No se detectaron líneas de pedido en la entrada.</p>
+          {% endif %}
+        </div>
+
+        {# Action Buttons Dock #}
+        <div class="manual-action-dock">
+          <form class="js-loading-form" method="post" action="/imports/manual/process" style="flex:1;">
+            <input type="hidden" name="channel" value="{{ channel }}">
+            <input type="hidden" name="raw_text" value="{{ raw_text }}">
+            <input type="hidden" name="sender" value="{{ sender }}">
+            <input type="hidden" name="sender_hint" value="{{ sender }}">
+            <input type="hidden" name="subject" value="{{ subject }}">
+            <input type="hidden" name="phone" value="{{ phone }}">
+            <input type="hidden" name="client_participant" value="{{ client_participant }}">
+            <input type="hidden" name="company_participant" value="{{ company_participant }}">
+            <input type="hidden" name="expected_customer" value="{{ expected_customer }}">
+            <input type="hidden" name="expected_score" value="{{ expected_score }}">
+            <input type="hidden" name="expected_status" value="{{ expected_status }}">
+            <button type="submit" class="button secondary compact-button" style="width:100%;" data-loading-text="Procesando...">
+              <span>Procesar entrada</span>
+            </button>
+          </form>
+
+          <form class="js-loading-form" method="post" action="/imports/manual/confirm" data-confirm="¿Confirmar la importación y encolarla para procesamiento?" style="flex:1;">
+            <input type="hidden" name="channel" value="{{ channel }}">
+            <input type="hidden" name="raw_text" value="{{ raw_text }}">
+            <input type="hidden" name="sender" value="{{ sender }}">
+            <input type="hidden" name="sender_hint" value="{{ sender }}">
+            <input type="hidden" name="subject" value="{{ subject }}">
+            <input type="hidden" name="phone" value="{{ phone }}">
+            <input type="hidden" name="client_participant" value="{{ client_participant }}">
+            <input type="hidden" name="company_participant" value="{{ company_participant }}">
+            <input type="hidden" name="expected_customer" value="{{ expected_customer }}">
+            <input type="hidden" name="expected_score" value="{{ expected_score }}">
+            <input type="hidden" name="expected_status" value="{{ expected_status }}">
+            <button type="submit" class="dock-primary-btn" style="width:100%;" data-loading-text="Confirmando...">
+              <span>Confirmar e importar</span>
+            </button>
+          </form>
+        </div>
+
+        {% if duplicate_message %}
+          <div style="padding:10px 14px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;font-size:12px;color:#991b1b;margin-top:8px;">
+            <strong>Importación existente detectada:</strong> Entrada reutilizada #{{ duplicate_message.id }} (no duplicada).
+          </div>
+        {% endif %}
+      {% else %}
+        {# Empty State when waiting for preview #}
+        <div class="manual-empty-preview">
+          <div class="manual-empty-preview-icon">
+            {{ icon_entries(24) }}
+          </div>
+          <strong>Previsualización en espera</strong>
+          <p>Pega el texto o adjunta un archivo en el panel izquierdo y haz clic en <strong>«Previsualizar con IA»</strong> para extraer los datos de forma segura sin guardar cambios.</p>
+        </div>
+      {% endif %}
+    </div>
+  </div>
 </section>
 
 <script>
-  (function() {
-    const form = document.getElementById("manual-import-form");
+  function setManualChannel(channel) {
     const channelInput = document.getElementById("manual-channel-input");
     const channelBadge = document.getElementById("manual-channel-badge");
-    const previewHeading = document.getElementById("manual-preview-heading");
+    const panelTitle = document.getElementById("manual-panel-title");
     const rawTextArea = document.getElementById("manual-raw-text");
-    const radios = form ? form.querySelectorAll("input[name='channel_switch']") : [];
+    const tabEmail = document.getElementById("tab-btn-email");
+    const tabWhatsapp = document.getElementById("tab-btn-whatsapp");
     const panes = document.querySelectorAll("[data-channel-pane]");
 
-    function syncChannel(value) {
-      if (channelInput) channelInput.value = value;
-      if (channelBadge) channelBadge.textContent = value === "whatsapp" ? "Canal: WhatsApp" : "Canal: Email";
-      if (previewHeading) previewHeading.textContent = value === "whatsapp" ? "Vista previa: Conversación WhatsApp" : "Vista previa: Correo recibido";
-      if (rawTextArea) {
-        rawTextArea.placeholder = value === "whatsapp"
-          ? "Pega aquí la conversación o mensajes de WhatsApp (ej: [20/08 10:30] Cliente: Hola...)"
-          : "Pega aquí el correo recibido o pedido...";
+    if (channelInput) channelInput.value = channel;
+    if (channelBadge) channelBadge.textContent = channel === "whatsapp" ? "Canal: WhatsApp" : "Canal: Email";
+    if (panelTitle) panelTitle.textContent = channel === "whatsapp" ? "Entrada de WhatsApp" : "Entrada de Correo Electrónico";
+
+    if (tabEmail && tabWhatsapp) {
+      if (channel === "whatsapp") {
+        tabWhatsapp.classList.add("is-active");
+        tabEmail.classList.remove("is-active");
+      } else {
+        tabEmail.classList.add("is-active");
+        tabWhatsapp.classList.remove("is-active");
       }
-      panes.forEach((pane) => {
-        pane.hidden = pane.getAttribute("data-channel-pane") !== value;
-      });
     }
 
-    radios.forEach((radio) => {
-      radio.addEventListener("change", () => syncChannel(radio.value));
+    if (rawTextArea) {
+      rawTextArea.placeholder = channel === "whatsapp"
+        ? "Pega aquí la conversación o mensajes de WhatsApp (ej: [20/08 10:30] Cliente: Hola, quiero pedir...)"
+        : "Pega aquí el correo recibido o cuerpo del pedido...";
+    }
+
+    panes.forEach((pane) => {
+      pane.hidden = pane.getAttribute("data-channel-pane") !== channel;
     });
-    syncChannel(channelInput ? channelInput.value || "email" : "email");
-  })();
+  }
+
+  function updateFileName(input) {
+    const label = document.getElementById("manual-file-name-label");
+    if (input.files && input.files.length > 0) {
+      label.textContent = "Archivo seleccionado: " + input.files[0].name;
+      label.style.fontWeight = "700";
+      label.style.color = "#0f766e";
+    }
+  }
 </script>
 {% endblock %}

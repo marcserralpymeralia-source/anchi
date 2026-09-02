@@ -557,13 +557,8 @@ def _dns_candidates(domain: str) -> tuple[list[MailEndpoint], list[MailEndpoint]
         if not _safe_host(host):
             continue
         mx_exchanges.append(host)
-        incoming.extend(
-            (
-                MailEndpoint("imap", host, 993, "ssl_tls", "", source="dns_mx"),
-                MailEndpoint("imap", host, 143, "starttls", "", source="dns_mx"),
-                MailEndpoint("pop3", host, 995, "ssl_tls", "", source="dns_mx"),
-            )
-        )
+        # MX identifies the provider's SMTP delivery endpoint. It is not an
+        # IMAP/POP3 endpoint, so keep it only as a discovery fingerprint.
     fingerprints = list(mx_exchanges)
     try:
         ns_answers = resolver.resolve(domain, "NS")

@@ -37,5 +37,27 @@ clients/*.local
 _codex_write_test.txt
 .vercel
 .env*
+
+# Local browser automation and end-to-end test artifacts
+.playwright-cli/
 .playwright-mcp/
+playwright-report/
+test-results/
+blob-report/
+playwright/.auth/
+*.trace.zip
+
+# Runtime output and diagnostic logs
+*.log
+*.log.*
+*.pid
+*.pid.lock
+
+# Temporary exports, captures and local reports
+*.har
+coverage/
+reports/
+screenshots/
+videos/
+traces/
 table-sidebar-collapsed-fixed.png

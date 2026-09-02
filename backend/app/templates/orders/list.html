@@ -225,22 +225,20 @@
       {# Status Tabs Strip #}
       <div class="dock-active-strip">
         <div class="workbench-tabs">
-          {% for key, label, count in [
-            ("all","Todos", tab_counts.all if tab_counts else pagination.total_items),
-            ("not_processed","Pendientes", tab_counts.not_processed if tab_counts else 0),
-            ("attention","Revisión", tab_counts.attention if tab_counts else 0),
-            ("processed","Listos", tab_counts.processed if tab_counts else 0),
-            ("errors","Errores", tab_counts.errors if tab_counts else 0),
-            ("no_order","Sin pedido", tab_counts.no_order if tab_counts else 0)
-          ] %}
-            <a class="workbench-tab {% if (filters.mode or 'all') == key %}active{% endif %}" href="/orders?view=list&mode={{ key }}{% if filters.search %}&search={{ filters.search|urlencode }}{% endif %}{% if filters.customer_id %}&customer_id={{ filters.customer_id }}{% endif %}{% if filters.date_range %}&date_range={{ filters.date_range }}{% endif %}">
-              <span>{{ label }}</span><strong>{{ count }}</strong>
-            </a>
+          <a class="workbench-tab {% if not filters.status or filters.status == 'all' %}active{% endif %}" href="/orders?view=list{% if filters.search %}&search={{ filters.search|urlencode }}{% endif %}{% if filters.customer_id %}&customer_id={{ filters.customer_id }}{% endif %}{% if filters.date_range %}&date_range={{ filters.date_range }}{% endif %}{% if filters.date_from %}&date_from={{ filters.date_from }}{% endif %}{% if filters.date_to %}&date_to={{ filters.date_to }}{% endif %}{% if archived_view %}&archived=true{% endif %}">
+            <span>Todos los estados</span><strong>{{ status_counts['all'] if (status_counts and 'all' in status_counts) else pagination.total_items }}</strong>
+          </a>
+          {% for st in statuses %}
+            {% if st %}
+              <a class="workbench-tab {% if filters.status == st %}active{% endif %}" href="/orders?view=list&status={{ st }}{% if filters.search %}&search={{ filters.search|urlencode }}{% endif %}{% if filters.customer_id %}&customer_id={{ filters.customer_id }}{% endif %}{% if filters.date_range %}&date_range={{ filters.date_range }}{% endif %}{% if filters.date_from %}&date_from={{ filters.date_from }}{% endif %}{% if filters.date_to %}&date_to={{ filters.date_to }}{% endif %}{% if archived_view %}&archived=true{% endif %}">
+                <span>{{ st|status_label }}</span><strong>{{ status_counts[st] if (status_counts and st in status_counts) else 0 }}</strong>
+              </a>
+            {% endif %}
           {% endfor %}
         </div>
 
-        {% if filters.customer_or_sender or filters.search or filters.date_range or filters.customer_id or filters.score_min or filters.score_max or filters.origin or filters.email_type or (filters.mode and filters.mode != 'all') %}
-          <a href="/orders?view=list" class="dock-clear-all-btn" style="margin-left:auto;">Restablecer filtros</a>
+        {% if filters.customer_or_sender or filters.search or filters.date_range or filters.customer_id or filters.score_min or filters.score_max or filters.origin or filters.email_type or (filters.status and filters.status != 'all') or filters.date_from or filters.date_to %}
+          <a href="/orders?view=list{% if archived_view %}&archived=true{% endif %}" class="dock-clear-all-btn" style="margin-left:auto;">Restablecer filtros</a>
         {% endif %}
       </div>
     </div>

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ.setdefault("APP_ENV", "test")
@@ -10,6 +11,7 @@ os.environ.setdefault("ENABLE_DEMO_BOOTSTRAP", "false")
 from app.settings.autoconfig import (
     _mx_provider_candidates,
     _mx_provider_domains,
+    _dns_candidates,
     detect_email_configuration,
     normalize_email,
 )
@@ -98,6 +100,24 @@ class EmailAutoconfigTests(unittest.TestCase):
         self.assertTrue(result["detected"])
         self.assertEqual(result["imap"]["host"], "imap.example.net")
         self.assertEqual(result["imap"]["source"], "mx_provider_pattern")
+
+    def test_mx_record_is_never_reported_as_imap_or_pop3(self):
+        class FakeResolver:
+            timeout = 0
+            lifetime = 0
+
+            def resolve(self, _name, record_type):
+                if record_type == "MX":
+                    return [SimpleNamespace(preference=10, exchange="mx.customer-mail.example.net.")]
+                return []
+
+        with patch("app.settings.autoconfig.dns_resolver", SimpleNamespace(Resolver=lambda: FakeResolver())):
+            incoming, outgoing, exchanges, fingerprints = _dns_candidates("customer.example.org")
+
+        self.assertEqual(incoming, [])
+        self.assertEqual(outgoing, [])
+        self.assertEqual(exchanges, ["mx.customer-mail.example.net"])
+        self.assertEqual(fingerprints, exchanges)
 
 
 class EmailAutoconfigRouteTests(unittest.TestCase):
