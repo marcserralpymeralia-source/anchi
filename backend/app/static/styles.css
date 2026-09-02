@@ -5434,3 +5434,225 @@ input[type="radio"] {
   outline: none !important;
   border-color: var(--accent, #0f766e) !important;
 }
+
+/* ==========================================================================
+   MODERN UNIFIED MODAL DIALOGS (.edit-dialog)
+   ========================================================================== */
+dialog.edit-dialog {
+  position: fixed !important;
+  inset: 0 !important;
+  margin: auto !important;
+  width: min(720px, calc(100vw - 32px)) !important;
+  max-width: 720px !important;
+  max-height: min(88vh, 780px) !important;
+  padding: 0 !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 14px !important;
+  background: #ffffff !important;
+  box-shadow: 0 24px 48px -12px rgba(15, 23, 42, 0.25), 0 0 0 1px rgba(15, 23, 42, 0.06) !important;
+  overflow: hidden !important;
+  color: var(--text, #0f172a) !important;
+  z-index: 9999 !important;
+}
+
+dialog.edit-dialog[id*="delete"] {
+  width: min(460px, calc(100vw - 32px)) !important;
+  max-width: 460px !important;
+}
+
+dialog.edit-dialog::backdrop {
+  background: rgba(15, 23, 42, 0.48) !important;
+  backdrop-filter: blur(4px) !important;
+  -webkit-backdrop-filter: blur(4px) !important;
+}
+
+dialog.edit-dialog form {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  max-height: min(88vh, 780px) !important;
+  margin: 0 !important;
+  background: #ffffff !important;
+}
+
+dialog.edit-dialog .dialog-header {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  padding: 16px 22px !important;
+  border-bottom: 1px solid var(--line, #e2e8f0) !important;
+  background: #f8faf9 !important;
+  flex-shrink: 0 !important;
+}
+
+dialog.edit-dialog .dialog-header h2 {
+  margin: 0 !important;
+  font-size: 16px !important;
+  font-weight: 700 !important;
+  color: #0f172a !important;
+  letter-spacing: -0.01em !important;
+}
+
+dialog.edit-dialog .dialog-header button {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 28px !important;
+  padding: 0 10px !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 6px !important;
+  background: #ffffff !important;
+  color: #64748b !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  transition: all 0.15s ease !important;
+}
+
+dialog.edit-dialog .dialog-header button:hover {
+  border-color: #cbd5e1 !important;
+  background: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+dialog.edit-dialog .form-grid {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 14px 16px !important;
+  padding: 22px !important;
+  overflow-y: auto !important;
+  flex: 1 1 auto !important;
+  background: #ffffff !important;
+}
+
+dialog.edit-dialog .form-grid label {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 5px !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  color: #475569 !important;
+}
+
+dialog.edit-dialog .form-grid label.span-2 {
+  grid-column: span 2 !important;
+}
+
+dialog.edit-dialog .form-grid label input[type="text"],
+dialog.edit-dialog .form-grid label input[type="number"],
+dialog.edit-dialog .form-grid label input[type="email"],
+dialog.edit-dialog .form-grid label input[type="date"],
+dialog.edit-dialog .form-grid label input:not([type]),
+dialog.edit-dialog .form-grid label select {
+  height: 36px !important;
+  padding: 0 11px !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 7px !important;
+  background: #ffffff !important;
+  font-size: 13px !important;
+  color: #0f172a !important;
+  box-sizing: border-box !important;
+  transition: all 0.15s ease !important;
+}
+
+dialog.edit-dialog .form-grid label select {
+  padding-right: 28px !important;
+  appearance: none !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 9px center !important;
+}
+
+dialog.edit-dialog .form-grid label textarea {
+  min-height: 72px !important;
+  padding: 9px 11px !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 7px !important;
+  background: #ffffff !important;
+  font-family: inherit !important;
+  font-size: 13px !important;
+  color: #0f172a !important;
+  box-sizing: border-box !important;
+  resize: vertical !important;
+  transition: all 0.15s ease !important;
+}
+
+dialog.edit-dialog .form-grid label input:focus,
+dialog.edit-dialog .form-grid label select:focus,
+dialog.edit-dialog .form-grid label textarea:focus {
+  outline: none !important;
+  border-color: var(--accent, #0f766e) !important;
+  box-shadow: 0 0 0 3px rgba(15, 118, 110, 0.12) !important;
+}
+
+dialog.edit-dialog .form-grid label input[type="checkbox"] {
+  width: 18px !important;
+  height: 18px !important;
+  margin-top: 4px !important;
+  accent-color: var(--accent, #0f766e) !important;
+  cursor: pointer !important;
+}
+
+dialog.edit-dialog .actions,
+dialog.edit-dialog form > button[data-loading-text] {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  gap: 10px !important;
+  padding: 14px 22px !important;
+  border-top: 1px solid var(--line, #e2e8f0) !important;
+  background: #f8faf9 !important;
+  flex-shrink: 0 !important;
+  margin-top: auto !important;
+}
+
+dialog.edit-dialog form > p {
+  padding: 0 22px !important;
+  margin: 8px 0 !important;
+  font-size: 13.5px !important;
+}
+
+dialog.edit-dialog .actions button,
+dialog.edit-dialog form > button[data-loading-text] {
+  height: 36px !important;
+  padding: 0 18px !important;
+  border-radius: 7px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  cursor: pointer !important;
+  transition: all 0.15s ease !important;
+}
+
+dialog.edit-dialog .actions button:not(.secondary):not(.danger),
+dialog.edit-dialog form > button[data-loading-text]:not(.secondary) {
+  border: none !important;
+  background: var(--accent, #0f766e) !important;
+  color: #ffffff !important;
+}
+
+dialog.edit-dialog .actions button:not(.secondary):not(.danger):hover,
+dialog.edit-dialog form > button[data-loading-text]:not(.secondary):hover {
+  background: var(--accent-dark, #0d5f58) !important;
+}
+
+dialog.edit-dialog .actions button.secondary {
+  border: 1px solid var(--line, #e2e8f0) !important;
+  background: #ffffff !important;
+  color: #475569 !important;
+}
+
+dialog.edit-dialog .actions button.secondary:hover {
+  border-color: #cbd5e1 !important;
+  background: #f1f5f9 !important;
+  color: #0f172a !important;
+}
+
+dialog.edit-dialog .actions button.danger {
+  border: none !important;
+  background: var(--danger, #dc2626) !important;
+  color: #ffffff !important;
+}
+
+dialog.edit-dialog .actions button.danger:hover {
+  background: #b91c1c !important;
+}

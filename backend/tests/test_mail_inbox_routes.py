@@ -206,6 +206,57 @@ class MailInboxRoutesTests(unittest.TestCase):
         finally:
             fixture.cleanup()
 
+    def test_mail_favorite_allows_historical_email_outside_active_mail_scope(self):
+        fixture = build_performance_fixture("small")
+        master_engine = create_engine(fixture.master_database_url, connect_args={"check_same_thread": False})
+        tenant_engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        MasterSession = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
+        TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
+        try:
+            with MasterSession() as master_db:
+                state = master_db.scalar(
+                    select(EmailSyncState).where(
+                        EmailSyncState.company_id == fixture.company_id,
+                        EmailSyncState.channel_key == "email",
+                    )
+                )
+                self.assertIsNotNone(state)
+                assert state is not None
+                state.mailbox = "INBOX"
+                state.uidvalidity = "999"
+                master_db.commit()
+
+            with TenantSession() as tenant_db:
+                email = tenant_db.scalar(
+                    select(Email)
+                    .where(Email.company_id == fixture.company_id)
+                    .order_by(Email.id)
+                )
+                self.assertIsNotNone(email)
+                assert email is not None
+                email_id = email.id
+                self.assertNotEqual(email.imap_mailbox, "INBOX")
+                self.assertNotEqual(email.imap_uidvalidity, "999")
+
+            with performance_test_client(fixture) as client:
+                response = client.post(
+                    f"/mail/{email_id}/favorite",
+                    headers={"X-Requested-With": "fetch", "Accept": "application/json"},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(), {"ok": True, "email_id": email_id, "is_favorite": True})
+
+            with TenantSession() as tenant_db:
+                saved = tenant_db.get(Email, email_id)
+                self.assertIsNotNone(saved)
+                assert saved is not None
+                self.assertTrue(saved.is_favorite)
+        finally:
+            master_engine.dispose()
+            tenant_engine.dispose()
+            fixture.cleanup()
+
     def test_mail_inbox_defaults_to_ten_and_filters_active_account(self):
         fixture = build_performance_fixture("small")
         master_engine = create_engine(fixture.master_database_url, connect_args={"check_same_thread": False})

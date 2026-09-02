@@ -555,7 +555,7 @@
       <label>Baja empresa<input name="company_inactive" type="checkbox"></label>
       <label class="span-2">Observaciones<textarea name="notes" rows="3"></textarea></label>
     </div>
-    <button data-loading-text="Guardando...">Guardar</button>
+    <div class="actions"><button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancelar</button><button class="primary" data-loading-text="Guardando...">Guardar</button></div>
   </form>
 </dialog>
 {% for row in customers %}

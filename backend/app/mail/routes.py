@@ -289,28 +289,37 @@ def mail_mark_read(email_id: int, request: Request, db: Session = Depends(get_te
 
 
 @router.post("/{email_id}/favorite")
-def mail_toggle_favorite(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
-    active_scope = _resolve_mail_scope(master_db, db, user.company_id)
-    email = db.get(Email, email_id)
-    valid_email = bool(
-        email
-        and email.company_id == user.company_id
-        and _email_matches_active_scope(email, active_scope)
-    )
-    if valid_email:
-        email.is_favorite = not email.is_favorite
-        db.commit()
-        log_action(
-            db,
-            company_id=user.company_id,
-            user=user,
-            action="mail.favorite.added" if email.is_favorite else "mail.favorite.removed",
-            entity_type="email",
-            entity_id=email.id,
-            message="Correo añadido a favoritos" if email.is_favorite else "Correo retirado de favoritos",
+def mail_toggle_favorite(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    # Favoritos es metadato local del tenant, no una operación sobre el buzón
+    # sincronizado. Debe funcionar también para correos históricos/importados
+    # cuyo scope IMAP ya no coincide con el checkpoint activo.
+    email = db.scalar(
+        select(Email).where(
+            Email.id == email_id,
+            Email.company_id == user.company_id,
         )
+    )
+    if not email:
+        if _wants_json(request):
+            return JSONResponse(
+                {"ok": False, "email_id": email_id, "message": "Correo no encontrado."},
+                status_code=404,
+            )
+        return _redirect_back(request)
+
+    email.is_favorite = not email.is_favorite
+    db.commit()
+    log_action(
+        db,
+        company_id=user.company_id,
+        user=user,
+        action="mail.favorite.added" if email.is_favorite else "mail.favorite.removed",
+        entity_type="email",
+        entity_id=email.id,
+        message="Correo añadido a favoritos" if email.is_favorite else "Correo retirado de favoritos",
+    )
     if _wants_json(request):
-        return JSONResponse({"ok": valid_email, "email_id": email_id, "is_favorite": bool(email and email.is_favorite)})
+        return JSONResponse({"ok": True, "email_id": email_id, "is_favorite": bool(email.is_favorite)})
     return _redirect_back(request)
 
 

@@ -348,7 +348,7 @@
       <label>Obsoleto<input name="obsolete" type="checkbox" {% if product and product.obsolete %}checked{% endif %}></label>
       <label class="span-2">Descripcion completa<textarea name="description_cont">{{ product.description_cont if product else "" }}</textarea></label>
     </div>
-    <div class="actions"><button data-loading-text="Guardando...">Guardar</button></div>
+    <div class="actions"><button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancelar</button><button class="primary" data-loading-text="Guardando...">Guardar</button></div>
   </form>
 </dialog>
 {% endmacro %}
