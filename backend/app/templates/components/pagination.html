@@ -1,19 +1,21 @@
 {% if pagination %}
-<nav class="pagination">
-  <div class="muted">Mostrando {{ pagination.start_item }}-{{ pagination.end_item }} de {{ pagination.total_items }}</div>
+<nav class="pagination data-pagination" aria-label="Navegación de páginas">
+  <div class="pagination-info muted">
+    Mostrando <strong>{{ pagination.start_item }}–{{ pagination.end_item }}</strong> de <strong>{{ pagination.total_items }}</strong>
+  </div>
   <div class="pagination-controls">
-    <a class="button secondary {% if not pagination.has_previous %}disabled{% endif %}" href="{{ page_url(request, 1) }}">Primera</a>
-    <a class="button secondary {% if not pagination.has_previous %}disabled{% endif %}" href="{{ page_url(request, pagination.page - 1) }}">Anterior</a>
-    <span class="page-pill">Pagina {{ pagination.page }} de {{ pagination.total_pages or 1 }}</span>
-    <a class="button secondary {% if not pagination.has_next %}disabled{% endif %}" href="{{ page_url(request, pagination.page + 1) }}">Siguiente</a>
-    <a class="button secondary {% if not pagination.has_next %}disabled{% endif %}" href="{{ page_url(request, pagination.total_pages or 1) }}">Ultima</a>
-    <form method="get" action="{{ request.url.path }}" class="page-size-form">
+    <a class="button secondary pagination-btn {% if not pagination.has_previous %}disabled is-disabled{% endif %}" href="{{ page_url(request, 1) }}" {% if not pagination.has_previous %}tabindex="-1" aria-disabled="true"{% endif %} title="Primera página">Primera</a>
+    <a class="button secondary pagination-btn {% if not pagination.has_previous %}disabled is-disabled{% endif %}" href="{{ page_url(request, pagination.page - 1) }}" {% if not pagination.has_previous %}tabindex="-1" aria-disabled="true"{% endif %} title="Página anterior">Anterior</a>
+    <span class="page-pill pagination-current-pill">Página <strong>{{ pagination.page }}</strong> de <strong>{{ pagination.total_pages or 1 }}</strong></span>
+    <a class="button secondary pagination-btn {% if not pagination.has_next %}disabled is-disabled{% endif %}" href="{{ page_url(request, pagination.page + 1) }}" {% if not pagination.has_next %}tabindex="-1" aria-disabled="true"{% endif %} title="Página siguiente">Siguiente</a>
+    <a class="button secondary pagination-btn {% if not pagination.has_next %}disabled is-disabled{% endif %}" href="{{ page_url(request, pagination.total_pages or 1) }}" {% if not pagination.has_next %}tabindex="-1" aria-disabled="true"{% endif %} title="Última página">Última</a>
+    <form method="get" action="{{ request.url.path }}" class="page-size-form pagination-size-form">
       {% for key, value in request.query_params.items() %}
         {% if key not in ["page", "page_size", "partial"] and value %}
           <input type="hidden" name="{{ key }}" value="{{ value }}">
         {% endif %}
       {% endfor %}
-      <select name="page_size" onchange="this.form.submit()">
+      <select name="page_size" class="pagination-size-select" aria-label="Elementos por página" onchange="this.form.submit()">
         {% for size in pagination.allowed_page_sizes %}
           <option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>
         {% endfor %}

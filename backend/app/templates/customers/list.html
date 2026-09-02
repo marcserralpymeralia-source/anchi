@@ -370,165 +370,161 @@
     {% include "components/pagination.html" %}
 
   {% else %}
-    <section class="knowledge-shell knowledge-shell-full">
-      <div class="knowledge-explorer">
-        <div class="data-dock-wrapper database-compact-toolbar">
-          <div class="data-dock">
-            {# Left section: View Switcher #}
-            <nav class="dock-segment-group" aria-label="Cambiar vista">
-              <a class="dock-segment-btn" href="/customers?view=list&status=all&page=1" title="Vista de listado">
-                {{ icon_list(14) }}
-                <span>Listado</span>
-              </a>
-              <a class="dock-segment-btn is-active" href="/customers?view=knowledge&status=all&page=1" aria-current="page" title="Vista de conocimiento">
-                {{ icon_book_open(14) }}
-                <span>Conocimiento</span>
-              </a>
-            </nav>
-            <div class="dock-divider" aria-hidden="true"></div>
+    <div class="data-dock-wrapper">
+      <div class="data-dock">
+        {# Left section: View Switcher #}
+        <nav class="dock-segment-group" aria-label="Cambiar vista">
+          <a class="dock-segment-btn" href="/customers?view=list&status=all&page=1" title="Vista de listado">
+            {{ icon_list(14) }}
+            <span>Listado</span>
+          </a>
+          <a class="dock-segment-btn is-active" href="/customers?view=knowledge&status=all&page=1" aria-current="page" title="Vista de conocimiento">
+            {{ icon_book_open(14) }}
+            <span>Conocimiento</span>
+          </a>
+        </nav>
+        <div class="dock-divider" aria-hidden="true"></div>
 
-            {# Main interactive filter form #}
-            <form class="dock-main-form" method="get" action="/customers" id="customers-knowledge-filter-form">
+        {# Main interactive filter form #}
+        <form class="dock-main-form" method="get" action="/customers" id="customers-knowledge-filter-form">
+          <input type="hidden" name="view" value="knowledge">
+          <input type="hidden" name="page" value="1">
+          <input type="hidden" name="density" value="{{ density }}">
+          <input type="hidden" name="page_size" value="{{ pagination.page_size }}">
+
+          {# Search Omnibox #}
+          <div class="dock-search-box">
+            <span class="dock-search-icon" aria-hidden="true">{{ icon_search(14) }}</span>
+            <input
+              type="search"
+              class="dock-search-input"
+              name="q"
+              value="{{ q }}"
+              placeholder="Buscar por cliente, código, CIF..."
+              aria-label="Buscar conocimiento"
+            >
+            {% if q %}
+              <button
+                type="button"
+                class="dock-search-clear"
+                title="Borrar búsqueda"
+                onclick="document.querySelector('.dock-search-input').value='';document.getElementById('customers-knowledge-filter-form').submit();"
+              >
+                {{ icon_close(12) }}
+              </button>
+            {% endif %}
+          </div>
+
+          {# Quick Status Selector #}
+          <div class="dock-select-box">
+            <select name="status" class="dock-select" aria-label="Filtrar por estado" onchange="this.form.submit()">
+              {% for value, label in [("all","Todos los estados"),("sin_conocimiento","Sin conocimiento"),("pendiente_importar","Pendiente de importar"),("en_construccion","En construcción"),("actualizado","Actualizado"),("con_errores","Con errores"),("con_sugerencias","Con sugerencias")] %}
+                <option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          {# Quick Sort Selector #}
+          <div class="dock-select-box">
+            <select name="sort" class="dock-select" aria-label="Ordenar" onchange="this.form.submit()">
+              {% for value, label in [("updated_desc","Recientes"),("name_asc","Nombre A-Z"),("name_desc","Nombre Z-A"),("code_asc","Código A-Z"),("code_desc","Código Z-A")] %}
+                <option value="{{ value }}" {% if sort == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </form>
+
+        {# Advanced Filters Popover Trigger #}
+        <details class="dock-popover-panel" id="dock-knowledge-filters-popover">
+          <summary class="dock-filter-trigger" title="Más filtros">
+            {{ icon_filter(14) }}
+            <span>Más filtros</span>
+          </summary>
+          <div class="dock-popover-flyout">
+            <form class="dock-flyout-form" method="get" action="/customers">
               <input type="hidden" name="view" value="knowledge">
               <input type="hidden" name="page" value="1">
-              <input type="hidden" name="density" value="{{ density }}">
-              <input type="hidden" name="page_size" value="{{ pagination.page_size }}">
+              <input type="hidden" name="q" value="{{ q }}">
+              <input type="hidden" name="status" value="{{ status }}">
+              <input type="hidden" name="sort" value="{{ sort }}">
 
-              {# Search Omnibox #}
-              <div class="dock-search-box">
-                <span class="dock-search-icon" aria-hidden="true">{{ icon_search(14) }}</span>
-                <input
-                  type="search"
-                  class="dock-search-input"
-                  name="q"
-                  value="{{ q }}"
-                  placeholder="Buscar por cliente, código, CIF..."
-                  aria-label="Buscar conocimiento"
-                >
-                {% if q %}
-                  <button
-                    type="button"
-                    class="dock-search-clear"
-                    title="Borrar búsqueda"
-                    onclick="document.querySelector('.dock-search-input').value='';document.getElementById('customers-knowledge-filter-form').submit();"
-                  >
-                    {{ icon_close(12) }}
-                  </button>
-                {% endif %}
+              <div class="dock-flyout-header">
+                <strong>Filtros de vista</strong>
               </div>
 
-              {# Quick Status Selector #}
-              <div class="dock-select-box">
-                <select name="status" class="dock-select" aria-label="Filtrar por estado" onchange="this.form.submit()">
-                  {% for value, label in [("all","Todos los estados"),("sin_conocimiento","Sin conocimiento"),("pendiente_importar","Pendiente de importar"),("en_construccion","En construcción"),("actualizado","Actualizado"),("con_errores","Con errores"),("con_sugerencias","Con sugerencias")] %}
-                    <option value="{{ value }}" {% if status == value %}selected{% endif %}>{{ label }}</option>
-                  {% endfor %}
-                </select>
+              <div class="dock-flyout-grid">
+                <label class="dock-flyout-field dock-col-span-2">
+                  <span class="dock-flyout-label">Densidad de carpetas</span>
+                  <select name="density">
+                    <option value="comfortable" {% if density != "compact" %}selected{% endif %}>Normal</option>
+                    <option value="compact" {% if density == "compact" %}selected{% endif %}>Compacta</option>
+                  </select>
+                </label>
+
+                <label class="dock-flyout-field dock-col-span-2">
+                  <span class="dock-flyout-label">Resultados por página</span>
+                  <select name="page_size">
+                    {% for size in pagination.allowed_page_sizes %}
+                      <option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }} carpetas por página</option>
+                    {% endfor %}
+                  </select>
+                </label>
               </div>
 
-              {# Quick Sort Selector #}
-              <div class="dock-select-box">
-                <select name="sort" class="dock-select" aria-label="Ordenar" onchange="this.form.submit()">
-                  {% for value, label in [("updated_desc","Recientes"),("name_asc","Nombre A-Z"),("name_desc","Nombre Z-A"),("code_asc","Código A-Z"),("code_desc","Código Z-A")] %}
-                    <option value="{{ value }}" {% if sort == value %}selected{% endif %}>{{ label }}</option>
-                  {% endfor %}
-                </select>
+              <div class="dock-flyout-footer">
+                <a class="button secondary compact-button" href="/customers?view=knowledge">Limpiar</a>
+                <button type="submit" class="compact-button dock-btn-apply" data-loading-text="Aplicando...">Aplicar filtros</button>
               </div>
             </form>
+          </div>
+        </details>
 
-            {# Advanced Filters Popover Trigger #}
-            <details class="dock-popover-panel" id="dock-knowledge-filters-popover">
-              <summary class="dock-filter-trigger" title="Más filtros">
-                {{ icon_filter(14) }}
-                <span>Más filtros</span>
-              </summary>
-              <div class="dock-popover-flyout">
-                <form class="dock-flyout-form" method="get" action="/customers">
-                  <input type="hidden" name="view" value="knowledge">
-                  <input type="hidden" name="page" value="1">
-                  <input type="hidden" name="q" value="{{ q }}">
-                  <input type="hidden" name="status" value="{{ status }}">
-                  <input type="hidden" name="sort" value="{{ sort }}">
+        <div class="dock-spacer"></div>
 
-                  <div class="dock-flyout-header">
-                    <strong>Filtros de vista</strong>
-                  </div>
+        {# Right section: Item Count #}
+        <div class="dock-actions-group">
+          <span class="dock-count-badge">
+            <strong>{{ pagination.total_items }}</strong> clientes
+          </span>
+        </div>
+      </div>
+    </div>
 
-                  <div class="dock-flyout-grid">
-                    <label class="dock-flyout-field dock-col-span-2">
-                      <span class="dock-flyout-label">Densidad de carpetas</span>
-                      <select name="density">
-                        <option value="comfortable" {% if density != "compact" %}selected{% endif %}>Normal</option>
-                        <option value="compact" {% if density == "compact" %}selected{% endif %}>Compacta</option>
-                      </select>
-                    </label>
-
-                    <label class="dock-flyout-field dock-col-span-2">
-                      <span class="dock-flyout-label">Resultados por página</span>
-                      <select name="page_size">
-                        {% for size in pagination.allowed_page_sizes %}
-                          <option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }} carpetas por página</option>
-                        {% endfor %}
-                      </select>
-                    </label>
-                  </div>
-
-                  <div class="dock-flyout-footer">
-                    <a class="button secondary compact-button" href="/customers?view=knowledge">Limpiar</a>
-                    <button type="submit" class="compact-button dock-btn-apply" data-loading-text="Aplicando...">Aplicar filtros</button>
-                  </div>
-                </form>
-              </div>
-            </details>
-
-            <div class="dock-spacer"></div>
-
-            {# Right section: Item Count #}
-            <div class="dock-actions-group">
-              <span class="dock-count-badge">
-                <strong>{{ pagination.total_items }}</strong> clientes
-              </span>
+    <div class="database-folder-grid knowledge-folder-grid {% if density == 'compact' %}is-compact{% endif %}">
+      {% for card in knowledge_cards %}
+        <article class="folder-card {% if selected_id == card.id %}is-selected{% endif %}">
+          <div class="folder-card-head">
+            <div>
+              <strong class="folder-title">{{ icon_folder(16) }} <span>{{ card.name }}</span></strong>
+              <p>{{ card.code }}</p>
             </div>
+            <span class="badge {% if card.knowledge_state == 'Actualizado' %}status-confirmed{% elif card.knowledge_state in ['Con sugerencias', 'En construcción'] %}status-doubtful{% elif card.knowledge_state == 'Con errores' %}status-discarded{% else %}status-confirmed{% endif %}">{{ card.knowledge_state }}</span>
+          </div>
+          <div class="folder-card-meta">
+            <span><strong>{{ card.documents }}</strong> documentos</span>
+            <span><strong>{{ card.habitual_products }}</strong> artículos</span>
+          </div>
+          <div class="folder-card-footer">
+            <small>Última actualización: {{ card.last_updated }}</small>
+          </div>
+          <div class="actions">
+            <a class="button secondary compact-button" href="/customers/{{ card.id }}/knowledge">Abrir carpeta</a>
+            <a class="button secondary compact-button table-edit-button" href="/customers/{{ card.id }}/knowledge?section=summary#customer-file" title="Editar ficha" aria-label="Editar ficha">{{ icon_edit(15) }}</a>
+          </div>
+        </article>
+      {% else %}
+        <div class="empty-action-card">
+          <strong>No hay clientes para mostrar en la vista de conocimiento.</strong>
+          <p>Prueba a cambiar el filtro o importarlos desde la base maestra.</p>
+          <div class="actions">
+            <a class="button secondary compact-button" href="/customers?view=list">Ir al listado</a>
           </div>
         </div>
-
-        <div class="database-folder-grid knowledge-folder-grid {% if density == 'compact' %}is-compact{% endif %}">
-          {% for card in knowledge_cards %}
-            <article class="folder-card {% if selected_id == card.id %}is-selected{% endif %}">
-              <div class="folder-card-head">
-                <div>
-                  <strong class="folder-title">{{ icon_folder(16) }} <span>{{ card.name }}</span></strong>
-                  <p>{{ card.code }}</p>
-                </div>
-                <span class="badge {% if card.knowledge_state == 'Actualizado' %}status-confirmed{% elif card.knowledge_state in ['Con sugerencias', 'En construcción'] %}status-doubtful{% elif card.knowledge_state == 'Con errores' %}status-discarded{% else %}status-confirmed{% endif %}">{{ card.knowledge_state }}</span>
-              </div>
-              <div class="folder-card-meta">
-                <span><strong>{{ card.documents }}</strong> documentos</span>
-                <span><strong>{{ card.habitual_products }}</strong> artículos</span>
-              </div>
-              <div class="folder-card-footer">
-                <small>Última actualización: {{ card.last_updated }}</small>
-              </div>
-              <div class="actions">
-                <a class="button secondary compact-button" href="/customers/{{ card.id }}/knowledge">Abrir carpeta</a>
-                <a class="button secondary compact-button table-edit-button" href="/customers/{{ card.id }}/knowledge?section=summary#customer-file" title="Editar ficha" aria-label="Editar ficha">{{ icon_edit(15) }}</a>
-              </div>
-            </article>
-          {% else %}
-            <div class="empty-action-card">
-              <strong>No hay clientes para mostrar en la vista de conocimiento.</strong>
-              <p>Prueba a cambiar el filtro o importarlos desde la base maestra.</p>
-              <div class="actions">
-                <a class="button secondary compact-button" href="/customers?view=list">Ir al listado</a>
-              </div>
-            </div>
-          {% endfor %}
-        </div>
-        {% if pagination.total_pages > 1 %}
-          {% include "components/pagination.html" %}
-        {% endif %}
-      </div>
-    </section>
+      {% endfor %}
+    </div>
+    {% if pagination.total_pages > 1 %}
+      {% include "components/pagination.html" %}
+    {% endif %}
   {% endif %}
 </section>
 

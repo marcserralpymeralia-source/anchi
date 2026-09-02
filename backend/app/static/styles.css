@@ -5144,3 +5144,293 @@ input[type="radio"] {
     max-width: none;
   }
 }
+
+/* ==========================================================================
+   UNIFIED STATUS TABS / WORKFLOW PASTILLAS (Global)
+   ========================================================================== */
+.workbench-tabs,
+.webmail-pills,
+.database-tabs,
+.learning-tabs {
+  display: flex !important;
+  align-items: center !important;
+  flex-wrap: wrap !important;
+  gap: 6px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow-x: auto !important;
+}
+
+.workbench-tab,
+.webmail-pill {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  min-height: 28px !important;
+  padding: 4px 10px !important;
+  border-radius: 999px !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  background: #ffffff !important;
+  color: #475569 !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  text-decoration: none !important;
+  white-space: nowrap !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04) !important;
+  transition: all 0.15s ease !important;
+  cursor: pointer !important;
+}
+
+.workbench-tab span,
+.webmail-pill span {
+  color: inherit !important;
+  font-size: inherit !important;
+  font-weight: inherit !important;
+}
+
+.workbench-tab strong,
+.workbench-tab .webmail-pill-count,
+.webmail-pill strong,
+.webmail-pill .webmail-pill-count {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-width: 18px !important;
+  height: 18px !important;
+  padding: 0 5px !important;
+  border-radius: 999px !important;
+  font-size: 10.5px !important;
+  font-weight: 700 !important;
+  background: #f1f5f9 !important;
+  color: #64748b !important;
+  transition: all 0.15s ease !important;
+  box-sizing: border-box !important;
+}
+
+.workbench-tab:hover,
+.webmail-pill:hover {
+  border-color: #cbd5e1 !important;
+  background: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+.workbench-tab:hover strong,
+.workbench-tab:hover .webmail-pill-count,
+.webmail-pill:hover strong,
+.webmail-pill:hover .webmail-pill-count {
+  background: #e2e8f0 !important;
+  color: #334155 !important;
+}
+
+.workbench-tab.active,
+.workbench-tab.is-active,
+.webmail-pill.active,
+.webmail-pill.is-active {
+  border-color: var(--accent, #0f766e) !important;
+  background: var(--accent, #0f766e) !important;
+  color: #ffffff !important;
+  box-shadow: 0 1px 3px rgba(15, 118, 110, 0.25) !important;
+}
+
+.workbench-tab.active strong,
+.workbench-tab.active .webmail-pill-count,
+.workbench-tab.is-active strong,
+.webmail-pill.active strong,
+.webmail-pill.active .webmail-pill-count,
+.webmail-pill.is-active strong {
+  background: rgba(255, 255, 255, 0.24) !important;
+  color: #ffffff !important;
+}
+
+/* ==========================================================================
+   WHATSAPP INBOX FULL VIEWPORT HEIGHT EXPANSION
+   ========================================================================== */
+.channel-inbox-shell,
+.whatsapp-inbox-shell {
+  display: flex !important;
+  flex-direction: column !important;
+  height: calc(100vh - 100px) !important;
+  min-height: 540px !important;
+  gap: 8px !important;
+  box-sizing: border-box !important;
+}
+
+.channel-inbox-workspace {
+  display: grid !important;
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr) !important;
+  flex: 1 1 0 !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  overflow: hidden !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 10px !important;
+  background: #fff !important;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, .035) !important;
+}
+
+.channel-inbox-contacts {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  min-width: 0 !important;
+  border-right: 1px solid var(--line) !important;
+  background: #fbfcfc !important;
+}
+
+.channel-inbox-pane-header,
+.channel-inbox-search,
+.channel-inbox-pagination {
+  flex-shrink: 0 !important;
+}
+
+.channel-inbox-contact-list {
+  flex: 1 1 0 !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  border-top: 1px solid var(--line) !important;
+}
+
+.channel-inbox-chat {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  min-width: 0 !important;
+  background: #fff !important;
+}
+
+.channel-chat-header,
+.channel-chat-compose,
+.channel-chat-disabled-note {
+  flex-shrink: 0 !important;
+}
+
+.channel-chat-messages {
+  flex: 1 1 0 !important;
+  min-height: 0 !important;
+  overflow-y: auto !important;
+  padding: 17px 19px !important;
+  background: linear-gradient(#fbfdfc, #f7faf9) !important;
+}
+
+/* ==========================================================================
+   UNIFIED MODERN PAGINATION BAR (Data Pagination)
+   ========================================================================== */
+.pagination,
+.data-pagination {
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+  gap: 12px !important;
+  padding: 8px 12px !important;
+  margin-top: 10px !important;
+  background: #ffffff !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 9px !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.03) !important;
+  box-sizing: border-box !important;
+  flex-wrap: wrap !important;
+}
+
+.pagination-info {
+  font-size: 12px !important;
+  color: #64748b !important;
+}
+
+.pagination-info strong {
+  color: #0f172a !important;
+  font-weight: 700 !important;
+}
+
+.pagination-controls {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  flex-wrap: wrap !important;
+}
+
+.pagination-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  height: 28px !important;
+  padding: 0 10px !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 6px !important;
+  background: #ffffff !important;
+  color: #475569 !important;
+  font-size: 11.5px !important;
+  font-weight: 600 !important;
+  text-decoration: none !important;
+  white-space: nowrap !important;
+  transition: all 0.15s ease !important;
+}
+
+.pagination-btn:hover:not(.is-disabled):not(.disabled) {
+  border-color: #cbd5e1 !important;
+  background: #f8fafc !important;
+  color: #0f172a !important;
+}
+
+.pagination-btn.is-disabled,
+.pagination-btn.disabled {
+  opacity: 0.45 !important;
+  pointer-events: none !important;
+  cursor: not-allowed !important;
+  background: #f8fafc !important;
+}
+
+.pagination-current-pill,
+.page-pill {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  height: 28px !important;
+  padding: 0 11px !important;
+  border: 1px solid #d9e2ec !important;
+  border-radius: 6px !important;
+  background: #f8fafc !important;
+  color: #334155 !important;
+  font-size: 11.5px !important;
+  font-weight: 500 !important;
+  white-space: nowrap !important;
+}
+
+.pagination-current-pill strong {
+  color: var(--accent, #0f766e) !important;
+  font-weight: 700 !important;
+}
+
+.pagination-size-form,
+.page-size-form {
+  margin: 0 !important;
+  display: inline-flex !important;
+}
+
+.pagination-size-select {
+  height: 28px !important;
+  padding: 0 24px 0 8px !important;
+  border: 1px solid var(--line, #e2e8f0) !important;
+  border-radius: 6px !important;
+  background: #ffffff !important;
+  font-size: 11.5px !important;
+  font-weight: 600 !important;
+  color: #334155 !important;
+  cursor: pointer !important;
+  appearance: none !important;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E") !important;
+  background-repeat: no-repeat !important;
+  background-position: right 7px center !important;
+  box-sizing: border-box !important;
+  transition: all 0.15s ease !important;
+}
+
+.pagination-size-select:hover {
+  border-color: #cbd5e1 !important;
+}
+
+.pagination-size-select:focus {
+  outline: none !important;
+  border-color: var(--accent, #0f766e) !important;
+}

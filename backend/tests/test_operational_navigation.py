@@ -137,7 +137,7 @@ class OperationalNavigationTests(unittest.TestCase):
 
             self.assertEqual(customer_knowledge.status_code, 200)
             self.assertIn("database-compact-page", customer_knowledge.text)
-            self.assertIn("database-compact-toolbar", customer_knowledge.text)
+            self.assertIn("data-dock", customer_knowledge.text)
             self.assertIn('id="customers-knowledge-filter-form"', customer_knowledge.text)
             self.assertIn("Más filtros", customer_knowledge.text)
             self.assertIn("knowledge-folder-grid", customer_knowledge.text)
