@@ -242,7 +242,7 @@ def parse_form_value(value: str) -> Any:
     return value
 
 
-def update_branding_from_form(branding: BrandingSettings, form: dict[str, str], user_id: int) -> None:
+def update_branding_from_form(branding: BrandingSettings, form: dict[str, str], user_id: int | None) -> None:
     for field in [
         "company_name",
         "app_name",
@@ -294,7 +294,7 @@ async def store_brand_asset(company_id: int, upload: UploadFile, prefix: str) ->
     return f"/static/uploads/branding/{filename}"
 
 
-def reset_branding(branding: BrandingSettings, user_id: int) -> None:
+def reset_branding(branding: BrandingSettings, user_id: int | None) -> None:
     payload = default_branding_payload()
     for key in ["company_name", "app_name", "primary_claim", "secondary_claim", "short_description", "logo_url", "dark_logo_url", "favicon_url"]:
         setattr(branding, key, payload[key])

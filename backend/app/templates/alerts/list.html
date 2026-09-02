@@ -1,100 +1,145 @@
+{% from "components/icons.html" import icon_close, icon_search %}
 {% extends "base.html" %}
 {% set title = "Alertas" %}
 {% block content %}
-<section class="page-section stack alerts-page-shell">
-  <div class="section-title-row">
-    <div>
-      <span class="page-kicker">Centro de avisos</span>
-      <p class="muted">Centro de revisión y trazabilidad de incidencias, bloqueos y avisos del sistema.</p>
-    </div>
-    <div class="actions">
-      <a class="button secondary" href="/">Bandeja</a>
-      <a class="button secondary" href="/pedidos">Pedidos</a>
-    </div>
-  </div>
+<section class="workbench-shell" id="alerts-shell">
+  {# Dock / Toolbar Superior con el mismo layout que la Bandeja #}
+  <div class="workbench-dock panel">
+    <div class="dock-primary-row">
+      {# Left section: Buscador #}
+      <div class="dock-left-controls">
+        <form class="dock-main-form" method="get" action="/alerts" id="alerts-main-filter-form">
+          <input type="hidden" name="page" value="1">
+          <input type="hidden" name="status" value="{{ filters.status or 'all' }}">
+          <input type="hidden" name="severity" value="{{ filters.severity or 'all' }}">
 
-  <section class="history-summary">
-    <article class="compact-card compact-card-error"><span>Pendientes</span><strong>{{ summary.total }}</strong><small>Activas</small></article>
-    <article class="compact-card compact-card-error"><span>Críticas</span><strong>{{ summary.critical }}</strong><small>Requieren atención</small></article>
-    <article class="compact-card compact-card-reviewable"><span>Alta</span><strong>{{ summary.high }}</strong><small>Revisión</small></article>
-    <article class="compact-card compact-card-safe"><span>Media/Baja</span><strong>{{ summary.medium + summary.low + summary.info }}</strong><small>Seguimiento</small></article>
-  </section>
-
-  <form class="filter-grid standard-filter-bar" method="get" action="/alerts">
-    <input type="hidden" name="page" value="1">
-    <label>Estado
-      <select name="status">
-        {% for value, label in [("all","Todas"),("open","Nuevas"),("seen","Vistas"),("processing","En proceso"),("resolved","Resueltas"),("ignored","Ignoradas")] %}
-          <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Severidad
-      <select name="severity">
-        {% for value, label in [("all","Todas"),("critical","Críticas"),("high","Alta"),("medium","Media"),("low","Baja"),("info","Informativas")] %}
-          <option value="{{ value }}" {% if filters.severity == value %}selected{% endif %}>{{ label }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>Buscar<input name="search" value="{{ filters.search }}" placeholder="Título, mensaje o tipo"></label>
-    <label>Tamaño página
-      <select name="page_size">
-        {% for size in pagination.allowed_page_sizes %}
-          <option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }}</option>
-        {% endfor %}
-      </select>
-    </label>
-    <label>&nbsp;<button class="secondary" data-loading-text="Filtrando...">Filtrar</button></label>
-  </form>
-</section>
-
-<section class="panel stack history-table-panel">
-  <div class="section-title-row">
-    <div>
-      <h3>Alertas activas e históricas</h3>
-      <span class="badge">{{ pagination.start_item }}-{{ pagination.end_item }} de {{ pagination.total_items }}</span>
-    </div>
-  </div>
-
-  <div class="alerts-list page-alerts-list">
-    {% for alert in alerts %}
-      <article class="alert-card alert-{{ alert.severity }} alert-status-{{ alert.status }}" data-alert-id="{{ alert.id }}">
-        <div class="alert-card-inner">
-          <div class="alert-card-header">
-            <div class="alert-card-tags">
-              <span class="alert-severity-badge severity-{{ alert.severity }}">{{ alert.severity_label }}</span>
-              <span class="badge">{{ alert.type_label }}</span>
-              <span class="badge">{{ alert.status_label }}</span>
-              <span class="badge">{{ alert.entity_type }} #{{ alert.entity_id }}</span>
-            </div>
-            <span class="alert-time">{{ alert.created_label }}</span>
+          <div class="dock-search-box">
+            <span class="dock-search-icon" aria-hidden="true">{{ icon_search(14) }}</span>
+            <input
+              type="search"
+              class="dock-search-input"
+              name="search"
+              value="{{ filters.search or '' }}"
+              placeholder="Buscar alertas o incidencias..."
+              aria-label="Buscar alertas"
+            >
+            {% if filters.search %}
+              <button
+                type="button"
+                class="dock-search-clear"
+                title="Borrar búsqueda"
+                onclick="document.querySelector('.dock-search-input').value='';document.getElementById('alerts-main-filter-form').submit();"
+              >
+                {{ icon_close(12) }}
+              </button>
+            {% endif %}
           </div>
-          <div class="alert-card-body">
-            <strong class="alert-card-title">{{ alert.title }}</strong>
-            <p class="alert-card-msg">{{ alert.message }}</p>
+        </form>
+      </div>
+
+      {# Right section: Contador #}
+      <div class="dock-actions-group">
+        <span class="dock-count-badge">
+          <strong>{{ pagination.total_items }}</strong> alertas
+        </span>
+      </div>
+    </div>
+
+    {# Status Tabs Strip #}
+    <div class="dock-active-strip">
+      <div class="workbench-tabs">
+        {% for key, label, count in [
+          ("all", "Todas", summary.total),
+          ("critical", "Críticas", summary.critical),
+          ("high", "Alta", summary.high),
+          ("medium", "Media", summary.medium),
+          ("low", "Baja / Info", summary.low + summary.info)
+        ] %}
+          <a class="workbench-tab {% if (filters.severity or 'all') == key %}active{% endif %}" href="/alerts?severity={{ key }}{% if filters.status and filters.status != 'all' %}&status={{ filters.status }}{% endif %}{% if filters.search %}&search={{ filters.search }}{% endif %}">
+            <span>{{ label }}</span><strong>{{ count }}</strong>
+          </a>
+        {% endfor %}
+      </div>
+
+      {% if filters.search or (filters.status and filters.status != 'all') or (filters.severity and filters.severity != 'all') %}
+        <a href="/alerts" class="dock-clear-all-btn" style="margin-left:auto;">Restablecer filtros</a>
+      {% endif %}
+    </div>
+  </div>
+
+  {# Grid de Tarjetas de Alerta exactamente iguales a las de la Bandeja #}
+  <div class="work-queue alerts-grid">
+    {% for alert in alerts %}
+      <article class="queue-item alert-queue-card" data-alert-id="{{ alert.id }}">
+        <div class="queue-item-inner">
+          <!-- Cabecera de la tarjeta: Badges -->
+          <div class="queue-item-header">
+            <div class="queue-item-badges">
+              <span class="queue-badge alert-severity-badge severity-{{ alert.severity }}">{{ alert.severity_label }}</span>
+              <span class="queue-badge queue-badge-status">{{ alert.status_label }}</span>
+              <span class="queue-badge queue-badge-channel">{{ alert.entity_type }} #{{ alert.entity_id }}</span>
+            </div>
+          </div>
+
+          <!-- Cuerpo de la tarjeta: Título y Mensaje -->
+          <div class="queue-item-body">
+            <div class="queue-item-customer">
+              <h3 class="queue-customer-title" title="{{ alert.title }}">
+                {{ alert.title }}
+              </h3>
+            </div>
+            <div class="queue-item-sender" title="{{ alert.message }}">
+              <span>{{ alert.message }}</span>
+            </div>
+          </div>
+
+          <!-- Pie de la tarjeta: Metadatos estructurados (Fecha, Entidad, Severidad) -->
+          <div class="queue-item-footer">
+            <div class="queue-meta-col queue-meta-date">
+              <span class="queue-meta-label">Fecha</span>
+              <span class="queue-meta-val">{{ alert.created_label }}</span>
+            </div>
+            <div class="queue-meta-col queue-meta-products">
+              <span class="queue-meta-label">Entidad</span>
+              <span class="queue-meta-val">
+                <strong>{{ alert.entity_type }} #{{ alert.entity_id }}</strong>
+              </span>
+            </div>
+            <div class="queue-meta-col queue-meta-score">
+              <span class="queue-meta-label">Severidad</span>
+              <div class="queue-meta-val alert-meta-severity severity-{{ alert.severity }}">
+                <strong>{{ alert.severity_label }}</strong>
+              </div>
+            </div>
           </div>
         </div>
-        <div class="alert-card-bottom-actions">
+
+        <!-- Botón inferior a ancho completo -->
+        <div class="queue-item-bottom-action">
           {% if alert.action_href %}
-            <a class="alert-btn-primary" href="{{ alert.action_href }}">{{ alert.action_label }}</a>
-          {% endif %}
-          {% if alert.secondary_action == "mark-read" %}
-            <form class="js-loading-form" method="post" action="/alerts/{{ alert.id }}/mark-read" style="display:contents;">
-              <button class="alert-btn-secondary" data-loading-text="Marcando...">Marcar vista</button>
+            <a class="queue-bottom-action-btn" href="{{ alert.action_href }}">{{ alert.action_label }}</a>
+          {% elif alert.secondary_action == "mark-read" %}
+            <form class="js-loading-form queue-bottom-action-form" method="post" action="/alerts/{{ alert.id }}/mark-read">
+              <button type="submit" class="queue-bottom-action-btn" data-loading-text="Marcando...">Marcar vista</button>
             </form>
           {% elif alert.secondary_action == "resolve" %}
-            <form class="js-loading-form" method="post" action="/alerts/{{ alert.id }}/resolve" style="display:contents;">
-              <button class="alert-btn-secondary" data-loading-text="Resolviendo...">Resolver</button>
+            <form class="js-loading-form queue-bottom-action-form" method="post" action="/alerts/{{ alert.id }}/resolve">
+              <button type="submit" class="queue-bottom-action-btn" data-loading-text="Resolviendo...">Resolver</button>
             </form>
           {% elif alert.secondary_action == "reopen" %}
-            <form class="js-loading-form" method="post" action="/alerts/{{ alert.id }}/reopen" style="display:contents;">
-              <button class="alert-btn-secondary" data-loading-text="Reabriendo...">Reabrir</button>
+            <form class="js-loading-form queue-bottom-action-form" method="post" action="/alerts/{{ alert.id }}/reopen">
+              <button type="submit" class="queue-bottom-action-btn" data-loading-text="Reabriendo...">Reabrir</button>
             </form>
+          {% else %}
+            <a class="queue-bottom-action-btn" href="/">Ver en bandeja</a>
           {% endif %}
         </div>
       </article>
     {% else %}
-      <p class="muted">No hay alertas para los filtros seleccionados.</p>
+      <article class="task-empty">
+        <strong>Sin alertas activas</strong>
+        <span>No hay incidencias ni avisos pendientes para los filtros seleccionados.</span>
+      </article>
     {% endfor %}
   </div>
 

@@ -4,128 +4,130 @@
 {% block content %}
 <div class="webmail-shell">
   {# Topbar / Toolbar #}
-  <div class="data-dock-wrapper" style="margin-bottom: 8px;">
-    <div class="data-dock">
-      {# Main interactive filter form #}
-      <form class="dock-main-form" method="get" action="/history" id="webmail-main-filter-form">
-        <input type="hidden" name="state" value="{{ filters.state or 'all' }}">
+  <div class="data-dock-wrapper" style="margin-bottom: 12px;">
+    <div class="data-dock-multi">
+      <div class="dock-primary-row">
+        {# Main interactive filter form #}
+        <form class="dock-main-form" method="get" action="/history" id="webmail-main-filter-form">
+          <input type="hidden" name="state" value="{{ filters.state or 'all' }}">
 
-        {# Search Omnibox #}
-        <div class="dock-search-box" style="width: 280px; max-width: 360px;">
-          <span class="dock-search-icon" aria-hidden="true">{{ icon_search(14) }}</span>
-          <input
-            type="search"
-            class="dock-search-input"
-            name="search"
-            value="{{ filters.search or '' }}"
-            placeholder="Buscar por cliente, remitente, asunto..."
-            aria-label="Buscar mensajes"
-          >
-          {% if filters.search %}
-            <button
-              type="button"
-              class="dock-search-clear"
-              title="Borrar búsqueda"
-              onclick="document.querySelector('.dock-search-input').value='';document.getElementById('webmail-main-filter-form').submit();"
+          {# Search Omnibox #}
+          <div class="dock-search-box" style="width: 280px; max-width: 360px;">
+            <span class="dock-search-icon" aria-hidden="true">{{ icon_search(14) }}</span>
+            <input
+              type="search"
+              class="dock-search-input"
+              name="search"
+              value="{{ filters.search or '' }}"
+              placeholder="Buscar por cliente, remitente, asunto..."
+              aria-label="Buscar mensajes"
             >
-              {{ icon_close(12) }}
-            </button>
-          {% endif %}
+            {% if filters.search %}
+              <button
+                type="button"
+                class="dock-search-clear"
+                title="Borrar búsqueda"
+                onclick="document.querySelector('.dock-search-input').value='';document.getElementById('webmail-main-filter-form').submit();"
+              >
+                {{ icon_close(12) }}
+              </button>
+            {% endif %}
+          </div>
+
+          {# Quick Date Range Selector #}
+          <div class="dock-select-box">
+            <select name="date_range" class="dock-select" aria-label="Rango de fecha" onchange="this.form.submit()">
+              {% for value, label in [("today","Hoy"),("yesterday","Ayer"),("7d","Últimos 7 días"),("30d","Últimos 30 días"),("90d","90 días"),("365d","1 año"),("all","Todas las fechas")] %}
+                <option value="{{ value }}" {% if (filters.date_range or '90d') == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          {# Quick Kind Selector #}
+          <div class="dock-select-box">
+            <select name="kind" class="dock-select" aria-label="Tipo de contenido" onchange="this.form.submit()">
+              {% for value, label in [("all","Todo el buzón"),("orders","Pedidos"),("emails","Correos")] %}
+                <option value="{{ value }}" {% if (filters.kind or 'all') == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </div>
+        </form>
+
+        {# Advanced Filters Popover Trigger #}
+        <details class="dock-popover-panel" id="dock-filters-popover">
+          <summary class="dock-filter-trigger {% if filters.customer_id and filters.customer_id != '0' and filters.customer_id != 0 %}has-active-filters{% endif %}" title="Más filtros">
+            {{ icon_filter(14) }}
+            <span>Más filtros</span>
+            {% if filters.customer_id and filters.customer_id != '0' and filters.customer_id != 0 %}
+              <span class="dock-badge-count">1</span>
+            {% endif %}
+          </summary>
+          <div class="dock-popover-flyout" style="width:min(400px, calc(100vw - 32px));">
+            <form class="dock-flyout-form" method="get" action="/history">
+              <input type="hidden" name="state" value="{{ filters.state or 'all' }}">
+              <input type="hidden" name="search" value="{{ filters.search or '' }}">
+              <input type="hidden" name="date_range" value="{{ filters.date_range or '90d' }}">
+              <input type="hidden" name="kind" value="{{ filters.kind or 'all' }}">
+
+              <div class="dock-flyout-header">
+                <strong>Filtros del buzón</strong>
+                {% if filters.customer_id and filters.customer_id != '0' and filters.customer_id != 0 %}
+                  <a class="dock-flyout-reset" href="/history?state={{ filters.state or 'all' }}&date_range={{ filters.date_range or '90d' }}&kind={{ filters.kind or 'all' }}">Restablecer</a>
+                {% endif %}
+              </div>
+
+              <div class="dock-flyout-grid">
+                <label class="dock-flyout-field dock-col-span-2">
+                  <span class="dock-flyout-label">Filtrar por Cliente</span>
+                  <select name="customer_id">
+                    <option value="0">Todos los clientes</option>
+                    {% for customer in customers %}
+                      <option value="{{ customer.id }}" {% if filters.customer_id|string == customer.id|string %}selected{% endif %}>{{ customer.code }} - {{ customer.fiscal_name }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+              </div>
+
+              <div class="dock-flyout-footer">
+                <a class="button secondary compact-button" href="/history?state={{ filters.state or 'all' }}&date_range={{ filters.date_range or '90d' }}&kind={{ filters.kind or 'all' }}">Limpiar</a>
+                <button type="submit" class="compact-button dock-btn-apply" data-loading-text="Aplicando...">Aplicar filtros</button>
+              </div>
+            </form>
+          </div>
+        </details>
+
+        <div class="dock-spacer"></div>
+
+        {# Right section: Count / Metric #}
+        <div class="dock-actions-group">
+          <span class="dock-count-badge">
+            <strong>{{ pagination.total_items }}</strong> mensajes
+          </span>
         </div>
-
-        {# Quick Date Range Selector #}
-        <div class="dock-select-box">
-          <select name="date_range" class="dock-select" aria-label="Rango de fecha" onchange="this.form.submit()">
-            {% for value, label in [("today","Hoy"),("yesterday","Ayer"),("7d","Últimos 7 días"),("30d","Últimos 30 días"),("90d","90 días"),("365d","1 año"),("all","Todas las fechas")] %}
-              <option value="{{ value }}" {% if (filters.date_range or '90d') == value %}selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-          </select>
-        </div>
-
-        {# Quick Kind Selector #}
-        <div class="dock-select-box">
-          <select name="kind" class="dock-select" aria-label="Tipo de contenido" onchange="this.form.submit()">
-            {% for value, label in [("all","Todo el buzón"),("orders","Pedidos"),("emails","Correos")] %}
-              <option value="{{ value }}" {% if (filters.kind or 'all') == value %}selected{% endif %}>{{ label }}</option>
-            {% endfor %}
-          </select>
-        </div>
-      </form>
-
-      {# Advanced Filters Popover Trigger #}
-      <details class="dock-popover-panel" id="dock-filters-popover">
-        <summary class="dock-filter-trigger {% if filters.customer_id and filters.customer_id != '0' and filters.customer_id != 0 %}has-active-filters{% endif %}" title="Más filtros">
-          {{ icon_filter(14) }}
-          <span>Más filtros</span>
-          {% if filters.customer_id and filters.customer_id != '0' and filters.customer_id != 0 %}
-            <span class="dock-badge-count">1</span>
-          {% endif %}
-        </summary>
-        <div class="dock-popover-flyout" style="width:min(400px, calc(100vw - 32px));">
-          <form class="dock-flyout-form" method="get" action="/history">
-            <input type="hidden" name="state" value="{{ filters.state or 'all' }}">
-            <input type="hidden" name="search" value="{{ filters.search or '' }}">
-            <input type="hidden" name="date_range" value="{{ filters.date_range or '90d' }}">
-            <input type="hidden" name="kind" value="{{ filters.kind or 'all' }}">
-
-            <div class="dock-flyout-header">
-              <strong>Filtros del buzón</strong>
-              {% if filters.customer_id and filters.customer_id != '0' and filters.customer_id != 0 %}
-                <a class="dock-flyout-reset" href="/history?state={{ filters.state or 'all' }}&date_range={{ filters.date_range or '90d' }}&kind={{ filters.kind or 'all' }}">Restablecer</a>
-              {% endif %}
-            </div>
-
-            <div class="dock-flyout-grid">
-              <label class="dock-flyout-field dock-col-span-2">
-                <span class="dock-flyout-label">Filtrar por Cliente</span>
-                <select name="customer_id">
-                  <option value="0">Todos los clientes</option>
-                  {% for customer in customers %}
-                    <option value="{{ customer.id }}" {% if filters.customer_id|string == customer.id|string %}selected{% endif %}>{{ customer.code }} - {{ customer.fiscal_name }}</option>
-                  {% endfor %}
-                </select>
-              </label>
-            </div>
-
-            <div class="dock-flyout-footer">
-              <a class="button secondary compact-button" href="/history?state={{ filters.state or 'all' }}&date_range={{ filters.date_range or '90d' }}&kind={{ filters.kind or 'all' }}">Limpiar</a>
-              <button type="submit" class="compact-button dock-btn-apply" data-loading-text="Aplicando...">Aplicar filtros</button>
-            </div>
-          </form>
-        </div>
-      </details>
-
-      <div class="dock-spacer"></div>
-
-      {# Right section: Count / Metric #}
-      <div class="dock-actions-group">
-        <span class="dock-count-badge">
-          <strong>{{ pagination.total_items }}</strong> mensajes
-        </span>
-      </div>
-    </div>
-
-    {# Sub-strip: Status / Workflow Pills #}
-    <div class="dock-active-strip" style="padding-top:2px;">
-      <div class="workbench-tabs">
-        {% for key, label in [
-          ("all", "Todos"),
-          ("current", "Actuales"),
-          ("review", "Con dudas"),
-          ("ready", "Listos"),
-          ("confirmed", "Confirmados"),
-          ("sent", "Enviados"),
-          ("blocked", "Bloqueados")
-        ] %}
-          <a class="workbench-tab {% if (filters.state or 'all') == key %}active{% endif %}" href="/history?state={{ key }}&kind={{ filters.kind }}&date_range={{ filters.date_range }}&search={{ filters.search|urlencode }}&customer_id={{ filters.customer_id }}">
-            <span>{{ label }}</span><strong>{{ tab_counts[key] }}</strong>
-          </a>
-        {% endfor %}
       </div>
 
-      {% if filters.search or (filters.customer_id and filters.customer_id != '0' and filters.customer_id != 0) %}
-        <a href="/history?state={{ filters.state or 'all' }}&date_range={{ filters.date_range or '90d' }}&kind={{ filters.kind or 'all' }}" class="dock-clear-all-btn" style="margin-left:auto;">Restablecer filtros</a>
-      {% endif %}
+      {# Sub-strip: Status / Workflow Pills INSIDE the box #}
+      <div class="dock-active-strip">
+        <div class="workbench-tabs">
+          {% for key, label in [
+            ("all", "Todos"),
+            ("current", "Actuales"),
+            ("review", "Con dudas"),
+            ("ready", "Listos"),
+            ("confirmed", "Confirmados"),
+            ("sent", "Enviados"),
+            ("blocked", "Bloqueados")
+          ] %}
+            <a class="workbench-tab {% if (filters.state or 'all') == key %}active{% endif %}" href="/history?state={{ key }}&kind={{ filters.kind }}&date_range={{ filters.date_range }}&search={{ filters.search|urlencode }}&customer_id={{ filters.customer_id }}">
+              <span>{{ label }}</span><strong>{{ tab_counts[key] }}</strong>
+            </a>
+          {% endfor %}
+        </div>
+
+        {% if filters.search or (filters.customer_id and filters.customer_id != '0' and filters.customer_id != 0) %}
+          <a href="/history?state={{ filters.state or 'all' }}&date_range={{ filters.date_range or '90d' }}&kind={{ filters.kind or 'all' }}" class="dock-clear-all-btn" style="margin-left:auto;">Restablecer filtros</a>
+        {% endif %}
+      </div>
     </div>
   </div>
 

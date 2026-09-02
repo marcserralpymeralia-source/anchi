@@ -253,7 +253,7 @@ async def update_settings_section_async(section: str, request: Request, db: Sess
         update_with_form(instance, form, {"api_key_encrypted"})
         if instance.provider == "disabled" or instance.agent_mode == "desactivado":
             instance.agent_enabled = False
-        instance.updated_by = user.id
+        instance.updated_by = resolve_updated_by_id(db, user)
         instance.updated_at = datetime.now(timezone.utc)
         apply_safety_level(get_or_create_settings(db, ScoringSettings, user.company_id), instance.safety_level)
         anchor = "agent-ai"
@@ -276,7 +276,7 @@ async def update_settings_section_async(section: str, request: Request, db: Sess
         llm = get_or_create_settings(db, LLMSettings, user.company_id)
         for field in ["allow_auto_confirm", "allow_auto_export"]:
             setattr(llm, field, form.get(field) == "on")
-        llm.updated_by = user.id
+        llm.updated_by = resolve_updated_by_id(db, user)
         llm.updated_at = datetime.now(timezone.utc)
         anchor = "scoring"
     elif section == "decision":

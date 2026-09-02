@@ -357,8 +357,133 @@ def _published_configuration(email_address: str, domain: str) -> tuple[str, str,
             except Exception:  # noqa: BLE001
                 results[futures[future]] = None
     for index in range(len(urls)):
-        if results.get(index):
-            return results[index]
+        result = results.get(index)
+        # An SMTP-only XML document cannot configure Anchi's inbox. Keep
+        # looking so MX-derived ISPDB discovery can still provide IMAP.
+        if result and result[2]:
+            return result
+    return None
+
+
+_COMMON_SECOND_LEVEL_TLDS = {
+    "ac.uk",
+    "co.uk",
+    "gov.uk",
+    "ltd.uk",
+    "me.uk",
+    "net.uk",
+    "org.uk",
+    "plc.uk",
+    "sch.uk",
+    "com.au",
+    "com.br",
+    "com.cn",
+    "com.hk",
+    "com.mx",
+    "com.sg",
+    "com.tr",
+    "com.tw",
+    "co.nz",
+    "co.za",
+    "com.ar",
+    "com.co",
+    "com.pe",
+}
+
+
+def _registrable_like_domain(host: str) -> str | None:
+    """Return a conservative provider-domain approximation without DNS writes.
+
+    The reference engine uses a public-suffix database. Anchi intentionally
+    keeps discovery lightweight, so this covers common multi-label suffixes
+    and falls back to the final two labels. It is only used as a bounded input
+    to Thunderbird ISPDB and provider-host candidates.
+    """
+
+    labels = [label for label in (host or "").rstrip(".").lower().split(".") if label]
+    if len(labels) < 2:
+        return None
+    suffix = ".".join(labels[-2:])
+    if suffix in _COMMON_SECOND_LEVEL_TLDS and len(labels) >= 3:
+        return ".".join(labels[-3:])
+    return suffix
+
+
+def _mx_provider_domains(exchanges: list[str], domain: str) -> list[str]:
+    """Derive mail-provider domains from the domain's MX exchanges.
+
+    MX records usually point at a provider hostname (for example
+    ``mx.customer-mail.example`` or ``mail.provider.example``), while IMAP
+    and SMTP live on sibling hosts. Querying the registrable provider domain
+    lets us use the provider's published ISPDB profile and its own host
+    naming, without trying an unbounded catalogue of generic servers.
+    """
+
+    result: list[str] = []
+    domain = domain.rstrip(".").lower()
+    for exchange in exchanges:
+        candidate = _registrable_like_domain(exchange)
+        if not candidate or candidate == domain or candidate in result:
+            continue
+        result.append(candidate)
+        if len(result) >= 3:
+            break
+    return result
+
+
+def _mx_provider_candidates(provider_domains: list[str]) -> tuple[list[MailEndpoint], list[MailEndpoint]]:
+    """Build bounded candidates from MX-derived provider hostnames only."""
+
+    incoming: list[MailEndpoint] = []
+    outgoing: list[MailEndpoint] = []
+    for provider_domain in provider_domains:
+        for host, protocol, port in (
+            (f"imap.{provider_domain}", "imap", 993),
+            (f"imap.{provider_domain}", "imap", 143),
+            (f"pop.{provider_domain}", "pop3", 995),
+            (f"pop.{provider_domain}", "pop3", 110),
+            (f"pop3.{provider_domain}", "pop3", 995),
+            (f"mail.{provider_domain}", "imap", 993),
+            (f"mail.{provider_domain}", "imap", 143),
+            (f"mail.{provider_domain}", "pop3", 995),
+            (f"mail.{provider_domain}", "pop3", 110),
+        ):
+            security = "ssl_tls" if port in {993, 995} else "starttls"
+            incoming.append(_endpoint(protocol, host, port, security, "mx_provider_pattern"))
+        for host, port, security in (
+            (f"smtp.{provider_domain}", 465, "ssl_tls"),
+            (f"smtp.{provider_domain}", 587, "starttls"),
+            (f"mail.{provider_domain}", 465, "ssl_tls"),
+            (f"mail.{provider_domain}", 587, "starttls"),
+        ):
+            outgoing.append(_endpoint("smtp", host, port, security, "mx_provider_pattern"))
+    return incoming, outgoing
+
+
+def _published_configuration_from_mx_provider(
+    email_address: str,
+    provider_domains: list[str],
+) -> tuple[str, str, list[MailEndpoint], list[MailEndpoint]] | None:
+    """Read Thunderbird ISPDB profiles for providers discovered via MX."""
+
+    if not provider_domains:
+        return None
+    urls = [
+        f"https://autoconfig.thunderbird.net/v1.1/{quote(provider_domain, safe='')}"
+        for provider_domain in provider_domains
+    ]
+    results: dict[int, tuple[str, str, list[MailEndpoint], list[MailEndpoint]] | None] = {}
+    with ThreadPoolExecutor(max_workers=min(3, len(urls))) as pool:
+        futures = {pool.submit(_fetch_autoconfig, url, email_address): index for index, url in enumerate(urls)}
+        for future in as_completed(futures):
+            try:
+                results[futures[future]] = future.result()
+            except Exception:  # noqa: BLE001
+                results[futures[future]] = None
+    for index in range(len(urls)):
+        result = results.get(index)
+        if result and result[2]:
+            return result
     return None
 
 
@@ -707,7 +832,15 @@ def detect_email_configuration(email_address: str, password: str) -> dict[str, A
         incoming.extend(preset.incoming)
         outgoing.extend(preset.outgoing)
     else:
+        # DNS discovery comes first for custom domains: the MX target is the
+        # only reliable clue about which hosted-mail provider owns the inbox.
+        # It feeds both the provider's published ISPDB profile and its
+        # provider-specific IMAP/SMTP hostname patterns.
+        dns_incoming, dns_outgoing, mx_exchanges, fingerprints = _dns_candidates(domain)
+        mx_provider_domains = _mx_provider_domains(mx_exchanges, domain)
         published = _published_configuration(normalized_email, domain)
+        if not published:
+            published = _published_configuration_from_mx_provider(normalized_email, mx_provider_domains)
         published_found = False
         if published:
             identifier, label, published_incoming, published_outgoing = published
@@ -715,13 +848,15 @@ def detect_email_configuration(email_address: str, password: str) -> dict[str, A
             incoming.extend(published_incoming)
             outgoing.extend(published_outgoing)
             published_found = True
-        dns_incoming, dns_outgoing, mx_exchanges, fingerprints = _dns_candidates(domain)
         mx_preset = _preset_from_mx(mx_exchanges)
         if mx_preset:
             incoming.extend(mx_preset.incoming)
             outgoing.extend(mx_preset.outgoing)
             if not published_found:
                 provider_key, provider_label = mx_preset.name, mx_preset.label
+        mx_incoming, mx_outgoing = _mx_provider_candidates(mx_provider_domains)
+        incoming.extend(mx_incoming)
+        outgoing.extend(mx_outgoing)
         hosting_incoming, hosting_outgoing = _hosting_candidates(domain, fingerprints)
         incoming.extend(hosting_incoming)
         outgoing.extend(hosting_outgoing)
@@ -740,6 +875,7 @@ def detect_email_configuration(email_address: str, password: str) -> dict[str, A
     discovered = bool(incoming)
     suggested_imap = next((endpoint for endpoint in incoming if endpoint.protocol == "imap"), None)
     suggested_pop3 = next((endpoint for endpoint in incoming if endpoint.protocol == "pop3"), None)
+    discovery_sources = sorted({endpoint.source for endpoint in (*incoming, *outgoing)})
     return {
         "ok": True,
         "detected": bool(verified_incoming),
@@ -758,4 +894,9 @@ def detect_email_configuration(email_address: str, password: str) -> dict[str, A
         "suggested_pop3": suggested_pop3.as_dict() if suggested_pop3 else None,
         "smtp": verified_smtp[0].as_dict() if verified_smtp else None,
         "attempts": {"incoming": incoming_attempts, "smtp": smtp_attempts},
+        "discovery": {
+            "sources": discovery_sources,
+            "mx_provider_domains": _mx_provider_domains(mx_exchanges, domain) if not preset else [],
+            "candidate_count": len(incoming) + len(outgoing),
+        },
     }

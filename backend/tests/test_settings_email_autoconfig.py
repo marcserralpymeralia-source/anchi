@@ -7,7 +7,12 @@ from unittest.mock import patch
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("ENABLE_DEMO_BOOTSTRAP", "false")
 
-from app.settings.autoconfig import detect_email_configuration, normalize_email
+from app.settings.autoconfig import (
+    _mx_provider_candidates,
+    _mx_provider_domains,
+    detect_email_configuration,
+    normalize_email,
+)
 from scripts.performance_data import build_performance_fixture, performance_test_client
 
 
@@ -66,6 +71,33 @@ class EmailAutoconfigTests(unittest.TestCase):
         self.assertEqual(parsed[2][0].host, "imap.example.com")
         self.assertEqual(parsed[2][0].username, "person@example.com")
         self.assertEqual(parsed[2][0].security, "ssl_tls")
+
+    def test_mx_discovery_derives_provider_domain_and_sibling_servers(self):
+        provider_domains = _mx_provider_domains(
+            ["mx01.mailhost.example.net.", "mx02.mailhost.example.net."],
+            "customer.example.org",
+        )
+        self.assertEqual(provider_domains, ["example.net"])
+
+        incoming, outgoing = _mx_provider_candidates(provider_domains)
+        self.assertIn(("imap", "imap.example.net", 993), {(item.protocol, item.host, item.port) for item in incoming})
+        self.assertIn(("smtp", "smtp.example.net", 587), {(item.protocol, item.host, item.port) for item in outgoing})
+        self.assertTrue(all(item.source == "mx_provider_pattern" for item in (*incoming, *outgoing)))
+
+    def test_custom_domain_uses_mx_derived_imap_before_common_fallbacks(self):
+        with (
+            patch("app.settings.autoconfig._dns_candidates", return_value=([], [], ["mx.mailhost.example.net"], ["mx.mailhost.example.net"])),
+            patch("app.settings.autoconfig._published_configuration", return_value=None),
+            patch("app.settings.autoconfig._published_configuration_from_mx_provider", return_value=None),
+            patch("app.settings.autoconfig._host_is_public", return_value=True),
+            patch("app.settings.autoconfig._probe_incoming", side_effect=lambda endpoint, _username, _password: endpoint.host == "imap.example.net"),
+            patch("app.settings.autoconfig._probe_smtp", return_value=False),
+        ):
+            result = detect_email_configuration("person@customer.example.org", "app-password")
+
+        self.assertTrue(result["detected"])
+        self.assertEqual(result["imap"]["host"], "imap.example.net")
+        self.assertEqual(result["imap"]["source"], "mx_provider_pattern")
 
 
 class EmailAutoconfigRouteTests(unittest.TestCase):

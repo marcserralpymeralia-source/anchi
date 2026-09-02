@@ -43,273 +43,207 @@
 {%- endmacro %}
 
 <section class="database-compact-page">
-  <div class="data-dock-wrapper">
-    <div class="data-dock">
-      {# Left section: View Switcher #}
-      {% if not archived_view %}
-        <nav class="dock-segment-group" aria-label="Cambiar vista">
-          <a class="dock-segment-btn" href="{{ view_cards_url }}" title="Vista de tarjetas">
-            {{ icon_dashboard(14) }}
-            <span>Tarjetas</span>
-          </a>
-          <a class="dock-segment-btn is-active" href="{{ view_list_url }}" aria-current="page" title="Vista de listado">
-            {{ icon_list(14) }}
-            <span>Lista</span>
-          </a>
-        </nav>
-        <div class="dock-divider" aria-hidden="true"></div>
-      {% endif %}
-
-      {# Main interactive filter form #}
-      <form class="dock-main-form" method="get" action="/orders" id="orders-main-filter-form">
-        <input type="hidden" name="page" value="1">
-        <input type="hidden" name="sort" value="{{ filters.sort or 'date_desc' }}">
-        {% if archived_view %}<input type="hidden" name="archived" value="true">{% endif %}
-
-        {# Search Omnibox #}
-        <div class="dock-search-box">
-          <span class="dock-search-icon" aria-hidden="true">{{ icon_search(14) }}</span>
-          <input
-            type="search"
-            class="dock-search-input"
-            name="search"
-            placeholder="Buscar por ID, cliente, asunto..."
-            value="{{ filters.search or '' }}"
-            aria-label="Buscar pedidos"
-          >
-          {% if filters.search %}
-            <button
-              type="button"
-              class="dock-search-clear"
-              title="Borrar búsqueda"
-              onclick="document.querySelector('.dock-search-input').value='';document.getElementById('orders-main-filter-form').submit();"
-            >
-              {{ icon_close(12) }}
-            </button>
-          {% endif %}
-        </div>
-
-        {# Quick Status Selector #}
-        <div class="dock-select-box">
-          <select name="status" class="dock-select" aria-label="Filtrar por estado" onchange="this.form.submit()">
-            <option value="">Todos los estados</option>
-            {% for item in statuses %}
-              <option value="{{ item }}" {% if filters.status == item %}selected{% endif %}>{{ item|status_label }}</option>
-            {% endfor %}
-          </select>
-        </div>
-      </form>
-
-      {# Advanced Filters Popover Trigger #}
-      <details class="dock-popover-panel" id="dock-filters-popover">
-        <summary class="dock-filter-trigger {% if active_count > 0 %}has-active-filters{% endif %}" title="Filtros avanzados">
-          {{ icon_filter(14) }}
-          <span>Filtros</span>
-          {% if active_count > 0 %}
-            <span class="dock-badge-count">{{ active_count }}</span>
-          {% endif %}
-        </summary>
-        <div class="dock-popover-flyout">
-          <form class="dock-flyout-form" method="get" action="/orders">
-            <input type="hidden" name="page" value="1">
-            <input type="hidden" name="search" value="{{ filters.search or '' }}">
-            <input type="hidden" name="status" value="{{ filters.status or '' }}">
-            <input type="hidden" name="sort" value="{{ filters.sort or 'date_desc' }}">
-            {% if archived_view %}<input type="hidden" name="archived" value="true">{% endif %}
-
-            <div class="dock-flyout-header">
-              <strong>Filtros avanzados</strong>
-              {% if active_count > 0 %}
-                <a class="dock-flyout-reset" href="{{ orders_reset_url }}">Restablecer</a>
-              {% endif %}
-            </div>
-
-            <div class="dock-flyout-grid">
-              <label class="dock-flyout-field">
-                <span class="dock-flyout-label">Desde</span>
-                <input type="date" name="date_from" value="{{ filters.date_from }}">
-              </label>
-
-              <label class="dock-flyout-field">
-                <span class="dock-flyout-label">Hasta</span>
-                <input type="date" name="date_to" value="{{ filters.date_to }}">
-              </label>
-
-              <label class="dock-flyout-field dock-col-span-2">
-                <span class="dock-flyout-label">Cliente</span>
-                <select name="customer_id">
-                  <option value="0">Todos los clientes</option>
-                  {% for customer in customers %}
-                    <option value="{{ customer.id }}" {% if filters.customer_id == customer.id %}selected{% endif %}>{{ customer.code }} - {{ customer.fiscal_name }}</option>
-                  {% endfor %}
-                </select>
-              </label>
-
-              <label class="dock-flyout-field dock-col-span-2">
-                <span class="dock-flyout-label">Remitente</span>
-                <input name="sender" value="{{ filters.sender }}" placeholder="ej. pedidos@empresa.com">
-              </label>
-
-              <label class="dock-flyout-field">
-                <span class="dock-flyout-label">Confianza</span>
-                <select name="scoring_category">
-                  <option value="">Todas las categorías</option>
-                  <option value="safe" {% if filters.scoring_category == "safe" %}selected{% endif %}>Alta</option>
-                  <option value="reviewable" {% if filters.scoring_category == "reviewable" %}selected{% endif %}>Revisable</option>
-                  <option value="doubtful" {% if filters.scoring_category == "doubtful" %}selected{% endif %}>Dudosa</option>
-                  <option value="not_importable" {% if filters.scoring_category == "not_importable" %}selected{% endif %}>Bloqueada</option>
-                  <option value="without_score" {% if filters.scoring_category == "without_score" %}selected{% endif %}>Pendiente</option>
-                </select>
-              </label>
-
-              <label class="dock-flyout-field">
-                <span class="dock-flyout-label">Tiene archivo PDF</span>
-                <select name="has_pdf">
-                  <option value="">Todos</option>
-                  <option value="yes" {% if filters.has_pdf == "yes" %}selected{% endif %}>Sí</option>
-                  <option value="no" {% if filters.has_pdf == "no" %}selected{% endif %}>No</option>
-                </select>
-              </label>
-
-              <label class="dock-flyout-field">
-                <span class="dock-flyout-label">Requiere revisión</span>
-                <select name="requires_review">
-                  <option value="">Todos</option>
-                  <option value="yes" {% if filters.requires_review == "yes" %}selected{% endif %}>Sí</option>
-                  <option value="no" {% if filters.requires_review == "no" %}selected{% endif %}>No</option>
-                </select>
-              </label>
-
-              <label class="dock-flyout-field">
-                <span class="dock-flyout-label">Tipo de mensaje</span>
-                <select name="email_type">
-                  <option value="">Todos</option>
-                  {% for item in ["pedido", "no_pedido", "consulta", "incidencia", "dudoso"] %}
-                    <option value="{{ item }}" {% if filters.email_type == item %}selected{% endif %}>{{ item|status_label }}</option>
-                  {% endfor %}
-                </select>
-              </label>
-
-              <label class="dock-flyout-field dock-col-span-2">
-                <span class="dock-flyout-label">Resultados por página</span>
-                <select name="page_size">
-                  {% for size in pagination.allowed_page_sizes %}
-                    <option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }} pedidos por página</option>
-                  {% endfor %}
-                </select>
-              </label>
-            </div>
-
-            <div class="dock-flyout-footer">
-              <a class="button secondary compact-button" href="{{ orders_reset_url }}">Limpiar</a>
-              <button type="submit" class="compact-button dock-btn-apply" data-loading-text="Aplicando...">Aplicar filtros</button>
-            </div>
-          </form>
-        </div>
-      </details>
-
-      <div class="dock-spacer"></div>
-
-      {# Right section: Item Count & Primary Action #}
-      <div class="dock-actions-group">
-        <span class="dock-count-badge">
-          <strong>{{ pagination.total_items }}</strong> {{ "archivados" if archived_view else "pedidos" }}
-        </span>
-
+  <div class="data-dock-wrapper" style="margin-bottom: 12px;">
+    <div class="data-dock-multi">
+      <div class="dock-primary-row">
+        {# Left section: View Switcher #}
         {% if not archived_view %}
-          <form method="post" action="/orders/mock" class="dock-action-form">
-            <button type="submit" class="dock-primary-btn" title="Crear un pedido de prueba simulado">
-              {{ icon_plus(14) }}
-              <span>{{ request.state.branding.microcopy.create_test_order }}</span>
-            </button>
-          </form>
+          <nav class="dock-segment-group" aria-label="Cambiar vista">
+            <a class="dock-segment-btn" href="{{ view_cards_url }}" title="Vista de tarjetas">
+              {{ icon_dashboard(14) }}
+              <span>Tarjetas</span>
+            </a>
+            <a class="dock-segment-btn is-active" href="{{ view_list_url }}" aria-current="page" title="Vista de listado">
+              {{ icon_list(14) }}
+              <span>Lista</span>
+            </a>
+          </nav>
+          <div class="dock-divider" aria-hidden="true"></div>
+        {% endif %}
+
+        {# Main interactive filter form #}
+        <form class="dock-main-form" method="get" action="/orders" id="orders-main-filter-form">
+          <input type="hidden" name="page" value="1">
+          <input type="hidden" name="view" value="list">
+          <input type="hidden" name="mode" value="{{ filters.mode or 'all' }}">
+          <input type="hidden" name="sort" value="{{ filters.sort or 'date_desc' }}">
+          {% if archived_view %}<input type="hidden" name="archived" value="true">{% endif %}
+
+          {# Search Omnibox #}
+          <div class="dock-search-box">
+            <span class="dock-search-icon" aria-hidden="true">{{ icon_search(14) }}</span>
+            <input
+              type="search"
+              class="dock-search-input"
+              name="search"
+              placeholder="Buscar por ID, cliente, asunto..."
+              value="{{ filters.search or '' }}"
+              aria-label="Buscar pedidos"
+            >
+            {% if filters.search %}
+              <button
+                type="button"
+                class="dock-search-clear"
+                title="Borrar búsqueda"
+                onclick="document.querySelector('.dock-search-input').value='';document.getElementById('orders-main-filter-form').submit();"
+              >
+                {{ icon_close(12) }}
+              </button>
+            {% endif %}
+          </div>
+        </form>
+
+        {# Advanced Filters Popover Trigger #}
+        <details class="dock-popover-panel" id="dock-filters-popover">
+          <summary class="dock-filter-trigger {% if active_count > 0 %}has-active-filters{% endif %}" title="Filtros avanzados">
+            {{ icon_filter(14) }}
+            <span>Filtros</span>
+            {% if active_count > 0 %}
+              <span class="dock-badge-count">{{ active_count }}</span>
+            {% endif %}
+          </summary>
+          <div class="dock-popover-flyout">
+            <form class="dock-flyout-form" method="get" action="/orders">
+              <input type="hidden" name="view" value="list">
+              <input type="hidden" name="page" value="1">
+              <input type="hidden" name="mode" value="{{ filters.mode or 'all' }}">
+              <input type="hidden" name="search" value="{{ filters.search or '' }}">
+              <input type="hidden" name="status" value="{{ filters.status or '' }}">
+              <input type="hidden" name="sort" value="{{ filters.sort or 'date_desc' }}">
+              {% if archived_view %}<input type="hidden" name="archived" value="true">{% endif %}
+
+              <div class="dock-flyout-header">
+                <strong>Filtros avanzados</strong>
+                {% if active_count > 0 %}
+                  <a class="dock-flyout-reset" href="{{ orders_reset_url }}">Restablecer</a>
+                {% endif %}
+              </div>
+
+              <div class="dock-flyout-grid">
+                <label class="dock-flyout-field">
+                  <span class="dock-flyout-label">Desde</span>
+                  <input type="date" name="date_from" value="{{ filters.date_from }}">
+                </label>
+
+                <label class="dock-flyout-field">
+                  <span class="dock-flyout-label">Hasta</span>
+                  <input type="date" name="date_to" value="{{ filters.date_to }}">
+                </label>
+
+                <label class="dock-flyout-field dock-col-span-2">
+                  <span class="dock-flyout-label">Cliente</span>
+                  <select name="customer_id">
+                    <option value="0">Todos los clientes</option>
+                    {% for customer in customers %}
+                      <option value="{{ customer.id }}" {% if filters.customer_id == customer.id %}selected{% endif %}>{{ customer.code }} - {{ customer.fiscal_name }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+
+                <label class="dock-flyout-field dock-col-span-2">
+                  <span class="dock-flyout-label">Remitente</span>
+                  <input name="sender" value="{{ filters.sender }}" placeholder="ej. pedidos@empresa.com">
+                </label>
+
+                <label class="dock-flyout-field">
+                  <span class="dock-flyout-label">Confianza</span>
+                  <select name="scoring_category">
+                    <option value="">Todas las categorías</option>
+                    <option value="safe" {% if filters.scoring_category == "safe" %}selected{% endif %}>Alta</option>
+                    <option value="reviewable" {% if filters.scoring_category == "reviewable" %}selected{% endif %}>Revisable</option>
+                    <option value="doubtful" {% if filters.scoring_category == "doubtful" %}selected{% endif %}>Dudosa</option>
+                    <option value="not_importable" {% if filters.scoring_category == "not_importable" %}selected{% endif %}>Bloqueada</option>
+                    <option value="without_score" {% if filters.scoring_category == "without_score" %}selected{% endif %}>Pendiente</option>
+                  </select>
+                </label>
+
+                <label class="dock-flyout-field">
+                  <span class="dock-flyout-label">Tiene archivo PDF</span>
+                  <select name="has_pdf">
+                    <option value="">Todos</option>
+                    <option value="yes" {% if filters.has_pdf == "yes" %}selected{% endif %}>Sí</option>
+                    <option value="no" {% if filters.has_pdf == "no" %}selected{% endif %}>No</option>
+                  </select>
+                </label>
+
+                <label class="dock-flyout-field">
+                  <span class="dock-flyout-label">Requiere revisión</span>
+                  <select name="requires_review">
+                    <option value="">Todos</option>
+                    <option value="yes" {% if filters.requires_review == "yes" %}selected{% endif %}>Sí</option>
+                    <option value="no" {% if filters.requires_review == "no" %}selected{% endif %}>No</option>
+                  </select>
+                </label>
+
+                <label class="dock-flyout-field">
+                  <span class="dock-flyout-label">Tipo de mensaje</span>
+                  <select name="email_type">
+                    <option value="">Todos</option>
+                    {% for item in ["pedido", "no_pedido", "consulta", "incidencia", "dudoso"] %}
+                      <option value="{{ item }}" {% if filters.email_type == item %}selected{% endif %}>{{ item|status_label }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+
+                <label class="dock-flyout-field dock-col-span-2">
+                  <span class="dock-flyout-label">Resultados por página</span>
+                  <select name="page_size">
+                    {% for size in pagination.allowed_page_sizes %}
+                      <option value="{{ size }}" {% if pagination.page_size == size %}selected{% endif %}>{{ size }} pedidos por página</option>
+                    {% endfor %}
+                  </select>
+                </label>
+              </div>
+
+              <div class="dock-flyout-footer">
+                <a class="button secondary compact-button" href="{{ orders_reset_url }}">Limpiar</a>
+                <button type="submit" class="compact-button dock-btn-apply" data-loading-text="Aplicando...">Aplicar filtros</button>
+              </div>
+            </form>
+          </div>
+        </details>
+
+        <div class="dock-spacer"></div>
+
+        {# Right section: Item Count & Primary Action #}
+        <div class="dock-actions-group">
+          <span class="dock-count-badge">
+            <strong>{{ pagination.total_items }}</strong> {{ "archivados" if archived_view else "pedidos" }}
+          </span>
+
+          {% if not archived_view %}
+            <form method="post" action="/orders/mock" class="dock-action-form">
+              <button type="submit" class="dock-primary-btn" title="Crear un pedido de prueba simulado">
+                {{ icon_plus(14) }}
+                <span>{{ request.state.branding.microcopy.create_test_order }}</span>
+              </button>
+            </form>
+          {% endif %}
+        </div>
+      </div>
+
+      {# Status Tabs Strip #}
+      <div class="dock-active-strip">
+        <div class="workbench-tabs">
+          {% for key, label, count in [
+            ("all","Todos", tab_counts.all if tab_counts else pagination.total_items),
+            ("not_processed","Pendientes", tab_counts.not_processed if tab_counts else 0),
+            ("attention","Revisión", tab_counts.attention if tab_counts else 0),
+            ("processed","Listos", tab_counts.processed if tab_counts else 0),
+            ("errors","Errores", tab_counts.errors if tab_counts else 0),
+            ("no_order","Sin pedido", tab_counts.no_order if tab_counts else 0)
+          ] %}
+            <a class="workbench-tab {% if (filters.mode or 'all') == key %}active{% endif %}" href="/orders?view=list&mode={{ key }}{% if filters.search %}&search={{ filters.search|urlencode }}{% endif %}{% if filters.customer_id %}&customer_id={{ filters.customer_id }}{% endif %}{% if filters.date_range %}&date_range={{ filters.date_range }}{% endif %}">
+              <span>{{ label }}</span><strong>{{ count }}</strong>
+            </a>
+          {% endfor %}
+        </div>
+
+        {% if filters.customer_or_sender or filters.search or filters.date_range or filters.customer_id or filters.score_min or filters.score_max or filters.origin or filters.email_type or (filters.mode and filters.mode != 'all') %}
+          <a href="/orders?view=list" class="dock-clear-all-btn" style="margin-left:auto;">Restablecer filtros</a>
         {% endif %}
       </div>
     </div>
-
-    {# Active Filter Pills Strip #}
-    {% if active_count > 0 or filters.search or filters.status %}
-      <div class="dock-active-strip">
-        <span class="dock-strip-label">Filtros aplicados:</span>
-        <div class="dock-chips-list">
-          {% if filters.search %}
-            <span class="dock-chip">
-              <span class="dock-chip-key">Búsqueda:</span>
-              <span class="dock-chip-val">"{{ filters.search }}"</span>
-              <a href="#" onclick="document.querySelector('.dock-search-input').value='';document.getElementById('orders-main-filter-form').submit();return false;" class="dock-chip-remove" title="Quitar búsqueda">{{ icon_close(12) }}</a>
-            </span>
-          {% endif %}
-          {% if filters.status %}
-            <span class="dock-chip">
-              <span class="dock-chip-key">Estado:</span>
-              <span class="dock-chip-val">{{ filters.status|status_label }}</span>
-              <a href="#" onclick="document.querySelector('.dock-select').value='';document.getElementById('orders-main-filter-form').submit();return false;" class="dock-chip-remove" title="Quitar estado">{{ icon_close(12) }}</a>
-            </span>
-          {% endif %}
-          {% if filters.customer_id and filters.customer_id != 0 and filters.customer_id != "0" %}
-            {% for customer in customers %}
-              {% if customer.id == filters.customer_id %}
-                <span class="dock-chip">
-                  <span class="dock-chip-key">Cliente:</span>
-                  <span class="dock-chip-val">{{ customer.fiscal_name }}</span>
-                  <a href="{{ orders_reset_url }}" class="dock-chip-remove" title="Quitar">{{ icon_close(12) }}</a>
-                </span>
-              {% endif %}
-            {% endfor %}
-          {% endif %}
-          {% if filters.date_from %}
-            <span class="dock-chip">
-              <span class="dock-chip-key">Desde:</span>
-              <span class="dock-chip-val">{{ filters.date_from }}</span>
-              <a href="{{ orders_reset_url }}" class="dock-chip-remove" title="Quitar">{{ icon_close(12) }}</a>
-            </span>
-          {% endif %}
-          {% if filters.date_to %}
-            <span class="dock-chip">
-              <span class="dock-chip-key">Hasta:</span>
-              <span class="dock-chip-val">{{ filters.date_to }}</span>
-              <a href="{{ orders_reset_url }}" class="dock-chip-remove" title="Quitar">{{ icon_close(12) }}</a>
-            </span>
-          {% endif %}
-          {% if filters.scoring_category %}
-            <span class="dock-chip">
-              <span class="dock-chip-key">Confianza:</span>
-              <span class="dock-chip-val">{{ filters.scoring_category }}</span>
-              <a href="{{ orders_reset_url }}" class="dock-chip-remove" title="Quitar">{{ icon_close(12) }}</a>
-            </span>
-          {% endif %}
-          {% if filters.has_pdf %}
-            <span class="dock-chip">
-              <span class="dock-chip-key">PDF:</span>
-              <span class="dock-chip-val">{{ 'Con PDF' if filters.has_pdf == 'yes' else 'Sin PDF' }}</span>
-              <a href="{{ orders_reset_url }}" class="dock-chip-remove" title="Quitar">{{ icon_close(12) }}</a>
-            </span>
-          {% endif %}
-          {% if filters.requires_review %}
-            <span class="dock-chip">
-              <span class="dock-chip-key">Revisión:</span>
-              <span class="dock-chip-val">{{ 'Requiere' if filters.requires_review == 'yes' else 'No requiere' }}</span>
-              <a href="{{ orders_reset_url }}" class="dock-chip-remove" title="Quitar">{{ icon_close(12) }}</a>
-            </span>
-          {% endif %}
-          {% if filters.sender %}
-            <span class="dock-chip">
-              <span class="dock-chip-key">Remitente:</span>
-              <span class="dock-chip-val">{{ filters.sender }}</span>
-              <a href="{{ orders_reset_url }}" class="dock-chip-remove" title="Quitar">{{ icon_close(12) }}</a>
-            </span>
-          {% endif %}
-          {% if filters.email_type %}
-            <span class="dock-chip">
-              <span class="dock-chip-key">Tipo:</span>
-              <span class="dock-chip-val">{{ filters.email_type|status_label }}</span>
-              <a href="{{ orders_reset_url }}" class="dock-chip-remove" title="Quitar">{{ icon_close(12) }}</a>
-            </span>
-          {% endif %}
-        </div>
-        <a href="{{ orders_reset_url }}" class="dock-clear-all-btn">Restablecer</a>
-      </div>
-    {% endif %}
   </div>
   <div class="database-table-wrap">
     <table class="data-table review-table database-table database-table-orders database-table-compact" data-resizable-table data-table-key="orders" data-min-table-width="1648">

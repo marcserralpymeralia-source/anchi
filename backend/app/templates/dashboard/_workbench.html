@@ -2,9 +2,10 @@
 {% set tabs = workbench["tab_counts"] %}
 <section class="workbench-shell page-section">
   <section class="workbench-queue-panel">
-    <div class="data-dock-wrapper">
-      <div class="data-dock">
-        {# Left section: View Switcher #}
+    <div class="data-dock-wrapper" style="margin-bottom: 12px;">
+      <div class="data-dock-multi">
+        <div class="dock-primary-row">
+          {# Left section: View Switcher #}
         <nav class="dock-segment-group" aria-label="Cambiar vista">
           <a class="dock-segment-btn is-active" href="{{ view_cards_url or (dashboard_action + '?view=cards') }}" aria-current="page" title="Vista de tarjetas">
             {{ icon_dashboard(14) }}
@@ -143,7 +144,7 @@
       </div>
 
       {# Status Tabs Strip #}
-      <div class="dock-active-strip" style="padding-top:2px;">
+      <div class="dock-active-strip">
         <div class="workbench-tabs">
           {% for key, label, count in [
             ("all","Todos", tabs.all),

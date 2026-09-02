@@ -643,7 +643,7 @@ def disconnect_email_account(db: Session = Depends(get_tenant_db), user: TenantU
     settings.read_unread_only = True
     settings.mark_as_read_after_import = False
     settings.move_after_processing = False
-    settings.updated_by = user.id
+    settings.updated_by = resolve_updated_by_id(db, user)
     settings.updated_at = datetime.now(timezone.utc)
     db.commit()
     try:
@@ -717,7 +717,7 @@ def create_email_template(
 ):
     if not can_edit_email_settings(user):
         return RedirectResponse("/settings#email-templates", status_code=303)
-    template = EmailTemplate(company_id=user.company_id, key=key.strip(), name=name.strip(), template_type=template_type, subject_template=subject_template, body_template=body_template, active=active == "on", is_default_for_type=is_default_for_type == "on", updated_by=user.id)
+    template = EmailTemplate(company_id=user.company_id, key=key.strip(), name=name.strip(), template_type=template_type, subject_template=subject_template, body_template=body_template, active=active == "on", is_default_for_type=is_default_for_type == "on", updated_by=resolve_updated_by_id(db, user))
     db.add(template)
     db.commit()
     log_action(db, company_id=user.company_id, user=user, action="settings.email.template.create", entity_type="email_template", entity_id=template.id, message=f"Plantilla creada: {template.key}")
@@ -735,7 +735,7 @@ async def update_email_template(template_id: int, request: Request, db: Session 
     data.setdefault("active", "off")
     data.setdefault("is_default_for_type", "off")
     update_with_form(template, data)
-    template.updated_by = user.id
+    template.updated_by = resolve_updated_by_id(db, user)
     template.updated_at = datetime.now(timezone.utc)
     db.commit()
     log_action(db, company_id=user.company_id, user=user, action="settings.email.template.update", entity_type="email_template", entity_id=template.id, message=f"Plantilla actualizada: {template.key}")
@@ -750,7 +750,7 @@ def delete_email_template(template_id: int, db: Session = Depends(get_tenant_db)
     if not template or template.company_id != user.company_id:
         return JSONResponse({"error": "Plantilla no encontrada."}, status_code=404)
     template.active = False
-    template.updated_by = user.id
+    template.updated_by = resolve_updated_by_id(db, user)
     template.updated_at = datetime.now(timezone.utc)
     db.commit()
     log_action(db, company_id=user.company_id, user=user, action="settings.email.template.disable", entity_type="email_template", entity_id=template.id, message=f"Plantilla desactivada: {template.key}")
@@ -762,7 +762,7 @@ def duplicate_email_template(template_id: int, db: Session = Depends(get_tenant_
     if can_edit_email_settings(user):
         template = db.get(EmailTemplate, template_id)
         if template and template.company_id == user.company_id:
-            copy = EmailTemplate(company_id=user.company_id, key=f"{template.key}_copia", name=f"{template.name} copia", template_type=template.template_type, subject_template=template.subject_template, body_template=template.body_template, active=False, is_default_for_type=False, updated_by=user.id)
+            copy = EmailTemplate(company_id=user.company_id, key=f"{template.key}_copia", name=f"{template.name} copia", template_type=template.template_type, subject_template=template.subject_template, body_template=template.body_template, active=False, is_default_for_type=False, updated_by=resolve_updated_by_id(db, user))
             db.add(copy)
             db.commit()
             log_action(db, company_id=user.company_id, user=user, action="settings.email.template.duplicate", entity_type="email_template", entity_id=copy.id, message=f"Plantilla duplicada: {template.key}")
@@ -817,7 +817,7 @@ async def put_branding(request: Request, db: Session = Depends(get_tenant_db), u
     if "microcopy" in data:
         import json
         branding.microcopy_json = json.dumps(data["microcopy"])
-    branding.updated_by = user.id
+    branding.updated_by = resolve_updated_by_id(db, user)
     db.commit()
     invalidate_branding_cache(user.company_id)
     log_action(db, company_id=user.company_id, user=user, action="branding.update", entity_type="branding", entity_id=branding.id, message="Identidad corporativa actualizada via API")
@@ -832,7 +832,7 @@ async def update_branding(request: Request, db: Session = Depends(get_tenant_db)
     formdata = await request.form()
     form = {key: value for key, value in formdata.items() if not isinstance(value, UploadFile)}
     branding = get_or_create_branding(db, user.company_id)
-    update_branding_from_form(branding, form, user.id)
+    update_branding_from_form(branding, form, resolve_updated_by_id(db, user))
     for field, upload_key, remove_key, prefix in [
         ("logo_url", "logo_file", "remove_logo", "logo-main"),
         ("dark_logo_url", "dark_logo_file", "remove_dark_logo", "logo-dark"),
@@ -855,7 +855,7 @@ async def update_branding(request: Request, db: Session = Depends(get_tenant_db)
 def reset_branding_default(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if user.role.name == "Administrador":
         branding = get_or_create_branding(db, user.company_id)
-        reset_branding(branding, user.id)
+        reset_branding(branding, resolve_updated_by_id(db, user))
         db.commit()
         invalidate_branding_cache(user.company_id)
         log_action(db, company_id=user.company_id, user=user, action="branding.reset_default", entity_type="branding", entity_id=branding.id, message="Identidad corporativa restaurada a valores por defecto")
@@ -1191,7 +1191,7 @@ def activate_agent(db: Session = Depends(get_tenant_db), user: TenantUser = Depe
     llm.agent_enabled = True
     if llm.agent_mode == "desactivado":
         llm.agent_mode = "semiautomatico"
-    llm.updated_by = user.id
+    llm.updated_by = resolve_updated_by_id(db, user)
     llm.updated_at = datetime.now(timezone.utc)
     db.commit()
     log_action(db, company_id=user.company_id, user=user, action="agent.settings_updated", entity_type="settings", entity_id=llm.id, message="Agente IA activado")
@@ -1202,7 +1202,7 @@ def activate_agent(db: Session = Depends(get_tenant_db), user: TenantUser = Depe
 def pause_agent(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     llm = get_or_create_settings(db, LLMSettings, user.company_id)
     llm.agent_enabled = False
-    llm.updated_by = user.id
+    llm.updated_by = resolve_updated_by_id(db, user)
     llm.updated_at = datetime.now(timezone.utc)
     db.commit()
     log_action(db, company_id=user.company_id, user=user, action="agent.settings_updated", entity_type="settings", entity_id=llm.id, message="Agente IA pausado")

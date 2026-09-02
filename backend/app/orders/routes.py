@@ -200,10 +200,21 @@ def list_orders(
         "page": page,
         "page_size": page_size,
     }
+    from app.dashboard.service import orders_workbench_summary
     order_view = load_order_view_data(db, user.company_id, filters)
-    orders = order_view["orders"]
+    wb_summary = orders_workbench_summary(order_view, filters)
+    tab_counts = wb_summary["tab_counts"]
+
+    mode = filters.get("mode") or "all"
+    if mode != "all":
+        order_by_id = {order.id: order for order in order_view["all_orders"]}
+        orders = [order_by_id[item["order_id"]] for item in wb_summary["items"] if item.get("order_id") in order_by_id]
+        pagination = wb_summary["pagination"]
+    else:
+        orders = order_view["orders"]
+        pagination = order_view["pagination"]
+
     scoring = order_view["settings"]
-    pagination = order_view["pagination"]
     customers = order_view["customers"]
     statuses = order_view["statuses"]
     line_metrics = order_view["line_metrics"]
@@ -232,7 +243,7 @@ def list_orders(
     view_cards_url = f"/orders?{urlencode(view_query)}"
     view_query["view"] = "list"
     view_list_url = f"/orders?{urlencode(view_query)}"
-    return templates.TemplateResponse("orders/list.html", {"request": request, "user": user, "orders": orders, "customers": customers, "statuses": statuses, "pagination": pagination, "filters": filters, "scoring": scoring, "categories": categories, "alerts": alerts, "view_cards_url": view_cards_url, "view_list_url": view_list_url})
+    return templates.TemplateResponse("orders/list.html", {"request": request, "user": user, "orders": orders, "customers": customers, "statuses": statuses, "pagination": pagination, "filters": filters, "scoring": scoring, "categories": categories, "alerts": alerts, "tab_counts": tab_counts, "view_cards_url": view_cards_url, "view_list_url": view_list_url})
 
 
 @router.post("/mock")
