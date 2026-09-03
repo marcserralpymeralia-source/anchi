@@ -49,7 +49,7 @@
       </div>
       {% set href_orders = '/orders?view=list' %}
       {% set href_archived_orders = '/orders?view=list&archived=true' %}
-      {% set href_history = '/history' %}
+      {% set href_history = '/mail' %}
       {% set href_customers = '/customers' %}
       {% set href_products = '/products' %}
       {% set href_settings = '/settings' %}
@@ -67,6 +67,7 @@
         <a href="{{ href_products }}" title="Productos" class="{% if request.url.path.startswith('/products') %}active{% endif %}"><span class="nav-icon">{{ icon_products(20) }}</span><span class="nav-label">Productos</span></a>
         {% if (user.role in ["admin", "superadmin"] or (user.role and (user.role.name if user.role.name is defined else "") in ["Administrador", "Superadmin"])) %}
           <a href="{{ href_settings }}" title="Configuración" class="{% if request.url.path.startswith('/settings') or request.url.path.startswith('/setup') %}active{% endif %}"><span class="nav-icon">{{ icon_settings(20) }}</span><span class="nav-label">Configuración</span></a>
+          <a href="/test" title="Validación" class="{% if request.url.path.startswith('/test') %}active{% endif %}"><span class="nav-icon">{{ icon_check(20) }}</span><span class="nav-label">Validación</span></a>
         {% endif %}
       </nav>
     </aside>

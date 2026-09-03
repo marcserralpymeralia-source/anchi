@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% from "components/icons.html" import icon_paperclip, icon_refresh %}
+{% set title = "Buzón de correo" %}
+{% block content %}
+<div class="webmail-shell">
+  <header class="webmail-toolbar mail-inbox-header">
+    <div class="webmail-toolbar-top">
+      <div class="webmail-title-group">
+        <h2 class="webmail-heading">Buzón de correo</h2>
+        <span class="webmail-count-badge">{{ pagination.total_items }} mensajes</span>
+      </div>
+      <div class="mail-inbox-toolbar-actions">
+        {% if account %}<span class="mail-inbox-account">Cuenta: <strong>{{ account }}</strong></span>{% endif %}
+        {% if account_ready %}
+          <form method="post" action="/settings/email/read" class="js-loading-form">
+            <button type="submit" class="button secondary compact-button" data-loading-text="Sincronizando...">
+              {{ icon_refresh(14) }} Sincronizar ahora
+            </button>
+          </form>
+        {% endif %}
+      </div>
+    </div>
+    {% if email_status and email_status.last_sync.at %}
+      <div class="mail-inbox-sync-status">
+        <span>Última sincronización: <strong>{{ email_status.last_sync.at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") }}</strong></span>
+        <span class="badge {% if email_status.last_sync.ok %}status-confirmed{% else %}status-error{% endif %}">
+          {{ "Conectado" if email_status.last_sync.ok else "Error" }}
+        </span>
+        <span>{{ email_status.last_sync.new or 0 }} nuevos · {{ email_status.last_sync.duplicates or 0 }} duplicados</span>
+        {% if email_status.last_sync.error or email_status.last_sync.message %}
+          <span class="muted">{{ email_status.last_sync.error or email_status.last_sync.message }}</span>
+        {% endif %}
+      </div>
+    {% endif %}
+  </header>
+
+  {% if not account_ready %}
+    <section class="webmail-empty-list mail-inbox-empty">
+      <h2>Conecta una cuenta de correo</h2>
+      <p class="muted">Configura una cuenta IMAP para recibir y consultar mensajes aquí.</p>
+      <a class="button primary compact-button" href="/settings#email-receive">Configurar correo</a>
+    </section>
+  {% else %}
+    <section class="webmail-list-pane">
+      <div class="webmail-list-header">
+        <span>Bandeja activa · {{ pagination.start_item }}–{{ pagination.end_item }} de {{ pagination.total_items }}</span>
+      </div>
+      <div class="webmail-list-body" role="list">
+        {% for item in items %}
+          <a class="webmail-item mail-inbox-item {% if not item.is_read %}is-unread{% endif %}" role="listitem" href="/mail/{{ item.email_id }}">
+            <div class="webmail-item-main">
+              <div class="webmail-item-top">
+                <strong class="webmail-item-sender">{{ item.from_email or "Remitente desconocido" }}</strong>
+                <span class="webmail-item-time">{{ item.date | local_dt(tenant_timezone, "%d %b %H:%M", "--") }}</span>
+              </div>
+              <div class="webmail-item-subject">{{ item.title }}</div>
+              <div class="mail-inbox-summary">{{ item.summary | truncate(160, True, "...") if item.summary else "Sin contenido de texto" }}</div>
+              <div class="webmail-item-bottom">
+                <div class="webmail-item-tags">
+                  <span class="badge {{ item.agent_status|status_class }}">{{ item.agent_status_label }}</span>
+                  {% if item.order_id %}<span class="badge status-confirmed">Pedido #{{ item.order_id }}</span>{% endif %}
+                  {% if item.score is not none %}<span class="score-badge">{{ "%.0f"|format(item.score) }}%</span>{% endif %}
+                  {% if item.has_pdf %}<span class="badge">PDF</span>{% elif item.has_attachments %}<span class="badge">{{ icon_paperclip(12) }}</span>{% endif %}
+                </div>
+              </div>
+            </div>
+          </a>
+        {% else %}
+          <div class="webmail-empty-list"><p class="muted">No hay correos activos en esta cuenta.</p></div>
+        {% endfor %}
+      </div>
+      <footer class="webmail-list-footer mail-inbox-pagination">
+        <span class="muted">Página {{ pagination.page }} de {{ pagination.total_pages or 1 }}</span>
+        <div>
+          {% if pagination.has_previous %}<a class="button secondary compact-button" href="/mail?page={{ pagination.page - 1 }}">Anteriores</a>{% endif %}
+          {% if pagination.has_next %}<a class="button secondary compact-button" href="/mail?page={{ pagination.page + 1 }}">Siguientes</a>{% endif %}
+        </div>
+      </footer>
+    </section>
+  {% endif %}
+</div>
+{% endblock %}
