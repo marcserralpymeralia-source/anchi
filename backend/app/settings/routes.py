@@ -4,9 +4,9 @@ from datetime import date
 from urllib.parse import urlsplit, urlunsplit
 from time import perf_counter
 
-from fastapi import APIRouter, Depends, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.core.templating import templates
@@ -36,6 +36,21 @@ from app.tenancy.migrations import tenant_migration_report
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
+
+SETTINGS_MODULE_KEYS = {"general", "identity", "email", "ai", "scoring", "decision", "export", "ftp", "advanced"}
+
+SETTINGS_SEARCH_CATALOG = [
+    {"module_key": "general", "module_label": "General", "title": "Datos de empresa", "detail": "Nombre, contacto, país, idioma y moneda", "search_text": "empresa nombre razón social CIF NIF email teléfono web dirección país idioma zona horaria moneda notificaciones"},
+    {"module_key": "identity", "module_label": "Identidad", "title": "Marca y apariencia", "detail": "Logos, colores, sidebar y tipografía", "search_text": "identidad marca logo favicon color principal fondo radio botón sidebar claim tipografía apariencia"},
+    {"module_key": "email", "module_label": "Correo", "title": "Cuenta y recepción", "detail": "IMAP, sincronización, histórico y carpetas", "search_text": "correo email IMAP cuenta recepción sincronización histórico carpeta servidor usuario contraseña /settings/email/receive"},
+    {"module_key": "email", "module_label": "Correo", "title": "Envío SMTP", "detail": "Servidor, remitente y prueba de envío", "search_text": "SMTP envío servidor puerto seguridad remitente contraseña prueba correo"},
+    {"module_key": "ai", "module_label": "Agente IA", "title": "Configuración del agente", "detail": "Proveedor, API key, modelos y capacidades", "search_text": "IA agente OpenAI proveedor API key modelo clasificación extracción validación seguridad capacidades prueba GPT-5.6 Luna GPT-5.6 Terra GPT-5.6 Sol GPT-4.1 mini GPT-4.1 Personalizado"},
+    {"module_key": "scoring", "module_label": "Confianza y automatización", "title": "Umbrales y reglas", "detail": "Confianza, pesos, bloqueos y auto-confirmación", "search_text": "scoring confianza umbral pesos dudoso bloqueado revisión auto confirmar auto exportar"},
+    {"module_key": "decision", "module_label": "Motor de decisión", "title": "Prioridades y aprendizaje", "detail": "Fuentes, pesos y bloqueos", "search_text": "decisión prioridad exacto alias histórico RAG LLM aprendizaje bloqueo"},
+    {"module_key": "export", "module_label": "Exportación", "title": "Formato de exportación", "detail": "CSV, JSON, separadores y plantilla", "search_text": "exportación CSV JSON encoding fecha separador plantilla cabecera líneas"},
+    {"module_key": "ftp", "module_label": "FTP/SFTP", "title": "Destino de exportación", "detail": "FTP, FTPS, host, credenciales y reintentos", "search_text": "FTP FTPS SFTP host puerto usuario contraseña clave privada destino reintentos timeout"},
+    {"module_key": "advanced", "module_label": "Avanzado", "title": "Prompts y versiones", "detail": "Configuración técnica y logs", "search_text": "avanzado prompts versiones logs técnicos"},
+]
 
 
 @router.get("/diagnostics/prompts")
@@ -253,6 +268,117 @@ def _clone_email_settings_for_preview(db: Session, company_id: int, data: dict) 
     return preview
 
 
+def _settings_summary_metrics(db: Session, company_id: int) -> dict:
+    """Return only the two counters used by the initial settings summary."""
+    row = db.execute(
+        select(
+            func.coalesce(func.sum(case((Email.status == "error_processing", 1), else_=0)), 0).label("llm_errors"),
+            func.coalesce(func.sum(case((Email.detected_type == "dudoso", 1), else_=0)), 0).label("doubtful_emails"),
+        ).where(Email.company_id == company_id)
+    ).one()._mapping
+    return {
+        "llm_errors": int(row["llm_errors"] or 0),
+        "doubtful_emails": int(row["doubtful_emails"] or 0),
+    }
+
+
+def _prompt_versions_by_template(db: Session, company_id: int) -> tuple[list[PromptTemplate], dict[int, list[PromptVersion]]]:
+    prompt_templates = db.scalars(
+        select(PromptTemplate).where(PromptTemplate.company_id == company_id).order_by(PromptTemplate.purpose)
+    ).all()
+    prompt_versions_by_template: dict[int, list[PromptVersion]] = {template.id: [] for template in prompt_templates}
+    if prompt_templates:
+        prompt_versions_rows = db.scalars(
+            select(PromptVersion)
+            .where(PromptVersion.template_id.in_([template.id for template in prompt_templates]))
+            .order_by(PromptVersion.template_id, PromptVersion.version.desc())
+        ).all()
+        for prompt_version in prompt_versions_rows:
+            prompt_versions_by_template[prompt_version.template_id].append(prompt_version)
+    return prompt_templates, prompt_versions_by_template
+
+
+def _settings_module_context(request: Request, db: Session, user: TenantUser, module_key: str) -> dict:
+    """Build context for one settings drawer, only after the drawer is opened."""
+    context = {"request": request, "user": user, "settings_fragment": module_key}
+
+    if module_key == "general":
+        context["company"] = db.get(Company, user.company_id)
+    elif module_key == "identity":
+        context.update(
+            branding=branding_to_dict(get_or_create_branding(db, user.company_id)),
+            can_edit_branding=user.role.name == "Administrador",
+        )
+    elif module_key == "email":
+        company = db.get(Company, user.company_id)
+        email_settings = get_or_create_settings(db, EmailSettings, user.company_id)
+        llm_settings = get_or_create_settings(db, LLMSettings, user.company_id)
+        context.update(
+            company=company,
+            email=email_settings,
+            email_status=email_config_status(email_settings),
+            email_templates=email_templates(db, user.company_id),
+            email_template_variables=TEMPLATE_VARIABLES,
+            can_edit_email=can_edit_email_settings(user),
+            can_test_email=can_test_email_settings(user),
+            recent_processed_emails=recent_processed_emails_overview(db, user.company_id, days=30, limit=8),
+            diagnostics=build_environment_diagnostics(db, user, company=company, email_settings=email_settings, llm_settings=llm_settings),
+            is_superadmin=user.role.name == "Superadmin",
+        )
+    elif module_key == "ai":
+        llm_settings = get_or_create_settings(db, LLMSettings, user.company_id)
+        scoring_settings = get_or_create_settings(db, ScoringSettings, user.company_id)
+        metrics = agent_metrics(db, user.company_id, scoring_settings)
+        dashboard = build_settings_dashboard(db, user, metrics, llm_settings, scoring_settings, prompt_templates=[])
+        extraction_model_value = resolve_openai_runtime_model(llm_settings.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK)
+        context.update(
+            llm=llm_settings,
+            llm_provider_options=[
+                {"value": "openai", "label": "OpenAI"},
+                {"value": "openai_compatible", "label": "Compatible OpenAI"},
+                {"value": "azure_openai", "label": "Azure OpenAI"},
+                {"value": "disabled", "label": "Desactivado"},
+            ],
+            agent_status=agent_status(llm_settings, metrics),
+            agent_metrics=metrics,
+            agent_improvements=improvement_suggestions(db, user.company_id),
+            extraction_model_options=openai_model_option_payload(),
+            extraction_model_values=sorted(OPENAI_MODEL_PRESET_VALUES),
+            extraction_model_value=extraction_model_value,
+            extraction_model_label=openai_model_label(extraction_model_value),
+            extraction_model_description=openai_model_description(extraction_model_value),
+            dashboard={"ai_module": dashboard["ai_module"]},
+            is_superadmin=user.role.name == "Superadmin",
+            mask_secret=mask_secret,
+        )
+    elif module_key == "scoring":
+        llm_settings = get_or_create_settings(db, LLMSettings, user.company_id)
+        scoring_settings = get_or_create_settings(db, ScoringSettings, user.company_id)
+        dashboard = build_settings_dashboard(db, user, {"llm_errors": 0, "doubtful_emails": 0}, llm_settings, scoring_settings, prompt_templates=[])
+        context.update(llm=llm_settings, scoring=scoring_settings, dashboard={"scoring_module": dashboard["scoring_module"]})
+    elif module_key == "decision":
+        context["decision"] = get_or_create_settings(db, DecisionSettings, user.company_id)
+    elif module_key == "export":
+        context["export"] = get_or_create_settings(db, ExportSettings, user.company_id)
+    elif module_key == "ftp":
+        context.update(ftp=get_or_create_settings(db, FTPSettings, user.company_id), mask_secret=mask_secret)
+    elif module_key == "advanced":
+        prompts, prompt_versions = _prompt_versions_by_template(db, user.company_id)
+        context.update(
+            prompts=prompts,
+            prompt_versions=prompt_versions,
+            dashboard={"prompt_templates": prompts},
+        )
+    return context
+
+
+@router.get("/module/{module_key}")
+def settings_module(module_key: str, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if module_key not in SETTINGS_MODULE_KEYS:
+        raise HTTPException(status_code=404, detail="Módulo de configuración no encontrado")
+    return templates.TemplateResponse("settings/index.html", _settings_module_context(request, db, user, module_key))
+
+
 @router.get("")
 def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     llm_settings = get_or_create_settings(db, LLMSettings, user.company_id)
@@ -263,70 +389,32 @@ def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: 
     ftp_settings = get_or_create_settings(db, FTPSettings, user.company_id)
     export_settings = get_or_create_settings(db, ExportSettings, user.company_id)
     branding_settings = get_or_create_branding(db, user.company_id)
-    metrics = agent_metrics(db, user.company_id, scoring_settings)
-    prompt_templates = db.scalars(select(PromptTemplate).where(PromptTemplate.company_id == user.company_id).order_by(PromptTemplate.purpose)).all()
-    prompt_versions_by_template: dict[int, list[PromptVersion]] = {template.id: [] for template in prompt_templates}
-    if prompt_templates:
-        prompt_versions_rows = db.scalars(
-            select(PromptVersion)
-            .where(PromptVersion.template_id.in_([template.id for template in prompt_templates]))
-            .order_by(PromptVersion.template_id, PromptVersion.version.desc())
-        ).all()
-        for prompt_version in prompt_versions_rows:
-            prompt_versions_by_template[prompt_version.template_id].append(prompt_version)
-    context = {
-        "request": request,
-        "user": user,
-        "company": company,
-        "email": email_settings,
-        "email_status": email_config_status(email_settings),
-        "email_templates": email_templates(db, user.company_id),
-        "email_template_variables": TEMPLATE_VARIABLES,
-        "can_edit_email": can_edit_email_settings(user),
-        "can_test_email": can_test_email_settings(user),
-        "llm": llm_settings,
-        "llm_provider_options": [
-            {"value": "openai", "label": "OpenAI"},
-            {"value": "openai_compatible", "label": "Compatible OpenAI"},
-            {"value": "azure_openai", "label": "Azure OpenAI"},
-            {"value": "disabled", "label": "Desactivado"},
-        ],
-        "agent_status": agent_status(llm_settings, metrics),
-        "agent_metrics": metrics,
-        "agent_improvements": improvement_suggestions(db, user.company_id),
-        "extraction_model_options": openai_model_option_payload(),
-        "extraction_model_values": sorted(OPENAI_MODEL_PRESET_VALUES),
-        "extraction_model_value": resolve_openai_runtime_model(llm_settings.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK),
-        "extraction_model_label": openai_model_label(resolve_openai_runtime_model(llm_settings.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK)),
-        "extraction_model_description": openai_model_description(resolve_openai_runtime_model(llm_settings.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK)),
-        "ftp": ftp_settings,
-        "export": export_settings,
-        "scoring": scoring_settings,
-        "decision": decision_settings,
-        "branding": branding_to_dict(branding_settings),
-        "can_edit_branding": user.role.name == "Administrador",
-        "prompts": prompt_templates,
-        "prompt_versions": prompt_versions_by_template,
-        "mask_secret": mask_secret,
-        "is_superadmin": user.role.name == "Superadmin",
-        "recent_processed_emails": recent_processed_emails_overview(db, user.company_id, days=30, limit=8),
-        "diagnostics": build_environment_diagnostics(db, user, company=company, email_settings=email_settings, llm_settings=llm_settings),
-        "dashboard": build_settings_dashboard(
-            db,
-            user,
-            metrics,
-            llm_settings,
-            scoring_settings,
-            company=company,
-            branding=branding_settings,
-            email=email_settings,
-            ftp=ftp_settings,
-            export=export_settings,
-            decision=decision_settings,
-            prompt_templates=prompt_templates,
-        ),
-    }
-    return templates.TemplateResponse("settings/index.html", context)
+    dashboard = build_settings_dashboard(
+        db,
+        user,
+        _settings_summary_metrics(db, user.company_id),
+        llm_settings,
+        scoring_settings,
+        company=company,
+        branding=branding_settings,
+        email=email_settings,
+        ftp=ftp_settings,
+        export=export_settings,
+        decision=decision_settings,
+        prompt_templates=[],
+        prompt_count=db.scalar(select(func.count(PromptTemplate.id)).where(PromptTemplate.company_id == user.company_id)) or 0,
+    )
+    return templates.TemplateResponse(
+        "settings/index.html",
+        {
+            "request": request,
+            "user": user,
+            "company": company,
+            "settings_fragment": "",
+            "settings_search_catalog": SETTINGS_SEARCH_CATALOG,
+            "dashboard": dashboard,
+        },
+    )
 
 
 def build_settings_dashboard(
@@ -343,6 +431,7 @@ def build_settings_dashboard(
     export: ExportSettings | None = None,
     decision: DecisionSettings | None = None,
     prompt_templates: list[PromptTemplate] | None = None,
+    prompt_count: int | None = None,
 ) -> dict:
     company = company if company is not None else db.get(Company, user.company_id)
     branding = branding if branding is not None else get_or_create_branding(db, user.company_id)
@@ -361,7 +450,11 @@ def build_settings_dashboard(
     customer_count = int(dashboard_counts["customer_count"] or 0)
     product_count = int(dashboard_counts["product_count"] or 0)
     active_channels_count = int(dashboard_counts["active_channels_count"] or 0)
-    prompt_templates = prompt_templates if prompt_templates is not None else db.scalars(select(PromptTemplate).where(PromptTemplate.company_id == user.company_id)).all()
+    if prompt_count is None:
+        prompt_count = len(prompt_templates) if prompt_templates is not None else db.scalar(
+            select(func.count(PromptTemplate.id)).where(PromptTemplate.company_id == user.company_id)
+        ) or 0
+    prompt_templates = prompt_templates if prompt_templates is not None else []
 
     def state(key: str, label: str, kind: str, summary: str, action: str) -> dict:
         return {"key": key, "label": label, "state": kind, "summary": summary, "action": action}
@@ -384,7 +477,7 @@ def build_settings_dashboard(
         state("ftp", "FTP/SFTP", "ready" if ftp.host and ftp.username else "pending", f"{ftp.connection_type.upper()} · {ftp.host or 'host pendiente'}", "Configurar"),
         state("alerts", "Alertas", "ready", f"{metrics['llm_errors']} errores · {metrics['doubtful_emails']} dudosos", "Ver"),
         state("users", "Usuarios y permisos", "ready", "Roles y accesos activos", "Abrir"),
-        state("advanced", "Avanzado", "optional" if user.role.name == "Superadmin" else "locked", f"{len(prompt_templates)} prompts · logs técnicos", "Abrir"),
+        state("advanced", "Avanzado", "optional" if user.role.name == "Superadmin" else "locked", f"{prompt_count} prompts · logs técnicos", "Abrir"),
     ]
     visible_modules = [module for module in modules if module["state"] != "locked"]
     configured = len([module for module in visible_modules if module["state"] in {"ready", "warning"}])
@@ -413,6 +506,7 @@ def build_settings_dashboard(
         "product_count": product_count,
         "active_channels_count": active_channels_count,
         "prompt_templates": prompt_templates,
+        "prompt_templates_count": prompt_count,
         "email_status": email_status,
         "email": email,
         "llm": llm,

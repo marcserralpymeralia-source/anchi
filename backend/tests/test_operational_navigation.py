@@ -122,6 +122,9 @@ class OperationalNavigationTests(unittest.TestCase):
             self.assertIn("data-table__primary", products.text)
             self.assertIn("data-table__actions", products.text)
             self.assertIn('data-column="price"', products.text)
+            self.assertEqual(products.text.count('id="product-delete-dialog"'), 1)
+            self.assertIn('class="js-open-product-delete"', products.text)
+            self.assertNotIn('id="product-delete-1"', products.text)
             self.assertNotIn("<h3>Importación</h3>", products.text)
 
             self.assertEqual(customers.status_code, 200)
@@ -133,6 +136,9 @@ class OperationalNavigationTests(unittest.TestCase):
             self.assertIn(">Contacto<", customers.text)
             self.assertIn(">Localidad<", customers.text)
             self.assertIn("data-table__actions", customers.text)
+            self.assertEqual(customers.text.count('id="customer-delete-dialog"'), 1)
+            self.assertIn('class="js-open-customer-delete"', customers.text)
+            self.assertNotIn('id="customer-delete-1"', customers.text)
             self.assertNotIn("<span>Importación</span>", customers.text)
 
             self.assertEqual(customer_knowledge.status_code, 200)

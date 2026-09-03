@@ -13,19 +13,30 @@ concurrency:
 
 jobs:
   sync:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: anchi-gemavi
+            base_url: https://anchi-gemavi.vercel.app
+            secret_name: CRON_SECRET_GEMAVI
+          - project: anchi-tan
+            base_url: https://anchi-tan.vercel.app
+            secret_name: CRON_SECRET_TAN
     runs-on: ubuntu-latest
     timeout-minutes: 4
     steps:
       - name: Wake due email synchronizations
         env:
-          CRON_BASE_URL: ${{ secrets.CRON_BASE_URL }}
-          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+          TARGET_PROJECT: ${{ matrix.project }}
+          CRON_BASE_URL: ${{ matrix.base_url }}
+          CRON_SECRET: ${{ secrets[matrix.secret_name] }}
         shell: bash
         run: |
           set -euo pipefail
 
           if [[ -z "${CRON_BASE_URL:-}" || -z "${CRON_SECRET:-}" ]]; then
-            echo "Missing CRON_BASE_URL or CRON_SECRET repository secret."
+            echo "Missing URL or cron secret for ${TARGET_PROJECT}."
             exit 1
           fi
 
@@ -42,8 +53,8 @@ jobs:
             "${base_url}/cron/email-sync")"
 
           if [[ "$http_code" != 2* ]]; then
-            echo "Email sync endpoint returned HTTP ${http_code}."
+            echo "Email sync endpoint for ${TARGET_PROJECT} returned HTTP ${http_code}."
             exit 1
           fi
 
-          echo "Email sync endpoint completed with HTTP ${http_code}."
+          echo "Email sync endpoint for ${TARGET_PROJECT} completed with HTTP ${http_code}."

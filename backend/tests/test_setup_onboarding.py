@@ -441,6 +441,27 @@ class SetupOnboardingTests(unittest.TestCase):
             cleanup()
             fixture.cleanup()
 
+    def test_settings_summary_defers_module_details_until_requested(self):
+        fixture = SetupFixture()
+        client, cleanup = fixture.client()
+        try:
+            self._login(client)
+            page = client.get("/settings")
+            self.assertEqual(page.status_code, 200)
+            self.assertNotIn('<dialog id="settings-email"', page.text)
+            self.assertNotIn('<dialog id="settings-ai"', page.text)
+
+            for module_key in ["general", "identity", "email", "ai", "scoring", "decision", "export", "ftp", "advanced"]:
+                response = client.get(f"/settings/module/{module_key}")
+                self.assertEqual(response.status_code, 200, module_key)
+                self.assertIn(f'<dialog id="settings-{module_key}"', response.text)
+
+            missing = client.get("/settings/module/not-a-module")
+            self.assertEqual(missing.status_code, 404)
+        finally:
+            cleanup()
+            fixture.cleanup()
+
     def test_llm_extraction_model_selector_supports_presets_custom_and_company_isolation(self):
         fixture = SetupFixture()
         client, cleanup = fixture.client()
@@ -592,7 +613,11 @@ class SetupOnboardingTests(unittest.TestCase):
 
             page = client.get("/settings")
             self.assertEqual(page.status_code, 200)
-            self.assertIn(f'name="extraction_model" value="{LEGACY_OPENAI_MODEL_FALLBACK}"', page.text)
+            self.assertNotIn(f'name="extraction_model" value="{LEGACY_OPENAI_MODEL_FALLBACK}"', page.text)
+
+            ai_module = client.get("/settings/module/ai")
+            self.assertEqual(ai_module.status_code, 200)
+            self.assertIn(f'name="extraction_model" value="{LEGACY_OPENAI_MODEL_FALLBACK}"', ai_module.text)
 
             with fixture.TenantSession() as db:
                 llm = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 1))

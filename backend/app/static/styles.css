@@ -10694,3 +10694,37 @@ button.secondary.danger:hover,
   border-color: #ef4444 !important;
   color: #b91c1c !important;
 }
+
+/* Lazy settings modules: keep the drawer useful while its independent request loads. */
+dialog.settings-drawer-loading {
+  min-height: 260px;
+  background: #ffffff;
+}
+
+.settings-loading-placeholder {
+  display: grid;
+  gap: 14px;
+  padding: 24px 28px 32px;
+}
+
+.settings-loading-line {
+  display: block;
+  width: 76%;
+  height: 14px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #eef3f1 20%, #f8fbfa 50%, #eef3f1 80%);
+  background-size: 220% 100%;
+  animation: settingsLoadingShimmer 1.2s ease-in-out infinite;
+}
+
+.settings-loading-line-wide { width: 94%; height: 22px; }
+.settings-loading-line-short { width: 48%; }
+
+@keyframes settingsLoadingShimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .settings-loading-line { animation: none; }
+}
