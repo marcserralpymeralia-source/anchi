@@ -6,7 +6,7 @@ from urllib.parse import quote_plus, urlencode
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import and_, case, exists, func, literal, or_, select, union_all
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, load_only, selectinload
 
 from app.auth.dependencies import current_user
 from app.core.pagination import normalize_page
@@ -733,7 +733,12 @@ def history_page(
             if row_item.get("email_id") == selected_email.id:
                 row_item["is_read"] = True
 
-    customers = db.scalars(select(Customer).where(Customer.company_id == user.company_id).order_by(Customer.fiscal_name)).all()
+    customers = db.scalars(
+        select(Customer)
+        .where(Customer.company_id == user.company_id)
+        .options(load_only(Customer.id, Customer.code, Customer.fiscal_name))
+        .order_by(Customer.fiscal_name)
+    ).all()
     template_name = "history/_list_pane.html" if partial == "list" else "history/list.html"
     return templates.TemplateResponse(
         template_name,

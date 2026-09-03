@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta, timezone
 from math import ceil
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import case, func, literal, or_, select, union_all
 from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy.orm.attributes import set_committed_value
 
@@ -468,33 +468,47 @@ def _safe_sender_domain(sender: str | None) -> str:
 
 
 def _customer_suggestion_maps(db: Session, company_id: int) -> dict[str, dict[str, str]]:
-    email_matches = db.execute(
-        select(CustomerContactPoint.value, Customer.fiscal_name)
-        .join(Customer, Customer.id == CustomerContactPoint.customer_id)
-        .where(
-            CustomerContactPoint.company_id == company_id,
-            CustomerContactPoint.type == "email",
-            CustomerContactPoint.active == True,  # noqa: E712
+    suggestion_rows = db.execute(
+        union_all(
+            select(
+                literal("email").label("kind"),
+                CustomerContactPoint.value.label("value"),
+                Customer.fiscal_name.label("fiscal_name"),
+            )
+            .join(Customer, Customer.id == CustomerContactPoint.customer_id)
+            .where(
+                CustomerContactPoint.company_id == company_id,
+                CustomerContactPoint.type == "email",
+                CustomerContactPoint.active == True,  # noqa: E712
+            ),
+            select(
+                literal("domain").label("kind"),
+                CustomerContactPoint.value.label("value"),
+                Customer.fiscal_name.label("fiscal_name"),
+            )
+            .join(Customer, Customer.id == CustomerContactPoint.customer_id)
+            .where(
+                CustomerContactPoint.company_id == company_id,
+                CustomerContactPoint.type == "domain",
+                CustomerContactPoint.active == True,  # noqa: E712
+            ),
+            select(
+                literal("customer_domain").label("kind"),
+                CustomerDomain.domain.label("value"),
+                Customer.fiscal_name.label("fiscal_name"),
+            )
+            .join(Customer, Customer.id == CustomerDomain.customer_id)
+            .where(CustomerDomain.company_id == company_id),
         )
     ).all()
-    domain_matches = db.execute(
-        select(CustomerContactPoint.value, Customer.fiscal_name)
-        .join(Customer, Customer.id == CustomerContactPoint.customer_id)
-        .where(
-            CustomerContactPoint.company_id == company_id,
-            CustomerContactPoint.type == "domain",
-            CustomerContactPoint.active == True,  # noqa: E712
-        )
-    ).all()
-    customer_domains = db.execute(
-        select(CustomerDomain.domain, Customer.fiscal_name)
-        .join(Customer, Customer.id == CustomerDomain.customer_id)
-        .where(CustomerDomain.company_id == company_id)
-    ).all()
+    maps = {"email": {}, "domain": {}, "customer_domain": {}}
+    for kind, value, fiscal_name in suggestion_rows:
+        if value:
+            maps[kind][str(value).strip().lower()] = fiscal_name
     return {
-        "email": {str(value).strip().lower(): fiscal_name for value, fiscal_name in email_matches if value},
-        "domain": {str(value).strip().lower(): fiscal_name for value, fiscal_name in domain_matches if value},
-        "customer_domain": {str(value).strip().lower(): fiscal_name for value, fiscal_name in customer_domains if value},
+        "email": maps["email"],
+        "domain": maps["domain"],
+        "customer_domain": maps["customer_domain"],
     }
 
 

@@ -165,7 +165,12 @@ def _product_row(product: Product, usage_count: int, last_used_at: datetime | No
     }
 
 
-def customer_knowledge_overview(db: Session, company_id: int, customer_ids: list[int] | None = None) -> list[dict]:
+def customer_knowledge_overview(
+    db: Session,
+    company_id: int,
+    customer_ids: list[int] | None = None,
+    customers: list[Customer] | None = None,
+) -> list[dict]:
     if customer_ids is not None and not customer_ids:
         return []
 
@@ -202,12 +207,13 @@ def customer_knowledge_overview(db: Session, company_id: int, customer_ids: list
     ).all()
     case_map = {customer_id: {"cases": int(count or 0), "last_case_at": updated_at} for customer_id, count, updated_at in case_rows if customer_id}
 
-    customers = db.scalars(
-        select(Customer)
-        .where(Customer.company_id == company_id, *([Customer.id.in_(customer_ids)] if customer_ids is not None else []))
-        .options(selectinload(Customer.aliases), selectinload(Customer.domains), selectinload(Customer.contacts), selectinload(Customer.contact_points))
-        .order_by(Customer.fiscal_name.asc())
-    ).all()
+    if customers is None:
+        customers = db.scalars(
+            select(Customer)
+            .where(Customer.company_id == company_id, *([Customer.id.in_(customer_ids)] if customer_ids is not None else []))
+            .options(selectinload(Customer.aliases), selectinload(Customer.domains), selectinload(Customer.contacts), selectinload(Customer.contact_points))
+            .order_by(Customer.fiscal_name.asc())
+        ).all()
     result: list[dict] = []
     for customer in customers:
         knowledge = knowledge_map.get(customer.id, {})
@@ -366,6 +372,7 @@ def build_databases_context(
     customer_rows: list[dict] = []
     product_rows: list[dict] = []
     alias_rows: list[dict] = []
+    customer_entities: list[Customer] = []
     detail = None
     pagination = {
         "page": 1,
@@ -379,12 +386,27 @@ def build_databases_context(
         "allowed_page_sizes": (10, 25, 50, 100),
     }
 
-    customers_total = db.scalar(select(func.count(Customer.id)).where(Customer.company_id == company_id, Customer.deleted_at.is_(None))) or 0
-    products_total = db.scalar(select(func.count(Product.id)).where(Product.company_id == company_id, Product.deleted_at.is_(None))) or 0
-    customer_alias_total = db.scalar(select(func.count(CustomerAlias.id)).where(CustomerAlias.company_id == company_id)) or 0
-    product_alias_total = db.scalar(select(func.count(ProductAlias.id)).where(ProductAlias.company_id == company_id)) or 0
-    active_customers = db.scalar(select(func.count(Customer.id)).where(Customer.company_id == company_id, Customer.deleted_at.is_(None), Customer.status == "active", Customer.company_inactive.is_(False))) or 0
-    active_products = db.scalar(select(func.count(Product.id)).where(Product.company_id == company_id, Product.deleted_at.is_(None), Product.status == "active", Product.obsolete.is_(False))) or 0
+    def count_for(model, *conditions):  # noqa: ANN001
+        return select(func.count(model.id)).where(model.company_id == company_id, *conditions).scalar_subquery()
+
+    database_counts = db.execute(
+        select(
+            count_for(Customer, Customer.deleted_at.is_(None)).label("customers_total"),
+            count_for(Product, Product.deleted_at.is_(None)).label("products_total"),
+            count_for(CustomerAlias).label("customer_alias_total"),
+            count_for(ProductAlias).label("product_alias_total"),
+            count_for(Customer, Customer.deleted_at.is_(None), Customer.status == "active", Customer.company_inactive.is_(False)).label("active_customers"),
+            count_for(Product, Product.deleted_at.is_(None), Product.status == "active", Product.obsolete.is_(False)).label("active_products"),
+            count_for(LearnedAlias).label("learned_aliases"),
+            count_for(ManualCorrection).label("manual_corrections"),
+        )
+    ).one()._mapping
+    customers_total = int(database_counts["customers_total"] or 0)
+    products_total = int(database_counts["products_total"] or 0)
+    customer_alias_total = int(database_counts["customer_alias_total"] or 0)
+    product_alias_total = int(database_counts["product_alias_total"] or 0)
+    active_customers = int(database_counts["active_customers"] or 0)
+    active_products = int(database_counts["active_products"] or 0)
 
     if active_tab == "customers":
         stmt = select(Customer).where(Customer.company_id == company_id, Customer.deleted_at.is_(None)).options(
@@ -476,6 +498,7 @@ def build_databases_context(
         else:
             stmt = stmt.order_by(Customer.company_inactive.asc(), Customer.fiscal_name.asc())
         customers, pagination = paginate(db, stmt, page=page, page_size=page_size)
+        customer_entities = customers
         customer_ids = [customer.id for customer in customers]
         counts, latest, contact_counts = _customer_related_stats(db, company_id, customer_ids)
         customer_rows = [_customer_row(customer, counts.get(customer.id, 0), latest.get(customer.id), contact_counts.get(customer.id, 0)) for customer in customers]
@@ -665,8 +688,8 @@ def build_databases_context(
             "product_alias_total": product_alias_total,
             "active_customers": active_customers,
             "active_products": active_products,
-            "learned_aliases": db.scalar(select(func.count(LearnedAlias.id)).where(LearnedAlias.company_id == company_id)) or 0,
-            "manual_corrections": db.scalar(select(func.count(ManualCorrection.id)).where(ManualCorrection.company_id == company_id)) or 0,
+            "learned_aliases": int(database_counts["learned_aliases"] or 0),
+            "manual_corrections": int(database_counts["manual_corrections"] or 0),
         },
         "customer_tabs": {
             "all": customers_total,
@@ -681,6 +704,7 @@ def build_databases_context(
             "with_alias": product_alias_total,
         },
         "customer_knowledge": customer_knowledge,
+        "customer_entities": customer_entities,
     }
     return context
 

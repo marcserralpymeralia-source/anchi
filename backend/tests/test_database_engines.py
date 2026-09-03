@@ -35,6 +35,7 @@ class DatabaseEngineRuntimeTests(unittest.TestCase):
                 self.assertEqual(conn.execute(text("SELECT 1")).scalar(), 1)
 
             self.assertTrue(engine.pool._pre_ping)
+            engine.dispose()
 
 
 if __name__ == "__main__":

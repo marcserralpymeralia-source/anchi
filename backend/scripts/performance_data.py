@@ -47,7 +47,7 @@ from app.master.migrations import upgrade_master_schema
 from app.master.models import CompanyMembership, EmailSyncState, MasterCompany, MasterTenantDatabase, MasterUser
 from app.master.service import slugify
 from app.migrations.helpers import ensure_columns
-from app.tenancy.database import ensure_tenant_schema
+from app.tenancy.database import ensure_tenant_schema, get_tenant_engine
 
 
 @dataclass(slots=True)
@@ -361,8 +361,10 @@ def build_performance_fixture(scenario: str, base_dir: Path | None = None) -> Pe
 
     master_engine = create_engine(master_database_url, connect_args=_connect_args(master_database_url))
     tenant_engine = create_engine(tenant_database_url, connect_args=_connect_args(tenant_database_url))
+    schema_engine = None
     MasterBase.metadata.create_all(master_engine)
     Base.metadata.create_all(tenant_engine)
+    schema_engine = get_tenant_engine(tenant_database_url)
     ensure_tenant_schema(tenant_database_url)
 
     MasterSession = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
@@ -415,6 +417,9 @@ def build_performance_fixture(scenario: str, base_dir: Path | None = None) -> Pe
         master_db.close()
         master_engine.dispose()
         tenant_engine.dispose()
+        if schema_engine is not None:
+            schema_engine.dispose()
+        get_tenant_engine.cache_clear()
 
     return PerformanceFixture(
         scenario=plan.name,
@@ -513,6 +518,10 @@ def temporary_performance_environment(fixture: PerformanceFixture) -> Iterator[N
         jobs_worker_module.MasterSessionLocal = previous_jobs_worker_master_sessionlocal
         master_engine.dispose()
         tenant_engine.dispose()
+        cached_tenant_engine = tenancy_database_module.get_tenant_engine(fixture.tenant_database_url)
+        cached_tenant_engine.dispose()
+        tenancy_database_module.get_tenant_engine.cache_clear()
+        tenancy_database_module.clear_tenant_schema_cache()
         for key, value in previous.items():
             if value is None:
                 os.environ.pop(key, None)

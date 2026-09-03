@@ -212,10 +212,16 @@ def list_customers(
     view_mode = view if view in {"list", "knowledge"} else "list"
     section_mode = _normalize_customer_section(section)
     list_context = build_databases_context(db, user.company_id, tab="customers", q=q, status=status, selected_id=selected_id, sort=sort, page=page, page_size=page_size)
+    customer_entities = list_context.pop("customer_entities", None)
     current_customer_ids = None
     if view_mode == "list":
         current_customer_ids = [row["id"] for row in list_context.get("customers", [])]
-    knowledge_all = customer_knowledge_overview(db, user.company_id, customer_ids=current_customer_ids)
+    knowledge_all = customer_knowledge_overview(
+        db,
+        user.company_id,
+        customer_ids=current_customer_ids,
+        customers=customer_entities if view_mode == "list" else None,
+    )
     knowledge_filtered = [card for card in knowledge_all if _matches_knowledge_status(card, status) and _matches_knowledge_query(card, q)]
     if sort == "name_asc":
         knowledge_filtered.sort(key=lambda card: (card.get("name") or "").lower())

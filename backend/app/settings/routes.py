@@ -343,9 +343,16 @@ def build_settings_dashboard(
     ftp = ftp if ftp is not None else get_or_create_settings(db, FTPSettings, user.company_id)
     export = export if export is not None else get_or_create_settings(db, ExportSettings, user.company_id)
     decision = decision if decision is not None else get_or_create_settings(db, DecisionSettings, user.company_id)
-    customer_count = db.query(Customer).filter(Customer.company_id == user.company_id).count()
-    product_count = db.query(Product).filter(Product.company_id == user.company_id).count()
-    active_channels_count = db.query(InputChannel).filter(InputChannel.company_id == user.company_id, InputChannel.is_active == True).count()  # noqa: E712
+    dashboard_counts = db.execute(
+        select(
+            select(func.count(Customer.id)).where(Customer.company_id == user.company_id).scalar_subquery().label("customer_count"),
+            select(func.count(Product.id)).where(Product.company_id == user.company_id).scalar_subquery().label("product_count"),
+            select(func.count(InputChannel.id)).where(InputChannel.company_id == user.company_id, InputChannel.is_active == True).scalar_subquery().label("active_channels_count"),  # noqa: E712
+        )
+    ).one()._mapping
+    customer_count = int(dashboard_counts["customer_count"] or 0)
+    product_count = int(dashboard_counts["product_count"] or 0)
+    active_channels_count = int(dashboard_counts["active_channels_count"] or 0)
     prompt_templates = prompt_templates if prompt_templates is not None else db.scalars(select(PromptTemplate).where(PromptTemplate.company_id == user.company_id)).all()
 
     def state(key: str, label: str, kind: str, summary: str, action: str) -> dict:
@@ -422,22 +429,45 @@ def build_environment_diagnostics(
     company = company if company is not None else db.get(Company, user.company_id)
     email_settings = email_settings if email_settings is not None else get_or_create_settings(db, EmailSettings, user.company_id)
     llm_settings = llm_settings if llm_settings is not None else get_or_create_settings(db, LLMSettings, user.company_id)
-    last_seed_at = db.scalar(
-        select(func.max(AuditLog.created_at)).where(AuditLog.company_id == user.company_id, AuditLog.action == "demo.seed")
-    )
-    customers_total = db.scalar(select(func.count(Customer.id)).where(Customer.company_id == user.company_id)) or 0
-    products_total = db.scalar(select(func.count(Product.id)).where(Product.company_id == user.company_id)) or 0
-    orders_total = db.scalar(select(func.count(Order.id)).where(Order.company_id == user.company_id)) or 0
-    emails_total = db.scalar(select(func.count(Email.id)).where(Email.company_id == user.company_id)) or 0
-    processed_emails_total = db.scalar(select(func.count(Email.id)).where(Email.company_id == user.company_id, Email.agent_status != "not_processed")) or 0
-    inbound_total = db.scalar(select(func.count(InboundMessage.id)).where(InboundMessage.company_id == user.company_id)) or 0
-    active_channels_total = db.scalar(select(func.count(InputChannel.id)).where(InputChannel.company_id == user.company_id, InputChannel.is_active == True)) or 0  # noqa: E712
-    jobs_total = db.scalar(select(func.count(BackgroundJob.id)).where(BackgroundJob.company_id == user.company_id)) or 0
-    jobs_queued = db.scalar(select(func.count(BackgroundJob.id)).where(BackgroundJob.company_id == user.company_id, BackgroundJob.status == "queued")) or 0
-    jobs_running = db.scalar(select(func.count(BackgroundJob.id)).where(BackgroundJob.company_id == user.company_id, BackgroundJob.status == "running")) or 0
-    jobs_retrying = db.scalar(select(func.count(BackgroundJob.id)).where(BackgroundJob.company_id == user.company_id, BackgroundJob.status == "retrying")) or 0
-    jobs_failed = db.scalar(select(func.count(BackgroundJob.id)).where(BackgroundJob.company_id == user.company_id, BackgroundJob.status == "failed")) or 0
-    jobs_cancelled = db.scalar(select(func.count(BackgroundJob.id)).where(BackgroundJob.company_id == user.company_id, BackgroundJob.status == "cancelled")) or 0
+    company_id = user.company_id
+
+    def count_for(model, *conditions):  # noqa: ANN001
+        return select(func.count(model.id)).where(model.company_id == company_id, *conditions).scalar_subquery()
+
+    diagnostics_stats = db.execute(
+        select(
+            select(func.max(AuditLog.created_at)).where(AuditLog.company_id == company_id, AuditLog.action == "demo.seed").scalar_subquery().label("last_seed_at"),
+            count_for(Customer).label("customers_total"),
+            count_for(Product).label("products_total"),
+            count_for(Order).label("orders_total"),
+            count_for(Email).label("emails_total"),
+            count_for(Email, Email.agent_status != "not_processed").label("processed_emails_total"),
+            count_for(InboundMessage).label("inbound_total"),
+            count_for(InputChannel, InputChannel.is_active == True).label("active_channels_total"),  # noqa: E712
+            count_for(BackgroundJob).label("jobs_total"),
+            count_for(BackgroundJob, BackgroundJob.status == "queued").label("jobs_queued"),
+            count_for(BackgroundJob, BackgroundJob.status == "running").label("jobs_running"),
+            count_for(BackgroundJob, BackgroundJob.status == "retrying").label("jobs_retrying"),
+            count_for(BackgroundJob, BackgroundJob.status == "failed").label("jobs_failed"),
+            count_for(BackgroundJob, BackgroundJob.status == "cancelled").label("jobs_cancelled"),
+            count_for(BackgroundJob, BackgroundJob.status == "success").label("jobs_success"),
+        )
+    ).one()._mapping
+    last_seed_at = diagnostics_stats["last_seed_at"]
+    customers_total = int(diagnostics_stats["customers_total"] or 0)
+    products_total = int(diagnostics_stats["products_total"] or 0)
+    orders_total = int(diagnostics_stats["orders_total"] or 0)
+    emails_total = int(diagnostics_stats["emails_total"] or 0)
+    processed_emails_total = int(diagnostics_stats["processed_emails_total"] or 0)
+    inbound_total = int(diagnostics_stats["inbound_total"] or 0)
+    active_channels_total = int(diagnostics_stats["active_channels_total"] or 0)
+    jobs_total = int(diagnostics_stats["jobs_total"] or 0)
+    jobs_queued = int(diagnostics_stats["jobs_queued"] or 0)
+    jobs_running = int(diagnostics_stats["jobs_running"] or 0)
+    jobs_retrying = int(diagnostics_stats["jobs_retrying"] or 0)
+    jobs_failed = int(diagnostics_stats["jobs_failed"] or 0)
+    jobs_cancelled = int(diagnostics_stats["jobs_cancelled"] or 0)
+    jobs_success = int(diagnostics_stats["jobs_success"] or 0)
     email_status = email_config_status(email_settings)
     llm_ready = bool(llm_settings.provider and llm_settings.provider != "disabled" and llm_settings.api_key_encrypted and llm_settings.last_test_ok is not False)
     migration_report = tenant_migration_report(db, user.company_id)
@@ -492,7 +522,7 @@ def build_environment_diagnostics(
         "jobs_retrying": jobs_retrying,
         "jobs_failed": jobs_failed,
         "jobs_cancelled": jobs_cancelled,
-        "jobs_success": db.scalar(select(func.count(BackgroundJob.id)).where(BackgroundJob.company_id == user.company_id, BackgroundJob.status == "success")) or 0,
+        "jobs_success": jobs_success,
     }
 
 
