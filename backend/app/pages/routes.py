@@ -438,7 +438,7 @@ def dashboard(
     is_orders_cards = request.url.path.startswith("/orders")
     default_date_range = "" if is_orders_cards else "7d"
     resolved_date_range = date_range or quick_range or default_date_range
-    filters = {"date_from": date_from, "date_to": date_to, "customer_id": customer_id, "status": status, "email_type": email_type, "score_min": score_min, "score_max": score_max, "scoring_category": scoring_category, "agent_status": agent_status, "date_range": resolved_date_range, "customer_or_sender": customer_or_sender, "has_attachments": has_attachments, "order_status": order_status, "mode": active_mode, "tab": active_mode, "work_status": work_status, "quick_range": resolved_date_range, "has_pdf": has_pdf, "requires_review": requires_review, "issue_type": issue_type, "origin": origin, "sender": sender, "search": search, "reason": reason, "page": page, "page_size": page_size, "sort": sort, "archived": False}
+    filters = {"date_from": date_from, "date_to": date_to, "customer_id": customer_id, "status": status, "email_type": email_type, "score_min": score_min, "score_max": score_max, "scoring_category": scoring_category, "agent_status": agent_status, "date_range": resolved_date_range, "customer_or_sender": customer_or_sender, "has_attachments": has_attachments, "order_status": order_status, "mode": active_mode, "tab": active_mode, "work_status": work_status, "quick_range": resolved_date_range, "has_pdf": has_pdf, "requires_review": requires_review, "issue_type": issue_type, "origin": origin, "sender": sender, "search": search, "reason": reason, "page": page, "page_size": page_size, "sort": sort, "archived": False, "workbench": is_orders_cards}
 
     try:
         if is_orders_cards:

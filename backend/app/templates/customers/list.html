@@ -335,7 +335,7 @@
                           <a href="/customers/{{ row.id }}/knowledge?section=summary">Ver conocimiento</a>
                           <a href="/customers?view=knowledge&selected_id={{ row.id }}">Vista conocimiento</a>
                           <a href="/orders?customer_id={{ row.id }}">Ver pedidos</a>
-                          <a href="#" onclick="event.preventDefault(); document.getElementById('customer-delete-{{ row.id }}').showModal();">Eliminar</a>
+                          <a href="#" class="js-open-customer-delete" data-delete-url="/customers/{{ row.id }}/delete" data-customer-name="{{ row.fiscal_name }}">Eliminar</a>
                         </div>
                       </details>
                     </div>
@@ -558,11 +558,10 @@
     <div class="actions"><button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancelar</button><button class="primary" data-loading-text="Guardando...">Guardar</button></div>
   </form>
 </dialog>
-{% for row in customers %}
-<dialog id="customer-delete-{{ row.id }}" class="edit-dialog">
-  <form class="stack js-loading-form" method="post" action="/customers/{{ row.id }}/delete" data-confirm="¿Seguro que quieres eliminar este cliente? No aparecerá en los listados activos, pero sus pedidos históricos se conservarán.">
+<dialog id="customer-delete-dialog" class="edit-dialog">
+  <form id="customer-delete-form" class="stack js-loading-form" method="post" action="/customers/0/delete" data-confirm="¿Seguro que quieres eliminar este cliente? No aparecerá en los listados activos, pero sus pedidos históricos se conservarán.">
     <div class="dialog-header"><h2>Eliminar cliente</h2><button type="button" class="secondary compact-button modal-close-btn" onclick="this.closest('dialog').close()" title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button></div>
-    <p>Vas a eliminar <strong>{{ row.fiscal_name }}</strong>.</p>
+    <p>Vas a eliminar <strong id="customer-delete-name"></strong>.</p>
     <p class="muted">Se ocultará de los listados activos, pero los pedidos históricos se conservarán.</p>
     <div class="actions">
       <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancelar</button>
@@ -570,11 +569,13 @@
     </div>
   </form>
 </dialog>
-{% endfor %}
 <script>
   const customerEditor = document.getElementById("customer-editor");
   const customerEditorForm = document.getElementById("customer-editor-form");
   const customerEditorTitle = document.getElementById("customer-editor-title");
+  const customerDeleteDialog = document.getElementById("customer-delete-dialog");
+  const customerDeleteForm = document.getElementById("customer-delete-form");
+  const customerDeleteName = document.getElementById("customer-delete-name");
   const customerEditorFields = [
     "code", "fiscal_name", "commercial_name", "tax_id", "primary_email", "associated_emails",
     "delegation", "phone", "associated_phones", "city", "province", "assigned_salesperson",
@@ -612,6 +613,15 @@
     }
     customerEditor.showModal();
   }
+
+  document.addEventListener("click", (event) => {
+    const trigger = event.target.closest(".js-open-customer-delete");
+    if (!trigger || !customerDeleteDialog || !customerDeleteForm) return;
+    event.preventDefault();
+    customerDeleteForm.action = trigger.dataset.deleteUrl || "/customers/0/delete";
+    if (customerDeleteName) customerDeleteName.textContent = trigger.dataset.customerName || "este cliente";
+    customerDeleteDialog.showModal();
+  });
 
   document.querySelectorAll(".js-import-paste-form").forEach((form) => {
     form.addEventListener("submit", (event) => {

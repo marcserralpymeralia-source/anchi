@@ -294,7 +294,7 @@
               <summary class="button secondary compact-button">...</summary>
               <div class="row-more-actions-panel">
                 <button type="button" onclick="document.getElementById('product-{{ product.id }}').showModal()">Editar</button>
-                <a href="#" onclick="event.preventDefault(); document.getElementById('product-delete-{{ product.id }}').showModal();">Eliminar</a>
+                <a href="#" class="js-open-product-delete" data-delete-url="/products/{{ product.id }}/delete" data-product-name="{{ product.reference }} · {{ product.name }}">Eliminar</a>
               </div>
             </details>
           </div>
@@ -355,11 +355,10 @@
 
 {{ product_form(None, "create-product", True) }}
 {% for product in products %}{{ product_form(product, "product-" ~ product.id) }}{% endfor %}
-{% for product in products %}
-<dialog id="product-delete-{{ product.id }}" class="edit-dialog">
-  <form class="stack js-loading-form" method="post" action="/products/{{ product.id }}/delete" data-confirm="¿Seguro que quieres eliminar este producto? No aparecerá en nuevos pedidos, pero se conservará en el histórico.">
+<dialog id="product-delete-dialog" class="edit-dialog">
+  <form id="product-delete-form" class="stack js-loading-form" method="post" action="/products/0/delete" data-confirm="¿Seguro que quieres eliminar este producto? No aparecerá en nuevos pedidos, pero se conservará en el histórico.">
     <div class="dialog-header"><h2>Eliminar producto</h2><button type="button" class="secondary compact-button modal-close-btn" onclick="this.closest('dialog').close()" title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button></div>
-    <p>Vas a eliminar <strong>{{ product.reference }} · {{ product.name }}</strong>.</p>
+    <p>Vas a eliminar <strong id="product-delete-name"></strong>.</p>
     <p class="muted">No aparecerá en nuevos pedidos y se conservará el histórico.</p>
     <div class="actions">
       <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancelar</button>
@@ -367,8 +366,18 @@
     </div>
   </form>
 </dialog>
-{% endfor %}
 <script>
+  const productDeleteDialog = document.getElementById("product-delete-dialog");
+  const productDeleteForm = document.getElementById("product-delete-form");
+  const productDeleteName = document.getElementById("product-delete-name");
+  document.addEventListener("click", (event) => {
+    const trigger = event.target.closest(".js-open-product-delete");
+    if (!trigger || !productDeleteDialog || !productDeleteForm) return;
+    event.preventDefault();
+    productDeleteForm.action = trigger.dataset.deleteUrl || "/products/0/delete";
+    if (productDeleteName) productDeleteName.textContent = trigger.dataset.productName || "este producto";
+    productDeleteDialog.showModal();
+  });
   document.querySelectorAll(".js-import-paste-form").forEach((form) => {
     form.addEventListener("submit", (event) => {
       const fileInput = form.querySelector("[data-import-file]");

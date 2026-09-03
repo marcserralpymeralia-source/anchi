@@ -11,6 +11,7 @@
   {%- endif -%}
 {%- endmacro %}
 {% block content %}
+{% if not settings_fragment %}
 <section class="settings-shell">
   {# Unified Settings Dock Card (Search + Progress banner separated by horizontal divider) #}
   <div class="settings-dock-card panel">
@@ -155,8 +156,11 @@
       </article>
     {% endfor %}
   </section>
+  <template id="settings-search-catalog">{{ settings_search_catalog | tojson }}</template>
 </section>
+{% endif %}
 
+{% if settings_fragment == "general" %}
 <dialog id="settings-general" class="settings-drawer">
   <div class="drawer-head">
     <div>
@@ -219,7 +223,9 @@
     </div>
   </form>
 </dialog>
+{% endif %}
 
+{% if settings_fragment == "identity" %}
 <dialog id="settings-identity" class="settings-drawer">
   <div class="drawer-head">
     <div>
@@ -371,7 +377,9 @@
     {% if not can_edit_branding %}</fieldset>{% endif %}
   </form>
 </dialog>
+{% endif %}
 
+{% if settings_fragment == "email" %}
 <dialog id="settings-email" class="settings-drawer">
   <div class="drawer-head">
     <div>
@@ -719,7 +727,9 @@
     </section>
   </div>
 </dialog>
+{% endif %}
 
+{% if settings_fragment == "ai" %}
 <dialog id="settings-ai" class="settings-drawer">
   <div class="drawer-head">
     <div>
@@ -882,7 +892,9 @@
     </form>
   </div>
 </dialog>
+{% endif %}
 
+{% if settings_fragment == "scoring" %}
 <dialog id="settings-scoring" class="settings-drawer">
   <div class="drawer-head">
     <div>
@@ -941,7 +953,9 @@
     </div>
   </form>
 </dialog>
+{% endif %}
 
+{% if settings_fragment == "decision" %}
 <dialog id="settings-decision" class="settings-drawer settings-drawer-wide">
   <div class="drawer-head">
     <div>
@@ -1023,7 +1037,9 @@
     </div>
   </form>
 </dialog>
+{% endif %}
 
+{% if settings_fragment == "export" %}
 <dialog id="settings-export" class="settings-drawer">
   <div class="drawer-head">
     <div>
@@ -1049,7 +1065,9 @@
     </div>
   </form>
 </dialog>
+{% endif %}
 
+{% if settings_fragment == "ftp" %}
 <dialog id="settings-ftp" class="settings-drawer">
   <div class="drawer-head">
     <div>
@@ -1089,7 +1107,9 @@
     <p class="muted">La prueba utiliza los datos guardados actualmente y no envía ningún pedido ni fichero.</p>
   </form>
 </dialog>
+{% endif %}
 
+{% if settings_fragment == "advanced" %}
 <dialog id="settings-advanced" class="settings-drawer settings-drawer-wide">
   <div class="drawer-head">
     <div>
@@ -1133,7 +1153,9 @@
     </section>
   </div>
 </dialog>
+{% endif %}
 
+{% if not settings_fragment %}
 <script>
   function togglePendingChecklist() {
     const checklist = document.getElementById("settings-checklist-section");
@@ -1186,6 +1208,19 @@
       entry.normalizedModule = normalizeSearchText(entry.moduleLabel);
       searchCatalog.push(entry);
     };
+
+    const staticCatalogNode = document.getElementById("settings-search-catalog");
+    if (staticCatalogNode) {
+      try {
+        JSON.parse(staticCatalogNode.content.textContent || "[]").forEach((entry) => addSearchEntry({
+          ...entry,
+          dialogId: "",
+          href: "",
+        }));
+      } catch (error) {
+        console.warn("No se pudo cargar el índice de configuración", error);
+      }
+    }
 
     moduleCards.forEach((card) => {
       const opener = card.querySelector("[data-open-settings]");
@@ -1289,20 +1324,25 @@
         window.location.assign(entry.href);
         return;
       }
-      const dialog = document.getElementById(entry.dialogId);
-      if (!dialog) {
-        document.getElementById(entry.targetId)?.scrollIntoView({ behavior: "smooth", block: "center" });
-        return;
-      }
-      if (!dialog.open) dialog.showModal();
-      window.requestAnimationFrame(() => {
-        const target = document.getElementById(entry.targetId);
+      const focusEntryTarget = () => {
+        const target = entry.targetId
+          ? document.getElementById(entry.targetId)
+          : entry.targetName
+            ? document.querySelector(`[name="${CSS.escape(entry.targetName)}"]`)
+            : null;
         if (!target) return;
         target.scrollIntoView({ behavior: "smooth", block: "center" });
         if (typeof target.focus === "function" && target.matches("input, select, textarea")) {
           target.focus({ preventScroll: true });
         }
-      });
+      };
+      const dialog = document.getElementById(entry.dialogId);
+      if (dialog) {
+        if (!dialog.open) dialog.showModal();
+        window.requestAnimationFrame(focusEntryTarget);
+        return;
+      }
+      openSettingsDrawer(entry.moduleKey).then(() => window.requestAnimationFrame(focusEntryTarget));
     };
 
     const matchesEntry = (entry, terms) => terms.every((term) => entry.normalizedSearchText.includes(term));
@@ -1470,58 +1510,149 @@
       if (!settingsSearchWrap.contains(event.target)) hideSearchResults();
     });
   }
-  const extractionModelSelect = document.querySelector("[data-extraction-model-select]");
-  const extractionModelHidden = document.querySelector("[data-extraction-model-value]");
-  const extractionModelCustomWrap = document.querySelector("[data-extraction-model-custom-wrap]");
-  const extractionModelCustom = document.querySelector("[data-extraction-model-custom]");
-  const extractionModelPreviewLabel = document.querySelector("[data-extraction-model-preview-label]");
-  const extractionModelPreviewId = document.querySelector("[data-extraction-model-preview-id]");
-  const extractionModelPreviewDescription = document.querySelector("[data-extraction-model-preview-description]");
-  function syncExtractionModelPreview() {
-    if (!extractionModelSelect) {
-      return;
+  function bindExtractionModelDialog(root = document) {
+    const extractionModelSelect = root.querySelector("[data-extraction-model-select]");
+    const extractionModelHidden = root.querySelector("[data-extraction-model-value]");
+    const extractionModelCustomWrap = root.querySelector("[data-extraction-model-custom-wrap]");
+    const extractionModelCustom = root.querySelector("[data-extraction-model-custom]");
+    const extractionModelPreviewLabel = root.querySelector("[data-extraction-model-preview-label]");
+    const extractionModelPreviewId = root.querySelector("[data-extraction-model-preview-id]");
+    const extractionModelPreviewDescription = root.querySelector("[data-extraction-model-preview-description]");
+    if (!extractionModelSelect) return;
+
+    function syncExtractionModelPreview() {
+      const selected = extractionModelSelect.selectedOptions[0];
+      const isCustom = extractionModelSelect.value === "custom";
+      const selectedLabel = selected?.dataset?.label || selected?.textContent?.trim() || "GPT-5.6 Luna";
+      const selectedDescription = selected?.dataset?.description || "Modelo recomendado para extracción.";
+      const currentValue = isCustom ? (extractionModelCustom?.value?.trim() || extractionModelHidden?.value || "gpt-5.6-luna") : extractionModelSelect.value;
+      if (extractionModelCustomWrap) {
+        extractionModelCustomWrap.hidden = !isCustom;
+      }
+      if (extractionModelHidden) {
+        extractionModelHidden.value = currentValue;
+      }
+      if (extractionModelPreviewLabel) {
+        extractionModelPreviewLabel.textContent = isCustom ? "Modelo personalizado" : selectedLabel;
+      }
+      if (extractionModelPreviewId) {
+        extractionModelPreviewId.textContent = currentValue;
+      }
+      if (extractionModelPreviewDescription) {
+        extractionModelPreviewDescription.textContent = isCustom ? "Se guardará exactamente el model ID indicado." : selectedDescription;
+      }
     }
-    const selected = extractionModelSelect.selectedOptions[0];
-    const isCustom = extractionModelSelect.value === "custom";
-    const selectedLabel = selected?.dataset?.label || selected?.textContent?.trim() || "GPT-5.6 Luna";
-    const selectedDescription = selected?.dataset?.description || "Modelo recomendado para extracción.";
-    const currentValue = isCustom ? (extractionModelCustom?.value?.trim() || extractionModelHidden?.value || "gpt-5.6-luna") : extractionModelSelect.value;
-    if (extractionModelCustomWrap) {
-      extractionModelCustomWrap.hidden = !isCustom;
-    }
-    if (extractionModelHidden) {
-      extractionModelHidden.value = currentValue;
-    }
-    if (extractionModelPreviewLabel) {
-      extractionModelPreviewLabel.textContent = isCustom ? "Modelo personalizado" : selectedLabel;
-    }
-    if (extractionModelPreviewId) {
-      extractionModelPreviewId.textContent = currentValue;
-    }
-    if (extractionModelPreviewDescription) {
-      extractionModelPreviewDescription.textContent = isCustom ? "Se guardará exactamente el model ID indicado." : selectedDescription;
-    }
-  }
-  if (extractionModelSelect) {
+
     extractionModelSelect.addEventListener("change", syncExtractionModelPreview);
+    extractionModelCustom?.addEventListener("input", syncExtractionModelPreview);
     syncExtractionModelPreview();
   }
-  if (extractionModelCustom) {
-    extractionModelCustom.addEventListener("input", syncExtractionModelPreview);
+  bindExtractionModelDialog();
+  const settingsDialogRoot = document.createElement("div");
+  settingsDialogRoot.id = "settings-dialog-root";
+  document.body.append(settingsDialogRoot);
+  const settingsDialogRequests = new Map();
+
+  function createSettingsLoadingDialog(id) {
+    const dialog = document.createElement("dialog");
+    dialog.id = `settings-${id}`;
+    dialog.className = "settings-drawer settings-drawer-loading";
+    dialog.innerHTML = `
+      <div class="drawer-head">
+        <div><h3>Cargando configuración</h3><p class="muted">Estamos preparando este bloque.</p></div>
+        <button type="button" class="secondary compact-button modal-close-btn" data-close-settings aria-label="Cerrar">×</button>
+      </div>
+      <div class="settings-loading-placeholder" role="status" aria-live="polite">
+        <span class="settings-loading-line settings-loading-line-wide"></span>
+        <span class="settings-loading-line"></span>
+        <span class="settings-loading-line settings-loading-line-short"></span>
+        <span class="settings-loading-line"></span>
+      </div>`;
+    return dialog;
   }
-  function openSettingsDrawer(id) {
-    const dialog = document.getElementById(`settings-${id}`);
-    if (dialog) dialog.showModal();
+
+  async function openSettingsDrawer(id) {
+    let dialog = document.getElementById(`settings-${id}`);
+    if (dialog?.dataset.settingsLoaded === "true") {
+      if (!dialog.open) dialog.showModal();
+      return dialog;
+    }
+    if (!dialog) {
+      dialog = createSettingsLoadingDialog(id);
+      settingsDialogRoot.append(dialog);
+    }
+    if (!dialog.open) dialog.showModal();
+    if (!settingsDialogRequests.has(id)) {
+      const request = fetch(`/settings/module/${encodeURIComponent(id)}`, {
+        credentials: "same-origin",
+        headers: {"Accept": "text/html", "X-Requested-With": "fetch"},
+      }).then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const html = await response.text();
+        const parsed = new DOMParser().parseFromString(html, "text/html");
+        const loadedDialog = parsed.getElementById(`settings-${id}`);
+        if (!loadedDialog) throw new Error("El bloque de configuración no está disponible");
+        loadedDialog.dataset.settingsLoaded = "true";
+        dialog.replaceWith(loadedDialog);
+        bindExtractionModelDialog(loadedDialog);
+        if (globalThis.AnchiEmailBackfill) globalThis.AnchiEmailBackfill.bindBackfillForms(loadedDialog);
+        loadedDialog.showModal();
+        return loadedDialog;
+      }).catch((error) => {
+        dialog.innerHTML = `
+          <div class="drawer-head">
+            <div><h3>No se pudo cargar</h3><p class="muted">Revisa la conexión e inténtalo de nuevo.</p></div>
+            <button type="button" class="secondary compact-button modal-close-btn" data-close-settings aria-label="Cerrar">×</button>
+          </div>
+          <div class="settings-loading-error" role="alert">Ha ocurrido un problema temporal.</div>
+          <div class="drawer-actions"><button type="button" class="primary" data-retry-settings="${id}">Reintentar</button></div>`;
+        console.warn("No se pudo cargar el módulo de configuración", id, error);
+        return dialog;
+      }).finally(() => settingsDialogRequests.delete(id));
+      settingsDialogRequests.set(id, request);
+    }
+    return settingsDialogRequests.get(id);
   }
   function closeSettingsDrawer(id) {
     const dialog = document.getElementById(id);
     if (dialog) dialog.close();
   }
-  document.querySelectorAll("[data-open-settings]").forEach((button) => {
-    button.addEventListener("click", () => openSettingsDrawer(button.dataset.openSettings));
+  document.addEventListener("click", (event) => {
+    const closeButton = event.target.closest("[data-close-settings]");
+    if (closeButton) {
+      event.preventDefault();
+      closeSettingsDrawer(closeButton.closest("dialog")?.id);
+      return;
+    }
+    const opener = event.target.closest("[data-open-settings]");
+    if (opener) {
+      event.preventDefault();
+      openSettingsDrawer(opener.dataset.openSettings);
+      return;
+    }
+    const retry = event.target.closest("[data-retry-settings]");
+    if (retry) {
+      event.preventDefault();
+      const id = retry.dataset.retrySettings;
+      const dialog = document.getElementById(`settings-${id}`);
+      if (dialog) dialog.remove();
+      openSettingsDrawer(id);
+    }
   });
-  document.querySelectorAll("[data-close-settings]").forEach((button) => {
-    button.addEventListener("click", () => closeSettingsDrawer(button.closest("dialog").id));
+  document.addEventListener("submit", (event) => {
+    const form = event.target.closest("form.js-loading-form");
+    if (!form || form.dataset.lazyLoadingBound === "true") return;
+    const submitter = event.submitter;
+    const message = form.dataset.confirm || submitter?.dataset?.confirm;
+    if (message && !confirm(message)) {
+      event.preventDefault();
+      return;
+    }
+    form.querySelectorAll("button[type='submit'], button:not([type])").forEach((button) => {
+      button.textContent = button.dataset.loadingText || "Procesando...";
+      button.disabled = true;
+    });
   });
 </script>
+{% endif %}
 {% endblock %}
