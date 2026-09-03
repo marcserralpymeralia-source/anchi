@@ -93,6 +93,14 @@ class MailInboxRoutesTests(unittest.TestCase):
         try:
             with SessionLocal() as db:
                 email_id = db.scalar(select(Email.id).where(Email.company_id == fixture.company_id).order_by(Email.id))
+                settings = db.scalar(
+                    select(EmailSettings).where(EmailSettings.company_id == fixture.company_id)
+                )
+                settings.imap_host = None
+                settings.imap_username = None
+                settings.imap_password_encrypted = None
+                settings.connected_email = None
+                db.commit()
             self.assertIsNotNone(email_id)
 
             with performance_test_client(fixture) as client:
@@ -100,8 +108,8 @@ class MailInboxRoutesTests(unittest.TestCase):
                 detail = client.get(f"/mail/{email_id}")
                 dashboard_fragment = client.get("/?partial=workbench", headers={"X-Requested-With": "fetch"})
 
-            self.assertEqual(inbox.status_code, 303)
-            self.assertEqual(inbox.headers["location"], "/")
+            self.assertEqual(inbox.status_code, 200)
+            self.assertIn("Conecta una cuenta de correo", inbox.text)
             self.assertEqual(detail.status_code, 200)
             self.assertIn("Detalle de correo", detail.text)
             self.assertNotIn("Internal Server Error", detail.text)
@@ -274,7 +282,14 @@ class MailInboxRoutesTests(unittest.TestCase):
                 master_db.commit()
 
             with TenantSession() as tenant_db:
-                for index in range(12):
+                settings = tenant_db.scalar(select(EmailSettings).where(EmailSettings.company_id == fixture.company_id))
+                self.assertIsNotNone(settings)
+                assert settings is not None
+                settings.imap_host = "imap.example.test"
+                settings.imap_username = "demo@example.test"
+                settings.imap_password_encrypted = "configured"
+                settings.connected_email = "demo@example.test"
+                for index in range(15):
                     tenant_db.add(
                         Email(
                             company_id=fixture.company_id,
@@ -289,6 +304,21 @@ class MailInboxRoutesTests(unittest.TestCase):
                             received_at=datetime(2026, 7, 31, 12, index, tzinfo=timezone.utc),
                         )
                     )
+                tenant_db.add(
+                    Email(
+                        company_id=fixture.company_id,
+                        external_id="archived-active",
+                        message_id="<archived-active@example.com>",
+                        imap_mailbox="INBOX",
+                        imap_uidvalidity="777",
+                        imap_uid="999",
+                        sender="nuevo@example.com",
+                        subject="Archivado activo",
+                        body="No debe aparecer",
+                        archived=True,
+                        received_at=datetime(2026, 7, 31, 13, 0, tzinfo=timezone.utc),
+                    )
+                )
                 for index in range(2):
                     tenant_db.add(
                         Email(
@@ -307,23 +337,33 @@ class MailInboxRoutesTests(unittest.TestCase):
                 tenant_db.commit()
 
             with performance_test_client(fixture) as client:
-                inbox = client.get("/mail", follow_redirects=True)
+                inbox = client.get("/mail", follow_redirects=False)
+                page_two = client.get("/mail?page=2", follow_redirects=False)
 
             self.assertEqual(inbox.status_code, 200)
-            self.assertIn("Bandeja", inbox.text)
+            self.assertIn("Bandeja activa", inbox.text)
+            self.assertIn("15 mensajes", inbox.text)
+            self.assertIn("Activo 14", inbox.text)
+            self.assertNotIn("Activo 4", inbox.text)
+            self.assertNotIn("Antiguo 0", inbox.text)
+            self.assertNotIn("Archivado activo", inbox.text)
+            self.assertIn('action="/settings/email/read"', inbox.text)
+            self.assertEqual(page_two.status_code, 200)
+            self.assertIn("Activo 4", page_two.text)
+            self.assertNotIn("Activo 14", page_two.text)
         finally:
             master_engine.dispose()
             tenant_engine.dispose()
             fixture.cleanup()
 
-    def test_mail_inbox_redirects_to_dashboard(self):
+    def test_mail_inbox_does_not_redirect_to_dashboard(self):
         fixture = build_performance_fixture("small")
         try:
             with performance_test_client(fixture) as client:
                 response = client.get("/mail", follow_redirects=False)
 
-            self.assertEqual(response.status_code, 303)
-            self.assertEqual(response.headers["location"], "/")
+            self.assertEqual(response.status_code, 200)
+            self.assertNotIn("location", {key.lower() for key in response.headers})
         finally:
             fixture.cleanup()
 
