@@ -39,10 +39,12 @@ El endpoint solo procesa estados cuyo `next_run_at` ya ha vencido. Tras cada lec
 
 Configura estos secretos del repositorio antes de activar el flujo:
 
-- `CRON_BASE_URL`: URL base del despliegue de producción, sin `/` final.
-- `CRON_SECRET`: el mismo valor configurado como `CRON_SECRET` en Vercel.
+- `CRON_SECRET_GEMAVI`: el mismo valor configurado como `CRON_SECRET` en el proyecto Vercel `anchi-gemavi`.
+- `CRON_SECRET_TAN`: el mismo valor configurado como `CRON_SECRET` en el proyecto Vercel `anchi` (`anchi-tan.vercel.app`).
 
-El flujo solo se ejecuta desde la rama por defecto y no imprime la respuesta del endpoint. GitHub Actions puede sufrir retrasos puntuales y su intervalo es solo la resolución máxima de esta alternativa para la demo; para producción real se recomienda el worker persistente descrito arriba, que respeta directamente cualquier frecuencia configurada.
+Las URLs de ambos despliegues están definidas en el workflow y no necesitan ser secretos.
+
+El flujo despierta ambos endpoints en paralelo, solo se ejecuta desde la rama por defecto y no imprime la respuesta del endpoint. GitHub Actions puede sufrir retrasos puntuales y su intervalo es solo la resolución máxima de esta alternativa para la demo; para producción real se recomienda el worker persistente descrito arriba, que respeta directamente cualquier frecuencia configurada.
 
 ## Sincronizacion manual
 
