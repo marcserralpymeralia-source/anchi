@@ -104,6 +104,30 @@ class SettingsEmailReceiveHttpTests(unittest.TestCase):
                     self.assertEqual(state.source_host, "imap.gmail.com")
                     self.assertEqual(state.source_username, "demo.user@example.com")
 
+                payload["auto_sync_enabled"] = "on"
+                payload["polling_frequency_minutes"] = "5"
+                response = client.post("/settings/email/receive", data=payload, follow_redirects=False)
+                self.assertEqual(response.status_code, 303)
+
+                with MasterSession() as db:
+                    state = db.scalar(
+                        select(EmailSyncState).where(
+                            EmailSyncState.company_id == fixture.company_id,
+                            EmailSyncState.channel_key == "email",
+                        )
+                    )
+                    self.assertIsNotNone(state)
+                    assert state is not None
+                    self.assertTrue(state.enabled)
+                    self.assertEqual(state.frequency_seconds, 300)
+                    self.assertIsNotNone(state.next_run_at)
+
+                with TenantSession() as db:
+                    saved_after_auto_sync = db.scalar(select(EmailSettings).where(EmailSettings.company_id == fixture.company_id))
+                    self.assertIsNotNone(saved_after_auto_sync)
+                    assert saved_after_auto_sync is not None
+                    encrypted_password = saved_after_auto_sync.imap_password_encrypted
+
                 payload["imap_password_encrypted"] = "********"
                 payload["initial_history_limit"] = "20"
                 follow_response = client.post("/settings/email/receive", data=payload, follow_redirects=True)
@@ -183,6 +207,76 @@ class SettingsEmailReceiveHttpTests(unittest.TestCase):
                 self.assertEqual(payload["items"][0]["status"], "missing_fields")
                 self.assertEqual(payload["items"][0]["duration_ms"], 321)
                 self.assertEqual(payload["items"][0]["response_excerpt"], '{"pedido":{}}')
+        finally:
+            master_engine.dispose()
+            tenant_engine.dispose()
+            fixture.cleanup()
+
+
+    def test_account_only_save_preserves_existing_sync_preferences_for_superadmin(self):
+        fixture = build_performance_fixture("small")
+        master_engine = create_engine(fixture.master_database_url, connect_args={"check_same_thread": False})
+        tenant_engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        MasterSession = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
+        TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
+        try:
+            with TenantSession() as db:
+                settings = db.scalar(select(EmailSettings).where(EmailSettings.company_id == fixture.company_id))
+                self.assertIsNotNone(settings)
+                assert settings is not None
+                settings.auto_sync_enabled = True
+                settings.read_unread_only = True
+                settings.mark_as_read_after_import = True
+                settings.move_after_processing = True
+                settings.polling_frequency_minutes = 15
+                db.commit()
+
+            with performance_test_client(fixture) as client:
+                response = client.post(
+                    "/settings/email/receive",
+                    data={
+                        "provider": "gmail",
+                        "connected_email": "detected@example.test",
+                        "imap_username": "detected@example.test",
+                        "imap_password_encrypted": "temporary-test-password",
+                        "imap_host": "imap.example.test",
+                        "imap_port": "993",
+                        "imap_security": "ssl_tls",
+                        "imap_use_ssl": "on",
+                        "inbox_folder": "INBOX",
+                        "email_account_only": "on",
+                    },
+                    follow_redirects=False,
+                )
+
+                self.assertEqual(response.status_code, 303)
+                self.assertEqual(response.headers["location"], "/settings#email-receive")
+
+                with TenantSession() as db:
+                    saved = db.scalar(select(EmailSettings).where(EmailSettings.company_id == fixture.company_id))
+                    self.assertIsNotNone(saved)
+                    assert saved is not None
+                    self.assertEqual(saved.provider, "gmail")
+                    self.assertEqual(saved.connected_email, "detected@example.test")
+                    self.assertEqual(saved.imap_host, "imap.example.test")
+                    self.assertTrue(saved.auto_sync_enabled)
+                    self.assertTrue(saved.read_unread_only)
+                    self.assertTrue(saved.mark_as_read_after_import)
+                    self.assertTrue(saved.move_after_processing)
+                    self.assertEqual(saved.polling_frequency_minutes, 15)
+                    self.assertEqual(decrypt_secret(saved.imap_password_encrypted), "temporary-test-password")
+
+                with MasterSession() as db:
+                    state = db.scalar(
+                        select(EmailSyncState).where(
+                            EmailSyncState.company_id == fixture.company_id,
+                            EmailSyncState.channel_key == "email",
+                        )
+                    )
+                    self.assertIsNotNone(state)
+                    assert state is not None
+                    self.assertTrue(state.enabled)
+                    self.assertEqual(state.frequency_seconds, 900)
         finally:
             master_engine.dispose()
             tenant_engine.dispose()

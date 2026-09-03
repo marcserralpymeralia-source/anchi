@@ -2,48 +2,168 @@
 {% set title = "Pedido #" ~ order.id %}
 
 {% block content %}
+{% from "components/icons.html" import icon_mail, icon_whatsapp, icon_arrow_left, icon_paperclip, icon_check, icon_close, icon_trash, icon_plus, icon_search, icon_calendar, icon_download, icon_external_link %}
+
 {% set attachments = order.email.attachments|list if order.email else [] %}
-{% set pdfs = attachments|selectattr("is_pdf")|list if attachments else [] %}
 {% set score_value = order.score if order.score is not none else 0 %}
 {% set selected_customer_id = order.validated_customer_id or order.customer_id or 0 %}
 
-<div class="order-review-layout">
+{# Safe totals calculation #}
+{% set ns = namespace(total=0.0, total_units=0.0) %}
+{% for line in order.lines %}
+  {% set prod = line.validated_product or line.product %}
+  {% set price = (prod.sale_price|float) if (prod and prod.sale_price is not none) else 0.0 %}
+  {% set qty = (line.quantity|float) if (line.quantity is not none) else 0.0 %}
+  {% set ns.total = ns.total + (price * qty) %}
+  {% set ns.total_units = ns.total_units + qty %}
+{% endfor %}
 
-  <section class="order-review-source">
-    <div class="order-review-tabs">
+{# Top context dock #}
+<div class="data-dock-wrapper" style="margin-bottom: 16px;">
+  <div class="data-dock-multi">
+    <div class="dock-primary-row">
+      <a href="/orders" class="dock-segment-btn" title="Volver a la lista de pedidos">
+        {{ icon_arrow_left(14) }}
+        <span>Pedidos</span>
+      </a>
+      <div class="dock-divider" aria-hidden="true"></div>
+
+      <div class="dock-entity-title">
+        <strong>Pedido #{{ order.id }}</strong>
+      </div>
+
+      <span class="badge {% if order.status in ['pedido_confirmado', 'pedido_validado'] %}status-confirmed{% elif order.status in ['dudoso', 'no_importable', 'error'] %}status-doubtful{% else %}status-pending{% endif %}">
+        {{ order.status|status_label }}
+      </span>
+
       {% if order.email %}
-        <button
-          type="button"
-          class="order-review-tab is-active"
-          data-order-source-tab="email"
-        >
-          Correo
-        </button>
+        <span class="badge" style="background:#e0f2fe;color:#0369a1;font-weight:600;display:inline-flex;align-items:center;gap:4px;">
+          {{ icon_mail(12) }} <span>Correo</span>
+        </span>
+      {% elif conversation_preview or order.conversation %}
+        <span class="badge" style="background:#dcfce7;color:#15803d;font-weight:600;display:inline-flex;align-items:center;gap:4px;">
+          {{ icon_whatsapp(12) }} <span>WhatsApp</span>
+        </span>
+      {% else %}
+        <span class="badge" style="background:#f1f5f9;color:#475569;font-weight:600;">
+          Manual
+        </span>
       {% endif %}
 
-      {% if pdfs %}
-        <button
-          type="button"
-          class="order-review-tab"
-          data-order-source-tab="pdf"
-        >
-          PDF
-        </button>
+      <div class="dock-divider" aria-hidden="true"></div>
+
+      <div class="dock-meta-pills" style="display:inline-flex;align-items:center;gap:10px;font-size:12.5px;color:#64748b;">
+        <span><strong>{{ order.lines|length }}</strong> producto{% if order.lines|length != 1 %}s{% endif %}</span>
+        <span>·</span>
+        <strong style="color:#0f172a;">Total: {{ "%.2f"|format(ns.total) }} €</strong>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="order-review-layout">
+
+  {# Left source panel #}
+  <section class="order-review-source manual-panel">
+    <div class="manual-panel-header">
+      <div style="display:flex;align-items:center;gap:8px;">
+        <h3>Origen del pedido</h3>
+        {% if order.email and not attachments %}
+          <span class="badge" style="font-size:11px;">Correo electrónico</span>
+        {% elif conversation_preview or order.conversation %}
+          <span class="badge status-confirmed" style="font-size:11px;">WhatsApp</span>
+        {% endif %}
+      </div>
+
+      {# Tabs for switching between Email, Attachments/PDFs, and WhatsApp #}
+      {% if (order.email and attachments) or (attachments and (conversation_preview or order.conversation)) %}
+        <nav class="dock-segment-group" aria-label="Cambiar vista de origen">
+          {% if order.email %}
+            <button
+              type="button"
+              class="dock-segment-btn is-active"
+              data-order-source-tab="email"
+            >
+              {{ icon_mail(13) }}
+              <span>Correo</span>
+            </button>
+          {% endif %}
+
+          {% if attachments %}
+            <button
+              type="button"
+              class="dock-segment-btn {% if not order.email %}is-active{% endif %}"
+              data-order-source-tab="attachments"
+            >
+              {{ icon_paperclip(13) }}
+              <span>PDF ({{ attachments|length }})</span>
+            </button>
+          {% endif %}
+
+          {% if conversation_preview or order.conversation %}
+            <button
+              type="button"
+              class="dock-segment-btn {% if not order.email and not attachments %}is-active{% endif %}"
+              data-order-source-tab="conversation"
+            >
+              {{ icon_whatsapp(13) }}
+              <span>WhatsApp</span>
+            </button>
+          {% endif %}
+        </nav>
       {% endif %}
     </div>
 
+    {# 1. EMAIL VIEW PANEL #}
     {% if order.email %}
       <div class="order-review-source-panel is-active" data-order-source-panel="email">
         <article class="order-review-email">
-          <header class="order-review-email-header">
-            <div>
-              <strong>{{ order.email.subject or "Sin asunto" }}</strong>
-              <span>{{ order.email.sender or "Remitente desconocido" }}</span>
+          <div class="order-email-meta-card">
+            <div class="order-email-avatar">
+              {{ icon_mail(18) }}
             </div>
-            <time>
+            <div class="order-email-meta-col">
+              <strong class="order-email-subject">{{ order.email.subject or "Sin asunto" }}</strong>
+              <div class="order-email-submeta">
+                <span class="order-email-sender">{{ order.email.sender or "Remitente desconocido" }}</span>
+              </div>
+            </div>
+            <time class="order-email-time">
               {{ order.email.received_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M", "—") }}
             </time>
-          </header>
+          </div>
+
+          {% if attachments %}
+            <div class="order-email-attachments-bar">
+              <span class="field-title" style="display:inline-flex;align-items:center;gap:4px;font-size:11.5px;margin:0;">
+                {{ icon_paperclip(12) }} Adjuntos:
+              </span>
+              <div class="order-email-attachments-list">
+                {% for att in attachments %}
+                  <div class="order-att-chip-group">
+                    <button
+                      type="button"
+                      class="order-att-chip"
+                      onclick="switchAndPreviewAttachment('{{ att.id }}', '/orders/{{ order.id }}/attachments/{{ att.id }}/preview', '{{ att.filename }}')"
+                      title="Ver adjunto integrado en la pantalla"
+                    >
+                      {{ icon_paperclip(12) }}
+                      <span>{{ att.filename }}</span>
+                    </button>
+                    <a
+                      href="/orders/{{ order.id }}/attachments/{{ att.id }}/preview"
+                      target="_blank"
+                      class="order-att-popout"
+                      title="Abrir en pestaña nueva"
+                      aria-label="Abrir en pestaña nueva"
+                    >
+                      {{ icon_external_link(11) }}
+                    </a>
+                  </div>
+                {% endfor %}
+              </div>
+            </div>
+          {% endif %}
 
           <div class="order-review-email-body">
             {{ order.email.body or "" }}
@@ -52,64 +172,119 @@
       </div>
     {% endif %}
 
-    {% if pdfs %}
-      <div class="order-review-source-panel" data-order-source-panel="pdf">
-        {% if pdfs|length > 1 %}
-          <select
-            class="order-review-pdf-selector"
-            onchange="switchOrderPdf(this, 'order-pdf-frame-{{ order.id }}')"
-          >
-            {% for attachment in pdfs %}
-              <option value="/orders/{{ order.id }}/attachments/{{ attachment.id }}/preview">
-                {{ attachment.filename }}
-              </option>
-            {% endfor %}
-          </select>
-        {% endif %}
+    {# 2. ATTACHMENT / PDF EMBEDDED VIEW PANEL #}
+    {% if attachments %}
+      <div class="order-review-source-panel {% if not order.email %}is-active{% endif %}" data-order-source-panel="attachments">
+        <div class="order-attachment-toolbar">
+          {% if attachments|length > 1 %}
+            <select
+              class="order-review-attachment-selector compact-input"
+              onchange="switchOrderAttachment(this, 'order-attachment-frame-{{ order.id }}')"
+            >
+              {% for attachment in attachments %}
+                <option
+                  value="/orders/{{ order.id }}/attachments/{{ attachment.id }}/preview"
+                  data-download-url="/orders/{{ order.id }}/attachments/{{ attachment.id }}"
+                >
+                  {{ attachment.filename }}
+                </option>
+              {% endfor %}
+            </select>
+          {% else %}
+            <span style="font-size:12.5px;font-weight:600;color:#334155;">
+              {{ attachments[0].filename }}
+            </span>
+          {% endif %}
+
+          <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
+            <a
+              id="order-att-popout-btn"
+              href="/orders/{{ order.id }}/attachments/{{ attachments[0].id }}/preview"
+              target="_blank"
+              class="order-toolbar-btn"
+              title="Abrir en pestaña nueva"
+            >
+              {{ icon_external_link(13) }}
+              <span>Abrir en pestaña</span>
+            </a>
+            <a
+              id="order-att-download-btn"
+              href="/orders/{{ order.id }}/attachments/{{ attachments[0].id }}"
+              download
+              class="order-toolbar-btn"
+              title="Descargar archivo"
+            >
+              {{ icon_download(13) }}
+              <span>Descargar</span>
+            </a>
+          </div>
+        </div>
 
         <iframe
-          id="order-pdf-frame-{{ order.id }}"
+          id="order-attachment-frame-{{ order.id }}"
           class="order-review-pdf"
-          src="/orders/{{ order.id }}/attachments/{{ pdfs[0].id }}/preview"
-          title="{{ pdfs[0].filename }}"
+          src="/orders/{{ order.id }}/attachments/{{ attachments[0].id }}/preview"
+          title="{{ attachments[0].filename }}"
         ></iframe>
       </div>
     {% endif %}
 
-    {% if not order.email and not pdfs %}
-      <div class="order-review-source-empty" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;min-height:360px;padding:32px 24px;text-align:center;color:var(--muted);gap:12px;">
-        <div style="width:48px;height:48px;border-radius:50%;background:#f1f5f9;display:flex;align-items:center;justify-content:center;color:#64748b;margin-bottom:4px;">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+    {# 3. WHATSAPP CONVERSATION PANEL #}
+    {% if conversation_preview or order.conversation %}
+      <div class="order-review-source-panel {% if not order.email and not attachments %}is-active{% endif %}" data-order-source-panel="conversation">
+        <div class="whatsapp-chat-stream">
+          {% set msgs = conversation_preview.messages if conversation_preview else (order.conversation.messages if order.conversation else []) %}
+          {% for message in msgs %}
+            <div class="whatsapp-msg-bubble {% if message.direction == 'outbound' %}is-outbound{% else %}is-inbound{% endif %}">
+              <div class="whatsapp-bubble-head">
+                <strong>{{ message.sender or message.role_label or ('Empresa' if message.direction == 'outbound' else 'Cliente') }}</strong>
+                {% if message.timestamp_label %}
+                  <time>{{ message.timestamp_label }}</time>
+                {% elif message.received_at is defined and message.received_at %}
+                  <time>{{ message.received_at | local_dt(tenant_timezone, "%H:%M", "") }}</time>
+                {% endif %}
+              </div>
+              <div class="whatsapp-bubble-text">{{ message.text if message.text is defined else (message.original_content or message.normalized_text or "") }}</div>
+            </div>
+          {% else %}
+            <div style="text-align:center;padding:32px 16px;color:#64748b;font-size:13px;">
+              No hay mensajes registrados en esta conversación.
+            </div>
+          {% endfor %}
         </div>
-        <strong style="font-size:15px;color:var(--text,#1e293b);">Pedido sin mensaje original</strong>
-        <p style="margin:0;font-size:13px;max-width:320px;line-height:1.45;color:var(--muted,#64748b);">
-          Este pedido fue creado de forma manual, mediante simulación de prueba o sin un correo electrónico asociado.
-        </p>
-        <p style="margin:0;font-size:12.5px;max-width:320px;line-height:1.4;color:#94a3b8;">
-          Puedes revisar, completar las líneas de productos y validar el cliente directamente en el panel de resolución de la derecha.
-        </p>
+      </div>
+    {% endif %}
+
+    {% if not order.email and not attachments and not order.conversation and not conversation_preview %}
+      <div class="manual-empty-preview" style="min-height: 280px;">
+        <div class="manual-empty-preview-icon">
+          {{ icon_mail(22) }}
+        </div>
+        <strong>Pedido sin mensaje original</strong>
+        <p>Este pedido fue creado de forma manual o sin un buzón de entrada asociado. Puedes completar los productos y validar el pedido a la derecha.</p>
       </div>
     {% endif %}
   </section>
 
-  <section class="order-review-resolution">
+  {# Right resolution workbench #}
+  <section class="order-review-resolution manual-panel">
 
-    <div class="order-review-confidence">
-      <div class="order-review-confidence-score">
-        {{ "%.0f"|format(score_value) }}%
-      </div>
+    {# Confidence banner - Clean and integrated without floating badge #}
+    {% set is_safe = score_value >= 80 %}
+    {% set is_warn = score_value >= 40 and score_value < 80 %}
+    <div class="order-confidence-card {% if is_safe %}is-safe{% elif is_warn %}is-warning{% else %}is-doubtful{% endif %}">
+      <div class="order-confidence-copy">
+        <strong class="order-confidence-title">
+          Confianza del pedido · {{ "%.0f"|format(score_value) }}%
+        </strong>
 
-      <div class="order-review-confidence-copy">
         {% if order.status in ["pedido_confirmado", "pedido_validado"] %}
-          <strong>Pedido confirmado</strong>
           <p>El pedido ya ha sido validado y no requiere nueva confirmación.</p>
         {% elif order.status in ["pedido_exportado", "cerrado", "cancelado", "descartado", "deleted", "archived_deleted"] %}
-          <strong>Pedido archivado</strong>
           <p>El pedido ha finalizado su ciclo operativo.</p>
         {% else %}
-          <strong>Confianza del pedido</strong>
           {% if score_value >= 80 %}
-            <p>Pedido listo para validar.</p>
+            <p>Todos los datos principales han sido identificados con alta precisión.</p>
           {% elif not selected_customer_id %}
             <p>Falta identificar correctamente el cliente.</p>
           {% elif order.lines|selectattr("validated_product_id", "none")|list|length %}
@@ -121,20 +296,22 @@
       </div>
     </div>
 
+    {# Metadata inputs (Customer and Order Date) #}
     <form
       id="order-review-form-{{ order.id }}"
-      class="order-review-order-data js-loading-form"
+      class="order-review-meta-grid js-loading-form"
       method="post"
       action="/orders/{{ order.id }}/save"
     >
-      <label>
-        <span>Cliente</span>
+      <label class="field-label" style="margin:0;">
+        <span class="field-title">Cliente</span>
         <div class="customer-autocomplete" data-customer-autocomplete>
           <input
             type="search"
+            class="compact-input"
             data-customer-input
             value="{% if customer_context and customer_context.identified %}{{ customer_context.customer.code }} - {{ customer_context.customer.name }}{% endif %}"
-            placeholder="Seleccionar cliente"
+            placeholder="Buscar por código, nombre o NIF..."
             autocomplete="off"
           >
           <input
@@ -151,48 +328,64 @@
         </div>
       </label>
 
-      <label>
-        <span>Fecha pedido</span>
+      <label class="field-label" style="margin:0;">
+        <span class="field-title">Fecha pedido</span>
         <input
           name="order_date"
+          class="compact-input"
           value="{% if order.order_date %}{{ order.order_date[8:10] }}-{{ order.order_date[5:7] }}-{{ order.order_date[0:4] }}{% elif order.email and order.email.received_at %}{{ order.email.received_at | local_dt(tenant_timezone, "%d-%m-%Y", "") }}{% endif %}"
           placeholder="DD-MM-YYYY"
         >
       </label>
     </form>
 
+    {# Line Items Table Block #}
     {% include "orders/_review_lines_block.html" %}
 
-    <div class="order-review-actions">
-      <button
-        type="submit"
-        form="order-review-form-{{ order.id }}"
-        class="secondary"
-        data-loading-text="Guardando..."
-      >
-        Guardar cambios
-      </button>
-
-      {% if order.status not in ["pedido_confirmado", "pedido_validado", "pedido_exportado", "cerrado", "cancelado", "descartado", "deleted", "archived_deleted"] %}
-        <form
-          class="js-loading-form"
-          method="post"
-          action="/orders/{{ order.id }}/validate"
-          data-confirm="Validar pedido?"
-        >
-          <button data-loading-text="Validando...">
-            Validar pedido
-          </button>
-        </form>
-      {% else %}
-        <span class="badge">
-          {% if order.status in ["pedido_confirmado", "pedido_validado"] %}
-            Pedido confirmado
-          {% else %}
-            Archivado
-          {% endif %}
+    {# Bottom action bar #}
+    <div class="order-review-footer-actions">
+      <div class="order-summary-pills">
+        <span class="order-summary-chip">
+          <strong>{{ order.lines|length }}</strong> líneas
         </span>
-      {% endif %}
+        <span class="order-summary-chip">
+          Total: <strong>{{ "%.2f"|format(ns.total) }} €</strong>
+        </span>
+      </div>
+
+      <div class="order-actions-buttons">
+        <button
+          type="submit"
+          form="order-review-form-{{ order.id }}"
+          class="button secondary compact-button"
+          data-loading-text="Guardando..."
+        >
+          Guardar cambios
+        </button>
+
+        {% if order.status not in ["pedido_confirmado", "pedido_validado", "pedido_exportado", "cerrado", "cancelado", "descartado", "deleted", "archived_deleted"] %}
+          <form
+            class="js-loading-form"
+            method="post"
+            action="/orders/{{ order.id }}/validate"
+            data-confirm="¿Validar este pedido y confirmar la información?"
+            style="margin:0;"
+          >
+            <button class="dock-primary-btn" data-loading-text="Validando...">
+              {{ icon_check(14) }}
+              <span>Validar pedido</span>
+            </button>
+          </form>
+        {% elif order.status in ["pedido_confirmado", "pedido_validado"] %}
+          <span class="badge status-confirmed">
+            {{ icon_check(12) }} Pedido confirmado
+          </span>
+        {% else %}
+          <span class="badge" style="background:#f1f5f9;color:#475569;font-weight:600;">
+            {{ order.status|status_label }}
+          </span>
+        {% endif %}
+      </div>
     </div>
 
   </section>
@@ -259,12 +452,23 @@
         button.type = "button";
         button.className = "customer-autocomplete-option";
 
+        const titleRow = document.createElement("div");
+        titleRow.className = "autocomplete-option-head";
+
         const title = document.createElement("strong");
-        title.textContent = `${customer.code} · ${customer.name}`;
-        button.appendChild(title);
+        title.textContent = customer.name;
+        titleRow.appendChild(title);
+
+        const badge = document.createElement("span");
+        badge.className = "autocomplete-option-badge";
+        badge.textContent = customer.code;
+        titleRow.appendChild(badge);
+
+        button.appendChild(titleRow);
 
         if (customer.tax_id || customer.email) {
           const meta = document.createElement("span");
+          meta.className = "autocomplete-option-meta";
           meta.textContent = [customer.tax_id, customer.email]
             .filter(Boolean)
             .join(" · ");
@@ -288,7 +492,6 @@
     if (!root.contains(event.target)) closeResults();
   });
 })();
-
 
 document.querySelectorAll("[data-product-autocomplete]").forEach((root) => {
   const input = root.querySelector("[data-product-input]");
@@ -327,13 +530,26 @@ document.querySelectorAll("[data-product-autocomplete]").forEach((root) => {
         button.type = "button";
         button.className = "product-autocomplete-option";
 
+        const titleRow = document.createElement("div");
+        titleRow.className = "autocomplete-option-head";
+
         const title = document.createElement("strong");
         title.textContent = product.name;
-        button.appendChild(title);
+        titleRow.appendChild(title);
 
-        const meta = document.createElement("span");
-        meta.textContent = product.reference;
-        button.appendChild(meta);
+        const badge = document.createElement("span");
+        badge.className = "autocomplete-option-badge";
+        badge.textContent = product.reference;
+        titleRow.appendChild(badge);
+
+        button.appendChild(titleRow);
+
+        if (product.sale_price !== null && product.sale_price !== undefined) {
+          const meta = document.createElement("span");
+          meta.className = "autocomplete-option-meta";
+          meta.textContent = `Precio tarifa: ${Number(product.sale_price).toFixed(2)} €`;
+          button.appendChild(meta);
+        }
 
         button.addEventListener("click", () => {
           input.value = product.name;
@@ -356,9 +572,31 @@ document.querySelectorAll("[data-product-autocomplete]").forEach((root) => {
   });
 });
 
-function switchOrderPdf(select, frameId) {
+function switchAndPreviewAttachment(attId, previewUrl, filename) {
+  const tab = document.querySelector('[data-order-source-tab="attachments"]');
+  if (tab) tab.click();
+  const frame = document.querySelector('.order-review-pdf');
+  if (frame) frame.src = previewUrl;
+  const select = document.querySelector('.order-review-attachment-selector');
+  if (select) select.value = previewUrl;
+  const popout = document.getElementById('order-att-popout-btn');
+  if (popout) popout.href = previewUrl;
+  const download = document.getElementById('order-att-download-btn');
+  if (download) download.href = `/orders/{{ order.id }}/attachments/${attId}`;
+}
+
+function switchOrderAttachment(select, frameId) {
   const frame = document.getElementById(frameId);
-  if (frame && select.value) frame.src = select.value;
+  if (frame && select.value) {
+    frame.src = select.value;
+    const popout = document.getElementById('order-att-popout-btn');
+    if (popout) popout.href = select.value;
+    const opt = select.selectedOptions[0];
+    if (opt && opt.dataset.downloadUrl) {
+      const download = document.getElementById('order-att-download-btn');
+      if (download) download.href = opt.dataset.downloadUrl;
+    }
+  }
 }
 
 document.querySelectorAll(".line-product-select").forEach((select) => {

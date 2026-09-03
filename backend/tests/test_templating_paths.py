@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,7 +21,7 @@ class TemplatingPathTests(unittest.TestCase):
     def test_login_template_loads_independently_of_cwd(self):
         current = Path.cwd()
         try:
-            os.chdir("/tmp")
+            os.chdir(tempfile.gettempdir())
             template = templates.get_template("login.html")
             self.assertEqual(template.name, "login.html")
         finally:

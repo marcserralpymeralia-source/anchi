@@ -24,7 +24,7 @@ from app.db.models import Company, Customer, ScoringSettings  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.master.service import TenantRole, TenantUser, load_tenant_context  # noqa: E402
-from app.tenancy.database import clear_tenant_schema_cache, ensure_tenant_schema, get_tenant_db  # noqa: E402
+from app.tenancy.database import clear_tenant_schema_cache, ensure_tenant_schema, get_tenant_db, get_tenant_engine  # noqa: E402
 
 
 class FakeRequest:
@@ -37,6 +37,7 @@ class FakeRequest:
 class TenantIsolationTests(unittest.TestCase):
     def setUp(self):
         clear_tenant_schema_cache()
+        get_tenant_engine.cache_clear()
         self.tempdir = tempfile.TemporaryDirectory()
         base = Path(self.tempdir.name)
         self.master_path = base / "master.sqlite"
@@ -54,6 +55,7 @@ class TenantIsolationTests(unittest.TestCase):
 
     def tearDown(self):
         clear_tenant_schema_cache()
+        get_tenant_engine.cache_clear()
         self.master_engine.dispose()
         self.tenant_a_engine.dispose()
         self.tenant_b_engine.dispose()

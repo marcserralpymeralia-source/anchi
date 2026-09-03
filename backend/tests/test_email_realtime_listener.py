@@ -21,6 +21,7 @@ from app.db.database import Base  # noqa: E402
 from app.db.models import Email, EmailSettings  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import EmailSyncState, MasterCompany, MasterTenantDatabase  # noqa: E402
+from app.tenancy.database import get_tenant_engine  # noqa: E402
 from app.workers.email_listener import reconcile_tenant_email  # noqa: E402
 
 
@@ -108,6 +109,7 @@ class EmailRealtimeListenerTests(unittest.TestCase):
         self.master_engine.dispose()
         self.tenant_one_engine.dispose()
         self.tenant_two_engine.dispose()
+        get_tenant_engine.cache_clear()
         self.tempdir.cleanup()
 
     def test_reconcile_tenant_email_isolated_by_database(self):

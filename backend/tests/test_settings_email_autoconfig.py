@@ -145,6 +145,8 @@ class EmailAutoconfigRouteTests(unittest.TestCase):
             self.assertIn('name="email"', response.text)
             self.assertIn('name="password"', response.text)
             self.assertIn('data-email-manual-panel hidden', response.text)
+            self.assertIn('data-email-save-detected', response.text)
+            self.assertIn('name="email_account_only" value="on"', response.text)
             self.assertIn('action="/settings/email/autoconfig"', response.text)
         finally:
             fixture.cleanup()

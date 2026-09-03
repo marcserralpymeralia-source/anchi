@@ -377,7 +377,10 @@ class ProductMatchingService:
                     )
                 ).all()
 
-                if len(partial_matches) == 1 and _product_name_is_compatible(detected_name, partial_matches[0]):
+                # A unique, sufficiently long reference prefix is deterministic.
+                # The extracted name can be abbreviated or noisy, so it must not
+                # veto an otherwise unambiguous catalog reference.
+                if len(partial_matches) == 1:
                     return partial_matches[0], "referencia_parcial_unica", 0.95
         if detected_name:
             learned = db.scalar(

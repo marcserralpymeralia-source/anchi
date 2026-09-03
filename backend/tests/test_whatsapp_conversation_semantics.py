@@ -73,6 +73,7 @@ class WhatsAppConversationSemanticValidationTests(unittest.TestCase):
 class WhatsAppConversationSemanticServiceTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine("sqlite:///:memory:")
+        self.addCleanup(self.engine.dispose)
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
 

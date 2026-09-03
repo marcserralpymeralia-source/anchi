@@ -29,6 +29,7 @@ from app.jobs.service import claim_next_job, enqueue_job, execute_job_inline, fa
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.core.encryption import encrypt_secret  # noqa: E402
+from app.tenancy.database import get_tenant_engine  # noqa: E402
 from app.tenancy.migrations import upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import _process_import_job, _process_job, run_worker_cycle  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
@@ -50,6 +51,7 @@ class JobsReliabilityTests(unittest.TestCase):
     def tearDown(self):
         self.master_engine.dispose()
         self.tenant_engine.dispose()
+        get_tenant_engine.cache_clear()
         self.tempdir.cleanup()
 
     def _seed_master(self):

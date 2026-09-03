@@ -78,12 +78,25 @@ class PerformanceFixture:
     counts: dict[str, int]
 
     def cleanup(self) -> None:
-        import gc
-        gc.collect()
+        # A fixture can be used without temporary_performance_environment (for
+        # example by tests that only inspect its database). Dispose the cached
+        # tenant engine here as well, before removing the SQLite files. This
+        # keeps cleanup deterministic and prevents sqlite3 ResourceWarnings.
+        try:
+            from app.tenancy.database import clear_tenant_engine_cache, clear_tenant_schema_cache
+
+            clear_tenant_engine_cache()
+            clear_tenant_schema_cache()
+        except (ImportError, OSError):
+            pass
         try:
             self.tempdir.cleanup()
         except (PermissionError, OSError):
             pass
+        finally:
+            import gc
+
+            gc.collect()
 
 
 SCENARIO_PLANS: dict[str, ScenarioPlan] = {

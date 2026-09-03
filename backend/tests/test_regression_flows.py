@@ -31,6 +31,7 @@ from app.master.models import MasterCompany, MasterTenantDatabase  # noqa: E402
 from app.orders.routes import confirm_order  # noqa: E402
 from app.orders.service import learn_customer_email_from_confirmed_order  # noqa: E402
 from app.messages.service import upsert_inbound_message  # noqa: E402
+from app.tenancy.database import get_tenant_engine  # noqa: E402
 from app.tenancy.migrations import upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import run_worker_cycle  # noqa: E402
 
@@ -59,6 +60,7 @@ class RegressionFlowsTests(unittest.TestCase):
     def tearDown(self):
         self.master_engine.dispose()
         self.tenant_engine.dispose()
+        get_tenant_engine.cache_clear()
         gc.collect()
         self.tempdir.cleanup()
 

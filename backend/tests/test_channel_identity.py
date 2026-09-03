@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.channel_identity import inbound_channel_key, order_channel_key
+from app.dashboard.service import order_sender
 from app.orders.routes import _conversation_preview as order_conversation_preview
 from app.workbench.routes import _conversation_preview as workbench_conversation_preview
 
@@ -68,6 +69,54 @@ class ChannelIdentityTests(unittest.TestCase):
 
         self.assertEqual(workbench_preview["provider_label"], "WhatsApp")
         self.assertEqual(order_preview["provider_label"], "WhatsApp")
+
+    def test_whatsapp_order_sender_uses_latest_inbound_phone(self):
+        older = SimpleNamespace(
+            direction="inbound",
+            sender="34600000000",
+            received_at=datetime(2026, 8, 30, tzinfo=timezone.utc),
+            created_at=datetime(2026, 8, 30, tzinfo=timezone.utc),
+        )
+        latest = SimpleNamespace(
+            direction="inbound",
+            sender="34611111111",
+            received_at=datetime(2026, 8, 31, tzinfo=timezone.utc),
+            created_at=datetime(2026, 8, 31, tzinfo=timezone.utc),
+        )
+        order = SimpleNamespace(
+            email=None,
+            conversation=SimpleNamespace(
+                external_thread_id="34600000000",
+                messages=[older, latest],
+            ),
+        )
+
+        self.assertEqual(order_sender(order), "34611111111")
+
+    def test_whatsapp_order_sender_falls_back_to_thread_id(self):
+        order = SimpleNamespace(
+            email=None,
+            conversation=SimpleNamespace(
+                external_thread_id="34600000000",
+                messages=[SimpleNamespace(direction="inbound", sender=None)],
+            ),
+        )
+
+        self.assertEqual(order_sender(order), "34600000000")
+
+    def test_whatsapp_order_sender_tolerates_missing_message_dates(self):
+        order = SimpleNamespace(
+            email=None,
+            conversation=SimpleNamespace(
+                external_thread_id="34600000000",
+                messages=[
+                    SimpleNamespace(direction="inbound", sender="34600000000", received_at=None, created_at=None),
+                    SimpleNamespace(direction="inbound", sender="34611111111", received_at=None, created_at=None),
+                ],
+            ),
+        )
+
+        self.assertEqual(order_sender(order), "34600000000")
 
     def test_unknown_provider_remains_an_unidentified_entry(self):
         message = SimpleNamespace(provider="some_provider", raw_payload_json=None)

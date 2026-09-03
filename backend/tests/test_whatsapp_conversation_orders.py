@@ -21,6 +21,7 @@ from app.whatsapp.conversation_orders import (
 class WhatsAppConversationOrderTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine("sqlite:///:memory:")
+        self.addCleanup(self.engine.dispose)
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
 
@@ -494,6 +495,7 @@ class WhatsAppConversationOrderTests(unittest.TestCase):
 class WhatsAppConversationWorkerTests(unittest.TestCase):
     def setUp(self):
         self.engine = create_engine("sqlite:///:memory:")
+        self.addCleanup(self.engine.dispose)
         Base.metadata.create_all(self.engine)
         self.Session = sessionmaker(bind=self.engine)
 

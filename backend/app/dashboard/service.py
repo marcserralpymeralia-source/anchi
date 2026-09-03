@@ -129,11 +129,11 @@ def _latest_inbound_message(order: Order):  # noqa: ANN001
     inbound_messages = [
         message
         for message in (order.conversation.messages or [])
-        if message.direction == "inbound"
+        if message.direction == "inbound" and (message.sender or "").strip()
     ]
     return max(
         inbound_messages,
-        key=lambda message: message.received_at or message.created_at,
+        key=lambda message: _safe_sort_timestamp(message.received_at or message.created_at),
         default=None,
     )
 
@@ -149,7 +149,12 @@ def order_subject(order: Order) -> str:
 def order_sender(order: Order) -> str:
     if order.email:
         return order.email.sender or ""
-    return order.conversation.external_thread_id if order.conversation else ""
+    if not order.conversation:
+        return ""
+    latest_inbound = _latest_inbound_message(order)
+    if latest_inbound:
+        return latest_inbound.sender.strip()
+    return order.conversation.external_thread_id or ""
 
 
 def _load_order_conversations(db: Session, orders: list[Order], company_id: int) -> None:

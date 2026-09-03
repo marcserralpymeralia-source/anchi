@@ -13,6 +13,7 @@ from email import policy
 from email import message_from_bytes
 from email.header import decode_header, make_header
 from email.message import EmailMessage
+from email.utils import parsedate_to_datetime
 from io import BytesIO
 from pathlib import Path
 
@@ -490,6 +491,69 @@ def _imap_uid(fetch_meta: str, fallback: str) -> str:
     return match.group(1) if match else fallback
 
 
+def _imap_internaldate(fetch_meta: bytes | str | None) -> datetime | None:
+    """Return the server arrival time from an IMAP FETCH response."""
+    if not fetch_meta:
+        return None
+    raw_meta = fetch_meta.encode(errors="ignore") if isinstance(fetch_meta, str) else fetch_meta
+    match = re.search(
+        rb'INTERNALDATE\s+"(?P<day>[ 0-9]{2})-(?P<month>[A-Za-z]{3})-(?P<year>[0-9]{4}) '
+        rb'(?P<hour>[0-9]{2}):(?P<minute>[0-9]{2}):(?P<second>[0-9]{2}) '
+        rb'(?P<sign>[+-])(?P<offset_hour>[0-9]{2})(?P<offset_minute>[0-9]{2})"',
+        raw_meta,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    try:
+        months = {
+            "jan": 1,
+            "feb": 2,
+            "mar": 3,
+            "apr": 4,
+            "may": 5,
+            "jun": 6,
+            "jul": 7,
+            "aug": 8,
+            "sep": 9,
+            "oct": 10,
+            "nov": 11,
+            "dec": 12,
+        }
+        month = months[match.group("month").decode("ascii").lower()]
+        offset = timedelta(
+            hours=int(match.group("offset_hour")),
+            minutes=int(match.group("offset_minute")),
+        )
+        if match.group("sign") == b"-":
+            offset = -offset
+        return datetime(
+            int(match.group("year")),
+            month,
+            int(match.group("day")),
+            int(match.group("hour")),
+            int(match.group("minute")),
+            int(match.group("second")),
+            tzinfo=timezone(offset),
+        ).astimezone(timezone.utc)
+    except (KeyError, TypeError, ValueError, UnicodeDecodeError):
+        return None
+
+
+def _message_received_at(msg: EmailMessage, fetch_meta: bytes | str | None) -> datetime | None:
+    """Prefer IMAP arrival time, then use the RFC 5322 date as a fallback."""
+    server_received_at = _imap_internaldate(fetch_meta)
+    if server_received_at:
+        return server_received_at
+    try:
+        header_received_at = parsedate_to_datetime(msg.get("Date", ""))
+    except (TypeError, ValueError, IndexError, OverflowError):
+        return None
+    if header_received_at.tzinfo is None:
+        header_received_at = header_received_at.replace(tzinfo=timezone.utc)
+    return header_received_at.astimezone(timezone.utc)
+
+
 def _normalized_email_external_id(mailbox: str, uidvalidity: str | None, uid: str) -> str:
     return f"{mailbox}:{uidvalidity or 'unknown'}:{uid}"
 
@@ -791,7 +855,7 @@ def _fetch_imap_emails(
             batch_count = len(batch)
             for msg_id in batch:
                 try:
-                    status, msg_data = client.uid("fetch", msg_id, "(UID RFC822)")
+                    status, msg_data = client.uid("fetch", msg_id, "(UID INTERNALDATE RFC822)")
                     if status != "OK" or not msg_data or not msg_data[0]:
                         errors += 1
                         continue
@@ -809,6 +873,7 @@ def _fetch_imap_emails(
                                 discarded += 1
                                 continue
                     msg = message_from_bytes(raw, policy=policy.default)
+                    received_at = _message_received_at(msg, fetch_meta)
                     message_id = msg.get("Message-ID") or None
                     dedupe_external_id = _normalized_email_external_id(mailbox, uidvalidity, uid)
                     exists = _existing_email_for_imap(
@@ -821,6 +886,16 @@ def _fetch_imap_emails(
                         external_id=dedupe_external_id,
                     )
                     if exists:
+                        if received_at:
+                            exists.received_at = received_at
+                            inbound_message = db.scalar(
+                                select(InboundMessage).where(
+                                    InboundMessage.company_id == company_id,
+                                    InboundMessage.source_external_id == dedupe_external_id,
+                                )
+                            )
+                            if inbound_message:
+                                inbound_message.received_at = received_at
                         duplicates += 1
                         processed_since_checkpoint += 1
                         last_processed_uid = uid
@@ -842,6 +917,7 @@ def _fetch_imap_emails(
                         subject=subject,
                         body=body,
                         extracted_text=body,
+                        received_at=received_at or datetime.now(timezone.utc),
                         status="pending",
                         agent_status="not_processed",
                         is_read=False,
@@ -1486,7 +1562,10 @@ def call_openai(settings: LLMSettings, messages: list[dict], model: str) -> dict
                 "usage": data.get("usage") or {},
             }
         except urllib.error.HTTPError as exc:
-            detail = exc.read().decode(errors="ignore")
+            try:
+                detail = exc.read().decode(errors="ignore")
+            finally:
+                exc.close()
             if exc.code in {401, 403}:
                 return {"ok": False, "error_type": "authentication_failed", "message": "API key invalida o sin permisos para el proveedor IA."}
             if exc.code == 404:

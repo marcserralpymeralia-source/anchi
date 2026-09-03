@@ -59,6 +59,7 @@ class PerformanceInstrumentationTests(unittest.TestCase):
     def test_sql_counting_duplicate_detection_and_sanitizing(self):
         collector = PerformanceCollector(request_id="req-1", endpoint="/orders", method="GET")
         engine = create_engine("sqlite:///:memory:")
+        self.addCleanup(engine.dispose)
         with performance_scope(collector):
             with engine.connect() as connection:
                 connection.execute(text("SELECT 1"))
@@ -95,6 +96,7 @@ class PerformanceInstrumentationTests(unittest.TestCase):
         collector_a = PerformanceCollector(request_id="req-a", endpoint="/a", method="GET")
         collector_b = PerformanceCollector(request_id="req-b", endpoint="/b", method="GET")
         engine = create_engine("sqlite:///:memory:")
+        self.addCleanup(engine.dispose)
         with performance_scope(collector_a):
             with engine.connect() as connection:
                 connection.execute(text("SELECT 1"))

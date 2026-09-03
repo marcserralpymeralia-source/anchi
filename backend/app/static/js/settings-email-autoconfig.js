@@ -65,20 +65,24 @@
     const title = root.querySelector("[data-email-autoconfig-status-title]");
     const message = root.querySelector("[data-email-autoconfig-status-message]");
     const details = root.querySelector("[data-email-autoconfig-details]");
+    const actions = root.querySelector("[data-email-autoconfig-actions]");
     if (!status) return;
     status.hidden = false;
     status.dataset.state = result.detected ? "success" : "warning";
-    setText(title, result.detected ? "Configuración encontrada" : "Configuración no verificada");
+    setText(title, result.detected ? "Configuración encontrada y verificada" : "Configuración no verificada");
     setText(message, result.message || "");
     const lines = [];
     if (result.imap) lines.push(endpointDescription(result.imap));
-    else if (result.suggested_imap) lines.push(`IMAP encontrado (sin verificar): ${result.suggested_imap.host}:${result.suggested_imap.port}`);
+    else if (result.suggested_imap) lines.push(`IMAP sugerido: ${result.suggested_imap.host}:${result.suggested_imap.port}`);
     if (result.pop3) lines.push(endpointDescription(result.pop3));
-    else if (result.suggested_pop3) lines.push(`POP3 encontrado (sin verificar): ${result.suggested_pop3.host}:${result.suggested_pop3.port}`);
+    else if (result.suggested_pop3) lines.push(`POP3 encontrado: ${result.suggested_pop3.host}:${result.suggested_pop3.port}`);
     if (result.smtp) lines.push(endpointDescription(result.smtp));
     if (!result.imap && (result.pop3 || result.suggested_pop3)) lines.push("Anchi necesita IMAP para sincronizar automáticamente.");
     setText(details, lines.join(" · "));
     copyDetectedConfig(root, result);
+    if (actions) {
+      actions.hidden = !result.detected;
+    }
   }
 
   function initialize(root) {
@@ -87,11 +91,33 @@
     const manualPanel = root.querySelector("[data-email-manual-panel]");
     const manualToggle = root.querySelector("[data-email-manual-toggle]");
     const security = manualForm?.querySelector("[data-email-manual-security]");
+    const saveDetectedBtn = root.querySelector("[data-email-save-detected]");
+    const manualEditBtn = root.querySelector("[data-email-manual-edit-btn]");
     if (!autoForm || !manualForm || !manualPanel || !manualToggle) return;
 
     manualToggle.addEventListener("click", function () {
       showManual(manualPanel, manualToggle, manualPanel.hidden);
     });
+
+    if (manualEditBtn) {
+      manualEditBtn.addEventListener("click", function () {
+        showManual(manualPanel, manualToggle, true);
+        manualPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    }
+
+    if (saveDetectedBtn) {
+      saveDetectedBtn.addEventListener("click", function () {
+        setBusy(saveDetectedBtn, true);
+        updateSslFlag(manualForm);
+        if (typeof manualForm.requestSubmit === "function") {
+          manualForm.requestSubmit();
+        } else {
+          manualForm.submit();
+        }
+      });
+    }
+
     security?.addEventListener("change", function () {
       updateSslFlag(manualForm);
     });

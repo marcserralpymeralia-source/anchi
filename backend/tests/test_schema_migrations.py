@@ -26,6 +26,7 @@ from app.master.provisioning import _ensure_master_user  # noqa: E402
 from app.migrations.inspection import discover_sqlite_files, inspect_database_url, inventory_records, simulate_sqlite_reference  # noqa: E402
 from app.migrations.helpers import table_exists  # noqa: E402
 from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, MASTER_EMAIL_SYNC_STATE_COLUMNS, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_master_email_sync_state_repair, _apply_tenant_email_favorites, _apply_tenant_knowledge_entries, _apply_tenant_order_archiving, _apply_tenant_product_embeddings  # noqa: E402
+from app.tenancy.database import get_tenant_engine  # noqa: E402
 from app.tenancy.migrations import tenant_migration_report, upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import run_worker_cycle  # noqa: E402
 
@@ -45,6 +46,7 @@ class SchemaMigrationTests(unittest.TestCase):
     def tearDown(self):
         self.master_engine.dispose()
         self.tenant_engine.dispose()
+        get_tenant_engine.cache_clear()
         self.tempdir.cleanup()
 
     def _create_tables_without_ledger(self, engine, base_metadata):  # noqa: ANN001
@@ -175,11 +177,15 @@ class SchemaMigrationTests(unittest.TestCase):
         self._seed_master_catalog(f"sqlite:///{self.tenant_path.as_posix()}")
 
         orphan_path = Path(self.tempdir.name) / "orphan.sqlite"
-        with create_engine(
+        orphan_engine = create_engine(
             f"sqlite:///{orphan_path.as_posix()}",
             connect_args={"check_same_thread": False},
-        ).begin() as conn:
-            conn.execute(text("CREATE TABLE misc (id INTEGER PRIMARY KEY)"))
+        )
+        try:
+            with orphan_engine.begin() as conn:
+                conn.execute(text("CREATE TABLE misc (id INTEGER PRIMARY KEY)"))
+        finally:
+            orphan_engine.dispose()
 
         db = self.MasterSession()
         try:

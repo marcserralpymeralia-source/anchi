@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from sqlalchemy import create_engine, select
+from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("APP_ENV", "test")
@@ -18,7 +19,7 @@ from scripts.performance_data import build_performance_fixture, performance_test
 
 
 def _tenant_session(database_url: str):
-    engine = create_engine(database_url, connect_args={"check_same_thread": False})
+    engine = create_engine(database_url, connect_args={"check_same_thread": False}, poolclass=NullPool)
     return sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 

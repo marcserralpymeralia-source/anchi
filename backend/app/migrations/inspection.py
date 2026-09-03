@@ -233,6 +233,8 @@ def _job_blockers(db) -> list[str]:  # noqa: ANN001
 
 def inspect_database_url(database_url: str, *, logical_name: str | None = None, kind_hint: str | None = None) -> dict[str, Any]:
     engine = _connect(database_url)
+    conn = None
+    insp = None
     try:
         with engine.connect() as conn:
             insp = inspect(conn)
@@ -251,6 +253,7 @@ def inspect_database_url(database_url: str, *, logical_name: str | None = None, 
                 finally:
                     if session is not None:
                         session.close()
+                        session = None
             schema_fingerprint = _schema_fingerprint(insp, tables)
             current_version = CURRENT_MASTER_SCHEMA_VERSION if kind == "master" else CURRENT_TENANT_SCHEMA_VERSION
             current_name = CURRENT_MASTER_SCHEMA_NAME if kind == "master" else CURRENT_TENANT_SCHEMA_NAME
@@ -350,6 +353,11 @@ def inspect_database_url(database_url: str, *, logical_name: str | None = None, 
             "baseline_proposal": None,
         }
     finally:
+        # Inspector keeps a reference to the SQLAlchemy connection. Release
+        # both objects before disposing the pool so SQLite files can be
+        # removed immediately on Windows as well as on POSIX systems.
+        insp = None
+        conn = None
         engine.dispose()
 
 
@@ -458,13 +466,18 @@ def copy_sqlite_database(source_path: Path, target_root: Path, *, label: str) ->
     shutil.copy2(source_path, target_path)
     if target_path.stat().st_size != source_path.stat().st_size:
         raise IOError("La copia no conserva el tamaño del archivo original")
-    with sqlite3.connect(target_path.as_posix()) as conn:
+    conn = sqlite3.connect(target_path.as_posix())
+    try:
         conn.execute("SELECT 1")
+    finally:
+        conn.close()
     return target_path
 
 
 def snapshot_counts(database_url: str) -> dict[str, int]:
     engine = _connect(database_url)
+    conn = None
+    insp = None
     try:
         counts: dict[str, int] = {}
         with engine.connect() as conn:
@@ -476,6 +489,8 @@ def snapshot_counts(database_url: str) -> dict[str, int]:
                     counts[table] = -1
         return counts
     finally:
+        insp = None
+        conn = None
         engine.dispose()
 
 

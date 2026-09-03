@@ -85,6 +85,7 @@ def _queued_job_response(request: Request, job_id: int, fallback: str = "/settin
 
 
 def _sync_email_sync_state(master_db: Session, user: TenantUser, settings: EmailSettings) -> None:
+    now = datetime.now(timezone.utc)
     state = master_db.scalar(
         select(EmailSyncState).where(
             EmailSyncState.company_id == user.company_id,
@@ -98,6 +99,7 @@ def _sync_email_sync_state(master_db: Session, user: TenantUser, settings: Email
             enabled=bool(settings.auto_sync_enabled),
             frequency_seconds=60,
             status="idle",
+            next_run_at=now if settings.auto_sync_enabled else None,
         )
         master_db.add(state)
     state.enabled = bool(settings.auto_sync_enabled)
@@ -110,7 +112,8 @@ def _sync_email_sync_state(master_db: Session, user: TenantUser, settings: Email
     state.source_host = (settings.imap_host or "").strip() or None
     state.source_username = (settings.imap_username or "").strip() or None
     state.source_connected_email = (settings.connected_email or settings.imap_username or "").strip() or None
-    state.updated_at = datetime.now(timezone.utc)
+    state.next_run_at = now if state.enabled else None
+    state.updated_at = now
     master_db.commit()
 
 
@@ -221,6 +224,11 @@ def _parse_date_input(raw_value: str | None) -> date | None:
 
 
 def _normalize_receive_form(data: dict) -> dict:
+    # The account form is intentionally partial: it only updates connection
+    # details. Do not inject checkbox defaults that would overwrite unrelated
+    # synchronization preferences when the detected configuration is saved.
+    if data.get("email_account_only") == "on":
+        return data
     for field in ["auto_sync_enabled", "read_unread_only", "mark_as_read_after_import", "move_after_processing", "imap_use_ssl"]:
         data.setdefault(field, "off")
     data.setdefault("initial_history_mode", "new")
@@ -274,8 +282,8 @@ def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: 
         "email_status": email_config_status(email_settings),
         "email_templates": email_templates(db, user.company_id),
         "email_template_variables": TEMPLATE_VARIABLES,
-        "can_edit_email": user.role.name == "Administrador",
-        "can_test_email": user.role.name in {"Administrador", "Supervisor"},
+        "can_edit_email": can_edit_email_settings(user),
+        "can_test_email": can_test_email_settings(user),
         "llm": llm_settings,
         "llm_provider_options": [
             {"value": "openai", "label": "OpenAI"},
@@ -527,11 +535,11 @@ def build_environment_diagnostics(
 
 
 def can_edit_email_settings(user: TenantUser) -> bool:
-    return user.role.name == "Administrador"
+    return user.role.name in {"Administrador", "Superadmin"}
 
 
 def can_test_email_settings(user: TenantUser) -> bool:
-    return user.role.name in {"Administrador", "Supervisor"}
+    return user.role.name in {"Administrador", "Supervisor", "Superadmin"}
 
 
 async def request_data(request: Request) -> dict:
@@ -1238,11 +1246,8 @@ async def confirm_email_initial_sync(request: Request, db: Session = Depends(get
         settings.initial_history_limit = 50
     settings.initial_history_mode = settings.initial_history_mode if settings.initial_history_mode in {"new", "7d", "30d", "100", "custom"} else "new"
     db.commit()
+    _sync_email_sync_state(master_db, user, settings)
     sync_state = master_db.scalar(select(EmailSyncState).where(EmailSyncState.company_id == user.company_id, EmailSyncState.channel_key == "email"))
-    if not sync_state:
-        sync_state = EmailSyncState(company_id=user.company_id, channel_key="email", enabled=True, frequency_seconds=60, status="idle", next_run_at=datetime.now(timezone.utc))
-        master_db.add(sync_state)
-        master_db.commit()
     try:
         result = run_initial_imap_sync(db, settings, user.company_id, sync_state=sync_state, sync_session=master_db)
     except ValueError as exc:

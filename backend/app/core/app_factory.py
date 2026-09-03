@@ -135,10 +135,22 @@ def create_app() -> FastAPI:
 
     @app.exception_handler(Exception)
     async def _fallback_exception_handler(request, exc):  # noqa: ANN001
+        logger.exception(
+            "UNHANDLED_EXCEPTION route=%s method=%s error_type=%s",
+            request.url.path,
+            request.method,
+            exc.__class__.__name__,
+        )
         return internal_server_error_response(request)
 
     @app.exception_handler(SQLAlchemyError)
     async def _sqlalchemy_exception_handler(request, exc):  # noqa: ANN001
+        logger.exception(
+            "SQLALCHEMY_ERROR route=%s method=%s error_type=%s",
+            request.url.path,
+            request.method,
+            exc.__class__.__name__,
+        )
         return sqlalchemy_error_response(request, exc)
 
     return app

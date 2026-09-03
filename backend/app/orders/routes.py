@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, load_only, selectinload
 
 from app.agent.extraction.diagnostics import extraction_diagnostics_from_messages
 from app.core.templating import templates
-from app.dashboard.service import load_order_view_data
+from app.dashboard.service import load_order_view_data, order_sender
 from app.agent.platform import LearningService
 from app.agent.services import MockAgentService, ScoringService
 from app.auth.dependencies import current_user
@@ -248,7 +248,8 @@ def list_orders(
     view_cards_url = f"/orders?{urlencode(view_query)}"
     view_query["view"] = "list"
     view_list_url = f"/orders?{urlencode(view_query)}"
-    return templates.TemplateResponse("orders/list.html", {"request": request, "user": user, "orders": orders, "customers": customers, "statuses": statuses, "pagination": pagination, "filters": filters, "scoring": scoring, "categories": categories, "alerts": alerts, "status_counts": status_counts, "view_cards_url": view_cards_url, "view_list_url": view_list_url})
+    order_senders = {order.id: order_sender(order) for order in orders}
+    return templates.TemplateResponse("orders/list.html", {"request": request, "user": user, "orders": orders, "customers": customers, "statuses": statuses, "pagination": pagination, "filters": filters, "scoring": scoring, "categories": categories, "alerts": alerts, "status_counts": status_counts, "order_senders": order_senders, "view_cards_url": view_cards_url, "view_list_url": view_list_url})
 
 
 @router.post("/mock")

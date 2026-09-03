@@ -30,6 +30,7 @@ from app.jobs.service import enqueue_job, job_payload, job_trace  # noqa: E402
 from app.logs.service import log_action  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
+from app.tenancy.database import get_tenant_engine  # noqa: E402
 
 
 class FakeRequest:
@@ -57,6 +58,7 @@ class ObservabilityTests(unittest.TestCase):
     def tearDown(self):
         self.master_engine.dispose()
         self.tenant_engine.dispose()
+        get_tenant_engine.cache_clear()
         self.tempdir.cleanup()
 
     def _seed_master(self):

@@ -99,9 +99,9 @@ def _ensure_tenant_database_row(master_db: Session, company: MasterCompany, data
     return tenant
 
 
-def _session_factory(database_url: str) -> sessionmaker[Session]:
+def _session_factory(database_url: str) -> tuple[object, sessionmaker[Session]]:
     engine = create_engine(database_url, connect_args={"check_same_thread": False} if database_url.startswith("sqlite") else {})
-    return sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    return engine, sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
 def _copy_company_rows(source_db: Session, target_db: Session, company_id: int) -> int:
@@ -146,9 +146,8 @@ def provision_company_database(master_db: Session, legacy_db: Session, company: 
         tenant_db.is_active = True
 
     target_path = tenant_database_path(company)
-    engine = create_engine(database_url, connect_args={"check_same_thread": False})
+    engine, session_factory = _session_factory(database_url)
     Base.metadata.create_all(bind=engine)
-    session_factory = _session_factory(database_url)
     target_db = session_factory()
     try:
         companies_table = Base.metadata.tables["companies"]
@@ -169,6 +168,7 @@ def provision_company_database(master_db: Session, legacy_db: Session, company: 
         )
     finally:
         target_db.close()
+        engine.dispose()
     master_db.commit()
     return tenant_db, was_provisioned
 
@@ -193,13 +193,10 @@ def provision_external_tenant(
     membership = _ensure_membership(master_db, user, company)
     tenant = _ensure_tenant_database_row(master_db, company, database_url)
 
-    engine = create_engine(
-        database_url,
-        connect_args={"check_same_thread": False} if database_url.startswith("sqlite") else {},
-    )
+    engine, tenant_session_factory = _session_factory(database_url)
     Base.metadata.create_all(bind=engine)
 
-    tenant_session = _session_factory(database_url)()
+    tenant_session = tenant_session_factory()
     try:
         tenant_company = tenant_session.get(TenantCompany, company.id)
         if tenant_company is None:
@@ -217,16 +214,18 @@ def provision_external_tenant(
         tenant_session.commit()
     finally:
         tenant_session.close()
+        engine.dispose()
 
     ensure_tenant_schema(database_url, company_id=company.id)
 
-    session_factory = _session_factory(database_url)
+    session_engine, session_factory = _session_factory(database_url)
     tenant_db = session_factory()
     try:
         tenant_db.execute(text("SELECT 1"))
         tenant_db.commit()
     finally:
         tenant_db.close()
+        session_engine.dispose()
 
     tenant.health_status = "ok"
     tenant.notes = "Provisioned against external database"

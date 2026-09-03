@@ -31,6 +31,19 @@ El listener:
 
 En Vercel no se inicia este listener. Vercel puede servir la UI y rutas manuales, pero no debe considerarse un runtime persistente de correo.
 
+### Demo desplegada en Vercel Hobby
+
+El plan Hobby de Vercel solo admite cron diarios, por lo que `vercel.json` mantiene su programación diaria y no puede representar una frecuencia IMAP configurable. Para la demo, `.github/workflows/email-sync-cron.yml` actúa como un dispatcher de comprobación cada cinco minutos desde GitHub Actions; no fija la frecuencia de ningún tenant.
+
+El endpoint solo procesa estados cuyo `next_run_at` ya ha vencido. Tras cada lectura, calcula la siguiente ejecución con `frequency_seconds`, que se sincroniza desde `polling_frequency_minutes` en Configuración. Por ejemplo, una frecuencia de 15 minutos programa 900 segundos; los despertares intermedios no vuelven a consultar IMAP.
+
+Configura estos secretos del repositorio antes de activar el flujo:
+
+- `CRON_BASE_URL`: URL base del despliegue de producción, sin `/` final.
+- `CRON_SECRET`: el mismo valor configurado como `CRON_SECRET` en Vercel.
+
+El flujo solo se ejecuta desde la rama por defecto y no imprime la respuesta del endpoint. GitHub Actions puede sufrir retrasos puntuales y su intervalo es solo la resolución máxima de esta alternativa para la demo; para producción real se recomienda el worker persistente descrito arriba, que respeta directamente cualquier frecuencia configurada.
+
 ## Sincronizacion manual
 
 Los botones manuales ya no dependen de un worker vivo para mostrar un resultado. Crean un job auditado y lo ejecutan inline, devolviendo el resumen real:

@@ -65,7 +65,10 @@ def _call_structured_extraction_http(extraction_input: OrderExtractionInput, mod
         with urllib.request.urlopen(request, timeout=timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode(errors="ignore")
+        try:
+            detail = exc.read().decode(errors="ignore")
+        finally:
+            exc.close()
         raise OrderExtractionError(f"OpenAI devolvio HTTP {exc.code}: {detail[:200]}") from exc
     except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
         raise OrderExtractionError(f"No se pudo conectar con OpenAI: {exc}") from exc

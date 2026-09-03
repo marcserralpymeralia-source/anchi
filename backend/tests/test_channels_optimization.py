@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from sqlalchemy import create_engine, func, select
+from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("APP_ENV", "test")
@@ -17,7 +18,7 @@ from scripts.performance_data import build_performance_fixture, performance_test
 
 
 def _tenant_session(tenant_path: Path):
-    engine = create_engine(f"sqlite:///{tenant_path.as_posix()}", connect_args={"check_same_thread": False})
+    engine = create_engine(f"sqlite:///{tenant_path.as_posix()}", connect_args={"check_same_thread": False}, poolclass=NullPool)
     return sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Generator
 from functools import lru_cache
+from threading import RLock
 
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.auth.redirects import login_location_for_request
@@ -19,9 +21,36 @@ def _connect_args(database_url: str) -> dict[str, object]:
     return {"check_same_thread": False} if database_url.startswith("sqlite") else {}
 
 
-@lru_cache(maxsize=128)
-def get_tenant_engine(database_url: str):
-    return create_engine(database_url, connect_args=_connect_args(database_url), pool_pre_ping=True)
+_tenant_engine_cache: dict[str, Engine] = {}
+_tenant_engine_cache_lock = RLock()
+
+
+def get_tenant_engine(database_url: str) -> Engine:
+    """Return the shared tenant engine for a URL.
+
+    The cache is explicit instead of relying on ``lru_cache`` so callers and
+    test fixtures can dispose every cached engine before removing SQLite
+    files.  The old ``cache_clear`` attribute is kept as a compatibility
+    alias for scripts and existing integrations.
+    """
+    with _tenant_engine_cache_lock:
+        engine = _tenant_engine_cache.get(database_url)
+        if engine is None:
+            engine = create_engine(database_url, connect_args=_connect_args(database_url), pool_pre_ping=True)
+            _tenant_engine_cache[database_url] = engine
+        return engine
+
+
+def clear_tenant_engine_cache() -> None:
+    """Dispose and forget all cached tenant engines."""
+    with _tenant_engine_cache_lock:
+        engines = tuple(_tenant_engine_cache.values())
+        _tenant_engine_cache.clear()
+    for engine in engines:
+        engine.dispose()
+
+
+setattr(get_tenant_engine, "cache_clear", clear_tenant_engine_cache)
 
 
 def tenant_db_session(database_url: str):

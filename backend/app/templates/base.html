@@ -1,27 +1,29 @@
 {% from "components/icons.html" import icon_menu, icon_chevron_left, icon_dashboard, icon_entries, icon_mail, icon_whatsapp, icon_customers, icon_products, icon_settings, icon_book_open, icon_bell, icon_plus, icon_logout, icon_paperclip, icon_search, icon_close, icon_check, icon_refresh, icon_trash, icon_copy, icon_folder %}
+{% set safe_branding = branding if branding is defined and branding else (safe_branding if (request.state is defined and request.state and safe_branding is defined and safe_branding) else {}) %}
+{% set safe_alert_center = alert_center if alert_center is defined and alert_center else (safe_alert_center if (request.state is defined and request.state and safe_alert_center is defined and safe_alert_center) else {'total': 0, 'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'has_critical': False, 'recent': []}) %}
 <!doctype html>
 <html lang="es">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ title or app_settings.app_name }}</title>
-  {% if request.state.branding.favicon_url %}<link rel="icon" href="{{ request.state.branding.favicon_url }}">{% endif %}
+  <title>{{ title or (app_settings.app_name if app_settings else "Anchi") }}</title>
+  {% if safe_branding and safe_branding.favicon_url %}<link rel="icon" href="{{ safe_branding.favicon_url }}">{% endif %}
   <link rel="stylesheet" href="{{ asset_url('styles.css') }}">
   <script src="{{ asset_url('js/database-tables.js') }}" defer></script>
   {% block head_extra %}{% endblock %}
-  <style>{{ branding_css_vars(request.state.branding)|safe }}</style>
+  <style>{{ branding_css_vars(safe_branding)|safe }}</style>
 </head>
 <body>
-  {% set cookie_sidebar_key = app_settings.app_slug ~ '.sidebarExpanded' %}
+  {% set cookie_sidebar_key = (app_settings.app_slug if app_settings else "anchi") ~ '.sidebarExpanded' %}
   {% set cookie_sidebar_val = request.cookies.get(cookie_sidebar_key) %}
-  {% set is_sidebar_collapsed = (cookie_sidebar_val == 'false') if cookie_sidebar_val is not none else (user.role.name != "Administrador") %}
+  {% set is_sidebar_collapsed = (cookie_sidebar_val == 'false') if cookie_sidebar_val is not none else ((user.role != "admin" and (not user.role or (user.role.name if user.role.name is defined else "") != "Administrador"))) %}
   <div class="app{% if is_sidebar_collapsed %} sidebar-collapsed{% endif %}" id="app-shell">
     <script>
       (function() {
         try {
-          var key = "{{ app_settings.app_slug }}.sidebarExpanded";
+          var key = "{{ app_settings.app_slug if app_settings else 'anchi' }}.sidebarExpanded";
           var stored = localStorage.getItem(key);
-          var def = {{ "true" if user.role.name == "Administrador" else "false" }};
+          var def = {{ "true" if (user.role == "admin" or (user.role and (user.role.name if user.role.name is defined else "") == "Administrador")) else "false" }};
           var expanded = stored === null ? def : (stored === "true");
           var shell = document.getElementById("app-shell");
           if (shell) {
@@ -37,11 +39,11 @@
     <aside class="sidebar">
       <div class="brand-row">
         <div class="brand">
-          {% if request.state.branding.show_logo_sidebar and request.state.branding.logo_url %}
-            <img class="brand-logo" src="{{ request.state.branding.dark_logo_url or request.state.branding.logo_url }}" alt="{{ request.state.branding.app_name }}" onerror="this.style.display='none'">
+          {% if safe_branding and safe_branding.show_logo_sidebar and safe_branding.logo_url %}
+            <img class="brand-logo" src="{{ safe_branding.dark_logo_url or safe_branding.logo_url }}" alt="{{ safe_branding.app_name }}" onerror="this.style.display='none'">
           {% endif %}
-          {% if request.state.branding.show_app_name_sidebar %}<span>{{ request.state.branding.app_name }}</span>{% endif %}
-          {% if request.state.branding.show_claim_sidebar %}<small>{{ request.state.branding.secondary_claim }}</small>{% endif %}
+          {% if safe_branding and safe_branding.show_app_name_sidebar %}<span>{{ safe_branding.app_name }}</span>{% endif %}
+          {% if safe_branding and safe_branding.show_claim_sidebar %}<small>{{ safe_branding.secondary_claim }}</small>{% endif %}
         </div>
         <button class="sidebar-toggle secondary" type="button" title="{{ 'Expandir menú' if is_sidebar_collapsed else 'Contraer menú' }}" aria-label="{{ 'Expandir menú' if is_sidebar_collapsed else 'Contraer menú' }}" onclick="toggleSidebar()">{{ icon_chevron_left(18, "icon-chevron") }}{{ icon_menu(18, "icon-menu") }}</button>
       </div>
@@ -51,7 +53,7 @@
       {% set href_customers = '/customers' %}
       {% set href_products = '/products' %}
       {% set href_settings = '/settings' %}
-      {% set href_import_manual = request.url_for('manual_import_page') if request.url_for is defined else '/imports/manual' %}
+      {% set href_import_manual = '/imports/manual' %}
       <nav class="nav">
         <a href="{{ href_orders }}" title="Pedidos" class="{% if request.url.path in ['/', '/inicio', '/workbench'] or (request.url.path.startswith('/orders') and request.query_params.get('archived') != 'true') %}active{% endif %}"><span class="nav-icon">{{ icon_entries(20) }}</span><span class="nav-label">Pedidos</span></a>
         <a href="{{ href_archived_orders }}" title="Archivos" class="{% if request.url.path.startswith('/orders') and request.query_params.get('archived') == 'true' %}active{% endif %}"><span class="nav-icon">{{ icon_folder(20) }}</span><span class="nav-label">Archivos</span></a>
@@ -63,7 +65,7 @@
         {% endif %}
         <a href="{{ href_customers }}" title="Clientes" class="{% if request.url.path.startswith('/customers') %}active{% endif %}"><span class="nav-icon">{{ icon_customers(20) }}</span><span class="nav-label">Clientes</span></a>
         <a href="{{ href_products }}" title="Productos" class="{% if request.url.path.startswith('/products') %}active{% endif %}"><span class="nav-icon">{{ icon_products(20) }}</span><span class="nav-label">Productos</span></a>
-        {% if user.role.name in ["Administrador", "Superadmin"] %}
+        {% if (user.role in ["admin", "superadmin"] or (user.role and (user.role.name if user.role.name is defined else "") in ["Administrador", "Superadmin"])) %}
           <a href="{{ href_settings }}" title="Configuración" class="{% if request.url.path.startswith('/settings') or request.url.path.startswith('/setup') %}active{% endif %}"><span class="nav-icon">{{ icon_settings(20) }}</span><span class="nav-label">Configuración</span></a>
         {% endif %}
       </nav>
@@ -77,7 +79,7 @@
           <div class="topbar-actions">
             <button type="button" class="alerts-button" onclick="toggleAlertsDrawer()" aria-label="Alertas" title="Ver alertas">
               <span class="alerts-button-icon">{{ icon_bell(16) }}</span>
-              <span class="alerts-button-badge {% if request.state.alert_center.has_critical %}alerts-badge-critical{% elif request.state.alert_center.high %}alerts-badge-high{% elif request.state.alert_center.medium %}alerts-badge-medium{% else %}alerts-badge-idle{% endif %}" id="alerts-badge">{{ request.state.alert_center.total }}</span>
+              <span class="alerts-button-badge {% if safe_alert_center.has_critical %}alerts-badge-critical{% elif safe_alert_center.high %}alerts-badge-high{% elif safe_alert_center.medium %}alerts-badge-medium{% else %}alerts-badge-idle{% endif %}" id="alerts-badge">{{ safe_alert_center.total }}</span>
             </button>
             <a class="topbar-new-entry-btn" href="{{ href_import_manual }}">
               {{ icon_plus(14) }}
@@ -88,8 +90,8 @@
           <div class="topbar-divider" aria-hidden="true"></div>
 
           <div class="topbar-context-badge">
-            <span class="topbar-company-name" title="{{ request.state.branding.company_name }}">{{ request.state.branding.company_name }}</span>
-            {% if app_settings.environment != "production" and "demo" not in ((request.state.branding.company_name or "")|lower) %}
+            <span class="topbar-company-name" title="{{ safe_branding.company_name }}">{{ safe_branding.company_name }}</span>
+            {% if app_settings.environment != "production" and "demo" not in ((safe_branding.company_name or "")|lower) %}
               <span class="topbar-env-tag">Demo</span>
             {% endif %}
           </div>
@@ -99,7 +101,7 @@
           <div class="topbar-user-card">
             <div class="topbar-user-meta">
               <strong class="topbar-user-name" title="{{ user.name }}">{{ user.name }}</strong>
-              <small class="topbar-user-role">{{ user.role.name if user.role and user.role.name else "Usuario" }}</small>
+              <small class="topbar-user-role">{{ user.role.name if (user.role and user.role.name is defined) else (user.role if user and user.role else "Usuario") }}</small>
             </div>
             <form method="post" action="/logout" class="topbar-logout-form">
               <button class="topbar-logout-button" type="submit" title="Cerrar sesión" aria-label="Cerrar sesión">
@@ -120,7 +122,7 @@
         <span class="alerts-drawer-icon">{{ icon_bell(18) }}</span>
         <div>
           <h3 class="alerts-drawer-title">Alertas</h3>
-          <p class="alerts-drawer-subtitle"><strong id="alerts-count">{{ request.state.alert_center.total }}</strong> pendientes de revisión</p>
+          <p class="alerts-drawer-subtitle"><strong id="alerts-count">{{ safe_alert_center.total }}</strong> pendientes de revisión</p>
         </div>
       </div>
       <div class="alerts-drawer-header-actions">
@@ -132,25 +134,25 @@
     <div class="alerts-summary-chips">
       <div class="alert-chip alert-chip-critical">
         <span class="alert-chip-dot"></span>
-        <span>Críticas: <strong id="alerts-critical">{{ request.state.alert_center.critical }}</strong></span>
+        <span>Críticas: <strong id="alerts-critical">{{ safe_alert_center.critical }}</strong></span>
       </div>
       <div class="alert-chip alert-chip-high">
         <span class="alert-chip-dot"></span>
-        <span>Alta: <strong id="alerts-high">{{ request.state.alert_center.high }}</strong></span>
+        <span>Alta: <strong id="alerts-high">{{ safe_alert_center.high }}</strong></span>
       </div>
       <div class="alert-chip alert-chip-medium">
         <span class="alert-chip-dot"></span>
-        <span>Media: <strong id="alerts-medium">{{ request.state.alert_center.medium }}</strong></span>
+        <span>Media: <strong id="alerts-medium">{{ safe_alert_center.medium }}</strong></span>
       </div>
       <div class="alert-chip alert-chip-low">
         <span class="alert-chip-dot"></span>
-        <span>Baja: <strong id="alerts-low">{{ request.state.alert_center.low }}</strong></span>
+        <span>Baja: <strong id="alerts-low">{{ safe_alert_center.low }}</strong></span>
       </div>
     </div>
 
     <div class="alerts-drawer-body">
       <div class="alerts-list" id="alerts-drawer-list">
-        {% for alert in request.state.alert_center.recent %}
+        {% for alert in safe_alert_center.recent %}
           <article class="alert-card alert-{{ alert.severity }} alert-status-{{ alert.status }}" data-alert-id="{{ alert.id }}">
             <div class="alert-card-inner">
               <div class="alert-card-header">
@@ -192,7 +194,7 @@
     const shell = document.getElementById("app-shell");
     const sidebarStorageKey = "{{ app_settings.app_slug }}.sidebarExpanded";
     const storedSidebar = localStorage.getItem(sidebarStorageKey);
-    const defaultExpanded = {{ "true" if user.role.name == "Administrador" else "false" }};
+    const defaultExpanded = {{ "true" if (user.role == "admin" or (user.role and (user.role.name if user.role.name is defined else "") == "Administrador")) else "false" }};
     const sidebarExpanded = storedSidebar === null ? defaultExpanded : storedSidebar === "true";
     function updateSidebarToggleLabel(collapsed) {
       const toggleBtn = document.querySelector(".sidebar-toggle");
@@ -225,7 +227,7 @@
     });
   </script>
   <script>
-    window.APP_BRANDING = {{ request.state.branding|tojson }};
+    window.APP_BRANDING = {{ safe_branding|tojson }};
     const alertsDrawer = document.getElementById("alerts-drawer");
     const alertsBackdrop = document.getElementById("alerts-backdrop");
 

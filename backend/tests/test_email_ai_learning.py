@@ -5,6 +5,7 @@ import unittest
 import imaplib
 import socket
 import ssl
+from datetime import datetime, timezone
 from email import policy
 from email.message import EmailMessage
 from pathlib import Path
@@ -39,12 +40,14 @@ class FakeImapClient:
         self,
         messages: dict[str, bytes] | None = None,
         search_result: bytes | None = None,
+        internal_dates: dict[str, str] | None = None,
         login_exc: Exception | None = None,
         select_status: str = "OK",
         select_payload: bytes = b"2",
     ) -> None:
         self.messages = messages or {}
         self.search_result = search_result
+        self.internal_dates = internal_dates or {}
         self.login_exc = login_exc
         self.select_status = select_status
         self.select_payload = select_payload
@@ -112,7 +115,9 @@ class FakeImapClient:
         if command == "fetch":
             uid = _args[0].decode() if isinstance(_args[0], bytes) else str(_args[0])
             raw = self.messages[uid]
-            meta = f"{uid} (UID {uid} RFC822 {{123}})".encode()
+            internal_date = self.internal_dates.get(uid)
+            date_part = f' INTERNALDATE "{internal_date}"' if internal_date else ""
+            meta = f"{uid} (UID {uid}{date_part} RFC822 {{123}})".encode()
             return "OK", [(meta, raw)]
         if command == "store":
             return "OK", [b"stored"]
@@ -121,7 +126,9 @@ class FakeImapClient:
     def fetch(self, msg_id, *_args, **_kwargs):
         uid = msg_id.decode()
         raw = self.messages[uid]
-        meta = f"{uid} (UID {uid} RFC822 {{123}})".encode()
+        internal_date = self.internal_dates.get(uid)
+        date_part = f' INTERNALDATE "{internal_date}"' if internal_date else ""
+        meta = f"{uid} (UID {uid}{date_part} RFC822 {{123}})".encode()
         return "OK", [(meta, raw)]
 
     def logout(self):
@@ -689,6 +696,42 @@ class EmailAiLearningTests(unittest.TestCase):
         self.assertEqual(result["downloaded"], 1)
         self.assertEqual(result["saved"], 1)
         self.assertEqual(result["last_seen_uid_after"], "3")
+        tenant_db.close()
+        master_db.close()
+
+    def test_incremental_sync_uses_imap_server_arrival_time(self):
+        self._seed_imap()
+        tenant_db = self.TenantSession()
+        master_db = self.MasterSession()
+        settings = tenant_db.scalar(select(EmailSettings).where(EmailSettings.company_id == 1))
+        state = master_db.scalar(select(EmailSyncState).where(EmailSyncState.company_id == 1, EmailSyncState.channel_key == "email"))
+        state.uidvalidity = "777"
+        state.last_seen_uid = "2"
+        master_db.commit()
+        client = FakeImapClient(
+            {
+                "3": (
+                    b"From: compras@example.com\r\n"
+                    b"Date: Thu, 03 Sep 2026 09:23:36 +0200\r\n"
+                    b"Subject: Pedido con fecha IMAP\r\n"
+                    b"Message-ID: <pedido-imap-date@example.com>\r\n\r\n"
+                    b"Pedido 3"
+                ),
+            },
+            search_result=b"3",
+            internal_dates={"3": "03-Sep-2026 07:23:36 +0000"},
+        )
+
+        with patch("app.settings.integrations._imap_client", return_value=client):
+            result = read_latest_imap_emails(tenant_db, settings, 1, auto_process=False, unread_only=False, sync_state=state, sync_session=master_db)
+
+        saved = tenant_db.scalar(select(Email).where(Email.message_id == "<pedido-imap-date@example.com>"))
+        self.assertTrue(result["ok"])
+        self.assertIsNotNone(saved)
+        assert saved is not None
+        expected = datetime(2026, 9, 3, 7, 23, 36, tzinfo=timezone.utc)
+        self.assertEqual(saved.received_at.replace(tzinfo=timezone.utc), expected)
+        self.assertIn("INTERNALDATE", client.uid_calls[1][2])
         tenant_db.close()
         master_db.close()
 

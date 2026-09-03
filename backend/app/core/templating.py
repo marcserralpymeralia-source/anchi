@@ -11,8 +11,10 @@ from starlette.responses import HTMLResponse
 from starlette.templating import _TemplateResponse
 
 from app.core.assets import versioned_asset_url
+from app.core.config import get_settings
 from app.core.performance import performance_profiling_enabled, record_template_render
 from app.core.timezones import DEFAULT_TIMEZONE, format_local_datetime, resolve_timezone_name
+from app.settings.branding import branding_css_vars
 
 
 APP_DIR = Path(__file__).resolve().parents[1]
@@ -202,6 +204,25 @@ def tenant_timezone_context_processor(request):  # noqa: ANN001
     return {"tenant_timezone": timezone_name, "default_timezone": DEFAULT_TIMEZONE}
 
 
+def state_defaults_context_processor(request):  # noqa: ANN001
+    from app.settings.branding import default_branding_payload, branding_to_dict
+    branding = getattr(getattr(request, "state", None), "branding", None)
+    if not branding or not isinstance(branding, dict):
+        branding = branding_to_dict(default_branding_payload())
+    alert_center = getattr(getattr(request, "state", None), "alert_center", None) or {
+        "total": 0, "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0, "has_critical": False, "recent": []
+    }
+    if hasattr(request, "state"):
+        if not getattr(request.state, "branding", None):
+            request.state.branding = branding
+        if not getattr(request.state, "alert_center", None):
+            request.state.alert_center = alert_center
+    return {
+        "branding": branding,
+        "alert_center": alert_center,
+    }
+
+
 def enabled_channels_context_processor(request):  # noqa: ANN001
     """Expose active tenant channels to the shared navigation after auth resolves."""
     tenant = getattr(getattr(request, "state", None), "tenant", None)
@@ -238,8 +259,11 @@ def enabled_channels_context_processor(request):  # noqa: ANN001
 
 templates.context_processors.append(tenant_timezone_context_processor)
 templates.context_processors.append(enabled_channels_context_processor)
+templates.context_processors.append(state_defaults_context_processor)
 templates.env.filters["local_dt"] = format_local_datetime
 templates.env.filters["status_label"] = status_label
 templates.env.filters["status_class"] = status_class
 templates.env.globals["page_url"] = page_url
 templates.env.globals["asset_url"] = versioned_asset_url
+templates.env.globals["branding_css_vars"] = branding_css_vars
+templates.env.globals["app_settings"] = get_settings()

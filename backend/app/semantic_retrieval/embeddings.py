@@ -53,7 +53,10 @@ def generate_embeddings(texts: Sequence[str], *, model: str | None = None) -> li
         with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
             body = response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")
+        finally:
+            exc.close()
         raise EmbeddingError(f"Error HTTP generando embeddings: {exc.code} {detail[:300]}") from exc
     except urllib.error.URLError as exc:
         raise EmbeddingError(f"No se pudo conectar con el proveedor de embeddings: {exc.reason}") from exc

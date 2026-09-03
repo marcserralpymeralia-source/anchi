@@ -331,10 +331,11 @@ def _fetch_autoconfig(url: str, email_address: str, redirect_count: int = 0) -> 
                 return None
             payload = response.read(MAX_AUTOCONFIG_BYTES + 1)
     except HTTPError as exc:
-        if 300 <= exc.code < 400 and redirect_count < MAX_AUTOCONFIG_REDIRECTS:
-            location = exc.headers.get("Location")
-            if location:
-                return _fetch_autoconfig(urljoin(url, location), email_address, redirect_count + 1)
+        code = exc.code
+        location = exc.headers.get("Location")
+        exc.close()
+        if 300 <= code < 400 and redirect_count < MAX_AUTOCONFIG_REDIRECTS and location:
+            return _fetch_autoconfig(urljoin(url, location), email_address, redirect_count + 1)
         return None
     except (URLError, OSError, TimeoutError, ssl.SSLError):
         return None

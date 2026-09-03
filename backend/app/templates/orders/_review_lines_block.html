@@ -1,23 +1,27 @@
 {% from "components/icons.html" import icon_plus, icon_trash %}
-<div class="order-review-lines">
-  <div class="order-review-lines-toolbar">
-    <span>Productos</span>
+<div class="order-review-lines-block">
+  <div class="order-lines-header-row">
+    <div class="order-lines-title-group">
+      <span class="field-title" style="margin:0;">Productos</span>
+      <span class="order-lines-count-pill">{{ order.lines|length }}</span>
+    </div>
 
     <form
       method="post"
       action="/orders/{{ order.id }}/lines"
       class="js-loading-form"
+      style="margin:0;"
     >
       <input type="hidden" name="validated_product_id" value="0">
-      <input type="hidden" name="original_text" value="Linea manual">
+      <input type="hidden" name="original_text" value="Línea manual">
       <input type="hidden" name="quantity" value="1">
       <input type="hidden" name="unit" value="">
       <button
         type="submit"
-        class="secondary order-review-add-line"
+        class="button secondary compact-button"
         data-loading-text="Añadiendo..."
       >
-        {{ icon_plus(14) }} <span>Añadir producto</span>
+        {{ icon_plus(13) }} <span>Añadir producto</span>
       </button>
     </form>
   </div>
@@ -25,24 +29,29 @@
   <table class="order-review-table">
     <thead>
       <tr>
-        <th>Referencia</th>
-        <th>Descripción</th>
-        <th class="order-review-number">Unidades</th>
-        <th class="order-review-number">Precio</th>
-        <th class="order-review-actions-col"></th>
+        <th class="th-ref">Referencia</th>
+        <th class="th-desc">Descripción</th>
+        <th class="th-qty order-review-number">Unidades</th>
+        <th class="th-price order-review-number">Precio</th>
+        <th class="th-actions"></th>
       </tr>
     </thead>
 
     <tbody>
+      {% set table_ns = namespace(subtotal=0.0) %}
       {% for line in order.lines %}
         {% set selected_product = line.validated_product %}
         {% set proposed_product = line.product if not line.validated_product_id else none %}
-        {% set unit_price = selected_product.sale_price if selected_product and selected_product.sale_price is not none else 0 %}
-        {% set quantity = line.quantity or 0 %}
+        {% set unit_price = (selected_product.sale_price|float) if (selected_product and selected_product.sale_price is not none) else 0.0 %}
+        {% set quantity = (line.quantity|float) if (line.quantity is not none) else 0.0 %}
+        {% set line_subtotal = unit_price * quantity %}
+        {% set table_ns.subtotal = table_ns.subtotal + line_subtotal %}
 
         <tr class="{% if not selected_product or line.validation_status != 'validated' %}order-review-line-warning{% endif %}">
           <td class="order-review-reference">
-            {{ selected_product.reference if selected_product else line.detected_reference or "—" }}
+            <span class="order-ref-badge {% if selected_product %}is-validated{% else %}is-unvalidated{% endif %}">
+              {{ selected_product.reference if selected_product else line.detected_reference or "—" }}
+            </span>
           </td>
 
           <td class="order-review-description">
@@ -51,6 +60,7 @@
               class="js-loading-form"
               method="post"
               action="/orders/{{ order.id }}/lines/{{ line.id }}"
+              style="margin:0;"
             ></form>
 
             <div
@@ -60,20 +70,22 @@
             >
               <input
                 type="search"
-                class="order-review-product-input"
+                class="order-review-product-input compact-input"
                 data-product-input
                 value="{{ selected_product.name if selected_product else line.detected_product or line.original_text or '' }}"
                 title="{{ selected_product.name if selected_product else line.detected_product or line.original_text or '' }}"
-                placeholder="Buscar producto"
+                placeholder="Buscar o seleccionar producto..."
                 autocomplete="off"
               >
 
               {% if proposed_product %}
-                <small class="muted order-review-proposal">
-                  Propuesta: {{ proposed_product.reference }} Â· selecciona y guarda para validarla.
-                </small>
+                <div class="order-review-proposal-badge">
+                  <span>Sugerencia: <strong>{{ proposed_product.reference }} · {{ proposed_product.name }}</strong> (selecciona para validar)</span>
+                </div>
               {% elif line.doubt_reason %}
-                <small class="muted order-review-proposal">{{ line.doubt_reason }}</small>
+                <div class="order-review-proposal-badge is-doubt">
+                  <span>{{ line.doubt_reason }}</span>
+                </div>
               {% endif %}
 
               <input
@@ -96,7 +108,7 @@
             <input
               form="line-form-{{ line.id }}"
               name="quantity"
-              class="order-review-quantity"
+              class="order-review-quantity compact-input"
               type="number"
               step="0.01"
               value="{{ quantity }}"
@@ -113,7 +125,7 @@
           </td>
 
           <td class="order-review-number order-review-price">
-            {{ "%.2f"|format(unit_price * quantity) }} €
+            {{ "%.2f"|format(line_subtotal) }} €
           </td>
 
           <td class="order-review-actions-col">
@@ -121,7 +133,8 @@
               method="post"
               action="/orders/{{ order.id }}/lines/{{ line.id }}/delete"
               class="js-loading-form"
-              data-confirm="Eliminar este producto?"
+              data-confirm="¿Eliminar este producto del pedido?"
+              style="margin:0;"
             >
               <button
                 type="submit"
@@ -129,7 +142,7 @@
                 title="Eliminar producto"
                 aria-label="Eliminar producto"
               >
-                {{ icon_trash(15) }}
+                {{ icon_trash(14) }}
               </button>
             </form>
           </td>
@@ -138,10 +151,30 @@
       {% else %}
         <tr>
           <td colspan="5" class="order-review-empty">
-            No se han detectado productos.
+            <div style="display:flex;flex-direction:column;align-items:center;gap:4px;padding:24px 12px;">
+              <span style="color:#64748b;font-size:13px;">No se han detectado productos en este pedido.</span>
+              <span style="color:#94a3b8;font-size:12px;">Haz clic en «Añadir producto» para agregar líneas manualmente.</span>
+            </div>
           </td>
         </tr>
       {% endfor %}
     </tbody>
+
+    {% if order.lines %}
+      <tfoot>
+        <tr class="order-review-tfoot-row">
+          <td colspan="2" style="text-align:right;font-weight:600;color:#64748b;font-size:12px;">
+            Total calculado:
+          </td>
+          <td class="order-review-number" style="font-weight:700;color:#0f172a;font-size:12.5px;">
+            {{ "%.2f"|format(ns.total_units) }}
+          </td>
+          <td class="order-review-number" style="font-weight:800;color:#0f766e;font-size:13px;">
+            {{ "%.2f"|format(ns.total) }} €
+          </td>
+          <td></td>
+        </tr>
+      </tfoot>
+    {% endif %}
   </table>
 </div>

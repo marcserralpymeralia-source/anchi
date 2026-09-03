@@ -263,7 +263,7 @@ def channels_settings_page(request: Request, db: Session = Depends(get_tenant_db
             "email": email_settings,
             "email_status": email_config_status(email_settings),
             "can_edit_email": has_admin_access(user),
-            "can_test_email": user.role.name in {"Administrador", "Supervisor"},
+            "can_test_email": user.role.name in {"Administrador", "Supervisor", "Superadmin"},
             "whatsapp": redact_whatsapp_config(whatsapp_config(db, user.company_id)),
             "whatsapp_embedded_signup": embedded_signup_public_config(),
             "whatsapp_signup_state": whatsapp_signup_state,

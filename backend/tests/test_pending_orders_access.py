@@ -117,6 +117,7 @@ class PendingOrdersAccessTests(unittest.TestCase):
     def test_workbench_order_detail_uses_compact_product_search(self):
         fixture = build_performance_fixture("small")
         client, cleanup = self._client_for(fixture)
+        tenant_engine = None
         try:
             login = client.post(
                 "/login",
@@ -125,7 +126,7 @@ class PendingOrdersAccessTests(unittest.TestCase):
             )
             self.assertEqual(login.status_code, 303)
 
-            _, TenantSession = _session_factory(fixture.tenant_database_url)
+            tenant_engine, TenantSession = _session_factory(fixture.tenant_database_url)
             with TenantSession() as db:
                 customer = db.query(Customer).filter(Customer.company_id == 1).first()
                 product = db.query(Product).filter(Product.company_id == 1).first()
@@ -177,6 +178,8 @@ class PendingOrdersAccessTests(unittest.TestCase):
             self.assertIn('Detectado:', response.text)
         finally:
             cleanup()
+            if tenant_engine is not None:
+                tenant_engine.dispose()
             fixture.cleanup()
 
     def test_next_rejects_external_url(self):

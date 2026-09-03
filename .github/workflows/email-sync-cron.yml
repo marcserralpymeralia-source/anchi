@@ -1,0 +1,49 @@
+name: Email sync dispatcher
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: email-sync-cron
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - name: Wake due email synchronizations
+        env:
+          CRON_BASE_URL: ${{ secrets.CRON_BASE_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${CRON_BASE_URL:-}" || -z "${CRON_SECRET:-}" ]]; then
+            echo "Missing CRON_BASE_URL or CRON_SECRET repository secret."
+            exit 1
+          fi
+
+          base_url="${CRON_BASE_URL%/}"
+          response_file="${RUNNER_TEMP}/email-sync-response.json"
+          http_code="$(curl \
+            --silent \
+            --show-error \
+            --max-time 210 \
+            --output "$response_file" \
+            --write-out "%{http_code}" \
+            --header "Accept: application/json" \
+            --header "x-cron-secret: ${CRON_SECRET}" \
+            "${base_url}/cron/email-sync")"
+
+          if [[ "$http_code" != 2* ]]; then
+            echo "Email sync endpoint returned HTTP ${http_code}."
+            exit 1
+          fi
+
+          echo "Email sync endpoint completed with HTTP ${http_code}."
