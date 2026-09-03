@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% from "components/icons.html" import icon_close, icon_edit, icon_filter, icon_plus, icon_search, icon_sliders, icon_upload %}
 {% set title = "Productos" %}
-{% block head_extra %}<link rel="stylesheet" href="{{ asset_url('database-compact.css') }}"><script src="{{ asset_url('js/database-tables.js') }}" defer></script>{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{ asset_url('database-compact.css') }}">{% endblock %}
 {% block content %}
 
 {% macro render_sort_th(col_key, label, asc_val, desc_val, default_desc=false) -%}

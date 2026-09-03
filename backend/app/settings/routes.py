@@ -250,18 +250,28 @@ def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: 
     llm_settings = get_or_create_settings(db, LLMSettings, user.company_id)
     scoring_settings = get_or_create_settings(db, ScoringSettings, user.company_id)
     decision_settings = get_or_create_settings(db, DecisionSettings, user.company_id)
+    company = db.get(Company, user.company_id)
+    email_settings = get_or_create_settings(db, EmailSettings, user.company_id)
+    ftp_settings = get_or_create_settings(db, FTPSettings, user.company_id)
+    export_settings = get_or_create_settings(db, ExportSettings, user.company_id)
+    branding_settings = get_or_create_branding(db, user.company_id)
     metrics = agent_metrics(db, user.company_id, scoring_settings)
     prompt_templates = db.scalars(select(PromptTemplate).where(PromptTemplate.company_id == user.company_id).order_by(PromptTemplate.purpose)).all()
-    prompt_versions = {
-        template.id: db.scalars(select(PromptVersion).where(PromptVersion.template_id == template.id).order_by(PromptVersion.version.desc())).all()
-        for template in prompt_templates
-    }
+    prompt_versions_by_template: dict[int, list[PromptVersion]] = {template.id: [] for template in prompt_templates}
+    if prompt_templates:
+        prompt_versions_rows = db.scalars(
+            select(PromptVersion)
+            .where(PromptVersion.template_id.in_([template.id for template in prompt_templates]))
+            .order_by(PromptVersion.template_id, PromptVersion.version.desc())
+        ).all()
+        for prompt_version in prompt_versions_rows:
+            prompt_versions_by_template[prompt_version.template_id].append(prompt_version)
     context = {
         "request": request,
         "user": user,
-        "company": db.get(Company, user.company_id),
-        "email": get_or_create_settings(db, EmailSettings, user.company_id),
-        "email_status": email_config_status(get_or_create_settings(db, EmailSettings, user.company_id)),
+        "company": company,
+        "email": email_settings,
+        "email_status": email_config_status(email_settings),
         "email_templates": email_templates(db, user.company_id),
         "email_template_variables": TEMPLATE_VARIABLES,
         "can_edit_email": user.role.name == "Administrador",
@@ -281,35 +291,62 @@ def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: 
         "extraction_model_value": resolve_openai_runtime_model(llm_settings.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK),
         "extraction_model_label": openai_model_label(resolve_openai_runtime_model(llm_settings.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK)),
         "extraction_model_description": openai_model_description(resolve_openai_runtime_model(llm_settings.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK)),
-        "ftp": get_or_create_settings(db, FTPSettings, user.company_id),
-        "export": get_or_create_settings(db, ExportSettings, user.company_id),
+        "ftp": ftp_settings,
+        "export": export_settings,
         "scoring": scoring_settings,
         "decision": decision_settings,
-        "branding": branding_to_dict(get_or_create_branding(db, user.company_id)),
+        "branding": branding_to_dict(branding_settings),
         "can_edit_branding": user.role.name == "Administrador",
         "prompts": prompt_templates,
-        "prompt_versions": prompt_versions,
+        "prompt_versions": prompt_versions_by_template,
         "mask_secret": mask_secret,
         "is_superadmin": user.role.name == "Superadmin",
         "recent_processed_emails": recent_processed_emails_overview(db, user.company_id, days=30, limit=8),
-        "diagnostics": build_environment_diagnostics(db, user),
-        "dashboard": build_settings_dashboard(db, user, metrics, llm_settings, scoring_settings),
+        "diagnostics": build_environment_diagnostics(db, user, company=company, email_settings=email_settings, llm_settings=llm_settings),
+        "dashboard": build_settings_dashboard(
+            db,
+            user,
+            metrics,
+            llm_settings,
+            scoring_settings,
+            company=company,
+            branding=branding_settings,
+            email=email_settings,
+            ftp=ftp_settings,
+            export=export_settings,
+            decision=decision_settings,
+            prompt_templates=prompt_templates,
+        ),
     }
     return templates.TemplateResponse("settings/index.html", context)
 
 
-def build_settings_dashboard(db: Session, user: TenantUser, metrics: dict, llm: LLMSettings, scoring: ScoringSettings) -> dict:
-    company = db.get(Company, user.company_id)
-    branding = get_or_create_branding(db, user.company_id)
-    email = get_or_create_settings(db, EmailSettings, user.company_id)
+def build_settings_dashboard(
+    db: Session,
+    user: TenantUser,
+    metrics: dict,
+    llm: LLMSettings,
+    scoring: ScoringSettings,
+    *,
+    company: Company | None = None,
+    branding: BrandingSettings | None = None,
+    email: EmailSettings | None = None,
+    ftp: FTPSettings | None = None,
+    export: ExportSettings | None = None,
+    decision: DecisionSettings | None = None,
+    prompt_templates: list[PromptTemplate] | None = None,
+) -> dict:
+    company = company if company is not None else db.get(Company, user.company_id)
+    branding = branding if branding is not None else get_or_create_branding(db, user.company_id)
+    email = email if email is not None else get_or_create_settings(db, EmailSettings, user.company_id)
     email_status = email_config_status(email)
-    ftp = get_or_create_settings(db, FTPSettings, user.company_id)
-    export = get_or_create_settings(db, ExportSettings, user.company_id)
-    decision = get_or_create_settings(db, DecisionSettings, user.company_id)
+    ftp = ftp if ftp is not None else get_or_create_settings(db, FTPSettings, user.company_id)
+    export = export if export is not None else get_or_create_settings(db, ExportSettings, user.company_id)
+    decision = decision if decision is not None else get_or_create_settings(db, DecisionSettings, user.company_id)
     customer_count = db.query(Customer).filter(Customer.company_id == user.company_id).count()
     product_count = db.query(Product).filter(Product.company_id == user.company_id).count()
     active_channels_count = db.query(InputChannel).filter(InputChannel.company_id == user.company_id, InputChannel.is_active == True).count()  # noqa: E712
-    prompt_templates = db.scalars(select(PromptTemplate).where(PromptTemplate.company_id == user.company_id)).all()
+    prompt_templates = prompt_templates if prompt_templates is not None else db.scalars(select(PromptTemplate).where(PromptTemplate.company_id == user.company_id)).all()
 
     def state(key: str, label: str, kind: str, summary: str, action: str) -> dict:
         return {"key": key, "label": label, "state": kind, "summary": summary, "action": action}
@@ -374,10 +411,17 @@ def build_settings_dashboard(db: Session, user: TenantUser, metrics: dict, llm: 
     }
 
 
-def build_environment_diagnostics(db: Session, user: TenantUser) -> dict:
-    company = db.get(Company, user.company_id)
-    email_settings = get_or_create_settings(db, EmailSettings, user.company_id)
-    llm_settings = get_or_create_settings(db, LLMSettings, user.company_id)
+def build_environment_diagnostics(
+    db: Session,
+    user: TenantUser,
+    *,
+    company: Company | None = None,
+    email_settings: EmailSettings | None = None,
+    llm_settings: LLMSettings | None = None,
+) -> dict:
+    company = company if company is not None else db.get(Company, user.company_id)
+    email_settings = email_settings if email_settings is not None else get_or_create_settings(db, EmailSettings, user.company_id)
+    llm_settings = llm_settings if llm_settings is not None else get_or_create_settings(db, LLMSettings, user.company_id)
     last_seed_at = db.scalar(
         select(func.max(AuditLog.created_at)).where(AuditLog.company_id == user.company_id, AuditLog.action == "demo.seed")
     )

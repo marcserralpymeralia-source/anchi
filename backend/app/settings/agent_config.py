@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import date, datetime, time, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.db.models import Email, LLMSettings, Order, OrderLine, ScoringSettings
@@ -65,43 +65,64 @@ def _period_start(period: str) -> datetime:
 
 def agent_metrics(db: Session, company_id: int, scoring: ScoringSettings, period: str = "today") -> dict:
     start = _period_start(period)
-    emails = db.scalars(select(Email).where(Email.company_id == company_id, Email.received_at >= start)).all()
-    orders = db.scalars(
-        select(Order)
+    email_stats = db.execute(
+        select(
+            func.count(Email.id),
+            func.coalesce(func.sum(case((or_(Email.status.is_(None), Email.status != "pending"), 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Email.detected_type == "pedido", 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Email.detected_type == "no_pedido", 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Email.detected_type == "dudoso", 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Email.status == "error_processing", 1), else_=0)), 0),
+        )
+        .where(Email.company_id == company_id, Email.received_at >= start)
+    ).one()
+    order_stats = db.execute(
+        select(
+            func.count(Order.id),
+            func.coalesce(func.sum(case((Order.status.in_(("confirmed", "pedido_confirmado", "pedido_exportado", "exported")), 1), else_=0)), 0),
+            func.coalesce(func.sum(case((Order.status.in_(("discarded", "descartado")), 1), else_=0)), 0),
+            func.coalesce(func.sum(case((func.coalesce(Order.score, 0) >= scoring.safe_threshold, 1), else_=0)), 0),
+            func.coalesce(func.sum(case((and_(func.coalesce(Order.score, 0) >= scoring.review_threshold, func.coalesce(Order.score, 0) < scoring.safe_threshold), 1), else_=0)), 0),
+            func.coalesce(func.sum(case((func.coalesce(Order.score, 0) < scoring.review_threshold, 1), else_=0)), 0),
+            func.coalesce(func.sum(case((and_(Order.review_reasons.is_not(None), Order.review_reasons != ""), 1), else_=0)), 0),
+            func.coalesce(func.sum(case((and_(Order.validated_customer_id.is_(None), Order.customer_id.is_(None)), 1), else_=0)), 0),
+            func.coalesce(func.sum(func.coalesce(Order.score, 0)), 0),
+        )
         .where(Order.company_id == company_id, Order.created_at >= start)
-        .options(selectinload(Order.lines), selectinload(Order.email))
-    ).unique().all()
-    lines = [line for order in orders for line in order.lines]
-    generated = len(orders)
-    confirmed = len([order for order in orders if order.status in {"confirmed", "pedido_confirmado", "pedido_exportado", "exported"}])
-    discarded = len([order for order in orders if order.status in {"discarded", "descartado"}])
-    safe = len([order for order in orders if (order.score or 0) >= scoring.safe_threshold])
-    review = len([order for order in orders if scoring.review_threshold <= (order.score or 0) < scoring.safe_threshold])
-    doubtful = len([order for order in orders if (order.score or 0) < scoring.review_threshold])
-    product_missing = len([line for line in lines if not line.validated_product_id and not line.product_id])
-    customer_missing = len([order for order in orders if not order.validated_customer_id and not order.customer_id])
-    validated_lines = len([line for line in lines if line.validated_product_id or line.product_id])
-    avg_score = round(sum((order.score or 0) for order in orders) / generated, 1) if generated else 0
+    ).one()
+    line_stats = db.execute(
+        select(
+            func.count(OrderLine.id),
+            func.coalesce(func.sum(case((and_(OrderLine.validated_product_id.is_(None), OrderLine.product_id.is_(None)), 1), else_=0)), 0),
+            func.coalesce(func.sum(case((or_(OrderLine.validated_product_id.is_not(None), OrderLine.product_id.is_not(None)), 1), else_=0)), 0),
+        )
+        .join(Order, Order.id == OrderLine.order_id)
+        .where(Order.company_id == company_id, Order.created_at >= start)
+    ).one()
+    _, processed_emails, detected_orders, no_order_emails, doubtful_emails, llm_errors = email_stats
+    generated, confirmed, discarded, safe, review, doubtful, corrected, customer_missing, score_total = order_stats
+    line_count, product_missing, validated_lines = line_stats
+    avg_score = round(float(score_total or 0) / generated, 1) if generated else 0
     return {
         "period": period,
-        "processed_emails": len([email for email in emails if email.status != "pending"]),
-        "detected_orders": len([email for email in emails if email.detected_type == "pedido"]) or generated,
-        "no_order_emails": len([email for email in emails if email.detected_type == "no_pedido"]),
-        "doubtful_emails": len([email for email in emails if email.detected_type == "dudoso"]),
-        "generated_orders": generated,
-        "confirmed_without_changes": confirmed,
-        "corrected_orders": len([order for order in orders if order.review_reasons]),
-        "discarded_orders": discarded,
-        "safe_orders": safe,
-        "review_orders": review,
-        "blocked_orders": doubtful,
+        "processed_emails": int(processed_emails or 0),
+        "detected_orders": int(detected_orders or 0) or int(generated or 0),
+        "no_order_emails": int(no_order_emails or 0),
+        "doubtful_emails": int(doubtful_emails or 0),
+        "generated_orders": int(generated or 0),
+        "confirmed_without_changes": int(confirmed or 0),
+        "corrected_orders": int(corrected or 0),
+        "discarded_orders": int(discarded or 0),
+        "safe_orders": int(safe or 0),
+        "review_orders": int(review or 0),
+        "blocked_orders": int(doubtful or 0),
         "safe_rate": round((safe * 100 / generated), 1) if generated else 0,
         "review_rate": round(((review + doubtful) * 100 / generated), 1) if generated else 0,
-        "validated_line_rate": round((validated_lines * 100 / len(lines)), 1) if lines else 0,
-        "product_missing_rate": round((product_missing * 100 / len(lines)), 1) if lines else 0,
+        "validated_line_rate": round((validated_lines * 100 / line_count), 1) if line_count else 0,
+        "product_missing_rate": round((product_missing * 100 / line_count), 1) if line_count else 0,
         "customer_missing_rate": round((customer_missing * 100 / generated), 1) if generated else 0,
         "avg_score": avg_score,
-        "llm_errors": len([email for email in emails if email.status == "error_processing"]),
+        "llm_errors": int(llm_errors or 0),
         "json_errors": 0,
         "pdf_errors": 0,
         "avg_processing_ms": 0,

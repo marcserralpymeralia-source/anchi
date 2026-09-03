@@ -165,7 +165,11 @@ def _product_row(product: Product, usage_count: int, last_used_at: datetime | No
     }
 
 
-def customer_knowledge_overview(db: Session, company_id: int) -> list[dict]:
+def customer_knowledge_overview(db: Session, company_id: int, customer_ids: list[int] | None = None) -> list[dict]:
+    if customer_ids is not None and not customer_ids:
+        return []
+
+    customer_id_filter = None if customer_ids is None else CustomerProductKnowledge.customer_id.in_(customer_ids)
     knowledge_rows = db.execute(
         select(
             CustomerProductKnowledge.customer_id,
@@ -173,28 +177,34 @@ def customer_knowledge_overview(db: Session, company_id: int) -> list[dict]:
             func.sum(case((CustomerProductKnowledge.is_habitual.is_(True), 1), else_=0)),
             func.max(CustomerProductKnowledge.updated_at),
         )
-        .where(CustomerProductKnowledge.company_id == company_id)
+        .where(CustomerProductKnowledge.company_id == company_id, *([customer_id_filter] if customer_id_filter is not None else []))
         .group_by(CustomerProductKnowledge.customer_id)
     ).all()
     knowledge_map = {customer_id: {"products": int(products or 0), "habitual": int(habitual or 0), "updated_at": updated_at} for customer_id, products, habitual, updated_at in knowledge_rows if customer_id}
 
+    document_id_filter = None if customer_ids is None else RagDocument.source_entity_id.in_(customer_ids)
     doc_rows = db.execute(
         select(RagDocument.source_entity_id, func.count(RagDocument.id), func.max(RagDocument.created_at))
-        .where(RagDocument.company_id == company_id, RagDocument.source_entity == "customer")
+        .where(
+            RagDocument.company_id == company_id,
+            RagDocument.source_entity == "customer",
+            *([document_id_filter] if document_id_filter is not None else []),
+        )
         .group_by(RagDocument.source_entity_id)
     ).all()
     doc_map = {customer_id: {"documents": int(count or 0), "last_doc_at": updated_at} for customer_id, count, updated_at in doc_rows if customer_id}
 
+    case_id_filter = None if customer_ids is None else RagCase.customer_id.in_(customer_ids)
     case_rows = db.execute(
         select(RagCase.customer_id, func.count(RagCase.id), func.max(RagCase.created_at))
-        .where(RagCase.company_id == company_id)
+        .where(RagCase.company_id == company_id, *([case_id_filter] if case_id_filter is not None else []))
         .group_by(RagCase.customer_id)
     ).all()
     case_map = {customer_id: {"cases": int(count or 0), "last_case_at": updated_at} for customer_id, count, updated_at in case_rows if customer_id}
 
     customers = db.scalars(
         select(Customer)
-        .where(Customer.company_id == company_id)
+        .where(Customer.company_id == company_id, *([Customer.id.in_(customer_ids)] if customer_ids is not None else []))
         .options(selectinload(Customer.aliases), selectinload(Customer.domains), selectinload(Customer.contacts), selectinload(Customer.contact_points))
         .order_by(Customer.fiscal_name.asc())
     ).all()

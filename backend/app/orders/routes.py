@@ -209,11 +209,16 @@ def list_orders(
     line_metrics = order_view["line_metrics"]
     pdf_flags = order_view["pdf_flags"]
 
-    # Calculate status_counts for the status tabs based on base filters (without status)
-    base_filters = {k: v for k, v in filters.items() if k not in {"status", "order_status", "page"}}
-    base_order_view = load_order_view_data(db, user.company_id, base_filters)
-    statuses = base_order_view["statuses"]
-    all_unfiltered_orders = base_order_view["all_orders"]
+    # Calculate status_counts for the status tabs based on base filters (without status).
+    # When no status is selected, the canonical dataset already represents those
+    # exact base filters, so avoid materializing the same orders a second time.
+    if filters.get("status") or filters.get("order_status"):
+        base_filters = {k: v for k, v in filters.items() if k not in {"status", "order_status", "page"}}
+        base_order_view = load_order_view_data(db, user.company_id, base_filters)
+        statuses = base_order_view["statuses"]
+        all_unfiltered_orders = base_order_view["all_orders"]
+    else:
+        all_unfiltered_orders = order_view["all_orders"]
     status_counts = {"all": len(all_unfiltered_orders)}
     for ord_item in all_unfiltered_orders:
         st = ord_item.status or ""

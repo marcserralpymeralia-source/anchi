@@ -3,7 +3,7 @@
 {% set archived_view = filters.archived %}
 {% set title = "Archivos" if archived_view else "Pedidos" %}
 {% set orders_reset_url = "/orders?archived=true" if archived_view else "/orders" %}
-{% block head_extra %}<link rel="stylesheet" href="{{ asset_url('database-compact.css') }}"><script src="{{ asset_url('js/database-tables.js') }}" defer></script>{% endblock %}
+{% block head_extra %}<link rel="stylesheet" href="{{ asset_url('database-compact.css') }}">{% endblock %}
 {% block content %}
 
 {% set active_count = 0 %}
