@@ -88,8 +88,8 @@ PROMPT_REGISTRY: dict[str, dict[str, Any]] = {
         },
         "fallback": (
             "Valida la propuesta de pedido frente al texto recibido. "
-            "Responde solo JSON con advertencias (lista de textos), "
-            "bloqueos (lista de textos), scoring_recomendado (numero) y resumen."
+            "Responde solo JSON con advertencias y bloqueos como listas de textos "
+            "u objetos con tipo, campo y mensaje, scoring_recomendado (numero) y resumen."
         ),
         "input_limit": 20000,
     },
@@ -278,10 +278,29 @@ def validate_prompt_output(purpose: str, content: str) -> PromptValidationResult
     if purpose == "validation":
         warnings = data.get("advertencias", data.get("warnings", []))
         blocks = data.get("bloqueos", data.get("blocks", []))
-        if not isinstance(warnings, list) or not all(isinstance(item, str) for item in warnings):
-            return PromptValidationResult(status="schema_error", data=data, errors=["La validacion debe contener advertencias como lista de textos."])
-        if not isinstance(blocks, list) or not all(isinstance(item, str) for item in blocks):
-            return PromptValidationResult(status="schema_error", data=data, errors=["La validacion debe contener bloqueos como lista de textos."])
+        for label, items in (("advertencias", warnings), ("bloqueos", blocks)):
+            if not isinstance(items, list):
+                return PromptValidationResult(
+                    status="schema_error",
+                    data=data,
+                    errors=[f"La validacion debe contener {label} como lista."],
+                )
+            if not all(
+                isinstance(item, str)
+                or (
+                    isinstance(item, dict)
+                    and isinstance(item.get("mensaje", item.get("message")), str)
+                    and bool(item.get("mensaje", item.get("message")).strip())
+                )
+                for item in items
+            ):
+                return PromptValidationResult(
+                    status="schema_error",
+                    data=data,
+                    errors=[
+                        f"Cada elemento de {label} debe ser texto u objeto con mensaje."
+                    ],
+                )
         return PromptValidationResult(status="valid", data=data, errors=[])
     return PromptValidationResult(status="valid", data=data, errors=[])
 

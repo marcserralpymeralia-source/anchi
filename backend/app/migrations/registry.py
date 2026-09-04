@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.db.models import TenantSchemaMigration
 from app.master.models import MasterSchemaMigration
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 
 from app.migrations.helpers import checksum_text, ensure_columns, ensure_unique_index
 from app.migrations.runner import MigrationSpec, registry_checksum
@@ -838,6 +838,60 @@ def _apply_tenant_llm_execution_details(engine, dry_run: bool) -> list[str]:  # 
     return ["CREATE TABLE prompt_execution_details (...)"]
 
 
+def _apply_tenant_proxy_connections(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    from app.db.models import ProxyConnection
+
+    with engine.connect() as conn:
+        if "proxy_connections" in inspect(conn).get_table_names():
+            if not dry_run:
+                ProxyConnection.__table__.create(bind=engine, checkfirst=True)
+            return []
+        if not dry_run:
+            ProxyConnection.__table__.create(bind=engine, checkfirst=True)
+    return ["CREATE TABLE proxy_connections (...)"]
+
+
+def _apply_tenant_proxy_connection_scope(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Remove the legacy database-destination fields from proxy profiles.
+
+    The first local version of this table mixed proxy and database settings.
+    Keep the migration explicit so existing demo tenants are upgraded to the
+    narrower contract without leaving database destination data in the proxy
+    configuration schema.
+    """
+
+    table_name = "proxy_connections"
+    with engine.connect() as conn:
+        if table_name not in inspect(conn).get_table_names():
+            return []
+        current_columns = {column["name"] for column in inspect(conn).get_columns(table_name)}
+
+    statements: list[str] = []
+    rename_pairs = (
+        ("destination_host", "proxy_host"),
+        ("destination_port", "proxy_port"),
+        ("destination_protocol", "proxy_protocol"),
+    )
+    for old_name, new_name in rename_pairs:
+        if old_name not in current_columns:
+            continue
+        if new_name in current_columns:
+            statement = f"ALTER TABLE {table_name} DROP COLUMN {old_name}"
+        else:
+            statement = f"ALTER TABLE {table_name} RENAME COLUMN {old_name} TO {new_name}"
+        statements.append(statement)
+        current_columns.discard(old_name)
+        current_columns.add(new_name)
+    if "database_name" in current_columns:
+        statements.append(f"ALTER TABLE {table_name} DROP COLUMN database_name")
+
+    if not dry_run and statements:
+        with engine.begin() as conn:
+            for statement in statements:
+                conn.execute(text(statement))
+    return statements
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -904,6 +958,18 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant ai execution details",
         checksum=checksum_text("tenant", "ai_execution_details", "prompt_execution_details"),
         upgrade=_apply_tenant_llm_execution_details,
+    ),
+    MigrationSpec(
+        version="2026.09.04.3",
+        name="tenant proxy connection profiles",
+        checksum=checksum_text("tenant", "proxy_connection_profiles", "proxy_connections"),
+        upgrade=_apply_tenant_proxy_connections,
+    ),
+    MigrationSpec(
+        version="2026.09.04.4",
+        name="tenant proxy configuration scope",
+        checksum=checksum_text("tenant", "proxy_configuration_scope", "proxy_host", "proxy_port", "proxy_protocol"),
+        upgrade=_apply_tenant_proxy_connection_scope,
     ),
 ]
 

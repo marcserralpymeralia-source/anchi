@@ -150,7 +150,7 @@
             <h3>{{ module.label }}</h3>
             <span class="module-state {{ module.state }}">{{ state_label(module.state) }}</span>
           </div>
-          {% if module.key in ["general", "identity", "ai", "scoring", "decision", "export", "ftp"] or (module.key == "advanced" and user.role.name == "Superadmin") %}
+          {% if module.key in ["general", "identity", "ai", "scoring", "decision", "export", "ftp", "proxies"] or (module.key == "advanced" and user.role.name == "Superadmin") %}
             <button type="button" class="secondary compact-button" data-open-settings="{{ module.key }}">Configurar</button>
           {% elif module.key == "advanced" %}
             <span class="muted">Solo Superadmin</span>
@@ -877,8 +877,8 @@
           </div>
         </div>
         <div class="form-grid">
-          <input type="hidden" name="sample_text" value="Cliente de prueba solicita 10 unidades del articulo de prueba.">
-          <p class="muted span-2">El flujo usa un texto de ejemplo interno para probar los modelos seleccionados de clasificación, extracción y validación. No confirma ni exporta ningún pedido.</p>
+          <input type="hidden" name="sample_text" value="Cliente Valid SL (código C001) solicita 10 unidades de Caja Kraft 30 (referencia KRAFT-30-BOX) y 5 paquetes de Bolsa eco (referencia BOLSA-ECO-10).">
+          <p class="muted span-2">El flujo usa una muestra demo coherente con clientes y productos sembrados para probar los modelos seleccionados de clasificación, extracción y validación. No confirma ni exporta ningún pedido.</p>
         </div>
         <div class="settings-status-note agent-flow-test-status {% if not llm.last_test_message %}is-hidden{% endif %}" data-agent-flow-test-status role="status" aria-live="polite">
           <strong>Resultado de la última prueba</strong>
@@ -1133,6 +1133,114 @@
     </div>
     <p class="muted">La prueba utiliza los datos guardados actualmente y no envía ningún pedido ni fichero.</p>
   </form>
+</dialog>
+{% endif %}
+
+{% if settings_fragment == "proxies" %}
+<dialog id="settings-proxies" class="settings-drawer settings-drawer-wide">
+  <div class="drawer-head">
+    <div>
+      <h3>Proxies</h3>
+      <p class="muted">Perfiles de acceso para el futuro gateway de red.</p>
+    </div>
+    <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
+  </div>
+  <div class="drawer-body stack">
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Gateway de Anchi</h4>
+          <p class="muted">Preparado en infraestructura. Guardar un perfil no envía tráfico; la prueba solo consulta el estado del gateway.</p>
+        </div>
+        <span class="badge status-doubtful">Sin tráfico</span>
+      </div>
+      <p class="muted">El futuro módulo de BBDD aportará el destino. Aquí solo se configura cómo llegar al proxy autorizado.</p>
+    </section>
+
+    {% if not proxy_connections %}
+      <section class="drawer-card">
+        <h4>Sin perfiles configurados</h4>
+        <p class="muted">Puedes dejar preparado un perfil ahora y activarlo más adelante, cuando se habilite el consumo del gateway.</p>
+      </section>
+    {% endif %}
+
+    {% for proxy in proxy_connections %}
+      <form class="drawer-card stack js-loading-form" method="post" action="/settings/proxies">
+        <input type="hidden" name="id" value="{{ proxy.id }}">
+        <div class="section-title-row">
+          <div>
+            <h4>{{ proxy.name }}</h4>
+            <p class="muted">Perfil {{ "habilitado" if proxy.enabled else "deshabilitado" }} · el gateway no reenvía datos</p>
+          </div>
+          <span class="badge {% if proxy.enabled %}status-confirmed{% else %}status-doubtful{% endif %}">{{ "Habilitado" if proxy.enabled else "Deshabilitado" }}</span>
+        </div>
+        <div class="form-grid">
+          <label>Nombre del perfil<input name="name" value="{{ proxy.name }}" required {% if not can_edit_proxies %}disabled{% endif %}></label>
+          <label>Tipo de proxy
+            <select name="proxy_protocol" {% if not can_edit_proxies %}disabled{% endif %}>
+              {% for value, label in [("http", "HTTP"), ("https", "HTTPS"), ("socks5", "SOCKS5"), ("other", "Otro")] %}
+                <option value="{{ value }}" {% if proxy.proxy_protocol == value %}selected{% endif %}>{{ label }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Host o IP del proxy<input name="proxy_host" value="{{ proxy.proxy_host }}" required {% if not can_edit_proxies %}disabled{% endif %}></label>
+          <label>Puerto del proxy<input name="proxy_port" type="number" min="1" max="65535" value="{{ proxy.proxy_port }}" required {% if not can_edit_proxies %}disabled{% endif %}></label>
+          <label>Usuario del proxy<input name="username" value="{{ proxy.username or '' }}" {% if not can_edit_proxies %}disabled{% endif %}></label>
+          <label>Contraseña<input name="password" type="password" placeholder="{{ mask_secret(proxy.password_encrypted) or 'No guardada' }}" autocomplete="new-password" {% if not can_edit_proxies %}disabled{% endif %}></label>
+          <label>Protección TLS del proxy
+            <select name="tls_mode" {% if not can_edit_proxies %}disabled{% endif %}>
+              <option value="verify" {% if proxy.tls_mode == "verify" %}selected{% endif %}>Verificar certificado</option>
+              <option value="required" {% if proxy.tls_mode == "required" %}selected{% endif %}>TLS obligatorio</option>
+              <option value="disabled" {% if proxy.tls_mode == "disabled" %}selected{% endif %}>Desactivado (solo pruebas)</option>
+            </select>
+          </label>
+          <label class="span-2">Notas<textarea name="notes" rows="2" {% if not can_edit_proxies %}disabled{% endif %}>{{ proxy.notes or '' }}</textarea></label>
+          <label class="checkbox-card span-2">Perfil habilitado (no activa tráfico todavía)<input name="enabled" type="checkbox" {% if proxy.enabled %}checked{% endif %} {% if not can_edit_proxies %}disabled{% endif %}></label>
+        </div>
+        {% if can_edit_proxies %}
+          <div class="drawer-actions">
+            <button data-loading-text="Guardando...">Guardar perfil</button>
+            <button class="secondary js-proxy-test" type="button" data-proxy-test-url="/settings/proxies/{{ proxy.id }}/test" data-loading-text="Comprobando...">Probar conexión</button>
+          </div>
+        {% endif %}
+        <p class="settings-status-note proxy-test-status" data-proxy-test-status role="status" aria-live="polite" hidden></p>
+      </form>
+    {% endfor %}
+
+    {% if can_edit_proxies %}
+      <form class="drawer-card stack js-loading-form" method="post" action="/settings/proxies">
+        <div class="section-title-row">
+          <div>
+            <h4>Nuevo perfil</h4>
+            <p class="muted">La contraseña se cifra antes de guardarse y nunca se muestra completa.</p>
+          </div>
+          <span class="badge status-doubtful">Inactivo</span>
+        </div>
+        <div class="form-grid">
+          <label>Nombre del perfil<input name="name" placeholder="Proxy empresa" required></label>
+          <label>Tipo de proxy
+            <select name="proxy_protocol">
+              <option value="http">HTTP</option>
+              <option value="https" selected>HTTPS</option>
+              <option value="socks5">SOCKS5</option>
+              <option value="other">Otro</option>
+            </select>
+          </label>
+          <label>Host o IP del proxy<input name="proxy_host" placeholder="192.0.2.10" required></label>
+          <label>Puerto del proxy<input name="proxy_port" type="number" min="1" max="65535" value="8787" required></label>
+          <label>Usuario del proxy<input name="username" placeholder="Opcional"></label>
+          <label>Contraseña<input name="password" type="password" autocomplete="new-password" placeholder="Opcional"></label>
+          <label>Protección TLS del proxy
+            <select name="tls_mode"><option value="verify">Verificar certificado</option><option value="required">TLS obligatorio</option><option value="disabled">Desactivado (solo pruebas)</option></select>
+          </label>
+          <label class="span-2">Notas<textarea name="notes" rows="2" placeholder="Uso previsto o contacto técnico"></textarea></label>
+        </div>
+        <div class="drawer-actions">
+          <button data-loading-text="Guardando...">Guardar perfil</button>
+        </div>
+      </form>
+    {% endif %}
+  </div>
 </dialog>
 {% endif %}
 
@@ -1735,6 +1843,47 @@
       const dialog = document.getElementById(`settings-${id}`);
       if (dialog) dialog.remove();
       openSettingsDrawer(id);
+    }
+  });
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-proxy-test-url]");
+    if (!button) return;
+    event.preventDefault();
+    if (button.disabled) return;
+    const form = button.closest("form");
+    const status = form?.querySelector("[data-proxy-test-status]");
+    const originalText = button.textContent;
+    button.textContent = button.dataset.loadingText || "Comprobando...";
+    button.disabled = true;
+    if (status) {
+      status.hidden = false;
+      status.className = "settings-status-note proxy-test-status is-pending";
+      status.textContent = "Comprobando el endpoint de salud del gateway…";
+    }
+    try {
+      const response = await fetch(button.dataset.proxyTestUrl, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {"Accept": "application/json", "X-Requested-With": "fetch"},
+      });
+      let payload;
+      try {
+        payload = await response.json();
+      } catch (_error) {
+        payload = {ok: false, message: `La prueba devolvió una respuesta no válida (HTTP ${response.status}).`};
+      }
+      if (status) {
+        status.className = `settings-status-note proxy-test-status ${payload.ok ? "is-success" : "is-error"}`;
+        status.textContent = payload.message || (payload.ok ? "Gateway accesible." : "No se pudo comprobar el gateway.");
+      }
+    } catch (_error) {
+      if (status) {
+        status.className = "settings-status-note proxy-test-status is-error";
+        status.textContent = "No se pudo completar la prueba. Revisa la conexión e inténtalo de nuevo.";
+      }
+    } finally {
+      button.textContent = originalText;
+      button.disabled = false;
     }
   });
   function renderAgentFlowTestResult(form, payload) {

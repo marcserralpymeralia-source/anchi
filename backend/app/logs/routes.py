@@ -10,8 +10,9 @@ from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_tenant_role
+from app.core.timezones import DEFAULT_TIMEZONE, format_local_datetime, resolve_timezone_name
 from app.core.templating import templates
-from app.db.models import AuditLog
+from app.db.models import AuditLog, Company
 from app.logs.service import audit_log_text, parse_audit_log_message
 from app.master.service import TenantUser
 from app.tenancy.database import get_tenant_db
@@ -112,7 +113,12 @@ def _derive_status(action: str, message: str, explicit_status: str | None) -> tu
     return "info", "Info", "neutral"
 
 
-def _serialize_audit_log(log: AuditLog) -> dict:
+def _company_timezone_name(db: Session, company_id: int) -> str:
+    company = db.get(Company, company_id)
+    return resolve_timezone_name(getattr(company, "timezone", None) if company else DEFAULT_TIMEZONE)
+
+
+def _serialize_audit_log(log: AuditLog, *, timezone_name: str = DEFAULT_TIMEZONE) -> dict:
     parsed = parse_audit_log_message(log.message)
     context = parsed.get("context") or {}
     metadata = parsed.get("metadata") or {}
@@ -126,7 +132,7 @@ def _serialize_audit_log(log: AuditLog) -> dict:
     return {
         "id": log.id,
         "created_at": log.created_at,
-        "created_label": log.created_at.strftime("%d/%m/%Y %H:%M:%S") if log.created_at else "",
+        "created_label": format_local_datetime(log.created_at, timezone_name, "%d/%m/%Y %H:%M:%S", ""),
         "action": log.action,
         "event": metadata.get("event") or log.action,
         "stage": metadata.get("stage") or "audit",
@@ -173,8 +179,9 @@ def logs_download(
         .order_by(AuditLog.created_at.asc(), AuditLog.id.asc())
         .limit(LOG_DOWNLOAD_LIMIT)
     ).all()
+    timezone_name = _company_timezone_name(db, user.company_id)
     return PlainTextResponse(
-        audit_log_text(logs),
+        audit_log_text(logs, timezone_name=timezone_name),
         headers={
             "Content-Disposition": 'attachment; filename="anchi-flow-logs.log"',
             "Cache-Control": "no-store",
@@ -226,7 +233,8 @@ def logs_page(
         .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
         .limit(LOG_PAGE_LIMIT)
     ).all()
-    items = [_serialize_audit_log(log) for log in logs]
+    timezone_name = _company_timezone_name(db, user.company_id)
+    items = [_serialize_audit_log(log, timezone_name=timezone_name) for log in logs]
     return templates.TemplateResponse(
         "logs/list.html",
         {

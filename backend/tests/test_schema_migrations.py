@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.security import hash_password, verify_password  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import BackgroundJob, Conversation, Customer, Email, EmailSettings, JobAttempt, KnowledgeEntry, Order, OrderLine, ProductEmbedding, TenantSchemaMigration  # noqa: E402
+from app.db.models import BackgroundJob, Conversation, Customer, Email, EmailSettings, JobAttempt, KnowledgeEntry, Order, OrderLine, ProductEmbedding, ProxyConnection, TenantSchemaMigration  # noqa: E402
 from app.jobs.service import enqueue_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.migrations import CURRENT_MASTER_SCHEMA_CHECKSUM, CURRENT_MASTER_SCHEMA_NAME, CURRENT_MASTER_SCHEMA_VERSION, master_migration_report, upgrade_master_schema  # noqa: E402
@@ -25,7 +25,7 @@ from app.master.models import CompanyMembership, EmailSyncState, MasterCompany, 
 from app.master.provisioning import _ensure_master_user  # noqa: E402
 from app.migrations.inspection import discover_sqlite_files, inspect_database_url, inventory_records, simulate_sqlite_reference  # noqa: E402
 from app.migrations.helpers import table_exists  # noqa: E402
-from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, MASTER_EMAIL_SYNC_STATE_COLUMNS, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_master_email_sync_state_repair, _apply_tenant_email_favorites, _apply_tenant_knowledge_entries, _apply_tenant_order_archiving, _apply_tenant_product_embeddings  # noqa: E402
+from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, MASTER_EMAIL_SYNC_STATE_COLUMNS, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_master_email_sync_state_repair, _apply_tenant_email_favorites, _apply_tenant_knowledge_entries, _apply_tenant_order_archiving, _apply_tenant_product_embeddings, _apply_tenant_proxy_connection_scope, _apply_tenant_proxy_connections  # noqa: E402
 from app.tenancy.database import get_tenant_engine  # noqa: E402
 from app.tenancy.migrations import tenant_migration_report, upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import run_worker_cycle  # noqa: E402
@@ -352,6 +352,46 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertEqual(actions, ["ALTER TABLE emails ADD COLUMN is_favorite BOOLEAN DEFAULT false"])
         columns = {column["name"] for column in inspect(self.tenant_engine).get_columns("emails")}
         self.assertIn("is_favorite", columns)
+
+    def test_proxy_migration_keeps_only_proxy_configuration_fields(self):
+        with self.tenant_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    CREATE TABLE proxy_connections (
+                        id INTEGER PRIMARY KEY,
+                        company_id INTEGER NOT NULL,
+                        name VARCHAR(120) NOT NULL,
+                        destination_host VARCHAR(255) NOT NULL,
+                        destination_port INTEGER DEFAULT 5432,
+                        destination_protocol VARCHAR(30) DEFAULT 'postgresql',
+                        database_name VARCHAR(255),
+                        username VARCHAR(255),
+                        password_encrypted TEXT,
+                        tls_mode VARCHAR(30) DEFAULT 'verify',
+                        enabled BOOLEAN DEFAULT false,
+                        notes TEXT,
+                        last_test_at DATETIME,
+                        last_test_ok BOOLEAN,
+                        last_test_message TEXT,
+                        updated_by INTEGER,
+                        created_at DATETIME,
+                        updated_at DATETIME
+                    )
+                    """
+                )
+            )
+
+        actions = _apply_tenant_proxy_connection_scope(self.tenant_engine, dry_run=False)
+
+        columns = {column["name"] for column in inspect(self.tenant_engine).get_columns("proxy_connections")}
+        self.assertEqual(set(ProxyConnection.__table__.columns.keys()), columns)
+        self.assertNotIn("destination_host", columns)
+        self.assertNotIn("destination_port", columns)
+        self.assertNotIn("destination_protocol", columns)
+        self.assertNotIn("database_name", columns)
+        self.assertIn("ALTER TABLE proxy_connections RENAME COLUMN destination_host TO proxy_host", actions)
+        self.assertIn("ALTER TABLE proxy_connections DROP COLUMN database_name", actions)
 
     def test_master_email_sync_state_registry_contains_listener_columns(self):
         with self.master_engine.begin() as conn:

@@ -494,7 +494,7 @@ def seed_demo_base(db: Session) -> dict[str, int]:
     default_prompts = {
         "classification": "Clasifica el correo como pedido, no_pedido, consulta, incidencia o dudoso. Responde JSON valido con tipo_correo, confianza y motivo.",
         "extraction": "Extrae un pedido en JSON valido con cliente, fechas, observaciones y lineas con producto, referencia, cantidad y unidad.",
-        "validation": "Valida el pedido extraido contra datos de cliente y producto. Devuelve JSON con advertencias y bloqueos.",
+        "validation": "Valida el pedido extraido contra datos de cliente y producto. Devuelve JSON con advertencias y bloqueos como listas de textos u objetos con tipo, campo y mensaje.",
         "non_order": "Resume por que el correo no contiene pedido y clasificalo como consulta, incidencia, no_pedido o dudoso.",
     }
     for purpose, content in default_prompts.items():

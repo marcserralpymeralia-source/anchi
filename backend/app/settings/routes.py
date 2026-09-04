@@ -1,11 +1,13 @@
 import logging
 import json
+import re
 from types import SimpleNamespace
 from datetime import datetime, timezone
 from datetime import date
 from urllib.parse import urlsplit, urlunsplit
 from time import perf_counter
 
+import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import case, func, select
@@ -20,14 +22,14 @@ from app.master.database import get_master_db
 from app.master.service import TenantUser
 from app.master.models import EmailSyncState
 from app.core.encryption import decrypt_secret, encrypt_secret, mask_secret
-from app.db.models import AuditLog, BrandingSettings, Company, Customer, DecisionSettings, Email, EmailSettings, EmailTemplate, ExportSettings, FTPSettings, InputChannel, InboundMessage, LLMSettings, Order, Product, PromptExecution, PromptExecutionDetail, PromptTemplate, PromptVersion, ScoringSettings
+from app.db.models import AuditLog, BrandingSettings, Company, Customer, DecisionSettings, Email, EmailSettings, EmailTemplate, ExportSettings, FTPSettings, InputChannel, InboundMessage, LLMSettings, Order, Product, PromptExecution, PromptExecutionDetail, PromptTemplate, PromptVersion, ProxyConnection, ScoringSettings
 from app.db.models import BackgroundJob
 from app.logs.service import log_action
 from app.settings.agent_config import agent_metrics, agent_status, apply_safety_level, improvement_suggestions
 from app.settings.autoconfig import detect_email_configuration
 from app.settings.branding import branding_to_dict, delete_brand_asset, get_or_create_branding, reset_branding, store_brand_asset, update_branding_from_form
 from app.settings.email_config import TEMPLATE_VARIABLES, email_config_status, email_templates, ensure_default_email_templates, serialize_email_settings
-from app.settings.integrations import classify_sample, extract_sample, preview_initial_imap_sync, run_initial_imap_sync, send_test_email, test_imap_connection, test_smtp_connection, validate_sample
+from app.settings.integrations import AGENT_FLOW_DEMO_SAMPLE, AGENT_FLOW_DEMO_VALIDATION_CONTEXT, classify_sample, extract_sample, preview_initial_imap_sync, run_initial_imap_sync, send_test_email, test_imap_connection, test_smtp_connection, validate_sample
 from app.settings.application import run_connection_test, update_settings_section_async
 from app.settings.service import get_or_create_settings, resolve_updated_by_id, update_with_form
 from app.dashboard.service import recent_processed_emails_overview
@@ -39,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
-SETTINGS_MODULE_KEYS = {"general", "identity", "email", "ai", "scoring", "decision", "export", "ftp", "advanced"}
+SETTINGS_MODULE_KEYS = {"general", "identity", "email", "ai", "scoring", "decision", "export", "ftp", "proxies", "advanced"}
 
 SETTINGS_SEARCH_CATALOG = [
     {"module_key": "general", "module_label": "General", "title": "Datos de empresa", "detail": "Nombre, contacto, país, idioma y moneda", "search_text": "empresa nombre razón social CIF NIF email teléfono web dirección país idioma zona horaria moneda notificaciones"},
@@ -51,6 +53,7 @@ SETTINGS_SEARCH_CATALOG = [
     {"module_key": "decision", "module_label": "Motor de decisión", "title": "Prioridades y aprendizaje", "detail": "Fuentes, pesos y bloqueos", "search_text": "decisión prioridad exacto alias histórico RAG LLM aprendizaje bloqueo"},
     {"module_key": "export", "module_label": "Exportación", "title": "Formato de exportación", "detail": "CSV, JSON, separadores y plantilla", "search_text": "exportación CSV JSON encoding fecha separador plantilla cabecera líneas"},
     {"module_key": "ftp", "module_label": "FTP/SFTP", "title": "Destino de exportación", "detail": "FTP, FTPS, host, credenciales y reintentos", "search_text": "FTP FTPS SFTP host puerto usuario contraseña clave privada destino reintentos timeout"},
+    {"module_key": "proxies", "module_label": "Proxies", "title": "Acceso al gateway", "detail": "Perfiles de acceso para el futuro gateway de red", "search_text": "proxy proxies gateway conexión externa IP host puerto protocolo usuario contraseña TLS HTTP HTTPS SOCKS5"},
     {"module_key": "advanced", "module_label": "Avanzado", "title": "Prompts y versiones", "detail": "Configuración técnica y logs", "search_text": "avanzado prompts versiones logs técnicos"},
 ]
 
@@ -384,6 +387,16 @@ def _settings_module_context(request: Request, db: Session, user: TenantUser, mo
         context["export"] = get_or_create_settings(db, ExportSettings, user.company_id)
     elif module_key == "ftp":
         context.update(ftp=get_or_create_settings(db, FTPSettings, user.company_id), mask_secret=mask_secret)
+    elif module_key == "proxies":
+        context.update(
+            proxy_connections=db.scalars(
+                select(ProxyConnection)
+                .where(ProxyConnection.company_id == user.company_id)
+                .order_by(ProxyConnection.name.asc(), ProxyConnection.id.asc())
+            ).all(),
+            can_edit_proxies=can_edit_proxies(user),
+            mask_secret=mask_secret,
+        )
     elif module_key == "advanced":
         prompts, prompt_versions = _prompt_versions_by_template(db, user.company_id)
         context.update(
@@ -398,7 +411,7 @@ def _settings_module_context(request: Request, db: Session, user: TenantUser, mo
 def settings_module(module_key: str, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if module_key not in SETTINGS_MODULE_KEYS:
         raise HTTPException(status_code=404, detail="Módulo de configuración no encontrado")
-    return templates.TemplateResponse("settings/index.html", _settings_module_context(request, db, user, module_key))
+    return templates.TemplateResponse(request, "settings/index.html", _settings_module_context(request, db, user, module_key))
 
 
 @router.get("")
@@ -409,6 +422,9 @@ def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: 
     company = db.get(Company, user.company_id)
     email_settings = get_or_create_settings(db, EmailSettings, user.company_id)
     ftp_settings = get_or_create_settings(db, FTPSettings, user.company_id)
+    proxy_connection_count = db.scalar(
+        select(func.count(ProxyConnection.id)).where(ProxyConnection.company_id == user.company_id)
+    ) or 0
     export_settings = get_or_create_settings(db, ExportSettings, user.company_id)
     branding_settings = get_or_create_branding(db, user.company_id)
     dashboard = build_settings_dashboard(
@@ -421,12 +437,14 @@ def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: 
         branding=branding_settings,
         email=email_settings,
         ftp=ftp_settings,
+        proxy_connection_count=proxy_connection_count,
         export=export_settings,
         decision=decision_settings,
         prompt_templates=[],
         prompt_count=db.scalar(select(func.count(PromptTemplate.id)).where(PromptTemplate.company_id == user.company_id)) or 0,
     )
     return templates.TemplateResponse(
+        request,
         "settings/index.html",
         {
             "request": request,
@@ -530,6 +548,7 @@ def build_settings_dashboard(
     branding: BrandingSettings | None = None,
     email: EmailSettings | None = None,
     ftp: FTPSettings | None = None,
+    proxy_connection_count: int | None = None,
     export: ExportSettings | None = None,
     decision: DecisionSettings | None = None,
     prompt_templates: list[PromptTemplate] | None = None,
@@ -540,6 +559,10 @@ def build_settings_dashboard(
     email = email if email is not None else get_or_create_settings(db, EmailSettings, user.company_id)
     email_status = email_config_status(email)
     ftp = ftp if ftp is not None else get_or_create_settings(db, FTPSettings, user.company_id)
+    if proxy_connection_count is None:
+        proxy_connection_count = db.scalar(
+            select(func.count(ProxyConnection.id)).where(ProxyConnection.company_id == user.company_id)
+        ) or 0
     export = export if export is not None else get_or_create_settings(db, ExportSettings, user.company_id)
     decision = decision if decision is not None else get_or_create_settings(db, DecisionSettings, user.company_id)
     dashboard_counts = db.execute(
@@ -577,6 +600,7 @@ def build_settings_dashboard(
         state("decision", "Motor de decisión", "ready" if decision.enable_exact_match else "warning", f"Prioridad {decision.exact_priority} a {decision.llm_priority} · modo {decision.learning_mode}", "Configurar"),
         state("export", "Exportación", "ready" if export.file_type and export.filename_template else "pending", f"{export.file_type.upper() if export.file_type else 'Sin formato'} · {export.filename_template or 'sin plantilla'}", "Configurar"),
         state("ftp", "FTP/SFTP", "ready" if ftp.host and ftp.username else "pending", f"{ftp.connection_type.upper()} · {ftp.host or 'host pendiente'}", "Configurar"),
+        state("proxies", "Proxies", "ready", f"{proxy_connection_count} perfiles · tráfico del gateway inactivo", "Configurar"),
         state("alerts", "Alertas", "ready", f"{metrics['llm_errors']} errores · {metrics['doubtful_emails']} dudosos", "Ver"),
         state("users", "Usuarios y permisos", "ready", "Roles y accesos activos", "Abrir"),
         state("advanced", "Avanzado", "optional" if user.role.name == "Superadmin" else "locked", f"{prompt_count} prompts · logs técnicos", "Abrir"),
@@ -613,6 +637,7 @@ def build_settings_dashboard(
         "email": email,
         "llm": llm,
         "ftp": ftp,
+        "proxy_connection_count": proxy_connection_count,
         "export": export,
         "decision": decision,
         "branding": branding,
@@ -736,6 +761,172 @@ def can_edit_email_settings(user: TenantUser) -> bool:
 
 def can_test_email_settings(user: TenantUser) -> bool:
     return user.role.name in {"Administrador", "Supervisor", "Superadmin"}
+
+
+def can_edit_proxies(user: TenantUser) -> bool:
+    return user.role.name in {"Administrador", "Superadmin"}
+
+
+_PROXY_PROTOCOLS = {"http", "https", "socks5", "other"}
+_PROXY_TLS_MODES = {"verify", "required", "disabled"}
+_HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+
+
+def _validate_proxy_host(raw_host: str) -> str:
+    host = (raw_host or "").strip()
+    if not host or "/" in host or "\\" in host or any(character.isspace() for character in host):
+        raise ValueError("Introduce un host o una IP válida, sin protocolo ni ruta.")
+    if host.startswith("[") and host.endswith("]"):
+        host = host[1:-1]
+    try:
+        import ipaddress
+
+        ipaddress.ip_address(host)
+    except ValueError:
+        if not _HOSTNAME_RE.fullmatch(host):
+            raise ValueError("Introduce un host o una IP válida, sin protocolo ni ruta.")
+    return host
+
+
+def _proxy_form_values(data: dict) -> dict:
+    name = str(data.get("name") or "").strip()
+    if not name or len(name) > 120:
+        raise ValueError("El nombre del perfil es obligatorio y no puede superar 120 caracteres.")
+    host = _validate_proxy_host(str(data.get("proxy_host") or ""))
+    try:
+        port = int(data.get("proxy_port") or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("El puerto del proxy debe ser un número entre 1 y 65535.") from exc
+    if not 1 <= port <= 65535:
+        raise ValueError("El puerto del proxy debe ser un número entre 1 y 65535.")
+    protocol = str(data.get("proxy_protocol") or "").strip().lower()
+    if protocol not in _PROXY_PROTOCOLS:
+        raise ValueError("El tipo de proxy no es válido.")
+    tls_mode = str(data.get("tls_mode") or "verify").strip().lower()
+    if tls_mode not in _PROXY_TLS_MODES:
+        raise ValueError("El modo TLS no es válido.")
+    return {
+        "name": name,
+        "proxy_host": host,
+        "proxy_port": port,
+        "proxy_protocol": protocol,
+        "username": str(data.get("username") or "").strip() or None,
+        "tls_mode": tls_mode,
+        "enabled": str(data.get("enabled") or "").lower() in {"on", "true", "1"},
+        "notes": str(data.get("notes") or "").strip() or None,
+    }
+
+
+def _proxy_health_result(connection: ProxyConnection) -> tuple[bool, str, str]:
+    """Check only the remote gateway health endpoint, never a DB destination."""
+    if connection.proxy_protocol not in {"http", "https"}:
+        return False, "unsupported_protocol", "La prueba de salud solo admite proxies HTTP o HTTPS."
+
+    host = _validate_proxy_host(connection.proxy_host)
+    host_for_url = f"[{host}]" if ":" in host else host
+    url = f"{connection.proxy_protocol}://{host_for_url}:{connection.proxy_port}/health"
+    password = decrypt_secret(connection.password_encrypted)
+    auth = (connection.username, password) if connection.username and password else None
+    verify_tls = connection.tls_mode != "disabled"
+
+    try:
+        timeout = httpx.Timeout(connect=2.0, read=4.0, write=4.0, pool=2.0)
+        with httpx.Client(timeout=timeout, verify=verify_tls, follow_redirects=False) as client:
+            response = client.get(
+                url,
+                auth=auth,
+                headers={"Accept": "application/json", "User-Agent": "Anchi-Proxy-Health/1.0"},
+            )
+    except httpx.TimeoutException:
+        return False, "timeout", "El gateway no respondió dentro del tiempo esperado."
+    except httpx.HTTPError:
+        return False, "unreachable", "No se pudo conectar con el gateway configurado."
+    except ValueError as exc:
+        return False, "invalid_configuration", str(exc)
+
+    if response.status_code == 401:
+        return False, "unauthorized", "El gateway rechazó las credenciales del perfil."
+    if response.status_code != 200:
+        return False, "unavailable", "El gateway respondió, pero su endpoint de salud no está disponible."
+    try:
+        payload = response.json()
+    except ValueError:
+        return False, "invalid_response", "El gateway devolvió una respuesta no válida."
+    if payload.get("service") != "anchi-proxy" or payload.get("traffic_enabled") is not False:
+        return False, "invalid_response", "La respuesta no corresponde al gateway de Anchi bloqueado para datos."
+    return True, "ready", "Gateway accesible. El tráfico de datos sigue desactivado."
+
+
+@router.api_route("/proxies", methods=["PUT", "POST"])
+async def save_proxy_connection(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if not can_edit_proxies(user):
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede configurar proxies."}, status_code=403)
+    data = await request_data(request)
+    try:
+        values = _proxy_form_values(data)
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=422)
+
+    raw_id = str(data.get("id") or "").strip()
+    connection = None
+    if raw_id:
+        try:
+            connection = db.scalar(
+                select(ProxyConnection).where(
+                    ProxyConnection.id == int(raw_id),
+                    ProxyConnection.company_id == user.company_id,
+                )
+            )
+        except ValueError:
+            connection = None
+        if connection is None:
+            return JSONResponse({"ok": False, "message": "No se encontró el perfil de proxy."}, status_code=404)
+    else:
+        connection = ProxyConnection(company_id=user.company_id)
+        db.add(connection)
+
+    for key, value in values.items():
+        setattr(connection, key, value)
+    password = str(data.get("password") or "").strip()
+    if password and password not in {"********", "••••••••"}:
+        connection.password_encrypted = encrypt_secret(password)
+    connection.updated_by = resolve_updated_by_id(db, user)
+    connection.updated_at = datetime.now(timezone.utc)
+    try:
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        if "UNIQUE" in str(exc).upper() or "DUPLICATE" in str(exc).upper():
+            return JSONResponse({"ok": False, "message": "Ya existe un perfil con ese nombre."}, status_code=409)
+        raise
+    log_action(db, company_id=user.company_id, user=user, action="settings.proxy.save", entity_type="proxy_connection", entity_id=connection.id, message="Perfil de proxy guardado")
+    return redirect_or_json(request, {"ok": True, "id": connection.id, "message": "Perfil de proxy guardado."}, "proxies")
+
+
+@router.post("/proxies/{proxy_id}/test")
+def test_proxy_connection(proxy_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if not can_edit_proxies(user):
+        return JSONResponse({"ok": False, "message": "No tienes permisos para probar este perfil."}, status_code=403)
+    connection = db.scalar(
+        select(ProxyConnection).where(ProxyConnection.id == proxy_id, ProxyConnection.company_id == user.company_id)
+    )
+    if connection is None:
+        return JSONResponse({"ok": False, "message": "No se encontró el perfil de proxy."}, status_code=404)
+    tested_at = datetime.now(timezone.utc)
+    try:
+        ok, status, message = _proxy_health_result(connection)
+    except ValueError as exc:
+        ok, status, message = False, "invalid_configuration", str(exc)
+    connection.last_test_at = tested_at
+    connection.last_test_ok = ok
+    connection.last_test_message = message
+    db.commit()
+    if "application/json" in (request.headers.get("accept") or ""):
+        return JSONResponse(
+            {"ok": ok, "status": status, "message": message, "checked_at": tested_at.isoformat()},
+            status_code=200 if ok else 502,
+        )
+    return RedirectResponse("/settings#proxies", status_code=303)
 
 
 async def request_data(request: Request) -> dict:
@@ -1487,7 +1678,7 @@ def pause_agent(db: Session = Depends(get_tenant_db), user: TenantUser = Depends
 @router.post("/agent/test-full-flow")
 def test_agent_full_flow(
     request: Request,
-    sample_text: str = Form("Cliente de prueba solicita 10 unidades del articulo de prueba."),
+    sample_text: str = Form(AGENT_FLOW_DEMO_SAMPLE),
     classification_model_mode: str = Form(""),
     classification_model_custom: str = Form(""),
     classification_model: str = Form(""),
@@ -1503,6 +1694,9 @@ def test_agent_full_flow(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
+    # This endpoint is a repeatable model smoke test, so it must not depend on
+    # arbitrary browser input or records that may be missing from a tenant.
+    sample_text = AGENT_FLOW_DEMO_SAMPLE
     llm = get_or_create_settings(db, LLMSettings, user.company_id)
     test_settings = _agent_flow_test_settings(
         llm,
@@ -1541,6 +1735,7 @@ def test_agent_full_flow(
                 sample_text,
                 extraction.get("validated_content") or {},
                 active_prompt_content(db, user.company_id, "validation"),
+                AGENT_FLOW_DEMO_VALIDATION_CONTEXT,
             ),
             "validación",
         )
@@ -1699,7 +1894,7 @@ def active_prompt_content(db: Session, company_id: int, purpose: str) -> str:
 DEFAULT_AGENT_PROMPTS = {
     "classification": "Clasifica el correo como pedido, no_pedido, consulta, incidencia o dudoso. Responde JSON valido con tipo_correo, confianza y motivo.",
     "extraction": "Extrae un pedido en JSON valido con cliente, fechas, observaciones y lineas con producto, referencia, cantidad y unidad.",
-    "validation": "Valida el pedido extraido contra datos de cliente y producto. Devuelve JSON con advertencias, bloqueos y scoring recomendado.",
+    "validation": "Valida el pedido extraido contra datos de cliente y producto. Devuelve JSON con advertencias y bloqueos como listas de textos u objetos con tipo, campo y mensaje, además de scoring recomendado.",
     "non_order": "Resume por que el correo no contiene pedido y clasificalo como consulta, incidencia, no_pedido o dudoso.",
     "doubtful": "Analiza un correo dudoso y devuelve JSON con motivos de duda, campos ambiguos y accion recomendada.",
 }

@@ -47,6 +47,23 @@ IMAP_TIMEOUT_SECONDS = 20
 SYNC_LOCKS: dict[int, threading.Lock] = {}
 INITIAL_HISTORY_MODES = {"new", "7d", "30d", "100", "custom"}
 
+# Controlled fixture used by the AI full-flow check. It references records
+# created by the demo seed and is never persisted as a real order.
+AGENT_FLOW_DEMO_SAMPLE = (
+    "Cliente Valid SL (código C001) solicita 10 unidades de Caja Kraft 30 "
+    "(referencia KRAFT-30-BOX) y 5 paquetes de Bolsa eco "
+    "(referencia BOLSA-ECO-10)."
+)
+AGENT_FLOW_DEMO_VALIDATION_CONTEXT = (
+    "Datos maestros disponibles para esta prueba controlada (no crear ni guardar "
+    "ningún registro):\n"
+    "- Cliente: Cliente Valid SL, código C001.\n"
+    "- Producto: KRAFT-30-BOX, nombre Kraft 30 Box, unidad unidades.\n"
+    "- Producto: BOLSA-ECO-10, nombre Bolsa Eco 10, unidad paquetes.\n"
+    "La propuesta coincide con estos datos demo. No generes bloqueos por falta de "
+    "datos maestros; informa únicamente de discrepancias reales con el texto."
+)
+
 
 def _imap_test_context(settings: EmailSettings, request_id: str | None = None) -> dict:
     return {
@@ -1818,6 +1835,7 @@ def validate_sample(
     text: str,
     extracted_content: dict,
     prompt: str | None = None,
+    validation_context: str | None = None,
 ) -> dict:
     validation_input = (
         "Texto recibido:\n"
@@ -1825,6 +1843,8 @@ def validate_sample(
         "Propuesta de extraccion:\n"
         f"{json.dumps(extracted_content, ensure_ascii=False)}"
     )
+    if validation_context:
+        validation_input += f"\n\n{validation_context}"
     result = run_prompt_execution(
         db,
         company_id,

@@ -289,6 +289,37 @@ class FTPSettings(Base):
     timeout_seconds: Mapped[int] = mapped_column(Integer, default=30)
 
 
+class ProxyConnection(Base):
+    """Tenant-owned access profile for the future outbound proxy gateway.
+
+    This table only stores configuration.  The application deliberately does
+    not use it to open sockets or connect to a customer database yet. Database
+    destination details belong to a separate database-connection module.
+    """
+
+    __tablename__ = "proxy_connections"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    proxy_host: Mapped[str] = mapped_column(String(255))
+    proxy_port: Mapped[int] = mapped_column(Integer, default=8787)
+    proxy_protocol: Mapped[str] = mapped_column(String(30), default="https")
+    username: Mapped[str | None] = mapped_column(String(255))
+    password_encrypted: Mapped[str | None] = mapped_column(Text)
+    tls_mode: Mapped[str] = mapped_column(String(30), default="verify")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    last_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_test_ok: Mapped[bool | None] = mapped_column(Boolean)
+    last_test_message: Mapped[str | None] = mapped_column(Text)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (UniqueConstraint("company_id", "name"),)
+
+
 class ExportSettings(Base):
     __tablename__ = "export_settings"
 

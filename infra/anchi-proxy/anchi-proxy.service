@@ -1,0 +1,20 @@
+[Unit]
+Description=Anchi inactive proxy gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/anchi-proxy
+EnvironmentFile=/root/anchi-proxy/config.env
+ExecStart=/usr/bin/python3 /root/anchi-proxy/proxy_gateway.py
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=read-only
+ProtectSystem=strict
+ReadOnlyPaths=/root/anchi-proxy
+
+[Install]
+WantedBy=multi-user.target
