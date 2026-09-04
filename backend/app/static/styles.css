@@ -6990,6 +6990,35 @@ input[type="radio"] {
   flex-shrink: 0;
 }
 
+.history-mail-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.history-mail-account {
+  max-width: min(24vw, 300px);
+  overflow: hidden;
+  color: var(--muted, #64748b);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-mail-account strong {
+  color: var(--text, #0f172a);
+  font-weight: 600;
+}
+
+.history-mail-sync-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
 .dock-count-badge {
   font-size: 12.5px;
   color: #64748b;

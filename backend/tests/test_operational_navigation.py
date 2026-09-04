@@ -60,9 +60,11 @@ class OperationalNavigationTests(unittest.TestCase):
             self.assertIsNotNone(nav_match, "No se encontró el bloque principal de navegación")
             nav_html = nav_match.group(0)
 
-            for label in ("Pedidos", "Buzón de correo", "Clientes", "Productos", "Configuración"):
+            for label in ("Pedidos", "Buzón de correo", "Buzón de correo 2", "Clientes", "Productos", "Configuración"):
                 self.assertIn(f'class="nav-label">{label}</span>', nav_html)
             self.assertEqual(nav_html.count('class="nav-label">Pedidos</span>'), 1)
+            self.assertEqual(nav_html.count('class="nav-label">Buzón de correo 2</span>'), 1)
+            self.assertIn('href="/history"', nav_html)
             self.assertIn('class="nav-label">Archivos</span>', nav_html)
 
             for hidden_label in ("Entradas", "Jobs", "Logs", "Bases de datos", "Diagnóstico", "Aprendizaje", "Canales"):

@@ -6,7 +6,7 @@ import unittest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-from app.db.models import Email, Order, utcnow
+from app.db.models import Email, EmailSettings, Order, utcnow
 from scripts.performance_data import build_performance_fixture, performance_test_client
 
 
@@ -34,6 +34,38 @@ class HistoryFiltersTests(unittest.TestCase):
                 current_total, _ = self._pagination_and_row_count(current_response.text)
                 self.assertGreater(current_total, 0)
         finally:
+            fixture.cleanup()
+
+    def test_history_shows_mail_account_and_sync_action_when_imap_is_ready(self):
+        fixture = build_performance_fixture("small")
+        engine = create_engine(
+            fixture.tenant_database_url,
+            connect_args={"check_same_thread": False},
+        )
+        SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        try:
+            with SessionLocal() as db:
+                settings = db.scalar(select(EmailSettings).where(EmailSettings.company_id == fixture.company_id))
+                if settings is None:
+                    settings = EmailSettings(company_id=fixture.company_id)
+                    db.add(settings)
+                settings.connected_email = "buzon@example.com"
+                settings.imap_host = "imap.example.com"
+                settings.imap_username = "buzon@example.com"
+                settings.imap_password_encrypted = "test-password-encrypted"
+                db.commit()
+
+            with performance_test_client(fixture) as client:
+                response = client.get("/history")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn('<title>Buzón de correo 2</title>', response.text)
+            self.assertIn("Cuenta:", response.text)
+            self.assertIn("buzon@example.com", response.text)
+            self.assertIn('action="/settings/email/read"', response.text)
+            self.assertIn("Sincronizar ahora", response.text)
+        finally:
+            engine.dispose()
             fixture.cleanup()
 
     def test_history_deduplicates_linked_emails_and_maps_email_status_aliases(self):

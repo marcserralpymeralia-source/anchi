@@ -1,6 +1,6 @@
 {% extends "base.html" %}
-{% set title = "Buzón de correo" %}
-{% from "components/icons.html" import icon_close, icon_filter, icon_search, icon_star %}
+{% set title = "Buzón de correo 2" %}
+{% from "components/icons.html" import icon_close, icon_filter, icon_refresh, icon_search, icon_star %}
 {% block content %}
 <div class="webmail-shell">
   {# Topbar / Toolbar #}
@@ -97,6 +97,19 @@
         </details>
 
         <div class="dock-spacer"></div>
+
+        <div class="history-mail-actions" aria-label="Cuenta de correo y sincronización">
+          {% if email_account %}
+            <span class="history-mail-account" title="{{ email_account }}">Cuenta: <strong>{{ email_account }}</strong></span>
+          {% endif %}
+          {% if email_sync_ready %}
+            <form method="post" action="/settings/email/read" class="dock-action-form js-loading-form">
+              <button type="submit" class="button secondary compact-button history-mail-sync-button" data-loading-text="Sincronizando...">
+                {{ icon_refresh(14) }}<span>Sincronizar ahora</span>
+              </button>
+            </form>
+          {% endif %}
+        </div>
 
         {# Right section: Count / Metric #}
         <div class="dock-actions-group">
