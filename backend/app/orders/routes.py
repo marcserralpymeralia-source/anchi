@@ -13,7 +13,7 @@ from app.dashboard.service import load_order_view_data, order_sender
 from app.agent.platform import LearningService
 from app.agent.services import MockAgentService, ScoringService
 from app.auth.dependencies import current_user
-from app.core.channel_identity import is_whatsapp_provider
+from app.core.channel_identity import is_whatsapp_provider, order_channel_key
 from app.master.service import TenantUser
 from app.db.models import Conversation, Customer, CustomerContactPoint, Email, EmailAttachment, ExportFile, FTPSettings, InboundMessage, ManualCorrection, Order, OrderLine, Product, RagCase, ScoringSettings, User, utcnow
 from app.jobs.service import enqueue_job
@@ -531,6 +531,7 @@ def order_detail(
             "line_suggestions": line_suggestions,
             "product_q": product_q,
             "conversation_preview": conversation_preview,
+            "order_channel": order_channel_key(order) if order else "inbound",
             "extraction_diagnostics": extraction_diagnostics,
         },
     )
