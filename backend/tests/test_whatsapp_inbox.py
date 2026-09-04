@@ -136,7 +136,7 @@ class WhatsAppInboxTests(unittest.TestCase):
         self.assertIn('href="/whatsapp/inbox"', response.text)
         self.assertIn("Buzón de correo", response.text)
         self.assertIn('name="files"', response.text)
-        self.assertEqual(response.text.count('href="/history"'), 1)
+        self.assertEqual(response.text.count('href="/mail"'), 1)
         self.assertEqual(response.text.count('class="nav-label">WhatsApp</span>'), 1)
 
     def test_inactive_channel_is_not_available(self):
