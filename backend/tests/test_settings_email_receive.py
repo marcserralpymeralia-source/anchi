@@ -13,7 +13,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.encryption import decrypt_secret
-from app.db.models import EmailSettings, InputChannel, PromptExecution, User
+from app.db.models import EmailSettings, InputChannel, PromptExecution, PromptExecutionDetail, User
 from app.master.models import CompanyMembership, EmailSyncState
 from scripts.performance_data import build_performance_fixture, performance_test_client
 
@@ -167,32 +167,46 @@ class SettingsEmailReceiveHttpTests(unittest.TestCase):
                     db.commit()
 
             with TenantSession() as db:
-                db.add_all(
-                    [
-                        PromptExecution(
-                            company_id=fixture.company_id,
-                            prompt_name="Extraccion",
-                            prompt_purpose="extraction",
-                            prompt_version=1,
-                            model="gpt-4.1-mini",
-                            parameters_json="{}",
-                            output_status="missing_fields",
-                            validation_errors_json='["Falta lineas"]',
-                            duration_ms=321,
-                            response_excerpt='{"pedido":{}}',
-                        ),
-                        PromptExecution(
-                            company_id=fixture.company_id + 999,
-                            prompt_name="Otra compañía",
-                            prompt_purpose="extraction",
-                            prompt_version=1,
-                            model="gpt-4.1-mini",
-                            parameters_json="{}",
-                            output_status="valid",
-                            duration_ms=111,
-                            response_excerpt='{"pedido":{"lineas":[{}]}}',
-                        ),
-                    ]
+                execution = PromptExecution(
+                    company_id=fixture.company_id,
+                    prompt_name="Extraccion",
+                    prompt_purpose="extraction",
+                    prompt_version=1,
+                    model="gpt-4.1-mini",
+                    parameters_json="{}",
+                    output_status="missing_fields",
+                    validation_errors_json='["Falta lineas"]',
+                    duration_ms=321,
+                    response_excerpt='{"pedido":{}}',
+                )
+                db.add(execution)
+                db.flush()
+                db.add(
+                    PromptExecutionDetail(
+                        prompt_execution_id=execution.id,
+                        company_id=fixture.company_id,
+                        system_prompt_text="Prompt de prueba",
+                        user_input_text="Entrada de prueba",
+                        assistant_output_text="Salida de prueba",
+                        reasoning_summary="Resumen explícito",
+                        decision_summary="Decisión tomada",
+                        effective_parameters_json='{"model":"gpt-4.1-mini"}',
+                        provider_metadata_json='{"ok":true}',
+                        is_anonymized=True,
+                    )
+                )
+                db.add(
+                    PromptExecution(
+                        company_id=fixture.company_id + 999,
+                        prompt_name="Otra compañía",
+                        prompt_purpose="extraction",
+                        prompt_version=1,
+                        model="gpt-4.1-mini",
+                        parameters_json="{}",
+                        output_status="valid",
+                        duration_ms=111,
+                        response_excerpt='{"pedido":{"lineas":[{}]}}',
+                    )
                 )
                 db.commit()
 
@@ -207,6 +221,14 @@ class SettingsEmailReceiveHttpTests(unittest.TestCase):
                 self.assertEqual(payload["items"][0]["status"], "missing_fields")
                 self.assertEqual(payload["items"][0]["duration_ms"], 321)
                 self.assertEqual(payload["items"][0]["response_excerpt"], '{"pedido":{}}')
+                self.assertTrue(payload["items"][0]["detail_available"])
+                detail_response = client.get(payload["items"][0]["detail_url"])
+                self.assertEqual(detail_response.status_code, 200)
+                detail_payload = detail_response.json()
+                self.assertTrue(detail_payload["detail_available"])
+                self.assertEqual(detail_payload["detail"]["user_input"], "Entrada de prueba")
+                self.assertEqual(detail_payload["detail"]["reasoning_summary"], "Resumen explícito")
+                self.assertEqual(detail_payload["execution"]["validation_errors"], ["Falta lineas"])
         finally:
             master_engine.dispose()
             tenant_engine.dispose()

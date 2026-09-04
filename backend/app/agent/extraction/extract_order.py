@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from app.agent.model_catalog import DEFAULT_OPENAI_MODEL
+from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, resolve_reasoning_effort
 from app.agent.extraction.prompts import ORDER_EXTRACTION_SYSTEM_PROMPT
 from app.agent.extraction.schema import (
     ORDER_EXTRACTION_SCHEMA_VERSION,
@@ -34,10 +34,11 @@ def extract_order(
     api_key: str | None = None,
     base_url: str | None = None,
     timeout_seconds: int | None = None,
+    reasoning_effort: str | None = None,
 ) -> OrderExtractionResult:
     extraction_input = input_data if isinstance(input_data, OrderExtractionInput) else OrderExtractionInput.model_validate(input_data)
     selected_model = model or os.getenv("OPENAI_DEFAULT_MODEL") or DEFAULT_ORDER_EXTRACTION_MODEL
-    content = _call_structured_extraction(client, extraction_input, selected_model) if client else _call_structured_extraction_http(extraction_input, selected_model, api_key=api_key, base_url=base_url, timeout_seconds=timeout_seconds)
+    content = _call_structured_extraction(client, extraction_input, selected_model, reasoning_effort=reasoning_effort) if client else _call_structured_extraction_http(extraction_input, selected_model, api_key=api_key, base_url=base_url, timeout_seconds=timeout_seconds, reasoning_effort=reasoning_effort)
     payload = _parse_payload(content)
     extracted = OrderExtraction.model_validate(payload)
     return OrderExtractionResult(
@@ -48,13 +49,21 @@ def extract_order(
     )
 
 
-def _call_structured_extraction_http(extraction_input: OrderExtractionInput, model: str, *, api_key: str | None = None, base_url: str | None = None, timeout_seconds: int | None = None) -> str:
+def _call_structured_extraction_http(
+    extraction_input: OrderExtractionInput,
+    model: str,
+    *,
+    api_key: str | None = None,
+    base_url: str | None = None,
+    timeout_seconds: int | None = None,
+    reasoning_effort: str | None = None,
+) -> str:
     resolved_api_key = api_key or os.getenv("OPENAI_API_KEY")
     if not resolved_api_key:
         raise OrderExtractionError("OPENAI_API_KEY no configurada para extraccion de pedidos.")
     resolved_base_url = (base_url or os.getenv("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
     timeout = timeout_seconds or int(os.getenv("OPENAI_TIMEOUT_SECONDS", "60"))
-    payload = _structured_extraction_payload(extraction_input, model)
+    payload = _structured_extraction_payload(extraction_input, model, reasoning_effort=reasoning_effort)
     request = urllib.request.Request(
         f"{resolved_base_url}/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
@@ -78,9 +87,15 @@ def _call_structured_extraction_http(extraction_input: OrderExtractionInput, mod
         raise OrderExtractionError("OpenAI no devolvio contenido estructurado.") from exc
 
 
-def _call_structured_extraction(client: Any, extraction_input: OrderExtractionInput, model: str) -> str:
+def _call_structured_extraction(
+    client: Any,
+    extraction_input: OrderExtractionInput,
+    model: str,
+    *,
+    reasoning_effort: str | None = None,
+) -> str:
     response = client.chat.completions.create(
-        **_structured_extraction_payload(extraction_input, model),
+        **_structured_extraction_payload(extraction_input, model, reasoning_effort=reasoning_effort),
     )
     try:
         message = response.choices[0].message
@@ -94,8 +109,8 @@ def _call_structured_extraction(client: Any, extraction_input: OrderExtractionIn
     return content
 
 
-def _structured_extraction_payload(extraction_input: OrderExtractionInput, model: str) -> dict[str, Any]:
-    return {
+def _structured_extraction_payload(extraction_input: OrderExtractionInput, model: str, *, reasoning_effort: str | None = None) -> dict[str, Any]:
+    payload = {
         "model": model,
         "messages": [
             {"role": "system", "content": ORDER_EXTRACTION_SYSTEM_PROMPT},
@@ -111,6 +126,10 @@ def _structured_extraction_payload(extraction_input: OrderExtractionInput, model
             },
         },
     }
+    resolved_reasoning_effort = resolve_reasoning_effort(reasoning_effort, model)
+    if resolved_reasoning_effort:
+        payload["reasoning_effort"] = resolved_reasoning_effort
+    return payload
 
 
 def _parse_payload(content: str) -> dict[str, Any]:

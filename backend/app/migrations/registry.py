@@ -823,6 +823,21 @@ def _apply_tenant_email_favorites(engine, dry_run: bool) -> list[str]:  # noqa: 
     return ensure_columns(engine, "emails", {"is_favorite": "BOOLEAN DEFAULT false"}, dry_run=dry_run)
 
 
+def _apply_tenant_llm_reasoning_effort(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    return ensure_columns(engine, "llm_settings", {"reasoning_effort": "VARCHAR(20) DEFAULT 'medium'"}, dry_run=dry_run)
+
+
+def _apply_tenant_llm_execution_details(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    from app.db.models import PromptExecutionDetail
+
+    with engine.connect() as conn:
+        if "prompt_execution_details" in inspect(conn).get_table_names():
+            return []
+        if not dry_run:
+            PromptExecutionDetail.__table__.create(bind=conn, checkfirst=True)
+    return ["CREATE TABLE prompt_execution_details (...)"]
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -877,6 +892,18 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant email favorites",
         checksum=checksum_text("tenant", "email_favorites", "emails", "is_favorite"),
         upgrade=_apply_tenant_email_favorites,
+    ),
+    MigrationSpec(
+        version="2026.09.04.1",
+        name="tenant ai reasoning effort",
+        checksum=checksum_text("tenant", "ai_reasoning_effort", "llm_settings", "reasoning_effort"),
+        upgrade=_apply_tenant_llm_reasoning_effort,
+    ),
+    MigrationSpec(
+        version="2026.09.04.2",
+        name="tenant ai execution details",
+        checksum=checksum_text("tenant", "ai_execution_details", "prompt_execution_details"),
+        upgrade=_apply_tenant_llm_execution_details,
     ),
 ]
 

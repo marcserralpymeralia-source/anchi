@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.observability import encode_trace_payload, split_trace_payload
 from app.db.models import BackgroundJob, JobAttempt, User
+from app.logs.service import log_flow_event
 
 
 logger = logging.getLogger(__name__)
@@ -184,6 +185,18 @@ def enqueue_job(
         )
     ).first()
     if existing:
+        log_flow_event(
+            db,
+            company_id=company_id,
+            event="job.deduplicated",
+            stage="queue",
+            message="El trabajo no se ha duplicado porque ya existe uno equivalente.",
+            entity_type="job",
+            entity_id=existing.id,
+            status="deduplicated",
+            metadata={"job_type": job_type},
+        )
+        db.refresh(existing)
         return existing
     settings = _settings()
     configured_max_retries = max(0, int((max_retries if max_retries is not None else DEFAULT_MAX_RETRIES.get(job_type, 3))))
@@ -217,6 +230,18 @@ def enqueue_job(
         if existing:
             return existing
         raise
+    db.refresh(job)
+    log_flow_event(
+        db,
+        company_id=company_id,
+        event="job.queued",
+        stage="queue",
+        message="Trabajo encolado para procesamiento.",
+        entity_type="job",
+        entity_id=job.id,
+        status="queued",
+        metadata={"job_type": job_type, "max_retries": max_retries_final},
+    )
     db.refresh(job)
     return job
 

@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.models import Conversation, InboundMessage, InputChannel
+from app.logs.service import log_flow_event
 
 
 @dataclass(slots=True)
@@ -239,6 +240,21 @@ def upsert_inbound_message(
         existing.has_pdf = has_pdf or existing.has_pdf
         existing.has_audio = has_audio or existing.has_audio
         existing.updated_at = datetime.now(timezone.utc)
+        log_flow_event(
+            db,
+            company_id=company_id,
+            event="message.deduplicated",
+            stage="ingestion",
+            message="Entrada recibida de nuevo; se ha reutilizado el mensaje existente.",
+            entity_type="inbound_message",
+            entity_id=existing.id,
+            status="deduplicated",
+            metadata={
+                "channel": normalize_channel(channel_key),
+                "provider": normalize_provider(provider),
+                "external_id": external_id,
+            },
+        )
         return existing, conversation
     message = InboundMessage(
         company_id=company_id,
@@ -263,6 +279,27 @@ def upsert_inbound_message(
     )
     db.add(message)
     db.flush()
+    log_flow_event(
+        db,
+        company_id=company_id,
+        event="message.persisted",
+        stage="ingestion",
+        message="Entrada normalizada guardada y asociada a una conversación.",
+        entity_type="inbound_message",
+        entity_id=message.id,
+        status="persisted",
+        metadata={
+            "channel": normalize_channel(channel_key),
+            "provider": normalize_provider(provider),
+            "direction": normalize_direction(direction),
+            "content_type": content_type,
+            "has_attachments": has_attachments,
+            "has_pdf": has_pdf,
+            "has_audio": has_audio,
+            "text_length": len(text_content or ""),
+            "external_id": external_id,
+        },
+    )
     return message, conversation
 
 

@@ -481,7 +481,8 @@ def dashboard(
         },
     )
 @router.get("/history")
-def history_page(
+@router.get("/mail")
+def mail_page(
     request: Request,
     date_range: str = "90d",
     date_from: str = "",
@@ -774,10 +775,11 @@ def pedidos_page(
     user: TenantUser = Depends(current_user),
 ):
     query = request.url.query
-    dest = f"/history?{query}" if query else "/history"
+    dest = f"/mail?{query}" if query else "/mail"
     return RedirectResponse(dest, status_code=303)
 
 
+@router.get("/mail/pane/{kind}/{item_id}")
 @router.get("/history/pane/{kind}/{item_id}")
 def history_detail_pane(
     kind: str,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import date, datetime
@@ -17,6 +18,7 @@ user_id_var: ContextVar[int | None] = ContextVar("user_id", default=None)
 membership_id_var: ContextVar[int | None] = ContextVar("membership_id", default=None)
 job_id_var: ContextVar[int | None] = ContextVar("job_id", default=None)
 worker_id_var: ContextVar[str | None] = ContextVar("worker_id", default=None)
+flow_id_var: ContextVar[str | None] = ContextVar("flow_id", default=None)
 route_var: ContextVar[str | None] = ContextVar("route", default=None)
 method_var: ContextVar[str | None] = ContextVar("method", default=None)
 
@@ -29,6 +31,7 @@ _CONTEXT_VARS: dict[str, ContextVar[Any | None]] = {
     "membership_id": membership_id_var,
     "job_id": job_id_var,
     "worker_id": worker_id_var,
+    "flow_id": flow_id_var,
     "route": route_var,
     "method": method_var,
 }
@@ -48,6 +51,20 @@ _SECRET_MARKERS = (
     "dsn",
 )
 
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)(\b(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|password|secret|authorization)\b\s*[:=]\s*)([^\s,;]+)"
+)
+_BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}")
+_TOKEN_SHAPE_RE = re.compile(r"\b(?:EA[A-Za-z0-9]{24,}|sk-[A-Za-z0-9_-]{20,})\b")
+
+
+def redact_log_text(value: str) -> str:
+    """Remove common credential representations from human-readable messages."""
+
+    redacted = _SECRET_ASSIGNMENT_RE.sub(r"\1[redacted]", value)
+    redacted = _BEARER_RE.sub("Bearer [redacted]", redacted)
+    return _TOKEN_SHAPE_RE.sub("[redacted]", redacted)
+
 
 def _normalize(value: Any) -> Any:
     if isinstance(value, (datetime, date)):
@@ -57,9 +74,9 @@ def _normalize(value: Any) -> Any:
     if isinstance(value, (list, tuple, set)):
         return [_normalize(item) for item in value]
     if isinstance(value, bytes):
-        return value.decode("utf-8", errors="ignore")
+        return redact_log_text(value.decode("utf-8", errors="ignore"))
     if isinstance(value, Exception):
-        return str(value)
+        return redact_log_text(str(value))
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return str(value)
@@ -83,6 +100,8 @@ def redact_sensitive_data(value: Any) -> Any:
         return [redact_sensitive_data(item) for item in value]
     if isinstance(value, tuple):
         return [redact_sensitive_data(item) for item in value]
+    if isinstance(value, str):
+        return redact_log_text(value)
     return _normalize(value)
 
 

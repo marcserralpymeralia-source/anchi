@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import unittest
 from pathlib import Path
-from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -109,7 +108,9 @@ class MailInboxRoutesTests(unittest.TestCase):
                 dashboard_fragment = client.get("/?partial=workbench", headers={"X-Requested-With": "fetch"})
 
             self.assertEqual(inbox.status_code, 200)
-            self.assertIn("Conecta una cuenta de correo", inbox.text)
+            self.assertIn('<title>Buzón de correo</title>', inbox.text)
+            self.assertIn("Bandeja de mensajes", inbox.text)
+            self.assertNotIn("Buzón de correo 2", inbox.text)
             self.assertEqual(detail.status_code, 200)
             self.assertIn("Detalle de correo", detail.text)
             self.assertNotIn("Internal Server Error", detail.text)
@@ -175,6 +176,17 @@ class MailInboxRoutesTests(unittest.TestCase):
                     headers={"X-Requested-With": "fetch", "Accept": "application/json"},
                 )
                 pane = client.get(f"/history/pane/email/{email_ids[0]}")
+                canonical_pane = client.get(f"/mail/pane/email/{email_ids[0]}")
+                bulk_read_async = client.post(
+                    "/mail/bulk-action",
+                    data={"action": "mark_read", "email_ids": [str(email_ids[0]), str(email_ids[1])]},
+                    headers={"X-Requested-With": "fetch", "Accept": "application/json"},
+                )
+                bulk_archive_async = client.post(
+                    "/mail/bulk-action",
+                    data={"action": "archive", "email_ids": [str(email_ids[0]), str(email_ids[1])]},
+                    headers={"X-Requested-With": "fetch", "Accept": "application/json"},
+                )
                 bulk_read = client.post(
                     "/mail/bulk-action",
                     data={"action": "mark_read", "email_ids": [str(email_ids[0]), str(email_ids[1])]},
@@ -196,6 +208,11 @@ class MailInboxRoutesTests(unittest.TestCase):
             self.assertEqual(favorite_async.status_code, 200)
             self.assertFalse(favorite_async.json()["is_favorite"])
             self.assertEqual(pane.status_code, 200)
+            self.assertEqual(canonical_pane.status_code, 200)
+            self.assertEqual(bulk_read_async.status_code, 200)
+            self.assertEqual(bulk_read_async.json(), {"ok": True, "action": "mark_read", "changed": 2})
+            self.assertEqual(bulk_archive_async.status_code, 200)
+            self.assertEqual(bulk_archive_async.json(), {"ok": True, "action": "archive", "changed": 2})
             self.assertEqual(bulk_read.status_code, 303)
             self.assertEqual(bulk_archive.status_code, 303)
             self.assertEqual(fragment.status_code, 200)
@@ -252,9 +269,28 @@ class MailInboxRoutesTests(unittest.TestCase):
                     f"/mail/{email_id}/favorite",
                     headers={"X-Requested-With": "fetch", "Accept": "application/json"},
                 )
+                mark_read = client.post(
+                    f"/mail/{email_id}/mark-read",
+                    headers={"X-Requested-With": "fetch", "Accept": "application/json"},
+                )
+                archive = client.post(
+                    f"/mail/{email_id}/archive",
+                    headers={"X-Requested-With": "fetch", "Accept": "application/json"},
+                )
+                bulk_archive = client.post(
+                    "/mail/bulk-action",
+                    data={"action": "archive", "email_ids": [str(email_id)]},
+                    headers={"X-Requested-With": "fetch", "Accept": "application/json"},
+                )
 
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.json(), {"ok": True, "email_id": email_id, "is_favorite": True})
+            self.assertEqual(mark_read.status_code, 200)
+            self.assertEqual(mark_read.json(), {"ok": True, "email_id": email_id, "action": "mark_read"})
+            self.assertEqual(archive.status_code, 200)
+            self.assertEqual(archive.json(), {"ok": True, "email_id": email_id, "action": "archive"})
+            self.assertEqual(bulk_archive.status_code, 200)
+            self.assertEqual(bulk_archive.json(), {"ok": True, "action": "archive", "changed": 1})
 
             with TenantSession() as tenant_db:
                 saved = tenant_db.get(Email, email_id)
@@ -266,94 +302,21 @@ class MailInboxRoutesTests(unittest.TestCase):
             tenant_engine.dispose()
             fixture.cleanup()
 
-    def test_mail_inbox_defaults_to_ten_and_filters_active_account(self):
+    def test_mail_is_the_canonical_advanced_inbox_and_history_is_compatible(self):
         fixture = build_performance_fixture("small")
-        master_engine = create_engine(fixture.master_database_url, connect_args={"check_same_thread": False})
-        tenant_engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
-        MasterSession = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
-        TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
         try:
-            with MasterSession() as master_db:
-                state = master_db.scalar(select(EmailSyncState).where(EmailSyncState.company_id == fixture.company_id, EmailSyncState.channel_key == "email"))
-                self.assertIsNotNone(state)
-                assert state is not None
-                state.mailbox = "INBOX"
-                state.uidvalidity = "777"
-                master_db.commit()
-
-            with TenantSession() as tenant_db:
-                settings = tenant_db.scalar(select(EmailSettings).where(EmailSettings.company_id == fixture.company_id))
-                self.assertIsNotNone(settings)
-                assert settings is not None
-                settings.imap_host = "imap.example.test"
-                settings.imap_username = "demo@example.test"
-                settings.imap_password_encrypted = "configured"
-                settings.connected_email = "demo@example.test"
-                for index in range(15):
-                    tenant_db.add(
-                        Email(
-                            company_id=fixture.company_id,
-                            external_id=f"active-{index}",
-                            message_id=f"<active-{index}@example.com>",
-                            imap_mailbox="INBOX",
-                            imap_uidvalidity="777",
-                            imap_uid=str(200 + index),
-                            sender="nuevo@example.com",
-                            subject=f"Activo {index}",
-                            body="Pedido activo",
-                            received_at=datetime(2026, 7, 31, 12, index, tzinfo=timezone.utc),
-                        )
-                    )
-                tenant_db.add(
-                    Email(
-                        company_id=fixture.company_id,
-                        external_id="archived-active",
-                        message_id="<archived-active@example.com>",
-                        imap_mailbox="INBOX",
-                        imap_uidvalidity="777",
-                        imap_uid="999",
-                        sender="nuevo@example.com",
-                        subject="Archivado activo",
-                        body="No debe aparecer",
-                        archived=True,
-                        received_at=datetime(2026, 7, 31, 13, 0, tzinfo=timezone.utc),
-                    )
-                )
-                for index in range(2):
-                    tenant_db.add(
-                        Email(
-                            company_id=fixture.company_id,
-                            external_id=f"legacy-{index}",
-                            message_id=f"<legacy-{index}@example.com>",
-                            imap_mailbox="INBOX",
-                            imap_uidvalidity="111",
-                            imap_uid=str(50 + index),
-                            sender="legacy@example.com",
-                            subject=f"Antiguo {index}",
-                            body="Pedido antiguo",
-                            received_at=datetime(2026, 7, 30, 12, index, tzinfo=timezone.utc),
-                        )
-                    )
-                tenant_db.commit()
-
             with performance_test_client(fixture) as client:
                 inbox = client.get("/mail", follow_redirects=False)
-                page_two = client.get("/mail?page=2", follow_redirects=False)
+                history = client.get("/history", follow_redirects=False)
 
             self.assertEqual(inbox.status_code, 200)
-            self.assertIn("Bandeja activa", inbox.text)
-            self.assertIn("15 mensajes", inbox.text)
-            self.assertIn("Activo 14", inbox.text)
-            self.assertNotIn("Activo 4", inbox.text)
-            self.assertNotIn("Antiguo 0", inbox.text)
-            self.assertNotIn("Archivado activo", inbox.text)
-            self.assertIn('action="/settings/email/read"', inbox.text)
-            self.assertEqual(page_two.status_code, 200)
-            self.assertIn("Activo 4", page_two.text)
-            self.assertNotIn("Activo 14", page_two.text)
+            self.assertEqual(history.status_code, 200)
+            self.assertIn("Bandeja de mensajes", inbox.text)
+            self.assertIn("Bandeja de mensajes", history.text)
+            self.assertIn('action="/mail"', inbox.text)
+            self.assertNotIn("Buzón de correo 2", inbox.text)
+            self.assertNotIn("Buzón de correo 2", history.text)
         finally:
-            master_engine.dispose()
-            tenant_engine.dispose()
             fixture.cleanup()
 
     def test_mail_inbox_does_not_redirect_to_dashboard(self):

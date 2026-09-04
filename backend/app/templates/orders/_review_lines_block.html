@@ -1,4 +1,4 @@
-{% from "components/icons.html" import icon_plus, icon_trash, icon_check, icon_alert_triangle %}
+{% from "components/icons.html" import icon_plus, icon_trash, icon_sparkles, icon_alert_triangle %}
 <div class="order-review-lines-block">
   <div class="order-lines-header-row">
     <div class="order-lines-title-group">
@@ -49,9 +49,15 @@
 
         <tr class="{% if not selected_product or line.validation_status != 'validated' %}order-review-line-warning{% endif %}">
           <td class="order-review-reference">
-            <span class="order-ref-badge {% if selected_product %}is-validated{% else %}is-unvalidated{% endif %}">
-              {{ selected_product.reference if selected_product else line.detected_reference or "—" }}
-            </span>
+            {% if selected_product %}
+              <span class="order-ref-badge is-validated">
+                {{ selected_product.reference }}
+              </span>
+            {% else %}
+              <span class="order-ref-empty">
+                {{ line.detected_reference or "—" }}
+              </span>
+            {% endif %}
           </td>
 
           <td class="order-review-description">
@@ -81,25 +87,26 @@
               {% if proposed_product %}
                 <button
                   type="button"
-                  class="order-review-proposal-badge is-suggestion is-clickable"
+                  class="order-line-hint is-suggestion"
                   data-apply-proposed
                   data-product-id="{{ proposed_product.id }}"
                   data-product-name="{{ proposed_product.name }}"
                   data-product-ref="{{ proposed_product.reference }}"
-                  title="Haz clic para seleccionar y validar esta sugerencia automáticamente"
+                  title="Haz clic para asignar y validar esta sugerencia"
                 >
-                  <span class="proposal-icon">{{ icon_check(12) }}</span>
-                  <span>Sugerencia: <strong>{{ proposed_product.reference }} · {{ proposed_product.name }}</strong> (clic para aplicar)</span>
+                  <span class="hint-icon">{{ icon_sparkles(12) }}</span>
+                  <span>Sugerencia: <strong>{{ proposed_product.reference }} · {{ proposed_product.name }}</strong></span>
+                  <span class="hint-apply-pill">Aplicar</span>
                 </button>
               {% elif line.doubt_reason %}
                 {% set doubt_text = line.doubt_reason %}
                 {% if "sin_referencia" in doubt_text or "no encontrado" in doubt_text %}
-                  {% set doubt_text = "Producto no identificado · Selecciona o busca el producto arriba" %}
+                  {% set doubt_text = "Producto no identificado · Busca o selecciona arriba" %}
                 {% elif "revision por extraccion" in doubt_text %}
-                  {% set doubt_text = "Línea marcada para revisión manual" %}
+                  {% set doubt_text = "Línea marcada para revisión" %}
                 {% endif %}
-                <div class="order-review-proposal-badge is-doubt">
-                  <span class="proposal-icon">{{ icon_alert_triangle(12) }}</span>
+                <div class="order-line-hint is-warning">
+                  <span class="hint-icon">{{ icon_alert_triangle(12) }}</span>
                   <span>{{ doubt_text }}</span>
                 </div>
               {% endif %}

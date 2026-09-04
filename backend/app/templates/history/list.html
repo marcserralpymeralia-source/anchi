@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% set title = "Buzón de correo 2" %}
+{% set title = "Buzón de correo" %}
 {% from "components/icons.html" import icon_close, icon_filter, icon_refresh, icon_search, icon_star %}
 {% block content %}
 <div class="webmail-shell">
@@ -338,6 +338,20 @@ function setMailAsyncStatus(message, isError = false) {
   status.classList.toggle('is-error', isError);
 }
 
+async function parseMailJsonResponse(response) {
+  const body = await response.text();
+  let payload = null;
+  try {
+    payload = body ? JSON.parse(body) : null;
+  } catch (error) {
+    throw new Error(`Respuesta no válida del servidor (${response.status})`);
+  }
+  if (!response.ok || !payload || !payload.ok) {
+    throw new Error(payload && payload.message ? payload.message : `Error del servidor (${response.status})`);
+  }
+  return payload;
+}
+
 async function refreshHistoryList() {
   const listPane = document.querySelector('.webmail-list-pane');
   if (!listPane || listPane.dataset.refreshing === 'true') return false;
@@ -376,15 +390,14 @@ async function handleMailFavoriteSubmit(event, form) {
   event.preventDefault();
   const button = form.querySelector('button[type="submit"]');
   if (!button || button.disabled) return false;
-  setMailButtonBusy(form, true);
+  button.disabled = true;
   try {
     const response = await fetch(form.action, {
       method: 'POST',
       headers: { 'X-Requested-With': 'fetch', 'Accept': 'application/json' },
       credentials: 'same-origin',
     });
-    const payload = await response.json();
-    if (!response.ok || !payload.ok) throw new Error(payload.message || 'No se pudo actualizar el favorito');
+    const payload = await parseMailJsonResponse(response);
     button.classList.toggle('is-favorite', !!payload.is_favorite);
     const label = payload.is_favorite ? 'Quitar de favoritos' : 'Añadir a favoritos';
     button.title = label;
@@ -393,7 +406,7 @@ async function handleMailFavoriteSubmit(event, form) {
     console.warn('No se pudo actualizar el favorito', error);
     setMailAsyncStatus('No se ha podido actualizar el favorito. Reintenta.', true);
   } finally {
-    setMailButtonBusy(form, false);
+    button.disabled = false;
   }
   return false;
 }
@@ -413,9 +426,13 @@ async function handleMailBulkSubmit(event, form) {
       headers: { 'X-Requested-With': 'fetch', 'Accept': 'application/json' },
       credentials: 'same-origin',
     });
-    const payload = await response.json();
-    if (!response.ok || !payload.ok) throw new Error(payload.message || 'No se pudo aplicar la acción');
-    if (!await refreshHistoryList()) throw new Error('No se pudo refrescar la bandeja');
+    await parseMailJsonResponse(response);
+    if (!await refreshHistoryList()) {
+      setMailAsyncStatus('Acción aplicada. Recargando la bandeja...', false);
+      window.location.reload();
+      return false;
+    }
+    setMailAsyncStatus('', false);
   } catch (error) {
     console.warn('No se pudo aplicar la acción masiva', error);
     setMailAsyncStatus('No se ha podido aplicar la acción. Reintenta.', true);

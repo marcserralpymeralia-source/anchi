@@ -59,7 +59,7 @@ class HistoryFiltersTests(unittest.TestCase):
                 response = client.get("/history")
 
             self.assertEqual(response.status_code, 200)
-            self.assertIn('<title>Buzón de correo 2</title>', response.text)
+            self.assertIn('<title>Buzón de correo</title>', response.text)
             self.assertIn("Cuenta:", response.text)
             self.assertIn("buzon@example.com", response.text)
             self.assertIn('action="/settings/email/read"', response.text)

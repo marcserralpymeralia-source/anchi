@@ -9,6 +9,7 @@ from difflib import SequenceMatcher
 from email.utils import parseaddr
 from math import isfinite
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Protocol
 
 from sqlalchemy import func, or_, select
@@ -49,7 +50,7 @@ from app.db.models import (
     ScoringSettings,
     LLMSettings,
 )
-from app.logs.service import log_action
+from app.logs.service import log_action, log_flow_event
 from app.knowledge.service import retrieve_product_knowledge
 from app.orders.state import ORDER_STATE
 from app.orders.scoring import calculate_order_score
@@ -1330,6 +1331,23 @@ class UnifiedOrderPipelineService:
         email_fast_path: bool = False,
     ) -> dict[str, Any]:
         self.decision.reset_runtime_state()
+        pipeline_started_at = perf_counter()
+        log_flow_event(
+            db,
+            company_id=inbound_message.company_id,
+            event="pipeline.started",
+            stage="pipeline",
+            message="Procesamiento de entrada iniciado.",
+            entity_type="inbound_message",
+            entity_id=inbound_message.id,
+            status="started",
+            metadata={
+                "channel": inbound_channel_key(inbound_message),
+                "provider": inbound_message.provider,
+                "force_order": force_order,
+                "email_fast_path": email_fast_path,
+            },
+        )
 
         if not force_order and inbound_message.order_id:
             order = db.scalar(
@@ -1339,6 +1357,17 @@ class UnifiedOrderPipelineService:
                 )
             )
             if order:
+                log_flow_event(
+                    db,
+                    company_id=inbound_message.company_id,
+                    event="pipeline.skipped_existing_order",
+                    stage="pipeline",
+                    message="La entrada ya estaba vinculada a un pedido y no se ha reprocesado.",
+                    entity_type="inbound_message",
+                    entity_id=inbound_message.id,
+                    status="skipped",
+                    metadata={"order_id": order.id, "score": order.score},
+                )
                 return {
                     "ok": True,
                     "status": "order_detected",
@@ -1350,17 +1379,79 @@ class UnifiedOrderPipelineService:
         llm_settings = get_or_create_settings(db, LLMSettings, inbound_message.company_id)
         email_settings = get_or_create_settings(db, EmailSettings, inbound_message.company_id)
         if not llm_settings.agent_enabled or llm_settings.provider == "disabled" or llm_settings.agent_mode == "desactivado":
-            return self._mark_error(db, inbound_message, user, "El agente no esta configurado o esta pausado.")
+            log_flow_event(
+                db,
+                company_id=inbound_message.company_id,
+                event="pipeline.blocked",
+                stage="pipeline",
+                message="El procesamiento se ha detenido porque el agente está desactivado.",
+                entity_type="inbound_message",
+                entity_id=inbound_message.id,
+                status="blocked",
+                metadata={"reason": "agent_disabled"},
+            )
+            return self._mark_error(
+                db,
+                inbound_message,
+                user,
+                "El agente no esta configurado o esta pausado.",
+                error_type="agent_disabled",
+                started_at=pipeline_started_at,
+            )
         if not llm_settings.api_key_encrypted:
-            return self._mark_error(db, inbound_message, user, "API key OpenAI no configurada.")
+            log_flow_event(
+                db,
+                company_id=inbound_message.company_id,
+                event="pipeline.blocked",
+                stage="pipeline",
+                message="El procesamiento se ha detenido porque falta la configuración de IA.",
+                entity_type="inbound_message",
+                entity_id=inbound_message.id,
+                status="blocked",
+                metadata={"reason": "missing_ai_configuration"},
+            )
+            return self._mark_error(
+                db,
+                inbound_message,
+                user,
+                "API key OpenAI no configurada.",
+                error_type="missing_ai_configuration",
+                started_at=pipeline_started_at,
+            )
 
         touch_message(db, inbound_message, status="processing", step="processing")
         inbound_message.processing_error = None
         db.commit()
+        log_flow_event(
+            db,
+            company_id=inbound_message.company_id,
+            event="pipeline.processing_started",
+            stage="pipeline",
+            message="Entrada preparada para normalización y evaluación.",
+            entity_type="inbound_message",
+            entity_id=inbound_message.id,
+            status="processing",
+            metadata={"source_type": self._source_type_for_extraction(inbound_message)},
+        )
 
         email = email or db.scalar(select(Email).where(Email.company_id == inbound_message.company_id, Email.external_id == inbound_message.source_external_id))
         try:
             source_text = source_text_override or self._input_text(inbound_message, email)
+            log_flow_event(
+                db,
+                company_id=inbound_message.company_id,
+                event="pipeline.input_prepared",
+                stage="normalization",
+                message="Texto de entrada preparado para el análisis.",
+                entity_type="inbound_message",
+                entity_id=inbound_message.id,
+                status="success",
+                metadata={
+                    "text_length": len(source_text),
+                    "has_email": email is not None,
+                    "attachment_count": len(inbound_message.attachments or []) + (len(email.attachments or []) if email else 0),
+                },
+            )
             if len(source_text.strip()) < 12:
                 inbound_message.status = "doubtful"
                 inbound_message.processing_step = "insufficient_text"
@@ -1375,6 +1466,17 @@ class UnifiedOrderPipelineService:
                     severity="low",
                     inbound_message_id=inbound_message.id,
                 )
+                log_flow_event(
+                    db,
+                    company_id=inbound_message.company_id,
+                    event="pipeline.insufficient_text",
+                    stage="classification",
+                    message="La entrada no tiene texto suficiente para evaluarse.",
+                    entity_type="inbound_message",
+                    entity_id=inbound_message.id,
+                    status="doubtful",
+                    metadata={"text_length": len(source_text)},
+                )
                 return {"ok": False, "message": inbound_message.processing_error}
 
             normalized = NormalizationService().normalize(source_text, preserve_lines=True)
@@ -1388,6 +1490,17 @@ class UnifiedOrderPipelineService:
                 )
             )
             db.flush()
+            log_flow_event(
+                db,
+                company_id=inbound_message.company_id,
+                event="pipeline.normalized",
+                stage="normalization",
+                message="Texto normalizado y preparado para la decisión.",
+                entity_type="inbound_message",
+                entity_id=inbound_message.id,
+                status="success",
+                metadata={"normalized_length": len(normalized), "line_count": len(normalized.splitlines())},
+            )
 
             if email_fast_path:
                 if not llm_settings.can_extract_order and not force_order:
@@ -1395,6 +1508,17 @@ class UnifiedOrderPipelineService:
                     inbound_message.processing_step = "order_detected_no_extraction"
                     inbound_message.last_processed_at = datetime.now(timezone.utc)
                     db.commit()
+                    log_flow_event(
+                        db,
+                        company_id=inbound_message.company_id,
+                        event="pipeline.order_detected_without_extraction",
+                        stage="classification",
+                        message="Se ha detectado una entrada de pedido, pero la extracción está desactivada.",
+                        entity_type="inbound_message",
+                        entity_id=inbound_message.id,
+                        status="completed",
+                        metadata={"classification": "pedido", "extraction_enabled": False},
+                    )
                     return {"ok": True, "status": "order_detected", "message": "Pedido detectado. Extraccion desactivada por configuracion."}
                 structured, fast_state, fast_message = self._extract_structured_fast_path(llm_settings, normalized, inbound_message)
                 if fast_state == "no_order":
@@ -1411,6 +1535,17 @@ class UnifiedOrderPipelineService:
                     inbound_message.processing_step = "classified_non_order"
                     inbound_message.last_processed_at = datetime.now(timezone.utc)
                     db.commit()
+                    log_flow_event(
+                        db,
+                        company_id=inbound_message.company_id,
+                        event="pipeline.classified_non_order",
+                        stage="classification",
+                        message="La entrada se ha clasificado como no pedido.",
+                        entity_type="inbound_message",
+                        entity_id=inbound_message.id,
+                        status="completed",
+                        metadata={"classification": "no_pedido", "confidence": 0.99, "reason": fast_message},
+                    )
                     return {"ok": True, "message": fast_message or "Entrada clasificada como no pedido.", "status": "no_order"}
                 if fast_state == "doubtful":
                     inbound_message.classification_json = json.dumps(
@@ -1436,6 +1571,17 @@ class UnifiedOrderPipelineService:
                         severity="medium",
                         inbound_message_id=inbound_message.id,
                     )
+                    log_flow_event(
+                        db,
+                        company_id=inbound_message.company_id,
+                        event="pipeline.classified_doubtful",
+                        stage="classification",
+                        message="La entrada se ha clasificado como dudosa y requiere revisión.",
+                        entity_type="inbound_message",
+                        entity_id=inbound_message.id,
+                        status="doubtful",
+                        metadata={"classification": "pedido", "confidence": 0.62, "reason": fast_message},
+                    )
                     return {"ok": False, "message": inbound_message.processing_error, "status": "doubtful"}
                 if fast_state == "processing_error":
                     inbound_message.classification_json = json.dumps(
@@ -1452,6 +1598,17 @@ class UnifiedOrderPipelineService:
                     inbound_message.processing_error = fast_message or "Error de extraccion estructurada."
                     inbound_message.last_processed_at = datetime.now(timezone.utc)
                     db.commit()
+                    log_flow_event(
+                        db,
+                        company_id=inbound_message.company_id,
+                        event="pipeline.ai_failed",
+                        stage="ai",
+                        message="La extracción estructurada no pudo completarse.",
+                        entity_type="inbound_message",
+                        entity_id=inbound_message.id,
+                        status="error",
+                        metadata={"error": fast_message},
+                    )
                     return {"ok": False, "message": inbound_message.processing_error, "status": "error"}
                 extraction = self._legacy_payload_from_structured(structured)
                 extraction_source = (
@@ -1471,11 +1628,38 @@ class UnifiedOrderPipelineService:
                 classification = self._classify(db, llm_settings, inbound_message.company_id, normalized)
                 tipo = str(classification.get("tipo_correo") or classification.get("type") or classification.get("tipo") or "").lower()
                 confidence = _confidence(classification.get("confianza") or classification.get("confidence"), 0.0)
+                log_flow_event(
+                    db,
+                    company_id=inbound_message.company_id,
+                    event="pipeline.classified",
+                    stage="classification",
+                    message="La IA ha evaluado si la entrada contiene un pedido.",
+                    entity_type="inbound_message",
+                    entity_id=inbound_message.id,
+                    status="success",
+                    metadata={
+                        "classification": tipo or "unknown",
+                        "confidence": confidence,
+                        "forced": force_order,
+                        "reason_length": len(str(classification.get("motivo") or classification.get("reason") or "")),
+                    },
+                )
                 if not force_order and (tipo in {"no_pedido", "consulta", "incidencia"} or ("pedido" not in tipo and confidence < 0.75)):
                     inbound_message.status = "no_order"
                     inbound_message.processing_step = "classified_non_order"
                     inbound_message.last_processed_at = datetime.now(timezone.utc)
                     db.commit()
+                    log_flow_event(
+                        db,
+                        company_id=inbound_message.company_id,
+                        event="pipeline.classified_non_order",
+                        stage="classification",
+                        message="La entrada se ha clasificado como no pedido.",
+                        entity_type="inbound_message",
+                        entity_id=inbound_message.id,
+                        status="completed",
+                        metadata={"classification": tipo or "unknown", "confidence": confidence},
+                    )
                     return {"ok": True, "message": "Entrada clasificada como no pedido.", "status": "no_order"}
 
                 if not force_order and (tipo == "dudoso" or confidence < 0.45):
@@ -1493,6 +1677,21 @@ class UnifiedOrderPipelineService:
                         severity="medium",
                         inbound_message_id=inbound_message.id,
                     )
+                    log_flow_event(
+                        db,
+                        company_id=inbound_message.company_id,
+                        event="pipeline.classified_doubtful",
+                        stage="classification",
+                        message="La entrada se ha clasificado como dudosa y requiere revisión.",
+                        entity_type="inbound_message",
+                        entity_id=inbound_message.id,
+                        status="doubtful",
+                        metadata={
+                            "classification": tipo or "unknown",
+                            "confidence": confidence,
+                            "reason_length": len(str(inbound_message.processing_error or "")),
+                        },
+                    )
                     return {"ok": False, "message": inbound_message.processing_error}
 
                 if not llm_settings.can_extract_order and not force_order:
@@ -1500,11 +1699,56 @@ class UnifiedOrderPipelineService:
                     inbound_message.processing_step = "order_detected_no_extraction"
                     inbound_message.last_processed_at = datetime.now(timezone.utc)
                     db.commit()
+                    log_flow_event(
+                        db,
+                        company_id=inbound_message.company_id,
+                        event="pipeline.order_detected_without_extraction",
+                        stage="classification",
+                        message="Se ha detectado una entrada de pedido, pero la extracción está desactivada.",
+                        entity_type="inbound_message",
+                        entity_id=inbound_message.id,
+                        status="completed",
+                        metadata={"classification": tipo or "pedido", "confidence": confidence, "extraction_enabled": False},
+                    )
                     return {"ok": True, "status": "order_detected", "message": "Pedido detectado. Extraccion desactivada por configuracion."}
 
                 extraction = self._extract(db, llm_settings, inbound_message.company_id, normalized, inbound_message)
                 extraction_source = (extraction.get("_extraction_meta") or {}).get("source") if isinstance(extraction.get("_extraction_meta"), dict) else None
+            log_flow_event(
+                db,
+                company_id=inbound_message.company_id,
+                event="pipeline.classification_recorded",
+                stage="classification",
+                message="Resultado de clasificación guardado en la entrada.",
+                entity_type="inbound_message",
+                entity_id=inbound_message.id,
+                status="success",
+                metadata={
+                    "classification": tipo or "unknown",
+                    "confidence": confidence,
+                    "forced": force_order,
+                    "fast_path": email_fast_path,
+                    "reason_length": len(str(classification.get("motivo") or classification.get("reason") or "")),
+                },
+            )
             extraction_meta = extraction.get("_extraction_meta") if isinstance(extraction.get("_extraction_meta"), dict) else {}
+            extracted_lines = self._lines_from_extraction(extraction)
+            log_flow_event(
+                db,
+                company_id=inbound_message.company_id,
+                event="pipeline.extracted",
+                stage="extraction",
+                message="La información del pedido ha sido extraída y validada.",
+                entity_type="inbound_message",
+                entity_id=inbound_message.id,
+                status="success",
+                metadata={
+                    "extraction_source": extraction_meta.get("source") or extraction_source or "unknown",
+                    "line_count": len(extracted_lines),
+                    "requires_human_review": bool(extraction.get("requiere_revision_humana") or extraction.get("requires_human_review")),
+                    "prompt_execution_id": extraction_meta.get("prompt_execution_id"),
+                },
+            )
             inbound_message.classification_json = json.dumps(classification, ensure_ascii=False)
             inbound_message.detected_type = tipo or None
             log_action(db, company_id=inbound_message.company_id, user=user, action="agent.classification_completed", entity_type="inbound_message", entity_id=inbound_message.id, message=f"Clasificacion: {tipo or 'sin tipo'} ({confidence:.2f})")
@@ -1555,6 +1799,25 @@ class UnifiedOrderPipelineService:
             score_result = self.scoring.score_order(db, order)
             order.score = score_result.total_score
             order.status = self.scoring.status_for_score(db, inbound_message.company_id, order.score)
+            log_flow_event(
+                db,
+                company_id=inbound_message.company_id,
+                event="pipeline.scored",
+                stage="scoring",
+                message="Scoring del pedido calculado.",
+                entity_type="order",
+                entity_id=order.id,
+                status="success",
+                metadata={
+                    "score": score_result.total_score,
+                    "order_status": order.status,
+                    "customer_score": getattr(score_result, "customer_score", None),
+                    "product_score": getattr(score_result, "product_score", None),
+                    "confidence_score": getattr(score_result, "confidence_score", None),
+                    "rule_score": getattr(score_result, "rule_score", None),
+                    "line_count": len(getattr(order, "lines", []) or []),
+                },
+            )
 
             scoring_settings = get_or_create_settings(
                 db,
@@ -1600,6 +1863,41 @@ class UnifiedOrderPipelineService:
                     source_context="pedido_confirmado_auto",
                     when=datetime.now(timezone.utc),
                 )
+                log_flow_event(
+                    db,
+                    company_id=inbound_message.company_id,
+                    event="pipeline.auto_confirmation_evaluated",
+                    stage="decision",
+                    message="Se ha evaluado la auto-confirmación del pedido.",
+                    entity_type="order",
+                    entity_id=order.id,
+                    status="confirmed" if confirmation.get("confirmed") else "review",
+                    metadata={
+                        "allowed": auto_confirm_allowed,
+                        "confirmed": bool(confirmation.get("confirmed")),
+                        "score": order.score,
+                        "safe_threshold": scoring_settings.safe_threshold,
+                        "email_input": is_email_input,
+                    },
+                )
+            else:
+                log_flow_event(
+                    db,
+                    company_id=inbound_message.company_id,
+                    event="pipeline.auto_confirmation_skipped",
+                    stage="decision",
+                    message="El pedido no cumple las reglas de auto-confirmación y pasa a revisión.",
+                    entity_type="order",
+                    entity_id=order.id,
+                    status="review",
+                    metadata={
+                        "allowed": False,
+                        "score": order.score,
+                        "safe_threshold": scoring_settings.safe_threshold,
+                        "email_input": is_email_input,
+                        "always_human_review": decision_settings.always_human_review,
+                    },
+                )
 
             review = None
             if not confirmation or not confirmation["confirmed"]:
@@ -1608,6 +1906,17 @@ class UnifiedOrderPipelineService:
                     order,
                     user=user,
                     comments=inbound_message.processing_error,
+                )
+                log_flow_event(
+                    db,
+                    company_id=inbound_message.company_id,
+                    event="pipeline.review_opened",
+                    stage="decision",
+                    message="El pedido ha quedado abierto para revisión humana.",
+                    entity_type="order",
+                    entity_id=order.id,
+                    status="review",
+                    metadata={"review_id": review.id, "score": order.score},
                 )
 
             inbound_message.status = "order_detected"
@@ -1672,8 +1981,38 @@ class UnifiedOrderPipelineService:
                     payload_json=None,
                 )
                 db.commit()
+                log_flow_event(
+                    db,
+                    company_id=inbound_message.company_id,
+                    event="pipeline.export_queued",
+                    stage="export",
+                    message="Exportación del pedido encolada.",
+                    entity_type="order",
+                    entity_id=order.id,
+                    status="queued",
+                    metadata={"order_status": order.status},
+                )
 
             message = f"Pedido {order.id} reprocesado." if existing_order else f"Pedido {order.id} creado."
+            log_flow_event(
+                db,
+                company_id=inbound_message.company_id,
+                event="pipeline.completed",
+                stage="pipeline",
+                message="Flujo de procesamiento completado.",
+                entity_type="order",
+                entity_id=order.id,
+                status="success",
+                metadata={
+                    "inbound_message_id": inbound_message.id,
+                    "review_id": review.id if review else None,
+                    "score": order.score,
+                    "order_status": order.status,
+                    "auto_confirmed": bool(confirmation and confirmation["confirmed"]),
+                    "reprocessed": bool(existing_order),
+                    "duration_ms": int((perf_counter() - pipeline_started_at) * 1000),
+                },
+            )
             return {
                 "ok": True,
                 "status": "order_detected",
@@ -1685,13 +2024,44 @@ class UnifiedOrderPipelineService:
             }
         except Exception as exc:
             db.rollback()
-            return self._mark_error(db, inbound_message, user, str(exc))
+            return self._mark_error(
+                db,
+                inbound_message,
+                user,
+                str(exc),
+                error_type=exc.__class__.__name__,
+                started_at=pipeline_started_at,
+            )
 
-    def _mark_error(self, db: Session, inbound_message: InboundMessage, user, message: str) -> dict[str, Any]:
+    def _mark_error(
+        self,
+        db: Session,
+        inbound_message: InboundMessage,
+        user,
+        message: str,
+        *,
+        error_type: str | None = None,
+        started_at: float | None = None,
+    ) -> dict[str, Any]:
         touch_message(db, inbound_message, status="error", step="processing_error")
         inbound_message.processing_error = message
         db.commit()
         log_action(db, company_id=inbound_message.company_id, user=user, action="agent.processing_error", entity_type="inbound_message", entity_id=inbound_message.id, message=message[:500])
+        log_flow_event(
+            db,
+            company_id=inbound_message.company_id,
+            event="pipeline.failed",
+            stage="pipeline",
+            message="El flujo de procesamiento terminó con error.",
+            entity_type="inbound_message",
+            entity_id=inbound_message.id,
+            status="error",
+            metadata={
+                "error_type": error_type or "processing_error",
+                "processing_step": inbound_message.processing_step,
+                "duration_ms": int((perf_counter() - started_at) * 1000) if started_at else None,
+            },
+        )
         return {"ok": False, "message": message}
 
     def _input_text(self, inbound_message: InboundMessage, email: Email | None = None) -> str:
@@ -1768,6 +2138,7 @@ class UnifiedOrderPipelineService:
                 api_key=decrypt_secret(settings.api_key_encrypted),
                 base_url=settings.base_url or "https://api.openai.com/v1",
                 timeout_seconds=settings.timeout_seconds,
+                reasoning_effort=getattr(settings, "reasoning_effort", None),
             )
         except Exception as exc:
             return None, exc.__class__.__name__
@@ -1794,6 +2165,7 @@ class UnifiedOrderPipelineService:
                 api_key=decrypt_secret(settings.api_key_encrypted),
                 base_url=settings.base_url or "https://api.openai.com/v1",
                 timeout_seconds=settings.timeout_seconds,
+                reasoning_effort=getattr(settings, "reasoning_effort", None),
             )
         except Exception as exc:
             message = str(exc) or "Error llamando al proveedor IA."
@@ -1989,6 +2361,24 @@ class UnifiedOrderPipelineService:
                 customer = None
                 method = customer_decision["selected"].source if customer_decision["selected"] else method
                 customer_score = customer_decision["selected"].confidence if customer_decision["selected"] else customer_score
+        log_flow_event(
+            db,
+            company_id=inbound_message.company_id,
+            event="pipeline.customer_decided",
+            stage="decision",
+            message="Resolución de cliente completada.",
+            entity_type="inbound_message",
+            entity_id=inbound_message.id,
+            status="review" if customer_decision["requires_review"] else "success",
+            metadata={
+                "customer_id": customer.id if customer else None,
+                "method": method,
+                "confidence": customer_score,
+                "requires_review": customer_decision["requires_review"],
+                "candidate_count": len(customer_decision.get("alternatives") or []),
+                "detected_customer_is_tenant": detected_customer_is_tenant,
+            },
+        )
         if existing_order:
             order = existing_order
             order.lines.clear()
@@ -2040,7 +2430,7 @@ class UnifiedOrderPipelineService:
             review_reasons.append(f"Cliente elegido por {customer_decision['selected'].source}: {customer_decision['selected'].reason}")
         elif customer_decision["evidence"]:
             review_reasons.append(f"Cliente con evidencia parcial: {customer_decision['evidence'][0]['reason']}")
-        for raw_line in self._lines_from_extraction(extracted):
+        for line_index, raw_line in enumerate(self._lines_from_extraction(extracted), start=1):
             for uncertainty in raw_line.get("uncertainties") or []:
                 if isinstance(uncertainty, dict) and uncertainty.get("reason"):
                     review_reasons.append(str(uncertainty["reason"]))
@@ -2115,6 +2505,26 @@ class UnifiedOrderPipelineService:
             if quantity_issue:
                 doubt_parts.append(quantity_issue)
             doubt = "; ".join(dict.fromkeys(doubt_parts))
+            log_flow_event(
+                db,
+                company_id=inbound_message.company_id,
+                event="pipeline.product_decided",
+                stage="decision",
+                message=f"Resolución de producto completada para la línea {line_index}.",
+                entity_type="order",
+                entity_id=order.id,
+                status="review" if doubt else "success",
+                metadata={
+                    "line_index": line_index,
+                    "product_id": product.id if product else None,
+                    "method": product_method,
+                    "confidence": product_score,
+                    "deterministic": product_is_deterministic,
+                    "quantity_valid": parsed_quantity is not None,
+                    "requires_review": bool(doubt),
+                    "semantic_candidate_count": len(semantic_candidates),
+                },
+            )
             if doubt:
                 review_reasons.append(doubt)
                 if semantic_candidates:
