@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.db.models import BackgroundJob, Company, Conversation, Customer, Email, EmailSettings, InboundMessage, InputChannel, LLMSettings, Order, Product, PromptExecution
+from app.db.models import BackgroundJob, Company, Conversation, Customer, Email, EmailSettings, InboundMessage, InputChannel, LLMSettings, Order, Product, PromptExecution, PromptExecutionDetail
 from app.core.metrics import snapshot_metrics
 from app.master.models import MasterCompany, MasterTenantDatabase
 from app.settings.email_config import email_config_status
@@ -76,11 +76,19 @@ def company_diagnostics(master_db: Session, company_id: int) -> dict:
             select(PromptExecution)
             .where(
                 PromptExecution.company_id == company_id,
-                PromptExecution.prompt_purpose.in_(["classification", "extraction"]),
+                PromptExecution.prompt_purpose.in_(["classification", "extraction", "validation"]),
             )
             .order_by(PromptExecution.id.desc())
             .limit(6)
         ).all()
+        detail_ids = set(
+            db.scalars(
+                select(PromptExecutionDetail.prompt_execution_id).where(
+                    PromptExecutionDetail.company_id == company_id,
+                    PromptExecutionDetail.prompt_execution_id.in_([execution.id for execution in prompt_executions]),
+                )
+            ).all()
+        ) if prompt_executions else set()
         return {
             **base,
             "customers_total": db.scalar(select(func.count()).select_from(Customer).where(Customer.company_id == company_id)) or 0,
@@ -114,6 +122,8 @@ def company_diagnostics(master_db: Session, company_id: int) -> dict:
                     "validation_errors": execution.validation_errors_json,
                     "duration_ms": execution.duration_ms,
                     "response_excerpt": execution.response_excerpt,
+                    "detail_available": execution.id in detail_ids,
+                    "detail_url": f"/settings/diagnostics/prompts/{execution.id}",
                     "created_at": execution.created_at,
                 }
                 for execution in prompt_executions

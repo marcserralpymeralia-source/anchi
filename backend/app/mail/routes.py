@@ -4,7 +4,7 @@ import logging
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, selectinload
 
@@ -12,19 +12,16 @@ from app.auth.dependencies import current_user
 from app.core.entry_workflow import queue_email_processing, mark_email_no_order
 from app.core.templating import templates
 from app.dashboard.service import email_workbench_item
-from app.db.models import Email, EmailSettings, Order
+from app.db.models import Email, Order
 from app.jobs.service import execute_job_inline
 from app.logs.service import log_action
 from app.master.database import get_master_db
 from app.master.models import EmailSyncState
 from app.master.service import TenantUser
-from app.settings.email_config import email_config_status
 from app.tenancy.database import get_tenant_db
 
 router = APIRouter(prefix="/mail", tags=["mail"])
 logger = logging.getLogger(__name__)
-MAIL_PAGE_SIZE = 10
-
 
 def _redirect_back(request: Request, fallback: str = "/") -> RedirectResponse:
     return RedirectResponse(request.headers.get("referer") or fallback, status_code=303)
@@ -113,29 +110,6 @@ def _apply_mail_scope(stmt, scope: tuple[str | None, str | None]):  # noqa: ANN0
     return stmt
 
 
-def _mail_inbox_item(email: Email, order: Order | None = None) -> dict:
-    item = email_workbench_item(email)
-    summary = (email.body or email.extracted_text or "").strip()
-    item.update(
-        {
-            "date": email.received_at,
-            "title": email.subject or "Correo sin asunto",
-            "subtitle": email.sender or "Remitente desconocido",
-            "summary": summary,
-        }
-    )
-    if order:
-        item.update(
-            {
-                "order_id": order.id,
-                "order_status": order.status,
-                "order_status_label": order.status,
-                "score": order.score,
-            }
-        )
-    return item
-
-
 @router.post("/bulk-action")
 def mail_bulk_action(
     request: Request,
@@ -143,9 +117,8 @@ def mail_bulk_action(
     email_ids: list[int] = Form(default=[]),
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
-    master_db: Session = Depends(get_master_db),
 ):
-    """Apply a safe batch action to emails belonging to the current mailbox."""
+    """Apply a safe batch action to emails belonging to the current tenant."""
     if action not in {"mark_read", "archive"}:
         if _wants_json(request):
             return JSONResponse({"ok": False, "message": "Acción no válida."}, status_code=400)
@@ -157,7 +130,6 @@ def mail_bulk_action(
             return JSONResponse({"ok": False, "message": "No hay correos seleccionados."}, status_code=400)
         return _redirect_back(request)
 
-    active_scope = _resolve_mail_scope(master_db, db, user.company_id)
     emails = db.scalars(
         select(Email).where(
             Email.company_id == user.company_id,
@@ -166,8 +138,6 @@ def mail_bulk_action(
     ).all()
     changed = 0
     for email in emails:
-        if not _email_matches_active_scope(email, active_scope):
-            continue
         email.is_read = True
         if action == "archive":
             email.archived = True
@@ -182,81 +152,11 @@ def mail_bulk_action(
             action=f"mail.bulk.{action}",
             entity_type="email_batch",
             message=f"Acción masiva aplicada a {changed} correos",
-            metadata={"email_ids": [email.id for email in emails if _email_matches_active_scope(email, active_scope)]},
+            metadata={"email_ids": [email.id for email in emails]},
         )
     if _wants_json(request):
         return JSONResponse({"ok": True, "action": action, "changed": changed})
     return _redirect_back(request)
-
-
-@router.get("")
-def mail_inbox(
-    request: Request,
-    page: int = 1,
-    db: Session = Depends(get_tenant_db),
-    user: TenantUser = Depends(current_user),
-    master_db: Session = Depends(get_master_db),
-):
-    page = max(page, 1)
-    settings = db.scalar(select(EmailSettings).where(EmailSettings.company_id == user.company_id))
-    email_status = email_config_status(settings) if settings else None
-    account = (settings.connected_email or settings.imap_username) if settings else None
-    account_ready = bool(email_status and email_status["imap_ready"])
-    active_scope = _resolve_mail_scope(master_db, db, user.company_id) if account_ready else (None, None)
-
-    total_items = 0
-    emails: list[Email] = []
-    orders_by_email: dict[int, Order] = {}
-    if account_ready:
-        base_stmt = _apply_mail_scope(
-            select(Email).where(
-                Email.company_id == user.company_id,
-                Email.archived.is_(False),
-            ),
-            active_scope,
-        )
-        total_items = db.scalar(select(func.count()).select_from(base_stmt.subquery())) or 0
-        emails = db.scalars(
-            base_stmt.order_by(Email.received_at.desc(), Email.id.desc())
-            .offset((page - 1) * MAIL_PAGE_SIZE)
-            .limit(MAIL_PAGE_SIZE)
-            .options(selectinload(Email.attachments))
-        ).all()
-        email_ids = [email.id for email in emails]
-        if email_ids:
-            orders = db.scalars(
-                select(Order)
-                .where(Order.company_id == user.company_id, Order.email_id.in_(email_ids))
-                .order_by(Order.id.desc())
-            ).all()
-            for order in orders:
-                if order.email_id is not None:
-                    orders_by_email.setdefault(order.email_id, order)
-
-    items = [_mail_inbox_item(email, orders_by_email.get(email.id)) for email in emails]
-    total_pages = (total_items + MAIL_PAGE_SIZE - 1) // MAIL_PAGE_SIZE if total_items else 0
-    return templates.TemplateResponse(
-        "mail/list.html",
-        {
-            "request": request,
-            "user": user,
-            "title": "Buzón de correo",
-            "items": items,
-            "account": account,
-            "account_ready": account_ready,
-            "email_status": email_status,
-            "pagination": {
-                "page": page,
-                "page_size": MAIL_PAGE_SIZE,
-                "total_items": int(total_items),
-                "total_pages": total_pages,
-                "has_previous": page > 1,
-                "has_next": page < total_pages,
-                "start_item": (page - 1) * MAIL_PAGE_SIZE + 1 if total_items else 0,
-                "end_item": min(page * MAIL_PAGE_SIZE, total_items),
-            },
-        },
-    )
 
 
 @router.get("/{email_id}")
@@ -376,14 +276,18 @@ def mail_reprocess(email_id: int, request: Request, db: Session = Depends(get_te
 
 
 @router.post("/{email_id}/mark-read")
-def mail_mark_read(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
-    active_scope = _resolve_mail_scope(master_db, db, user.company_id)
+def mail_mark_read(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     email = db.get(Email, email_id)
-    if email and email.company_id == user.company_id and _email_matches_active_scope(email, active_scope):
-        email.is_read = True
-        email.archived = False
-        db.commit()
-        log_action(db, company_id=user.company_id, user=user, action="mail.mark_read", entity_type="email", entity_id=email.id, message="Correo marcado como leído")
+    if not email or email.company_id != user.company_id:
+        if _wants_json(request):
+            return JSONResponse({"ok": False, "email_id": email_id, "message": "Correo no encontrado."}, status_code=404)
+        return _redirect_back(request)
+    email.is_read = True
+    email.archived = False
+    db.commit()
+    log_action(db, company_id=user.company_id, user=user, action="mail.mark_read", entity_type="email", entity_id=email.id, message="Correo marcado como leído")
+    if _wants_json(request):
+        return JSONResponse({"ok": True, "email_id": email_id, "action": "mark_read"})
     return _redirect_back(request)
 
 
@@ -423,14 +327,18 @@ def mail_toggle_favorite(email_id: int, request: Request, db: Session = Depends(
 
 
 @router.post("/{email_id}/archive")
-def mail_archive(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user), master_db: Session = Depends(get_master_db)):
-    active_scope = _resolve_mail_scope(master_db, db, user.company_id)
+def mail_archive(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     email = db.get(Email, email_id)
-    if email and email.company_id == user.company_id and _email_matches_active_scope(email, active_scope):
-        email.is_read = True
-        email.archived = True
-        db.commit()
-        log_action(db, company_id=user.company_id, user=user, action="mail.archive", entity_type="email", entity_id=email.id, message="Correo archivado")
+    if not email or email.company_id != user.company_id:
+        if _wants_json(request):
+            return JSONResponse({"ok": False, "email_id": email_id, "message": "Correo no encontrado."}, status_code=404)
+        return _redirect_back(request)
+    email.is_read = True
+    email.archived = True
+    db.commit()
+    log_action(db, company_id=user.company_id, user=user, action="mail.archive", entity_type="email", entity_id=email.id, message="Correo archivado")
+    if _wants_json(request):
+        return JSONResponse({"ok": True, "email_id": email_id, "action": "archive"})
     return _redirect_back(request)
 
 

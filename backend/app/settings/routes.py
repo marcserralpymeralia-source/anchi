@@ -1,4 +1,6 @@
 import logging
+import json
+from types import SimpleNamespace
 from datetime import datetime, timezone
 from datetime import date
 from urllib.parse import urlsplit, urlunsplit
@@ -12,20 +14,20 @@ from sqlalchemy.orm import Session
 from app.core.templating import templates
 from app.core.config import get_settings
 from app.core.middleware import invalidate_branding_cache
-from app.auth.dependencies import current_user
-from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, LEGACY_OPENAI_MODEL_FALLBACK, openai_model_description, openai_model_label, openai_model_option_payload, OPENAI_MODEL_PRESET_VALUES, resolve_openai_runtime_model
+from app.auth.dependencies import current_user, require_tenant_role
+from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, DEFAULT_REASONING_EFFORT, LEGACY_OPENAI_MODEL_FALLBACK, REASONING_EFFORT_VALUES, openai_model_description, openai_model_label, openai_model_option_payload, OPENAI_MODEL_PRESET_VALUES, reasoning_effort_option_payload, resolve_openai_model_choice, resolve_openai_runtime_model
 from app.master.database import get_master_db
 from app.master.service import TenantUser
 from app.master.models import EmailSyncState
-from app.core.encryption import mask_secret
-from app.db.models import AuditLog, BrandingSettings, Company, Customer, DecisionSettings, Email, EmailSettings, EmailTemplate, ExportSettings, FTPSettings, InputChannel, InboundMessage, LLMSettings, Order, Product, PromptExecution, PromptTemplate, PromptVersion, ScoringSettings
+from app.core.encryption import decrypt_secret, encrypt_secret, mask_secret
+from app.db.models import AuditLog, BrandingSettings, Company, Customer, DecisionSettings, Email, EmailSettings, EmailTemplate, ExportSettings, FTPSettings, InputChannel, InboundMessage, LLMSettings, Order, Product, PromptExecution, PromptExecutionDetail, PromptTemplate, PromptVersion, ScoringSettings
 from app.db.models import BackgroundJob
 from app.logs.service import log_action
 from app.settings.agent_config import agent_metrics, agent_status, apply_safety_level, improvement_suggestions
 from app.settings.autoconfig import detect_email_configuration
 from app.settings.branding import branding_to_dict, delete_brand_asset, get_or_create_branding, reset_branding, store_brand_asset, update_branding_from_form
 from app.settings.email_config import TEMPLATE_VARIABLES, email_config_status, email_templates, ensure_default_email_templates, serialize_email_settings
-from app.settings.integrations import classify_sample, extract_sample, preview_initial_imap_sync, run_initial_imap_sync, send_test_email, test_imap_connection, test_smtp_connection
+from app.settings.integrations import classify_sample, extract_sample, preview_initial_imap_sync, run_initial_imap_sync, send_test_email, test_imap_connection, test_smtp_connection, validate_sample
 from app.settings.application import run_connection_test, update_settings_section_async
 from app.settings.service import get_or_create_settings, resolve_updated_by_id, update_with_form
 from app.dashboard.service import recent_processed_emails_overview
@@ -62,11 +64,20 @@ def prompt_execution_diagnostics(
         select(PromptExecution)
         .where(
             PromptExecution.company_id == user.company_id,
-            PromptExecution.prompt_purpose.in_(["classification", "extraction"]),
+            PromptExecution.prompt_purpose.in_(["classification", "extraction", "validation"]),
         )
         .order_by(PromptExecution.id.desc())
         .limit(6)
     ).all()
+    execution_ids = [execution.id for execution in executions]
+    detail_ids = set(
+        db.scalars(
+            select(PromptExecutionDetail.prompt_execution_id).where(
+                PromptExecutionDetail.company_id == user.company_id,
+                PromptExecutionDetail.prompt_execution_id.in_(execution_ids),
+            )
+        ).all()
+    ) if execution_ids else set()
 
     return JSONResponse(
         {
@@ -80,6 +91,8 @@ def prompt_execution_diagnostics(
                     "validation_errors": execution.validation_errors_json,
                     "duration_ms": execution.duration_ms,
                     "response_excerpt": execution.response_excerpt,
+                    "detail_available": execution.id in detail_ids,
+                    "detail_url": f"/settings/diagnostics/prompts/{execution.id}",
                     "created_at": execution.created_at.isoformat() if execution.created_at else None,
                 }
                 for execution in executions
@@ -331,6 +344,10 @@ def _settings_module_context(request: Request, db: Session, user: TenantUser, mo
         metrics = agent_metrics(db, user.company_id, scoring_settings)
         dashboard = build_settings_dashboard(db, user, metrics, llm_settings, scoring_settings, prompt_templates=[])
         extraction_model_value = resolve_openai_runtime_model(llm_settings.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK)
+        classification_model_value = resolve_openai_runtime_model(llm_settings.classification_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK)
+        validation_model_value = resolve_openai_runtime_model(llm_settings.validation_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK)
+        model_options = openai_model_option_payload()
+        model_values = sorted(OPENAI_MODEL_PRESET_VALUES)
         context.update(
             llm=llm_settings,
             llm_provider_options=[
@@ -342,11 +359,16 @@ def _settings_module_context(request: Request, db: Session, user: TenantUser, mo
             agent_status=agent_status(llm_settings, metrics),
             agent_metrics=metrics,
             agent_improvements=improvement_suggestions(db, user.company_id),
-            extraction_model_options=openai_model_option_payload(),
-            extraction_model_values=sorted(OPENAI_MODEL_PRESET_VALUES),
+            model_options=model_options,
+            model_values=model_values,
+            extraction_model_options=model_options,
+            extraction_model_values=model_values,
+            classification_model_value=classification_model_value,
             extraction_model_value=extraction_model_value,
+            validation_model_value=validation_model_value,
             extraction_model_label=openai_model_label(extraction_model_value),
             extraction_model_description=openai_model_description(extraction_model_value),
+            reasoning_effort_options=reasoning_effort_option_payload(),
             dashboard={"ai_module": dashboard["ai_module"]},
             is_superadmin=user.role.name == "Superadmin",
             mask_secret=mask_secret,
@@ -403,6 +425,86 @@ def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: 
         decision=decision_settings,
         prompt_templates=[],
         prompt_count=db.scalar(select(func.count(PromptTemplate.id)).where(PromptTemplate.company_id == user.company_id)) or 0,
+    )
+    return templates.TemplateResponse(
+        "settings/index.html",
+        {
+            "request": request,
+            "user": user,
+            "company": company,
+            "settings_fragment": "",
+            "settings_search_catalog": SETTINGS_SEARCH_CATALOG,
+            "dashboard": dashboard,
+        },
+    )
+
+
+@router.get("/diagnostics/prompts/{execution_id}")
+def prompt_execution_detail(
+    execution_id: int,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(require_tenant_role("Administrador", "Superadmin")),
+):
+    execution = db.scalar(
+        select(PromptExecution).where(
+            PromptExecution.id == execution_id,
+            PromptExecution.company_id == user.company_id,
+        )
+    )
+    if not execution:
+        raise HTTPException(status_code=404, detail="Ejecución IA no encontrada")
+
+    detail = db.scalar(
+        select(PromptExecutionDetail).where(
+            PromptExecutionDetail.prompt_execution_id == execution.id,
+            PromptExecutionDetail.company_id == user.company_id,
+        )
+    )
+
+    def decode_json(raw: str | None):
+        if not raw:
+            return {}
+        try:
+            value = json.loads(raw)
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return value
+
+    return JSONResponse(
+        {
+            "company_id": user.company_id,
+            "execution": {
+                "id": execution.id,
+                "purpose": execution.prompt_purpose,
+                "prompt_name": execution.prompt_name,
+                "prompt_version": execution.prompt_version,
+                "model": execution.model,
+                "status": execution.output_status,
+                "validation_errors": decode_json(execution.validation_errors_json),
+                "input_reference": execution.input_reference,
+                "input_tokens": execution.input_tokens,
+                "output_tokens": execution.output_tokens,
+                "duration_ms": execution.duration_ms,
+                "response_hash": execution.response_hash,
+                "response_excerpt": execution.response_excerpt,
+                "started_at": execution.started_at.isoformat() if execution.started_at else None,
+                "finished_at": execution.finished_at.isoformat() if execution.finished_at else None,
+            },
+            "detail_available": detail is not None,
+            "payload_stored": bool(detail and detail.user_input_text is not None),
+            "detail": {
+                "system_prompt": detail.system_prompt_text if detail else None,
+                "user_input": detail.user_input_text if detail else None,
+                "assistant_output": detail.assistant_output_text if detail else None,
+                "reasoning_summary": detail.reasoning_summary if detail else None,
+                "decision_summary": detail.decision_summary if detail else None,
+                "effective_parameters": decode_json(detail.effective_parameters_json if detail else None),
+                "provider_metadata": decode_json(detail.provider_metadata_json if detail else None),
+                "is_anonymized": bool(detail and detail.is_anonymized),
+                "created_at": detail.created_at.isoformat() if detail and detail.created_at else None,
+            },
+            "notice": "Las credenciales se redactan siempre. El razonamiento privado interno del modelo no se almacena; solo se muestra un resumen explícito si el proveedor lo devuelve.",
+        }
     )
     return templates.TemplateResponse(
         "settings/index.html",
@@ -1383,21 +1485,177 @@ def pause_agent(db: Session = Depends(get_tenant_db), user: TenantUser = Depends
 
 
 @router.post("/agent/test-full-flow")
-def test_agent_full_flow(sample_text: str = Form("Cliente de prueba solicita 10 unidades del articulo de prueba."), db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+def test_agent_full_flow(
+    request: Request,
+    sample_text: str = Form("Cliente de prueba solicita 10 unidades del articulo de prueba."),
+    classification_model_mode: str = Form(""),
+    classification_model_custom: str = Form(""),
+    classification_model: str = Form(""),
+    extraction_model_mode: str = Form(""),
+    extraction_model_custom: str = Form(""),
+    extraction_model: str = Form(""),
+    validation_model_mode: str = Form(""),
+    validation_model_custom: str = Form(""),
+    validation_model: str = Form(""),
+    use_same_model_for_all: str = Form(""),
+    reasoning_effort: str = Form(""),
+    api_key_encrypted: str = Form(""),
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
     llm = get_or_create_settings(db, LLMSettings, user.company_id)
+    test_settings = _agent_flow_test_settings(
+        llm,
+        classification_model_mode=classification_model_mode,
+        classification_model_custom=classification_model_custom,
+        classification_model=classification_model,
+        extraction_model_mode=extraction_model_mode,
+        extraction_model_custom=extraction_model_custom,
+        extraction_model=extraction_model,
+        validation_model_mode=validation_model_mode,
+        validation_model_custom=validation_model_custom,
+        validation_model=validation_model,
+        use_same_model_for_all=use_same_model_for_all,
+        reasoning_effort=reasoning_effort,
+        api_key_encrypted=api_key_encrypted,
+    )
     start = perf_counter()
-    classification = classify_sample(db, llm, user.company_id, sample_text, active_prompt_content(db, user.company_id, "classification"))
-    extraction = extract_sample(db, llm, user.company_id, sample_text, active_prompt_content(db, user.company_id, "extraction")) if classification.get("ok") else {"ok": False, "message": "No se ejecuto extraccion porque fallo la clasificacion."}
+    classification = _run_agent_flow_step(
+        lambda: classify_sample(db, test_settings, user.company_id, sample_text, active_prompt_content(db, user.company_id, "classification")),
+        "clasificación",
+    )
+    extraction = (
+        _run_agent_flow_step(
+            lambda: extract_sample(db, test_settings, user.company_id, sample_text, active_prompt_content(db, user.company_id, "extraction")),
+            "extracción",
+        )
+        if classification.get("ok")
+        else {"ok": False, "message": "No se ejecutó extracción porque falló la clasificación.", "skipped": True}
+    )
+    validation = (
+        _run_agent_flow_step(
+            lambda: validate_sample(
+                db,
+                test_settings,
+                user.company_id,
+                sample_text,
+                extraction.get("validated_content") or {},
+                active_prompt_content(db, user.company_id, "validation"),
+            ),
+            "validación",
+        )
+        if extraction.get("ok")
+        else {"ok": False, "message": "No se ejecutó validación porque falló la extracción.", "skipped": True}
+    )
     elapsed_ms = int((perf_counter() - start) * 1000)
-    ok = classification.get("ok") and extraction.get("ok")
+    ok = bool(classification.get("ok") and extraction.get("ok") and validation.get("ok"))
+    models = {
+        "classification": test_settings.classification_model,
+        "extraction": test_settings.extraction_model,
+        "validation": test_settings.validation_model,
+    }
+    steps = [
+        _agent_flow_step_payload("Clasificación", classification, models["classification"]),
+        _agent_flow_step_payload("Extracción", extraction, models["extraction"]),
+        _agent_flow_step_payload("Validación", validation, models["validation"]),
+    ]
+    failed_messages = [step["message"] for step in steps if not step["ok"] and not step.get("skipped")]
+    status_label = "correcto" if ok else "con incidencias"
+    model_summary = ", ".join(f"{label}={model}" for label, model in [("clasificación", models["classification"]), ("extracción", models["extraction"]), ("validación", models["validation"])])
     llm.last_test_at = datetime.now(timezone.utc)
     llm.last_test_ok = bool(ok)
-    llm.last_test_message = f"Flujo completo {'correcto' if ok else 'con incidencias'}. Tiempo: {elapsed_ms} ms. No se confirmo ni exporto ningun pedido."
-    llm.last_error = None if ok else f"{classification.get('message')} {extraction.get('message')}"
+    llm.last_test_message = f"Flujo completo {status_label}. Modelos: {model_summary}. Tiempo: {elapsed_ms} ms. No se confirmó ni exportó ningún pedido."
+    llm.last_error = None if ok else " ".join(failed_messages) or "La prueba no pudo completar todos los pasos."
     llm.last_response_ms = elapsed_ms
     db.commit()
     log_action(db, company_id=user.company_id, user=user, action="agent.process_email", entity_type="settings", entity_id=llm.id, message=llm.last_test_message)
+    response_payload = {
+        "ok": bool(ok),
+        "message": llm.last_test_message,
+        "steps": steps,
+        "duration_ms": elapsed_ms,
+    }
+    if request.headers.get("x-requested-with") == "fetch" or "application/json" in (request.headers.get("accept") or ""):
+        return JSONResponse(response_payload, status_code=200 if ok else 422)
     return RedirectResponse("/settings#agent-tests", status_code=303)
+
+
+def _agent_flow_test_settings(
+    llm: LLMSettings,
+    *,
+    classification_model_mode: str,
+    classification_model_custom: str,
+    classification_model: str,
+    extraction_model_mode: str,
+    extraction_model_custom: str,
+    extraction_model: str,
+    validation_model_mode: str,
+    validation_model_custom: str,
+    validation_model: str,
+    use_same_model_for_all: str,
+    reasoning_effort: str,
+    api_key_encrypted: str,
+) -> SimpleNamespace:
+    selected_extraction = resolve_openai_model_choice(
+        extraction_model_mode,
+        extraction_model_custom,
+        extraction_model or resolve_openai_runtime_model(llm.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK),
+    )
+    selected_classification = resolve_openai_model_choice(
+        classification_model_mode,
+        classification_model_custom,
+        classification_model or resolve_openai_runtime_model(llm.classification_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK),
+    )
+    selected_validation = resolve_openai_model_choice(
+        validation_model_mode,
+        validation_model_custom,
+        validation_model or resolve_openai_runtime_model(llm.validation_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK),
+    )
+    if use_same_model_for_all == "on":
+        selected_classification = selected_extraction
+        selected_validation = selected_extraction
+
+    submitted_api_key = (api_key_encrypted or "").strip()
+    if submitted_api_key and submitted_api_key not in {"********", "••••••••"} and decrypt_secret(submitted_api_key) is None:
+        submitted_api_key = encrypt_secret(submitted_api_key) or llm.api_key_encrypted
+    else:
+        submitted_api_key = llm.api_key_encrypted
+
+    normalized_reasoning = (reasoning_effort or getattr(llm, "reasoning_effort", None) or DEFAULT_REASONING_EFFORT).strip().lower()
+    if normalized_reasoning not in REASONING_EFFORT_VALUES:
+        normalized_reasoning = DEFAULT_REASONING_EFFORT
+    return SimpleNamespace(
+        provider=llm.provider,
+        api_key_encrypted=submitted_api_key,
+        base_url=llm.base_url,
+        temperature=llm.temperature,
+        max_tokens=llm.max_tokens,
+        retries=llm.retries,
+        timeout_seconds=llm.timeout_seconds,
+        classification_model=selected_classification,
+        extraction_model=selected_extraction,
+        validation_model=selected_validation,
+        reasoning_effort=normalized_reasoning,
+    )
+
+
+def _run_agent_flow_step(callback, label: str) -> dict:
+    try:
+        return callback()
+    except Exception as exc:  # pragma: no cover - defensive boundary for provider failures
+        logger.exception("Fallo en la prueba de flujo IA", extra={"step": label})
+        return {"ok": False, "message": f"{label.capitalize()}: error inesperado ({type(exc).__name__})."}
+
+
+def _agent_flow_step_payload(label: str, result: dict, fallback_model: str) -> dict:
+    return {
+        "label": label,
+        "ok": bool(result.get("ok")),
+        "skipped": bool(result.get("skipped")),
+        "model": result.get("model") or fallback_model,
+        "message": result.get("message") or ("Completado correctamente." if result.get("ok") else "No completado."),
+        "duration_ms": result.get("duration_ms"),
+    }
 
 
 @router.post("/llm/classify")
@@ -1433,9 +1691,9 @@ def test_llm_extraction(sample_text: str = Form(...), db: Session = Depends(get_
 def active_prompt_content(db: Session, company_id: int, purpose: str) -> str:
     template = db.scalar(select(PromptTemplate).where(PromptTemplate.company_id == company_id, PromptTemplate.purpose == purpose))
     if not template or not template.active_version_id:
-        return "Responde en JSON valido cuando se solicite extraccion."
+        return DEFAULT_AGENT_PROMPTS.get(purpose, "Responde en JSON valido cuando se solicite extraccion.")
     version = db.get(PromptVersion, template.active_version_id)
-    return version.content if version else "Responde en JSON valido cuando se solicite extraccion."
+    return version.content if version else DEFAULT_AGENT_PROMPTS.get(purpose, "Responde en JSON valido cuando se solicite extraccion.")
 
 
 DEFAULT_AGENT_PROMPTS = {

@@ -7,6 +7,8 @@
 {% set attachments = order.email.attachments|list if order.email else [] %}
 {% set score_value = order.score if order.score is not none else 0 %}
 {% set selected_customer_id = order.validated_customer_id or order.customer_id or 0 %}
+{% set is_email_order = order_channel == "email" %}
+{% set is_whatsapp_order = order_channel == "whatsapp" %}
 
 {# Safe totals calculation #}
 {% set ns = namespace(total=0.0, total_units=0.0) %}
@@ -36,11 +38,11 @@
         {{ order.status|status_label }}
       </span>
 
-      {% if order.email %}
+      {% if is_email_order %}
         <span class="badge" style="background:#e0f2fe;color:#0369a1;font-weight:600;display:inline-flex;align-items:center;gap:4px;">
           {{ icon_mail(12) }} <span>Correo</span>
         </span>
-      {% elif conversation_preview or order.conversation %}
+      {% elif is_whatsapp_order %}
         <span class="badge" style="background:#dcfce7;color:#15803d;font-weight:600;display:inline-flex;align-items:center;gap:4px;">
           {{ icon_whatsapp(12) }} <span>WhatsApp</span>
         </span>
@@ -68,17 +70,17 @@
     <div class="manual-panel-header">
       <div style="display:flex;align-items:center;gap:8px;">
         <h3>Origen del pedido</h3>
-        {% if order.email and not attachments %}
+        {% if is_email_order %}
           <span class="badge" style="font-size:11px;">Correo electrónico</span>
-        {% elif conversation_preview or order.conversation %}
+        {% elif is_whatsapp_order %}
           <span class="badge status-confirmed" style="font-size:11px;">WhatsApp</span>
         {% endif %}
       </div>
 
-      {# Tabs for switching between Email, Attachments/PDFs, and WhatsApp #}
-      {% if (order.email and attachments) or (attachments and (conversation_preview or order.conversation)) %}
+      {# Tabs for switching between the real source channel and its attachments. #}
+      {% if attachments and (is_email_order or is_whatsapp_order) %}
         <nav class="dock-segment-group" aria-label="Cambiar vista de origen">
-          {% if order.email %}
+          {% if is_email_order %}
             <button
               type="button"
               class="dock-segment-btn is-active"
@@ -96,14 +98,14 @@
               data-order-source-tab="attachments"
             >
               {{ icon_paperclip(13) }}
-              <span>PDF ({{ attachments|length }})</span>
+              <span>Adjuntos ({{ attachments|length }})</span>
             </button>
           {% endif %}
 
-          {% if conversation_preview or order.conversation %}
+          {% if is_whatsapp_order %}
             <button
               type="button"
-              class="dock-segment-btn {% if not order.email and not attachments %}is-active{% endif %}"
+              class="dock-segment-btn {% if not attachments %}is-active{% endif %}"
               data-order-source-tab="conversation"
             >
               {{ icon_whatsapp(13) }}
@@ -172,9 +174,9 @@
       </div>
     {% endif %}
 
-    {# 2. ATTACHMENT / PDF EMBEDDED VIEW PANEL #}
+    {# 2. ATTACHMENTS EMBEDDED VIEW PANEL #}
     {% if attachments %}
-      <div class="order-review-source-panel {% if not order.email %}is-active{% endif %}" data-order-source-panel="attachments">
+      <div class="order-review-source-panel {% if not is_email_order %}is-active{% endif %}" data-order-source-panel="attachments">
         <div class="order-attachment-toolbar">
           {% if attachments|length > 1 %}
             <select
@@ -230,8 +232,8 @@
     {% endif %}
 
     {# 3. WHATSAPP CONVERSATION PANEL #}
-    {% if conversation_preview or order.conversation %}
-      <div class="order-review-source-panel {% if not order.email and not attachments %}is-active{% endif %}" data-order-source-panel="conversation">
+    {% if is_whatsapp_order %}
+      <div class="order-review-source-panel {% if not attachments %}is-active{% endif %}" data-order-source-panel="conversation">
         <div class="whatsapp-chat-stream">
           {% set msgs = conversation_preview.messages if conversation_preview else (order.conversation.messages if order.conversation else []) %}
           {% for message in msgs %}
@@ -255,7 +257,7 @@
       </div>
     {% endif %}
 
-    {% if not order.email and not attachments and not order.conversation and not conversation_preview %}
+    {% if not is_email_order and not is_whatsapp_order and not attachments %}
       <div class="manual-empty-preview" style="min-height: 280px;">
         <div class="manual-empty-preview-icon">
           {{ icon_mail(22) }}
@@ -497,7 +499,23 @@ document.querySelectorAll("[data-product-autocomplete]").forEach((root) => {
   const input = root.querySelector("[data-product-input]");
   const productId = root.querySelector("[data-product-id]");
   const results = root.querySelector("[data-product-results]");
+  const proposalBtn = root.querySelector("[data-apply-proposed]");
   let timer;
+
+  if (proposalBtn) {
+    proposalBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const pId = proposalBtn.dataset.productId;
+      const pName = proposalBtn.dataset.productName;
+      if (pId) {
+        input.value = pName;
+        productId.value = String(pId);
+        const form = productId.form;
+        if (form) form.requestSubmit();
+      }
+    });
+  }
 
   function closeResults() {
     results.hidden = true;

@@ -36,6 +36,27 @@ OPENAI_MODEL_PRESETS: list[dict[str, str]] = [
 
 OPENAI_MODEL_PRESET_VALUES = {preset["value"] for preset in OPENAI_MODEL_PRESETS}
 
+DEFAULT_REASONING_EFFORT = "medium"
+REASONING_EFFORT_OPTIONS: list[dict[str, str]] = [
+    {
+        "value": "low",
+        "label": "Bajo",
+        "description": "Menor latencia y coste.",
+    },
+    {
+        "value": "medium",
+        "label": "Equilibrado",
+        "description": "Buen equilibrio entre calidad y velocidad.",
+    },
+    {
+        "value": "high",
+        "label": "Alto",
+        "description": "Más análisis para casos ambiguos.",
+    },
+]
+REASONING_EFFORT_VALUES = {option["value"] for option in REASONING_EFFORT_OPTIONS}
+REASONING_MODEL_PREFIXES = ("gpt-5", "gpt-6", "o1", "o3", "o4")
+
 
 def is_openai_model_preset(model: str | None) -> bool:
     return bool((model or "").strip()) and (model or "").strip() in OPENAI_MODEL_PRESET_VALUES
@@ -62,6 +83,27 @@ def resolve_openai_model_choice(choice: str | None, custom_model: str | None = N
     return (fallback or DEFAULT_OPENAI_MODEL)
 
 
+def model_supports_reasoning(model: str | None) -> bool:
+    normalized = (model or "").strip().lower()
+    return any(
+        normalized == prefix
+        or normalized.startswith(f"{prefix}.")
+        or normalized.startswith(f"{prefix}-")
+        for prefix in REASONING_MODEL_PREFIXES
+    )
+
+
+def resolve_reasoning_effort(effort: str | None, model: str | None = None) -> str | None:
+    if not model_supports_reasoning(model):
+        return None
+    normalized = (effort or "").strip().lower()
+    return normalized if normalized in REASONING_EFFORT_VALUES else DEFAULT_REASONING_EFFORT
+
+
+def reasoning_effort_option_payload() -> list[dict[str, str]]:
+    return [dict(option) for option in REASONING_EFFORT_OPTIONS]
+
+
 def openai_model_label(model: str | None) -> str:
     normalized = (model or "").strip()
     for preset in OPENAI_MODEL_PRESETS:
@@ -79,4 +121,4 @@ def openai_model_description(model: str | None) -> str:
 
 
 def openai_model_option_payload() -> list[dict[str, Any]]:
-    return [dict(preset) for preset in OPENAI_MODEL_PRESETS]
+    return [dict(preset, supports_reasoning=model_supports_reasoning(preset["value"])) for preset in OPENAI_MODEL_PRESETS]

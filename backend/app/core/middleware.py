@@ -103,6 +103,7 @@ async def branding_middleware(request: Request, call_next: Callable[[Request], A
             "tenant_slug": tenant.company.slug if tenant else None,
             "user_id": tenant.user.id if tenant and tenant.user else None,
             "membership_id": tenant.user.membership_id if tenant and tenant.user else None,
+            "flow_id": correlation_id,
             "route": request.url.path,
             "method": request.method,
         }

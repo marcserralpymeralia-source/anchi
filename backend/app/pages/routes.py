@@ -12,10 +12,11 @@ from app.auth.dependencies import current_user
 from app.core.pagination import normalize_page
 from app.core.templating import templates
 from app.dashboard.service import orders_workbench_summary, workbench_summary
-from app.db.models import Customer, Email, Order, OrderLine, ScoringSettings
+from app.db.models import Customer, Email, EmailSettings, Order, OrderLine, ScoringSettings
 from app.dashboard.service import _customer_suggestion_maps, _load_order_line_metrics, email_workbench_item, load_order_view_data, order_workbench_item, suggest_customer_for_email
 from app.orders.state import ERROR_ORDER_STATUSES, PENDING_ORDER_STATUSES, REVIEW_ORDER_STATUSES, TERMINAL_ORDER_STATUSES
 from app.master.service import TenantUser
+from app.settings.email_config import email_config_status
 from app.settings.service import get_or_create_settings
 from app.setup.service import get_setup_status, setup_operational_context
 from app.tenancy.database import get_tenant_db
@@ -480,7 +481,8 @@ def dashboard(
         },
     )
 @router.get("/history")
-def history_page(
+@router.get("/mail")
+def mail_page(
     request: Request,
     date_range: str = "90d",
     date_from: str = "",
@@ -499,6 +501,10 @@ def history_page(
 ):
     start, end = _history_bounds(date_range, date_from, date_to)
     scoring_settings = get_or_create_settings(db, ScoringSettings, user.company_id)
+    email_settings = db.scalar(select(EmailSettings).where(EmailSettings.company_id == user.company_id))
+    email_status = email_config_status(email_settings) if email_settings else None
+    email_account = (email_settings.connected_email or email_settings.imap_username or "").strip() if email_settings else ""
+    email_sync_ready = bool(email_status and email_status["imap_ready"])
     allowed_kind = kind if kind in {"all", "orders", "emails"} else "all"
     allowed_state = state if state in {"all", "current", "review", "ready", "confirmed", "sent", "blocked"} else "all"
     suggestion_maps = _customer_suggestion_maps(db, user.company_id)
@@ -755,6 +761,8 @@ def history_page(
             "selected_email": selected_email,
             "selected_order": selected_order,
             "selected_item": selected_item,
+            "email_account": email_account,
+            "email_sync_ready": email_sync_ready,
             "filters": {"date_range": date_range, "date_from": date_from, "date_to": date_to, "kind": kind, "state": state, "customer_id": customer_id, "search": search},
             "pagination": {"page": page, "page_size": page_size, "total_items": total_items, "total_pages": total_pages, "has_previous": page > 1, "has_next": page < total_pages, "start_item": start_item, "end_item": end_item, "allowed_page_sizes": (10, 25, 50, 100)},
         },
@@ -767,10 +775,11 @@ def pedidos_page(
     user: TenantUser = Depends(current_user),
 ):
     query = request.url.query
-    dest = f"/history?{query}" if query else "/history"
+    dest = f"/mail?{query}" if query else "/mail"
     return RedirectResponse(dest, status_code=303)
 
 
+@router.get("/mail/pane/{kind}/{item_id}")
 @router.get("/history/pane/{kind}/{item_id}")
 def history_detail_pane(
     kind: str,

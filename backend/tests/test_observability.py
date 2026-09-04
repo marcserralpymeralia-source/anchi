@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -24,10 +25,12 @@ from app.core.middleware import branding_middleware  # noqa: E402
 from app.core.observability import decode_structured_message, observability_scope  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import AuditLog, BackgroundJob  # noqa: E402
+from app.db.models import AuditLog, BackgroundJob, PromptExecution  # noqa: E402
 from app.health.routes import health_live, health_ready  # noqa: E402
 from app.jobs.service import enqueue_job, job_payload, job_trace  # noqa: E402
-from app.logs.service import log_action  # noqa: E402
+from app.logs.service import audit_log_text, log_action, log_flow_event  # noqa: E402
+from app.logs.routes import delete_logs, logs_download  # noqa: E402
+from app.agent.prompt_runtime import run_prompt_execution  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.tenancy.database import get_tenant_engine  # noqa: E402
@@ -109,6 +112,89 @@ class ObservabilityTests(unittest.TestCase):
         self.assertIsNotNone(log)
         self.assertIsNone(log.user_id)
         self.assertIn("imap.demo.local", decode_structured_message(log.message)["message"])
+        db.close()
+
+    def test_flow_event_is_correlated_and_exportable_without_credentials(self):
+        db = self.TenantSession()
+        with observability_scope(flow_id="flow-email-1", correlation_id="corr-flow-1"):
+            log_flow_event(
+                db,
+                company_id=1,
+                event="pipeline.scored",
+                stage="scoring",
+                message="Scoring calculado.",
+                entity_type="order",
+                entity_id=12,
+                status="success",
+                metadata={"score": 94, "access_token": "must-not-be-stored"},
+            )
+
+        log = db.scalar(select(AuditLog).where(AuditLog.company_id == 1))
+        self.assertIsNotNone(log)
+        parsed = decode_structured_message(log.message)
+        self.assertEqual(log.action, "flow.pipeline.scored")
+        self.assertEqual(parsed["context"]["flow_id"], "flow-email-1")
+        self.assertEqual(parsed["metadata"]["event"], "pipeline.scored")
+        self.assertEqual(parsed["metadata"]["access_token"], "[redacted]")
+
+        exported = audit_log_text([log])
+        record = json.loads(exported.strip())
+        self.assertEqual(record["metadata"]["flow_id"], "flow-email-1")
+        self.assertEqual(record["metadata"]["access_token"], "[redacted]")
+        db.close()
+
+    def test_log_download_and_delete_are_scoped_to_company(self):
+        db = self.TenantSession()
+        log_action(db, company_id=1, user=None, action="flow.email.persisted", message="Empresa 1")
+        db.add(AuditLog(company_id=2, action="flow.email.persisted", message="Empresa 2"))
+        db.commit()
+        user = SimpleNamespace(
+            id=7,
+            company_id=1,
+            role=SimpleNamespace(name="Administrador"),
+        )
+
+        response = logs_download(db=db, user=user)
+        body = response.body.decode("utf-8")
+        self.assertIn("Empresa 1", body)
+        self.assertNotIn("Empresa 2", body)
+        self.assertIn("attachment; filename=\"anchi-flow-logs.log\"", response.headers["content-disposition"])
+
+        redirect = delete_logs(db=db, user=user)
+        self.assertEqual(redirect.status_code, 303)
+        self.assertIsNone(db.scalar(select(AuditLog).where(AuditLog.company_id == 1)))
+        self.assertIsNotNone(db.scalar(select(AuditLog).where(AuditLog.company_id == 2)))
+        db.close()
+
+    def test_ai_provider_failure_is_persisted_as_flow_event(self):
+        db = self.TenantSession()
+        settings = SimpleNamespace(classification_model="gpt-4.1-mini")
+
+        def failing_provider(_settings, _messages, _model):
+            raise TimeoutError("provider timeout")
+
+        with observability_scope(flow_id="flow-ai-1"):
+            with self.assertRaises(TimeoutError):
+                run_prompt_execution(
+                    db,
+                    company_id=1,
+                    purpose="classification",
+                    settings=settings,
+                    text="Contenido de prueba suficiente.",
+                    provider_call=failing_provider,
+                )
+
+        logs = db.scalars(select(AuditLog).order_by(AuditLog.id.asc())).all()
+        events = [decode_structured_message(log.message)["metadata"].get("event") for log in logs]
+        self.assertIn("ai.started", events)
+        self.assertIn("ai.failed", events)
+        failed = next(log for log in logs if decode_structured_message(log.message)["metadata"].get("event") == "ai.failed")
+        failed_metadata = decode_structured_message(failed.message)["metadata"]
+        self.assertEqual(failed_metadata["error_type"], "TimeoutError")
+        self.assertEqual(failed_metadata["prompt_execution_id"], 1)
+        execution = db.scalar(select(PromptExecution).where(PromptExecution.id == failed_metadata["prompt_execution_id"]))
+        self.assertIsNotNone(execution)
+        self.assertEqual(execution.output_status, "provider_error")
         db.close()
 
     def test_enqueue_job_embeds_trace_without_polluting_payload(self):

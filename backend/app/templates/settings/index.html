@@ -10,6 +10,23 @@
   {%- else -%}Opcional
   {%- endif -%}
 {%- endmacro %}
+{% macro model_selector(label, role, value, placeholder, disabled=false) -%}
+<div class="model-selector" data-model-selector data-model-role="{{ role }}">
+  <input type="hidden" name="{{ role }}_model" value="{{ value }}" data-model-value{% if role == "extraction" %} data-extraction-model-value{% endif %}{% if disabled %} disabled{% endif %}>
+  <label>{{ label }}
+    <select name="{{ role }}_model_mode" data-model-select{% if role == "extraction" %} data-extraction-model-select{% endif %}{% if disabled %} disabled{% endif %}>
+      {% for option in model_options %}
+        <option value="{{ option.value }}" data-label="{{ option.label }}" data-description="{{ option.description }}" data-reasoning-supported="{{ 'true' if option.supports_reasoning else 'false' }}" {% if value == option.value %}selected{% endif %}>{{ option.label }}</option>
+      {% endfor %}
+      <option value="custom" data-label="Personalizado" data-description="Introduce un model ID manualmente" data-reasoning-supported="false" {% if value not in model_values %}selected{% endif %}>Personalizado</option>
+    </select>
+  </label>
+  <label class="model-selector-custom" data-model-custom-wrap{% if role == "extraction" %} data-extraction-model-custom-wrap{% endif %} {% if value in model_values %}hidden{% endif %}>
+    Model ID personalizado
+    <input name="{{ role }}_model_custom" value="{% if value not in model_values %}{{ value }}{% endif %}" data-model-custom{% if role == "extraction" %} data-extraction-model-custom{% endif %} placeholder="{{ placeholder }}"{% if disabled or value in model_values %} disabled{% endif %}>
+  </label>
+</div>
+{%- endmacro %}
 {% block content %}
 {% if not settings_fragment %}
 <section class="settings-shell">
@@ -73,6 +90,7 @@
         <button type="button" class="button secondary compact-button" onclick="togglePendingChecklist()" id="btn-toggle-pending">
           Ver pendientes
         </button>
+        <a class="button secondary compact-button" href="/logs">Ver logs de flujo</a>
       </div>
     </div>
   </div>
@@ -791,31 +809,36 @@
           </div>
         </div>
         <div class="modelos-top-toggle">
-          <label>Usar mismo modelo para todo<input name="use_same_model_for_all" type="checkbox" {% if llm.use_same_model_for_all %}checked{% endif %}></label>
+          <label>Usar mismo modelo para todo<input name="use_same_model_for_all" type="checkbox" data-model-same-toggle {% if llm.use_same_model_for_all %}checked{% endif %}></label>
         </div>
-        <div class="form-grid grid-4-cols">
-          <label>Clasificación<input name="classification_model" value="{{ llm.classification_model }}"></label>
-          <input type="hidden" name="extraction_model" value="{{ extraction_model_value }}" data-extraction-model-value>
-          <label>Modelo de extracción
-            <select name="extraction_model_mode" data-extraction-model-select>
-              {% for option in extraction_model_options %}
-                <option value="{{ option.value }}" data-label="{{ option.label }}" data-description="{{ option.description }}" {% if extraction_model_value == option.value %}selected{% endif %}>{{ option.label }}</option>
+        <div class="model-selection-shared" data-model-selection-shared {% if not llm.use_same_model_for_all %}hidden{% endif %}>
+          {{ model_selector("Modelo para todas las tareas", "extraction", extraction_model_value, "gpt-5.6-mi-modelo", disabled=not llm.use_same_model_for_all) }}
+        </div>
+        <div class="model-selection-specialized" data-model-selection-specialized {% if llm.use_same_model_for_all %}hidden{% endif %}>
+          <div class="model-selection-grid">
+            {{ model_selector("Clasificación", "classification", classification_model_value, "gpt-5.6-mi-modelo", disabled=llm.use_same_model_for_all) }}
+            {{ model_selector("Modelo de extracción", "extraction", extraction_model_value, "gpt-5.6-mi-modelo", disabled=llm.use_same_model_for_all) }}
+            {{ model_selector("Validación", "validation", validation_model_value, "gpt-5.6-mi-modelo", disabled=llm.use_same_model_for_all) }}
+          </div>
+          <div class="form-grid">
+            <div class="model-preview-card" data-extraction-model-preview>
+              <div style="display: flex; align-items: baseline; gap: 8px;">
+                <strong data-extraction-model-preview-label>{{ extraction_model_label }}</strong>
+                <span data-extraction-model-preview-id>{{ extraction_model_value }}</span>
+              </div>
+              <small data-extraction-model-preview-description>{{ extraction_model_description }}</small>
+            </div>
+          </div>
+        </div>
+        <div class="model-reasoning-row">
+          <label>Nivel de razonamiento
+            <select name="reasoning_effort" data-reasoning-effort-select>
+              {% for option in reasoning_effort_options %}
+                <option value="{{ option.value }}" {% if (llm.reasoning_effort or "medium") == option.value %}selected{% endif %}>{{ option.label }}</option>
               {% endfor %}
-              <option value="custom" data-label="Personalizado" data-description="Introduce un model ID manualmente" {% if extraction_model_value not in extraction_model_values %}selected{% endif %}>Personalizado</option>
             </select>
           </label>
-          <label data-extraction-model-custom-wrap {% if extraction_model_value in extraction_model_values %}hidden{% endif %}>
-            Model ID personalizado
-            <input name="extraction_model_custom" value="{% if extraction_model_value not in extraction_model_values %}{{ extraction_model_value }}{% endif %}" data-extraction-model-custom placeholder="gpt-5.6-mi-modelo">
-          </label>
-          <label>Validación<input name="validation_model" value="{{ llm.validation_model }}"></label>
-          <div class="model-preview-card" data-extraction-model-preview>
-            <div style="display: flex; align-items: baseline; gap: 8px;">
-              <strong data-extraction-model-preview-label>{{ extraction_model_label }}</strong>
-              <span data-extraction-model-preview-id>{{ extraction_model_value }}</span>
-            </div>
-            <small data-extraction-model-preview-description>{{ extraction_model_description }}</small>
-          </div>
+          <p class="muted" data-reasoning-effort-help>Se aplica en las tareas cuyos modelos admiten razonamiento; en los demás se omite automáticamente.</p>
         </div>
       </section>
 
@@ -855,11 +878,15 @@
         </div>
         <div class="form-grid">
           <input type="hidden" name="sample_text" value="Cliente de prueba solicita 10 unidades del articulo de prueba.">
-          <p class="muted span-2">El flujo de prueba usa un texto de ejemplo interno para validar clasificación y extracción.</p>
+          <p class="muted span-2">El flujo usa un texto de ejemplo interno para probar los modelos seleccionados de clasificación, extracción y validación. No confirma ni exporta ningún pedido.</p>
+        </div>
+        <div class="settings-status-note agent-flow-test-status {% if not llm.last_test_message %}is-hidden{% endif %}" data-agent-flow-test-status role="status" aria-live="polite">
+          <strong>Resultado de la última prueba</strong>
+          <span data-agent-flow-test-message>{{ llm.last_test_message or "Todavía no se ha ejecutado." }}</span>
         </div>
         <div class="drawer-actions">
           <button data-loading-text="Guardando...">Guardar IA</button>
-          <button class="secondary js-loading-form" type="submit" formaction="/settings/agent/test-full-flow" formmethod="post" data-loading-text="Probando..." formnovalidate>Probar flujo</button>
+          <button class="secondary js-loading-form" type="submit" formaction="/settings/agent/test-full-flow" formmethod="post" data-loading-text="Probando..." data-agent-full-flow-test formnovalidate>Probar flujo</button>
         </div>
       </section>
 
@@ -881,12 +908,12 @@
             <label>ID organización<input name="organization_id" value="{{ llm.organization_id or '' }}"></label>
             <label>ID proyecto<input name="project_id" value="{{ llm.project_id or '' }}"></label>
             <label>Deployment Azure<input name="azure_deployment_name" value="{{ llm.azure_deployment_name or '' }}"></label>
-            <label>Logs detallados<input name="detailed_llm_logs" type="checkbox" {% if llm.detailed_llm_logs %}checked{% endif %}></label>
-            <label>Guardar payloads<input name="store_llm_payloads" type="checkbox" {% if llm.store_llm_payloads %}checked{% endif %}></label>
+            <label title="Guarda metadatos ampliados de cada etapa IA">Logs detallados<input name="detailed_llm_logs" type="checkbox" {% if llm.detailed_llm_logs %}checked{% endif %}></label>
+            <label title="Guarda prompt, entrada y salida completos en la traza de ejecución">Guardar payloads<input name="store_llm_payloads" type="checkbox" {% if llm.store_llm_payloads %}checked{% endif %}></label>
             <label>Anonimizar logs<input name="anonymize_llm_logs" type="checkbox" {% if llm.anonymize_llm_logs %}checked{% endif %}></label>
             <label>Debug<input name="debug_mode" type="checkbox" {% if llm.debug_mode %}checked{% endif %}></label>
           </div>
-          <p class="muted">Los prompts y versiones siguen en el bloque Avanzado general.</p>
+          <p class="muted">Guardar payloads registra prompt, entrada y salida completos por ejecución. Se redactan credenciales siempre; con «Anonimizar logs» también se ocultan emails y teléfonos.</p>
         </section>
       {% endif %}
     </form>
@@ -1510,44 +1537,115 @@
       if (!settingsSearchWrap.contains(event.target)) hideSearchResults();
     });
   }
-  function bindExtractionModelDialog(root = document) {
-    const extractionModelSelect = root.querySelector("[data-extraction-model-select]");
-    const extractionModelHidden = root.querySelector("[data-extraction-model-value]");
-    const extractionModelCustomWrap = root.querySelector("[data-extraction-model-custom-wrap]");
-    const extractionModelCustom = root.querySelector("[data-extraction-model-custom]");
+  function modelSupportsReasoning(model) {
+    const normalized = (model || "").trim().toLowerCase();
+    return ["gpt-5", "gpt-6", "o1", "o3", "o4"].some((prefix) => (
+      normalized === prefix || normalized.startsWith(`${prefix}.`) || normalized.startsWith(`${prefix}-`)
+    ));
+  }
+  function bindModelSelectors(root = document) {
+    const modelSelectors = [...root.querySelectorAll("[data-model-selector]")];
+    if (!modelSelectors.length) return;
+    const reasoningSelect = root.querySelector("[data-reasoning-effort-select]");
+    const reasoningHelp = root.querySelector("[data-reasoning-effort-help]");
+    const sameModelToggle = root.querySelector("[data-model-same-toggle]");
+    const sharedSelection = root.querySelector("[data-model-selection-shared]");
+    const specializedSelection = root.querySelector("[data-model-selection-specialized]");
     const extractionModelPreviewLabel = root.querySelector("[data-extraction-model-preview-label]");
     const extractionModelPreviewId = root.querySelector("[data-extraction-model-preview-id]");
     const extractionModelPreviewDescription = root.querySelector("[data-extraction-model-preview-description]");
-    if (!extractionModelSelect) return;
 
-    function syncExtractionModelPreview() {
-      const selected = extractionModelSelect.selectedOptions[0];
-      const isCustom = extractionModelSelect.value === "custom";
-      const selectedLabel = selected?.dataset?.label || selected?.textContent?.trim() || "GPT-5.6 Luna";
-      const selectedDescription = selected?.dataset?.description || "Modelo recomendado para extracción.";
-      const currentValue = isCustom ? (extractionModelCustom?.value?.trim() || extractionModelHidden?.value || "gpt-5.6-luna") : extractionModelSelect.value;
-      if (extractionModelCustomWrap) {
-        extractionModelCustomWrap.hidden = !isCustom;
-      }
-      if (extractionModelHidden) {
-        extractionModelHidden.value = currentValue;
-      }
-      if (extractionModelPreviewLabel) {
-        extractionModelPreviewLabel.textContent = isCustom ? "Modelo personalizado" : selectedLabel;
-      }
-      if (extractionModelPreviewId) {
-        extractionModelPreviewId.textContent = currentValue;
-      }
-      if (extractionModelPreviewDescription) {
-        extractionModelPreviewDescription.textContent = isCustom ? "Se guardará exactamente el model ID indicado." : selectedDescription;
-      }
+    function setModelControlsDisabled(container, disabled) {
+      container?.querySelectorAll("input, select, textarea, button").forEach((control) => {
+        control.disabled = disabled;
+      });
     }
 
-    extractionModelSelect.addEventListener("change", syncExtractionModelPreview);
-    extractionModelCustom?.addEventListener("input", syncExtractionModelPreview);
-    syncExtractionModelPreview();
+    function syncModelLayout() {
+      const useSameModel = Boolean(sameModelToggle?.checked);
+      if (sharedSelection) {
+        sharedSelection.hidden = !useSameModel;
+        setModelControlsDisabled(sharedSelection, !useSameModel);
+      }
+      if (specializedSelection) {
+        specializedSelection.hidden = useSameModel;
+        setModelControlsDisabled(specializedSelection, useSameModel);
+      }
+      return useSameModel;
+    }
+
+    function activeExtractionModelSelector() {
+      return modelSelectors.find((wrapper) => (
+        wrapper.dataset.modelRole === "extraction" && !wrapper.querySelector("[data-model-select]")?.disabled
+      ));
+    }
+
+    function syncModelSelector(wrapper) {
+      const select = wrapper.querySelector("[data-model-select]");
+      const hidden = wrapper.querySelector("[data-model-value]");
+      const customWrap = wrapper.querySelector("[data-model-custom-wrap]");
+      const customInput = wrapper.querySelector("[data-model-custom]");
+      if (!select) return "";
+      const selected = select.selectedOptions[0];
+      const isCustom = select.value === "custom";
+      const isActive = !select.disabled;
+      const currentValue = isCustom ? (customInput?.value?.trim() || hidden?.value || "gpt-5.6-luna") : select.value;
+      if (customWrap) customWrap.hidden = !isActive || !isCustom;
+      if (customInput) customInput.disabled = !isActive || !isCustom;
+      if (hidden) {
+        hidden.disabled = !isActive;
+        hidden.value = currentValue;
+      }
+      if (wrapper === activeExtractionModelSelector()) {
+        if (extractionModelPreviewLabel) extractionModelPreviewLabel.textContent = isCustom ? "Modelo personalizado" : (selected?.dataset?.label || selected?.textContent?.trim() || "GPT-5.6 Luna");
+        if (extractionModelPreviewId) extractionModelPreviewId.textContent = currentValue;
+        if (extractionModelPreviewDescription) extractionModelPreviewDescription.textContent = isCustom ? "Se guardará exactamente el model ID indicado." : (selected?.dataset?.description || "Modelo recomendado para extracción.");
+      }
+      return currentValue;
+    }
+
+    function syncReasoningAvailability() {
+      if (!reasoningSelect) return;
+      const supportsReasoning = modelSelectors.some((wrapper) => {
+        const select = wrapper.querySelector("[data-model-select]");
+        if (!select || select.disabled) return false;
+        const customInput = wrapper.querySelector("[data-model-custom]");
+        const selected = select?.selectedOptions[0];
+        const model = syncModelSelector(wrapper);
+        return select?.value === "custom"
+          ? modelSupportsReasoning(customInput?.value || model)
+          : selected?.dataset?.reasoningSupported === "true";
+      });
+      reasoningSelect.disabled = !supportsReasoning;
+      if (reasoningHelp) reasoningHelp.textContent = supportsReasoning
+        ? "Se aplica en las tareas cuyos modelos admiten razonamiento; en los demás se omite automáticamente."
+        : "Los modelos seleccionados no admiten un nivel de razonamiento configurable.";
+    }
+
+    modelSelectors.forEach((wrapper) => {
+      if (wrapper.dataset.modelSelectorBound === "true") return;
+      wrapper.dataset.modelSelectorBound = "true";
+      const select = wrapper.querySelector("[data-model-select]");
+      const customInput = wrapper.querySelector("[data-model-custom]");
+      select?.addEventListener("change", () => {
+        syncModelSelector(wrapper);
+        syncReasoningAvailability();
+      });
+      customInput?.addEventListener("input", () => {
+        syncModelSelector(wrapper);
+        syncReasoningAvailability();
+      });
+    });
+    syncModelLayout();
+    modelSelectors.forEach((wrapper) => syncModelSelector(wrapper));
+    sameModelToggle?.addEventListener("change", () => {
+      syncModelLayout();
+      modelSelectors.forEach((wrapper) => syncModelSelector(wrapper));
+      syncReasoningAvailability();
+    });
+    syncReasoningAvailability();
   }
-  bindExtractionModelDialog();
+  bindModelSelectors();
   const settingsDialogRoot = document.createElement("div");
   settingsDialogRoot.id = "settings-dialog-root";
   document.body.append(settingsDialogRoot);
@@ -1594,7 +1692,7 @@
         if (!loadedDialog) throw new Error("El bloque de configuración no está disponible");
         loadedDialog.dataset.settingsLoaded = "true";
         dialog.replaceWith(loadedDialog);
-        bindExtractionModelDialog(loadedDialog);
+        bindModelSelectors(loadedDialog);
         if (globalThis.AnchiEmailBackfill) globalThis.AnchiEmailBackfill.bindBackfillForms(loadedDialog);
         loadedDialog.showModal();
         return loadedDialog;
@@ -1637,6 +1735,77 @@
       const dialog = document.getElementById(`settings-${id}`);
       if (dialog) dialog.remove();
       openSettingsDrawer(id);
+    }
+  });
+  function renderAgentFlowTestResult(form, payload) {
+    const status = form.querySelector("[data-agent-flow-test-status]");
+    if (!status) return;
+    status.hidden = false;
+    status.className = `settings-status-note agent-flow-test-status ${payload.ok ? "is-success" : "is-error"}`;
+    status.replaceChildren();
+    const title = document.createElement("strong");
+    title.textContent = payload.ok ? "Flujo completado correctamente" : "Flujo completado con incidencias";
+    status.append(title);
+    const message = document.createElement("span");
+    message.dataset.agentFlowTestMessage = "";
+    message.textContent = payload.message || "La prueba ha terminado.";
+    status.append(message);
+    if (Array.isArray(payload.steps) && payload.steps.length) {
+      const list = document.createElement("ul");
+      list.className = "agent-flow-test-steps";
+      payload.steps.forEach((step) => {
+        const item = document.createElement("li");
+        const stepStatus = step.skipped ? "Omitido" : step.ok ? "OK" : "Error";
+        item.textContent = `${stepStatus} · ${step.label} · ${step.model || "modelo no indicado"}${step.duration_ms == null ? "" : ` · ${step.duration_ms} ms`} · ${step.message || ""}`;
+        list.append(item);
+      });
+      status.append(list);
+    }
+    const dialog = form.closest("dialog");
+    const badge = dialog?.querySelector(".section-title-row .badge");
+    if (badge) {
+      badge.textContent = payload.ok ? "Correcto" : "Con avisos";
+      badge.classList.toggle("status-confirmed", Boolean(payload.ok));
+      badge.classList.toggle("status-doubtful", !payload.ok);
+    }
+  }
+  document.addEventListener("submit", async (event) => {
+    const submitter = event.submitter;
+    if (!submitter?.matches("[data-agent-full-flow-test]")) return;
+    const form = submitter.form;
+    if (!form) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    const formData = new FormData(form);
+    const status = form.querySelector("[data-agent-flow-test-status]");
+    if (status) {
+      status.hidden = false;
+      status.className = "settings-status-note agent-flow-test-status is-pending";
+      status.textContent = "Ejecutando clasificación, extracción y validación con los modelos seleccionados…";
+    }
+    const originalText = submitter.textContent;
+    submitter.textContent = submitter.dataset.loadingText || "Probando...";
+    submitter.disabled = true;
+    try {
+      const response = await fetch(submitter.formAction || form.action, {
+        method: "POST",
+        body: formData,
+        credentials: "same-origin",
+        headers: {"Accept": "application/json", "X-Requested-With": "fetch"},
+      });
+      let payload;
+      try {
+        payload = await response.json();
+      } catch (_error) {
+        payload = {ok: false, message: `La prueba devolvió una respuesta no válida (HTTP ${response.status}).`};
+      }
+      if (!response.ok && payload.ok !== false) payload.ok = false;
+      renderAgentFlowTestResult(form, payload);
+    } catch (_error) {
+      renderAgentFlowTestResult(form, {ok: false, message: "No se pudo completar la prueba. Revisa la conexión e inténtalo de nuevo."});
+    } finally {
+      submitter.textContent = originalText;
+      submitter.disabled = false;
     }
   });
   document.addEventListener("submit", (event) => {

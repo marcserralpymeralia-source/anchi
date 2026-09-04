@@ -98,6 +98,57 @@ class OrderExtractionServiceTests(unittest.TestCase):
         with self.assertRaises(OrderExtractionError):
             extract_order({"text": "Pedido"}, client=BadClient(), model="gpt-test")
 
+    def test_extract_order_emits_detailed_trace_without_private_reasoning(self):
+        payload = {
+            "isOrder": True,
+            "customer": {"rawName": "Cliente Demo", "rawNameSource": "expressed"},
+            "lines": [],
+            "notes": [],
+            "uncertainties": [],
+            "requiresReview": False,
+        }
+        traces = []
+
+        with self.assertRaises(ValueError):
+            extract_order(
+                {"text": "Pedido para cliente@example.com", "sourceType": "email"},
+                client=FakeClient(payload),
+                model="gpt-test",
+                input_reference="inbound_message:42",
+                trace_callback=traces.append,
+            )
+
+        self.assertEqual(len(traces), 1)
+        trace = traces[0]
+        self.assertIn("No busques, inventes ni asignes customerId", trace["system_prompt"])
+        self.assertIn("cliente@example.com", trace["user_input"])
+        self.assertEqual(trace["model"], "gpt-test")
+        self.assertEqual(trace["input_reference"], "inbound_message:42")
+        self.assertEqual(trace["output_status"], "invalid")
+        self.assertIsInstance(trace["duration_ms"], int)
+        self.assertNotIn("reasoning", trace)
+
+    def test_extract_order_trace_callback_cannot_break_provider_result(self):
+        payload = {
+            "isOrder": False,
+            "customer": {"rawName": None, "rawNameSource": "unknown"},
+            "lines": [],
+            "notes": [],
+            "uncertainties": [],
+            "requiresReview": False,
+        }
+
+        def broken_callback(_trace):
+            raise RuntimeError("trace storage unavailable")
+
+        result = extract_order(
+            {"text": "Consulta", "sourceType": "whatsapp"},
+            client=FakeClient(payload),
+            model="gpt-test",
+            trace_callback=broken_callback,
+        )
+        self.assertFalse(result.extracted_data.is_order)
+
     def test_extract_order_rejects_erp_identifiers_from_model(self):
         payload = {
             "isOrder": True,

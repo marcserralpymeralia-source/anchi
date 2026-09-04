@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, LEGACY_OPENAI_MODEL_FALLBACK, resolve_openai_model_choice, resolve_openai_runtime_model
+from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, DEFAULT_REASONING_EFFORT, LEGACY_OPENAI_MODEL_FALLBACK, REASONING_EFFORT_VALUES, resolve_openai_model_choice, resolve_openai_runtime_model
 from app.core.config import get_settings
 from app.core.encryption import mask_secret
 from app.db.models import AuditLog, BackgroundJob, BrandingSettings, Company, Customer, DecisionSettings, Email, EmailSettings, ExportSettings, FTPSettings, InputChannel, InboundMessage, LLMSettings, Order, Product, PromptTemplate, PromptVersion, ScoringSettings
@@ -245,9 +245,23 @@ async def update_settings_section_async(section: str, request: Request, db: Sess
             form.get("extraction_model_custom"),
             form.get("extraction_model") or resolve_openai_runtime_model(instance.extraction_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK),
         )
+        classification_model = resolve_openai_model_choice(
+            form.get("classification_model_mode"),
+            form.get("classification_model_custom"),
+            form.get("classification_model") or resolve_openai_runtime_model(instance.classification_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK),
+        )
+        validation_model = resolve_openai_model_choice(
+            form.get("validation_model_mode"),
+            form.get("validation_model_custom"),
+            form.get("validation_model") or resolve_openai_runtime_model(instance.validation_model, fallback=LEGACY_OPENAI_MODEL_FALLBACK),
+        )
         form["extraction_model"] = extracted_model
+        form["classification_model"] = classification_model
+        form["validation_model"] = validation_model
+        reasoning_effort = (form.get("reasoning_effort") or getattr(instance, "reasoning_effort", None) or DEFAULT_REASONING_EFFORT).strip().lower()
+        form["reasoning_effort"] = reasoning_effort if reasoning_effort in REASONING_EFFORT_VALUES else DEFAULT_REASONING_EFFORT
         if form.get("use_same_model_for_all") == "on":
-            model = extracted_model or form.get("classification_model") or instance.classification_model or DEFAULT_OPENAI_MODEL
+            model = extracted_model or classification_model or instance.classification_model or DEFAULT_OPENAI_MODEL
             form["classification_model"] = model
             form["validation_model"] = model
         update_with_form(instance, form, {"api_key_encrypted"})

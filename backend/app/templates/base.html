@@ -49,7 +49,7 @@
       </div>
       {% set href_orders = '/orders?view=list' %}
       {% set href_archived_orders = '/orders?view=list&archived=true' %}
-      {% set href_history = '/mail' %}
+      {% set href_mail = '/mail' %}
       {% set href_customers = '/customers' %}
       {% set href_products = '/products' %}
       {% set href_settings = '/settings' %}
@@ -58,7 +58,7 @@
         <a href="{{ href_orders }}" title="Pedidos" class="{% if request.url.path in ['/', '/inicio', '/workbench'] or (request.url.path.startswith('/orders') and request.query_params.get('archived') != 'true') %}active{% endif %}"><span class="nav-icon">{{ icon_entries(20) }}</span><span class="nav-label">Pedidos</span></a>
         <a href="{{ href_archived_orders }}" title="Archivos" class="{% if request.url.path.startswith('/orders') and request.query_params.get('archived') == 'true' %}active{% endif %}"><span class="nav-icon">{{ icon_folder(20) }}</span><span class="nav-label">Archivos</span></a>
         {% if "email" in enabled_channels %}
-          <a href="{{ href_history }}" title="Buzón de correo" class="{% if request.url.path.startswith('/history') or request.url.path.startswith('/pedidos') or request.url.path.startswith('/mail') %}active{% endif %}"><span class="nav-icon">{{ icon_mail(20) }}</span><span class="nav-label">Buzón de correo</span></a>
+          <a href="{{ href_mail }}" title="Buzón de correo" class="{% if request.url.path.startswith('/mail') or request.url.path.startswith('/history') or request.url.path.startswith('/pedidos') %}active{% endif %}"><span class="nav-icon">{{ icon_mail(20) }}</span><span class="nav-label">Buzón de correo</span></a>
         {% endif %}
         {% if "whatsapp" in enabled_channels %}
           <a href="/whatsapp/inbox" title="WhatsApp" class="{% if request.url.path.startswith('/whatsapp/inbox') %}active{% endif %}"><span class="nav-icon">{{ icon_whatsapp(20) }}</span><span class="nav-label">WhatsApp</span></a>

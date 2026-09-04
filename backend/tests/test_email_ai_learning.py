@@ -5,6 +5,7 @@ import unittest
 import imaplib
 import socket
 import ssl
+import json
 from datetime import datetime, timezone
 from email import policy
 from email.message import EmailMessage
@@ -25,7 +26,7 @@ from app.core.encryption import encrypt_secret  # noqa: E402
 from app.agent.services import AgentProcessingService  # noqa: E402
 from app.channels.service import get_or_create_channel  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import Email, EmailAttachment, EmailSettings, LLMSettings, MessageAttachment, PromptExecution, PromptTemplate, PromptVersion  # noqa: E402
+from app.db.models import Email, EmailAttachment, EmailSettings, LLMSettings, MessageAttachment, PromptExecution, PromptExecutionDetail, PromptTemplate, PromptVersion  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import EmailSyncState, MasterCompany  # noqa: E402
 from app.agent.model_catalog import LEGACY_OPENAI_MODEL_FALLBACK  # noqa: E402
@@ -224,6 +225,59 @@ class EmailAiLearningTests(unittest.TestCase):
         executions = db.scalars(select(PromptExecution)).all()
         self.assertEqual(len(executions), 1)
         self.assertEqual(executions[0].output_status, "valid")
+        db.close()
+
+    def test_detailed_prompt_trace_stores_sanitized_payload_and_explicit_reasoning_summary(self):
+        db = self.TenantSession()
+        self.addCleanup(db.close)
+        self._seed_prompt(db)
+        settings = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 1))
+        settings.detailed_llm_logs = True
+        settings.store_llm_payloads = True
+        settings.anonymize_llm_logs = True
+        settings.reasoning_effort = "high"
+        settings.classification_model = "gpt-5.6-luna"
+        db.commit()
+
+        def fake_provider(_settings, _messages, _model):  # noqa: ANN001
+            return {
+                "ok": True,
+                "content": '{"tipo_correo":"pedido","confianza":0.92,"motivo":"Solicitud de cliente@example.com por telefono +34600111222"}',
+                "usage": {"prompt_tokens": 12, "completion_tokens": 8},
+                "reasoning_summary": "Se identificó un pedido claro de cliente@example.com.",
+            }
+
+        result = run_prompt_execution(
+            db,
+            1,
+            "classification",
+            settings,
+            "Pedido para cliente@example.com, telefono +34600111222, api_key=sk-123456789012345678901234.",
+            provider_call=fake_provider,
+            input_reference="mail-detail-1",
+        )
+
+        self.assertTrue(result["validation_ok"])
+        self.assertTrue(result["detail_stored"])
+        self.assertTrue(result["payload_stored"])
+        detail = db.scalar(select(PromptExecutionDetail).where(PromptExecutionDetail.prompt_execution_id == result["prompt_execution_id"]))
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertIn("[email]", detail.user_input_text or "")
+        self.assertIn("[telefono]", detail.user_input_text or "")
+        self.assertIn("[redacted]", detail.user_input_text or "")
+        self.assertNotIn("cliente@example.com", detail.user_input_text or "")
+        self.assertNotIn("+34600111222", detail.user_input_text or "")
+        self.assertIn("[email]", detail.assistant_output_text or "")
+        self.assertNotIn("cliente@example.com", detail.assistant_output_text or "")
+        self.assertEqual(detail.reasoning_summary, "Se identificó un pedido claro de [email].")
+        self.assertEqual(detail.decision_summary, "Solicitud de [email] por telefono [telefono]")
+        effective_parameters = json.loads(detail.effective_parameters_json)
+        self.assertEqual(effective_parameters["model"], "gpt-5.6-luna")
+        self.assertEqual(effective_parameters["reasoning_effort"], "high")
+        provider_metadata = json.loads(detail.provider_metadata_json)
+        self.assertEqual(provider_metadata["usage"]["input"], 12)
+        self.assertTrue(detail.is_anonymized)
         db.close()
 
     def test_extraction_prompt_uses_legacy_runtime_fallback_when_setting_is_blank(self):

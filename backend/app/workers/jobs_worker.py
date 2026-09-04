@@ -24,7 +24,7 @@ from app.core.metrics import record_job
 from app.core.observability import observability_scope
 from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, ExportSettings, FTPSettings, ImportJob, InboundMessage, Order, ScoringSettings
 from app.exports.service import ExportService, FTPService
-from app.logs.service import log_action
+from app.logs.service import log_action, log_flow_event
 from app.orders.state import ORDER_STATE
 import app.master.database as master_database
 from app.master.database import MasterSessionLocal
@@ -817,9 +817,11 @@ def _handle_tenant_jobs(
                 break
             attempted_jobs += 1
             trace = job_trace(job)
+            job_started_at = time.perf_counter()
             with observability_scope(
                 request_id=trace.get("request_id"),
                 correlation_id=trace.get("correlation_id") or trace.get("request_id"),
+                flow_id=trace.get("flow_id") or f"job-{job.id}",
                 tenant_id=job.company_id,
                 user_id=trace.get("user_id"),
                 membership_id=trace.get("membership_id"),
@@ -839,6 +841,17 @@ def _handle_tenant_jobs(
                             "worker_id": owner,
                         },
                     )
+                    log_flow_event(
+                        db,
+                        company_id=job.company_id,
+                        event="job.started",
+                        stage="queue",
+                        message="Trabajo iniciado por el worker.",
+                        entity_type="job",
+                        entity_id=job.id,
+                        status="started",
+                        metadata={"job_type": job.job_type, "attempt": job.attempt_count},
+                    )
                     record_job(job_type=job.job_type, status="started")
                     result = _process_job(db, job)
                     if isinstance(result, dict) and result.get("ok") is False:
@@ -848,7 +861,23 @@ def _handle_tenant_jobs(
                         raise error
                     finish_job(db, job, result)
                     record_job(job_type=job.job_type, status="success")
-                    log_action(db, company_id=job.company_id, user=None, action=f"job.{job.job_type}.success", entity_type="job", entity_id=job.id, message=result.get("message") or "Trabajo completado")
+                    result_message = result.get("message") if isinstance(result, dict) else None
+                    log_action(db, company_id=job.company_id, user=None, action=f"job.{job.job_type}.success", entity_type="job", entity_id=job.id, message=result_message or "Trabajo completado")
+                    log_flow_event(
+                        db,
+                        company_id=job.company_id,
+                        event="job.completed",
+                        stage="queue",
+                        message="Trabajo completado correctamente.",
+                        entity_type="job",
+                        entity_id=job.id,
+                        status="success",
+                        metadata={
+                            "job_type": job.job_type,
+                            "duration_ms": int((time.perf_counter() - job_started_at) * 1000),
+                            "result_type": type(result).__name__,
+                        },
+                    )
                     processed_jobs += 1
                     logger.info(
                         "job.end",
@@ -876,6 +905,22 @@ def _handle_tenant_jobs(
                     record_job(job_type=job.job_type, status=failed_job.status)
                     action_suffix = "retrying" if failed_job.status == "retrying" else "failed"
                     log_action(db, company_id=job.company_id, user=None, action=f"job.{job.job_type}.{action_suffix}", entity_type="job", entity_id=job.id, message=str(exc))
+                    log_flow_event(
+                        db,
+                        company_id=job.company_id,
+                        event="job.failed",
+                        stage="queue",
+                        message="Trabajo terminado con error.",
+                        entity_type="job",
+                        entity_id=job.id,
+                        status=failed_job.status,
+                        metadata={
+                            "job_type": job.job_type,
+                            "duration_ms": int((time.perf_counter() - job_started_at) * 1000),
+                            "error_type": str(getattr(exc, "error_type", None) or exc.__class__.__name__),
+                            "retryable": should_retry,
+                        },
+                    )
                     logger.info(
                         "job.end",
                         extra={

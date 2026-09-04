@@ -472,6 +472,12 @@ class SetupOnboardingTests(unittest.TestCase):
             self.assertEqual(page.status_code, 200)
             for label in ["GPT-5.6 Luna", "GPT-5.6 Terra", "GPT-5.6 Sol", "GPT-4.1 mini", "GPT-4.1", "Personalizado"]:
                 self.assertIn(label, page.text)
+            ai_module = client.get("/settings/module/ai")
+            self.assertEqual(ai_module.status_code, 200)
+            for field in ["classification_model_mode", "extraction_model_mode", "validation_model_mode", "reasoning_effort"]:
+                self.assertIn(f'name="{field}"', ai_module.text)
+            for level in ["Bajo", "Equilibrado", "Alto"]:
+                self.assertIn(level, ai_module.text)
 
             with fixture.TenantSession() as db:
                 llm = get_or_create_settings(db, LLMSettings, 1)
@@ -492,6 +498,7 @@ class SetupOnboardingTests(unittest.TestCase):
                     "extraction_model_mode": "gpt-5.6-luna",
                     "extraction_model": "gpt-5.6-luna",
                     "validation_model": "gpt-4.1-mini",
+                    "reasoning_effort": "high",
                     "can_read_email": "on",
                     "can_extract_pdf": "on",
                     "can_classify_email": "on",
@@ -515,6 +522,7 @@ class SetupOnboardingTests(unittest.TestCase):
                 self.assertEqual(current.extraction_model, "gpt-5.6-luna")
                 self.assertEqual(current.classification_model, "gpt-5.6-luna")
                 self.assertEqual(current.validation_model, "gpt-5.6-luna")
+                self.assertEqual(current.reasoning_effort, "high")
                 self.assertEqual(other.extraction_model, "gpt-4.1")
 
             response = client.post(
@@ -590,6 +598,138 @@ class SetupOnboardingTests(unittest.TestCase):
                 self.assertEqual(current.classification_model, "gpt-5.6-orion")
                 self.assertEqual(current.validation_model, "gpt-5.6-orion")
                 self.assertEqual(other.extraction_model, "gpt-4.1")
+
+            response = client.post(
+                "/settings/llm",
+                data={
+                    "agent_enabled": "on",
+                    "use_same_model_for_all": "",
+                    "provider": "openai",
+                    "api_key_encrypted": "tenant-api-key",
+                    "classification_model_mode": "gpt-5.6-sol",
+                    "classification_model": "gpt-5.6-sol",
+                    "extraction_model_mode": "gpt-4.1",
+                    "extraction_model": "gpt-4.1",
+                    "validation_model_mode": "custom",
+                    "validation_model_custom": "gpt-5.6-validator",
+                    "validation_model": "gpt-5.6-validator",
+                    "reasoning_effort": "low",
+                },
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 303)
+            with fixture.TenantSession() as db:
+                current = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 1))
+                assert current is not None
+                self.assertEqual(current.classification_model, "gpt-5.6-sol")
+                self.assertEqual(current.extraction_model, "gpt-4.1")
+                self.assertEqual(current.validation_model, "gpt-5.6-validator")
+                self.assertEqual(current.reasoning_effort, "low")
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+    def test_ai_model_selector_switches_between_shared_and_specialized_views(self):
+        fixture = SetupFixture()
+        client, cleanup = fixture.client()
+        try:
+            self._login(client)
+
+            shared = client.get("/settings/module/ai")
+            self.assertEqual(shared.status_code, 200)
+            self.assertIn('data-model-same-toggle', shared.text)
+            self.assertIn('class="model-selection-shared" data-model-selection-shared', shared.text)
+            self.assertIn('class="model-selection-specialized" data-model-selection-specialized hidden', shared.text)
+            self.assertIn('name="extraction_model_mode"', shared.text)
+            self.assertIn('name="extraction_model_custom"', shared.text)
+            self.assertIn('placeholder="gpt-5.6-mi-modelo" disabled', shared.text)
+
+            with fixture.TenantSession() as db:
+                llm = get_or_create_settings(db, LLMSettings, 1)
+                llm.use_same_model_for_all = False
+                db.commit()
+
+            specialized = client.get("/settings/module/ai")
+            self.assertEqual(specialized.status_code, 200)
+            self.assertIn('class="model-selection-shared" data-model-selection-shared hidden', specialized.text)
+            self.assertIn('class="model-selection-specialized" data-model-selection-specialized', specialized.text)
+            self.assertNotIn('data-model-selection-specialized hidden', specialized.text)
+            self.assertIn('name="classification_model_mode"', specialized.text)
+            self.assertIn('name="validation_model_mode"', specialized.text)
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+    def test_agent_full_flow_reports_each_step_without_saving_selected_models(self):
+        fixture = SetupFixture()
+        client, cleanup = fixture.client()
+        try:
+            self._login(client)
+            with fixture.TenantSession() as db:
+                llm = get_or_create_settings(db, LLMSettings, 1)
+                llm.classification_model = "gpt-4.1-mini"
+                llm.extraction_model = "gpt-4.1"
+                llm.validation_model = "gpt-4.1-mini"
+                db.commit()
+
+            captured_settings = {}
+
+            def fake_classify(_db, settings, _company_id, _text, _prompt):
+                captured_settings["classification"] = settings
+                return {"ok": True, "message": "Clasificación correcta", "model": settings.classification_model, "duration_ms": 11}
+
+            def fake_extract(_db, settings, _company_id, _text, _prompt):
+                captured_settings["extraction"] = settings
+                return {
+                    "ok": True,
+                    "message": "Extracción correcta",
+                    "model": settings.extraction_model,
+                    "duration_ms": 22,
+                    "validated_content": {"lineas": [{"referencia": "P001", "cantidad": 10}]},
+                }
+
+            def fake_validate(_db, settings, _company_id, _text, extracted_content, _prompt):
+                captured_settings["validation"] = settings
+                self.assertEqual(extracted_content["lineas"][0]["referencia"], "P001")
+                return {"ok": True, "message": "Validación correcta", "model": settings.validation_model, "duration_ms": 33}
+
+            with patch("app.settings.routes.classify_sample", side_effect=fake_classify), patch(
+                "app.settings.routes.extract_sample", side_effect=fake_extract
+            ), patch("app.settings.routes.validate_sample", side_effect=fake_validate), patch(
+                "app.settings.routes.active_prompt_content", return_value="prompt de prueba"
+            ):
+                response = client.post(
+                    "/settings/agent/test-full-flow",
+                    data={
+                        "sample_text": "Cliente Demo solicita 10 unidades de P001.",
+                        "classification_model_mode": "gpt-5.6-sol",
+                        "classification_model": "gpt-5.6-sol",
+                        "extraction_model_mode": "gpt-4.1",
+                        "extraction_model": "gpt-4.1",
+                        "validation_model_mode": "custom",
+                        "validation_model_custom": "gpt-5.6-validator",
+                        "validation_model": "gpt-5.6-validator",
+                        "reasoning_effort": "high",
+                    },
+                    headers={"Accept": "application/json", "X-Requested-With": "fetch"},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual([step["label"] for step in payload["steps"]], ["Clasificación", "Extracción", "Validación"])
+            self.assertEqual([step["model"] for step in payload["steps"]], ["gpt-5.6-sol", "gpt-4.1", "gpt-5.6-validator"])
+            self.assertEqual(captured_settings["classification"].reasoning_effort, "high")
+            self.assertEqual(captured_settings["validation"].validation_model, "gpt-5.6-validator")
+
+            with fixture.TenantSession() as db:
+                llm = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 1))
+                assert llm is not None
+                self.assertEqual(llm.classification_model, "gpt-4.1-mini")
+                self.assertEqual(llm.extraction_model, "gpt-4.1")
+                self.assertEqual(llm.validation_model, "gpt-4.1-mini")
+                self.assertTrue(llm.last_test_ok)
+                self.assertIn("Flujo completo correcto", llm.last_test_message)
         finally:
             cleanup()
             fixture.cleanup()

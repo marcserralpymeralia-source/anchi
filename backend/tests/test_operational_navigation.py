@@ -63,6 +63,9 @@ class OperationalNavigationTests(unittest.TestCase):
             for label in ("Pedidos", "Buzón de correo", "Clientes", "Productos", "Configuración"):
                 self.assertIn(f'class="nav-label">{label}</span>', nav_html)
             self.assertEqual(nav_html.count('class="nav-label">Pedidos</span>'), 1)
+            self.assertEqual(nav_html.count('class="nav-label">Buzón de correo</span>'), 1)
+            self.assertNotIn("Buzón de correo 2", nav_html)
+            self.assertIn('href="/mail"', nav_html)
             self.assertIn('class="nav-label">Archivos</span>', nav_html)
 
             for hidden_label in ("Entradas", "Jobs", "Logs", "Bases de datos", "Diagnóstico", "Aprendizaje", "Canales"):
@@ -94,14 +97,19 @@ class OperationalNavigationTests(unittest.TestCase):
         try:
             with performance_test_client(fixture) as client:
                 history = client.get("/history", follow_redirects=False)
+                mail = client.get("/mail", follow_redirects=False)
                 legacy_pedidos = client.get("/pedidos", follow_redirects=False)
 
             self.assertEqual(history.status_code, 200)
             self.assertIn("Buzón de correo", history.text)
             self.assertIn("Bandeja de mensajes", history.text)
+            self.assertEqual(mail.status_code, 200)
+            self.assertIn('<title>Buzón de correo</title>', mail.text)
+            self.assertIn("Bandeja de mensajes", mail.text)
+            self.assertNotIn("Buzón de correo 2", mail.text)
             self.assertIn(legacy_pedidos.status_code, (200, 303))
             if legacy_pedidos.status_code == 303:
-                self.assertEqual(legacy_pedidos.headers["location"], "/history")
+                self.assertEqual(legacy_pedidos.headers["location"], "/mail")
         finally:
             fixture.cleanup()
 

@@ -1,65 +1,245 @@
 {% extends "base.html" %}
-{% set title = "Logs" %}
+{% from "components/icons.html" import icon_download, icon_trash, icon_filter, icon_close, icon_search, icon_check, icon_refresh, icon_clock, icon_info, icon_lock %}
+{% set title = "Logs de flujo" %}
+
+{% block head_extra %}<link rel="stylesheet" href="{{ asset_url('database-compact.css') }}">{% endblock %}
+
 {% block content %}
-<section class="panel stack">
-  <div class="section-title-row">
-    <div>
-      <h2>Logs de auditoría</h2>
-      <p class="muted">Acciones operativas con request, correlación y trazas de tenant visibles de un vistazo.</p>
+<section class="database-compact-page logs-page-container">
+
+  {% if deleted %}
+    <div class="logs-alert is-success">
+      {{ icon_check(14) }}
+      <span>Todos los registros de logs han sido eliminados correctamente.</span>
+    </div>
+  {% endif %}
+
+  {# 1. Single Unified Toolbar / Dock (Matching the rest of the application) #}
+  {% set has_active_filters = filters.action or filters.entity_type or filters.flow_id or filters.request_id or filters.correlation_id or filters.search %}
+  <div class="data-dock-wrapper" style="margin-bottom: 0;">
+    <div class="logs-toolbar-dock">
+      {# Filter Form #}
+      <form class="logs-main-form" method="get" action="/logs" id="logs-filter-form">
+        {# Omnibox Search #}
+        <div class="logs-search-wrapper">
+          <span class="logs-search-icon">{{ icon_search(14) }}</span>
+          <input
+            type="search"
+            name="search"
+            class="logs-search-input compact-input"
+            value="{{ filters.search }}"
+            placeholder="Buscar por texto, mensaje o evento..."
+            autocomplete="off"
+          >
+          {% if filters.search %}
+            <button type="button" class="logs-clear-search" onclick="this.previousElementSibling.value=''; this.form.submit();" title="Limpiar búsqueda">
+              {{ icon_close(12) }}
+            </button>
+          {% endif %}
+        </div>
+
+        {# Action filter #}
+        <input
+          type="text"
+          name="action"
+          class="logs-filter-input compact-input"
+          value="{{ filters.action }}"
+          placeholder="Acción (ej: flow.pipeline...)"
+          title="Filtrar por acción específica"
+        >
+
+        {# Entity filter #}
+        <input
+          type="text"
+          name="entity_type"
+          class="logs-filter-input compact-input"
+          value="{{ filters.entity_type }}"
+          placeholder="Entidad (order, email...)"
+          title="Filtrar por tipo de entidad"
+        >
+
+        {# Flow ID filter #}
+        <input
+          type="text"
+          name="flow_id"
+          class="logs-filter-input compact-input"
+          value="{{ filters.flow_id }}"
+          placeholder="Flow ID"
+          title="Filtrar por Flow ID"
+        >
+
+        {# Filter button & Reset #}
+        <div class="logs-filter-actions-group">
+          <button type="submit" class="order-toolbar-btn is-primary" title="Aplicar filtros">
+            {{ icon_filter(13) }}
+            <span>Filtrar</span>
+          </button>
+          {% if has_active_filters %}
+            <a href="/logs" class="order-toolbar-btn" title="Restablecer todos los filtros">
+              {{ icon_close(12) }}
+              <span>Limpiar</span>
+            </a>
+          {% endif %}
+        </div>
+      </form>
+
+      {# Right Actions (Download, Delete, Counter) #}
+      <div class="logs-toolbar-right">
+        <span class="logs-count-chip">{{ logs|length }} eventos</span>
+        <a class="order-toolbar-btn" href="{{ download_url }}" title="Descargar registro de logs en formato .log">
+          {{ icon_download(13) }}
+          <span>Descargar .log</span>
+        </a>
+        {% if can_delete_logs %}
+          <form method="post" action="/logs/delete" onsubmit="return window.confirm('¿Borrar todos los logs de auditoría de esta empresa? Esta acción no se puede deshacer.');" style="margin:0;">
+            <button class="order-toolbar-btn is-danger" type="submit" title="Borrar logs de auditoría">
+              {{ icon_trash(13) }}
+              <span>Borrar logs</span>
+            </button>
+          </form>
+        {% endif %}
+      </div>
     </div>
   </div>
 
-  <form class="filter-grid" method="get" action="/logs">
-    <label>Acción<input name="action" value="{{ filters.action }}" placeholder="email.saved"></label>
-    <label>Entidad<input name="entity_type" value="{{ filters.entity_type }}" placeholder="order, email..."></label>
-    <label>Request ID<input name="request_id" value="{{ filters.request_id }}" placeholder="traza de request"></label>
-    <label>Correlation ID<input name="correlation_id" value="{{ filters.correlation_id }}" placeholder="correlación"></label>
-    <label>Buscar<input name="search" value="{{ filters.search }}" placeholder="Texto o acción"></label>
-    <label>&nbsp;<button class="secondary" data-loading-text="Filtrando...">Filtrar</button></label>
-  </form>
-</section>
+  {# 2. Main Logs Table #}
+  <div class="logs-table-card">
+    <div class="logs-table-wrapper">
+      <table class="logs-table">
+        <thead>
+          <tr>
+            <th class="th-time">Fecha y hora</th>
+            <th class="th-flow">Flujo & Trazas</th>
+            <th class="th-event">Evento & Etapa</th>
+            <th class="th-status">Estado</th>
+            <th class="th-entity">Entidad</th>
+            <th class="th-info">Mensaje & Detalles</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for log in logs %}
+            <tr class="log-row is-{{ log.status_class }}">
+              {# Date / Time #}
+              <td class="log-cell-time">
+                <span class="log-datetime">{{ log.created_label }}</span>
+              </td>
 
-<section class="panel stack">
-  <div class="section-title-row">
-    <div>
-      <h3>Eventos</h3>
-      <span class="badge">{{ logs|length }} resultados</span>
+              {# Flow & Traces #}
+              <td class="log-cell-flow">
+                {% if log.flow_id %}
+                  <span class="log-flow-chip" title="Flow ID: {{ log.flow_id }}">
+                    #{{ log.flow_id[:12] }}
+                  </span>
+                {% else %}
+                  <span class="log-empty-dash">—</span>
+                {% endif %}
+
+                <div class="log-trace-chips">
+                  {% if log.request_id %}
+                    <span class="log-trace-pill" title="Request ID: {{ log.request_id }}">req:{{ log.request_id[:6] }}</span>
+                  {% endif %}
+                  {% if log.correlation_id and log.correlation_id != log.flow_id %}
+                    <span class="log-trace-pill" title="Correlation ID: {{ log.correlation_id }}">corr:{{ log.correlation_id[:6] }}</span>
+                  {% endif %}
+                  {% if log.job_id %}
+                    <span class="log-trace-pill is-job">job #{{ log.job_id }}</span>
+                  {% endif %}
+                </div>
+              </td>
+
+              {# Event & Stage #}
+              <td class="log-cell-event">
+                <div class="log-event-title">{{ log.event }}</div>
+                <div class="log-stage-row">
+                  <span class="log-stage-badge">{{ log.stage }}</span>
+                  {% if log.action != log.event %}
+                    <span class="log-action-sub">{{ log.action }}</span>
+                  {% endif %}
+                </div>
+              </td>
+
+              {# Status #}
+              <td class="log-cell-status">
+                <span class="log-status-badge is-{{ log.status_class }}">
+                  {% if log.status_class == "success" %}
+                    {{ icon_check(11) }}
+                  {% elif log.status_class == "failed" %}
+                    {{ icon_close(11) }}
+                  {% elif log.status_class == "running" %}
+                    {{ icon_refresh(11) }}
+                  {% elif log.status_class == "queued" %}
+                    {{ icon_clock(11) }}
+                  {% else %}
+                    {{ icon_info(11) }}
+                  {% endif %}
+                  <span>{{ log.status_label }}</span>
+                </span>
+              </td>
+
+              {# Entity #}
+              <td class="log-cell-entity">
+                {% if log.entity_type %}
+                  <span class="log-entity-badge">
+                    {{ log.entity_type }}{% if log.entity_id %} <strong style="margin-left:2px;">#{{ log.entity_id }}</strong>{% endif %}
+                  </span>
+                {% else %}
+                  <span class="log-empty-dash">—</span>
+                {% endif %}
+              </td>
+
+              {# Info & Details #}
+              <td class="log-cell-info">
+                <div class="log-msg-text">{{ log.message }}</div>
+                {% if log.metadata_json %}
+                  <details class="log-metadata-details">
+                    <summary class="log-metadata-summary">
+                      <span>Ver metadata</span>
+                    </summary>
+                    <div class="log-json-box">
+                      <pre><code>{{ log.metadata_json }}</code></pre>
+                    </div>
+                  </details>
+                {% endif %}
+                {% if log.prompt_execution_id and user.role.name in ["Administrador", "Superadmin"] %}
+                  <a class="log-trace-detail-link" href="/settings/diagnostics/prompts/{{ log.prompt_execution_id }}" target="_blank" rel="noopener">Ver traza IA completa</a>
+                {% endif %}
+              </td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="6" class="logs-empty-state">
+                <div class="logs-empty-content">
+                  <div class="logs-empty-icon">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                      <polyline points="4 17 10 11 4 5"></polyline>
+                      <line x1="12" y1="19" x2="20" y2="19"></line>
+                    </svg>
+                  </div>
+                  <strong>No se han encontrado logs de flujo</strong>
+                  <p>No hay eventos registrados que coincidan con los filtros actuales.</p>
+                  {% if has_active_filters %}
+                    <a href="/logs" class="order-toolbar-btn" style="margin-top:8px;">
+                      {{ icon_close(12) }}
+                      <span>Restablecer filtros</span>
+                    </a>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {# Footer stats #}
+    <div class="logs-table-footer">
+      <span class="logs-footer-meta">Mostrando {{ logs|length }} eventos (máx. 200 en pantalla)</span>
+      <span class="logs-footer-privacy">
+        {{ icon_lock(12) }}
+        <span>Logs aislados por empresa · Sin almacenamiento de contraseñas ni tokens</span>
+      </span>
     </div>
   </div>
 
-  <table>
-    <thead>
-      <tr>
-        <th>Fecha</th>
-        <th>Acción</th>
-        <th>Mensaje</th>
-        <th>Traza</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for log in logs %}
-        <tr>
-          <td>{{ log.created_label }}</td>
-          <td>
-            <strong>{{ log.action }}</strong>
-            {% if log.entity_type %}
-              <div class="muted">{{ log.entity_type }}{% if log.entity_id %} #{{ log.entity_id }}{% endif %}</div>
-            {% endif %}
-          </td>
-          <td>{{ log.message }}</td>
-          <td>
-            <div class="trace-pills">
-              {% if log.request_id %}<span class="job-pill">Req {{ log.request_id[:8] }}</span>{% endif %}
-              {% if log.correlation_id %}<span class="job-pill">Corr {{ log.correlation_id[:8] }}</span>{% endif %}
-              {% if log.job_id %}<span class="job-pill">Job #{{ log.job_id }}</span>{% endif %}
-              {% if log.worker_id %}<span class="job-pill">Worker {{ log.worker_id }}</span>{% endif %}
-            </div>
-          </td>
-        </tr>
-      {% else %}
-        <tr><td colspan="4" class="muted">Sin logs todavia.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
 </section>
 {% endblock %}

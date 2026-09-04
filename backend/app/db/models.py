@@ -234,6 +234,7 @@ class LLMSettings(Base):
     classification_model: Mapped[str] = mapped_column(String(100), default=DEFAULT_OPENAI_MODEL)
     extraction_model: Mapped[str] = mapped_column(String(100), default=DEFAULT_OPENAI_MODEL)
     validation_model: Mapped[str] = mapped_column(String(100), default=DEFAULT_OPENAI_MODEL)
+    reasoning_effort: Mapped[str] = mapped_column(String(20), default="medium")
     use_same_model_for_all: Mapped[bool] = mapped_column(Boolean, default=True)
     can_read_email: Mapped[bool] = mapped_column(Boolean, default=True)
     can_extract_pdf: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -1116,6 +1117,30 @@ class PromptExecution(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PromptExecutionDetail(Base):
+    """Optional, tenant-scoped full trace for an LLM execution.
+
+    The summary row above stays small so normal diagnostics remain fast. Full
+    payloads are stored separately and only when the tenant explicitly enables
+    ``store_llm_payloads``.
+    """
+
+    __tablename__ = "prompt_execution_details"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    prompt_execution_id: Mapped[int] = mapped_column(ForeignKey("prompt_executions.id", ondelete="CASCADE"), unique=True, index=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    system_prompt_text: Mapped[str | None] = mapped_column(Text)
+    user_input_text: Mapped[str | None] = mapped_column(Text)
+    assistant_output_text: Mapped[str | None] = mapped_column(Text)
+    reasoning_summary: Mapped[str | None] = mapped_column(Text)
+    decision_summary: Mapped[str | None] = mapped_column(Text)
+    effective_parameters_json: Mapped[str] = mapped_column(Text, default="{}")
+    provider_metadata_json: Mapped[str] = mapped_column(Text, default="{}")
+    is_anonymized: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

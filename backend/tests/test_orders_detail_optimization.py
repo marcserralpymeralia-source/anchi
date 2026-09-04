@@ -34,6 +34,10 @@ class OrdersDetailOptimizationTests(unittest.TestCase):
             self.assertIn("Descripción", response.text)
             self.assertIn("Unidades", response.text)
             self.assertIn("Precio", response.text)
+            self.assertNotIn('data-order-source-tab="conversation"', response.text)
+            self.assertNotIn('data-order-source-panel="conversation"', response.text)
+            self.assertIn("Adjuntos (", response.text)
+            self.assertNotIn("PDF (", response.text)
         finally:
             fixture.cleanup()
 

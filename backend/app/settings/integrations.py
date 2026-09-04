@@ -16,12 +16,15 @@ from email.message import EmailMessage
 from email.utils import parsedate_to_datetime
 from io import BytesIO
 from pathlib import Path
+from uuid import uuid4
 
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
+from app.agent.model_catalog import resolve_reasoning_effort
 from app.agent.prompt_runtime import run_prompt_execution
 from app.core.encryption import decrypt_secret
+from app.core.observability import flow_id_var
 from app.db.models import Email, EmailAttachment, EmailSettings, InboundMessage, LLMSettings, MessageAttachment
 from app.master.models import EmailSyncState
 from app.messages.service import (
@@ -29,7 +32,7 @@ from app.messages.service import (
     persist_normalized_message,
 )
 from app.jobs.service import enqueue_job
-from app.logs.service import log_action
+from app.logs.service import log_action, log_flow_event
 from app.core.attachment_storage import read_attachment, save_attachment
 
 
@@ -188,6 +191,7 @@ def redact_llm_config(settings: LLMSettings) -> dict:
         "classification_model": settings.classification_model,
         "extraction_model": settings.extraction_model,
         "validation_model": settings.validation_model,
+        "reasoning_effort": getattr(settings, "reasoning_effort", None),
         "api_key": "••••••••" if settings.api_key_encrypted else "",
     }
 
@@ -713,12 +717,34 @@ def _fetch_imap_emails(
     batch_size: int | None = None,
     stop_after_batch: bool = False,
 ) -> dict:
+    flow_id = flow_id_var.get() or f"email-sync-{uuid4().hex}"
     password = decrypt_secret(settings.imap_password_encrypted)
     if not settings.imap_host or not settings.imap_username or not password:
+        log_flow_event(
+            db,
+            company_id=company_id,
+            flow_id=flow_id,
+            event="email.sync.blocked",
+            stage="sync",
+            message="La sincronización no puede comenzar porque faltan credenciales IMAP.",
+            status="blocked",
+            metadata={"label": label, "reason": "missing_imap_configuration"},
+        )
         return {"ok": False, "found": 0, "saved": 0, "message": "Faltan host, usuario o password IMAP."}
     sync_lock = SYNC_LOCKS.setdefault(company_id, threading.Lock())
     if not sync_lock.acquire(blocking=False):
+        log_flow_event(
+            db,
+            company_id=company_id,
+            flow_id=flow_id,
+            event="email.sync.blocked",
+            stage="sync",
+            message="La sincronización no puede comenzar porque ya existe otra en curso.",
+            status="blocked",
+            metadata={"label": label, "reason": "sync_already_running"},
+        )
         return {"ok": False, "found": 0, "saved": 0, "message": "Ya hay una sincronizacion IMAP en curso."}
+    flow_token = flow_id_var.set(flow_id)
     found = saved = attachments_saved = 0
     duplicates = 0
     errors = 0
@@ -736,6 +762,25 @@ def _fetch_imap_emails(
     except Exception:
         db.rollback()
     log_action(db, company_id=company_id, user=None, action="email.fetch_started", entity_type="email", message=f"{label} iniciada")
+    log_flow_event(
+        db,
+        company_id=company_id,
+        event="email.sync.started",
+        stage="sync",
+        message=f"{label} iniciada.",
+        status="started",
+        metadata={
+            "label": label,
+            "mailbox": mailbox,
+            "unread_only": unread_only,
+            "limit": limit,
+            "auto_process": should_auto_process,
+            "start_date": start_date,
+            "end_date": end_date,
+            "start_uid": start_uid,
+            "end_uid": end_uid,
+        },
+    )
     try:
         client = _imap_client(settings)
         client.login(settings.imap_username, password)
@@ -764,6 +809,15 @@ def _fetch_imap_emails(
                 seed_ids = _imap_uid_search(client, "ALL")
                 if seed_ids is None:
                     client.logout()
+                    log_flow_event(
+                        db,
+                        company_id=company_id,
+                        event="email.sync.failed",
+                        stage="sync",
+                        message="No se pudo fijar el punto de partida del buzón.",
+                        status="error",
+                        metadata={"mailbox": mailbox, "reason": "initial_scope_search_failed"},
+                    )
                     return {"ok": False, "found": 0, "saved": 0, "downloaded": 0, "duplicates": 0, "discarded": 0, "errors": 0, "message": "No se pudo leer el buzón para fijar el nuevo punto de partida."}
                 highest_uid = seed_ids[-1].decode(errors="ignore") if seed_ids else None
                 if sync_state and sync_session:
@@ -831,6 +885,15 @@ def _fetch_imap_emails(
         ids = _imap_uid_search(client, *criteria)
         if ids is None:
             client.logout()
+            log_flow_event(
+                db,
+                company_id=company_id,
+                event="email.sync.failed",
+                stage="sync",
+                message="No se pudieron listar los mensajes del buzón.",
+                status="error",
+                metadata={"mailbox": mailbox, "uidvalidity": uidvalidity, "reason": "message_search_failed"},
+            )
             return {"ok": False, "found": 0, "saved": 0, "downloaded": 0, "duplicates": 0, "discarded": 0, "errors": 0, "message": "No se pudieron listar correos."}
         if start_date or end_date:
             ids = sorted(ids, key=lambda raw: int(raw.decode(errors="ignore") or 0))
@@ -839,6 +902,15 @@ def _fetch_imap_emails(
             limit = min(limit, IMAP_MAX_MESSAGES_PER_RUN)
             ids = ids[:limit] if (start_date or end_date) else ids[-limit:]
         found = len(ids)
+        log_flow_event(
+            db,
+            company_id=company_id,
+            event="email.sync.search_completed",
+            stage="sync",
+            message="Búsqueda IMAP completada.",
+            status="success",
+            metadata={"mailbox": mailbox, "criteria": criteria, "found": found, "uidvalidity": uidvalidity},
+        )
         batch_size = max(min(int(batch_size or settings.read_limit or 10), IMAP_MAX_MESSAGES_PER_RUN), 1)
         saved_email_ids: list[int] = []
         checkpoint_uid = sync_state.last_checkpoint_uid if sync_state and sync_state.backfill_status == "paused" else None
@@ -902,6 +974,17 @@ def _fetch_imap_emails(
                         if sync_state:
                             sync_state.backfill_last_uid = uid
                         log_action(db, company_id=company_id, user=None, action="email.duplicate_ignored", entity_type="email", entity_id=exists.id, message=f"Duplicado ignorado: {message_id or dedupe_external_id}")
+                        log_flow_event(
+                            db,
+                            company_id=company_id,
+                            event="email.duplicate_ignored",
+                            stage="ingestion",
+                            message="Correo duplicado descartado por el identificador IMAP.",
+                            entity_type="email",
+                            entity_id=exists.id,
+                            status="deduplicated",
+                            metadata={"mailbox": mailbox, "uid": uid, "uidvalidity": uidvalidity},
+                        )
                         continue
                     subject = _decode_mime_header(msg.get("Subject", ""))
                     sender = _decode_mime_header(msg.get("From", ""))
@@ -957,6 +1040,27 @@ def _fetch_imap_emails(
                     if sync_state:
                         sync_state.backfill_last_uid = uid
                     log_action(db, company_id=company_id, user=None, action="email.saved", entity_type="email", entity_id=email.id, message=f"Correo guardado: {subject[:120]}")
+                    log_flow_event(
+                        db,
+                        company_id=company_id,
+                        event="email.persisted",
+                        stage="ingestion",
+                        message="Correo recibido, normalizado y guardado.",
+                        entity_type="email",
+                        entity_id=email.id,
+                        status="persisted",
+                        metadata={
+                            "inbound_message_id": inbound_message.id,
+                            "mailbox": mailbox,
+                            "uid": uid,
+                            "uidvalidity": uidvalidity,
+                            "received_at": email.received_at,
+                            "subject_length": len(subject),
+                            "body_length": len(body),
+                            "attachment_count": attachment_count,
+                            "has_pdf": email.has_pdf,
+                        },
+                    )
                     if settings.mark_as_read_after_import:
                         client.uid("store", msg_id, "+FLAGS", "\\Seen")
                 except Exception as exc:  # noqa: BLE001
@@ -974,16 +1078,40 @@ def _fetch_imap_emails(
                             "error_type": type(exc).__name__,
                         },
                     )
+                    log_flow_event(
+                        db,
+                        company_id=company_id,
+                        event="email.message_error",
+                        stage="ingestion",
+                        message="No se pudo procesar un mensaje IMAP.",
+                        status="error",
+                        metadata={
+                            "mailbox": mailbox,
+                            "uid": msg_id.decode(errors="ignore") if isinstance(msg_id, bytes) else str(msg_id),
+                            "error_type": type(exc).__name__,
+                        },
+                    )
                     continue
             db.commit()
             if should_auto_process and saved_email_ids:
                 for email_id in saved_email_ids:
-                    enqueue_job(
+                    process_job = enqueue_job(
                         db,
                         company_id=company_id,
                         job_type="process_email",
                         payload={"email_id": email_id},
                         created_by_user_id=None,
+                    )
+                    log_flow_event(
+                        db,
+                        company_id=company_id,
+                        event="email.processing_queued",
+                        stage="queue",
+                        message="Procesamiento del correo encolado.",
+                        entity_type="email",
+                        entity_id=email_id,
+                        status="queued",
+                        metadata={"job_id": process_job.id, "job_type": process_job.job_type},
                     )
                 db.commit()
             if sync_state and sync_session:
@@ -1096,6 +1224,26 @@ def _fetch_imap_emails(
         _update_sync_status(settings, True, saved, duplicates, f"{found} correos encontrados, {downloaded} descargados, {saved} importados, {duplicates} duplicados ignorados, {discarded} descartados, {errors} errores, {attachments_saved} adjuntos guardados.")
         db.commit()
         log_action(db, company_id=company_id, user=None, action="email.fetch_completed", entity_type="email", message=settings.last_sync_message or "")
+        log_flow_event(
+            db,
+            company_id=company_id,
+            event="email.sync.completed",
+            stage="sync",
+            message="Sincronización IMAP completada.",
+            status="success",
+            metadata={
+                "mailbox": mailbox,
+                "uidvalidity": uidvalidity,
+                "found": found,
+                "downloaded": downloaded,
+                "saved": saved,
+                "duplicates": duplicates,
+                "discarded": discarded,
+                "errors": errors,
+                "attachments_saved": attachments_saved,
+                "last_uid": last_processed_uid,
+            },
+        )
         logger.info(
             "email.sync.completed",
             extra={
@@ -1137,6 +1285,23 @@ def _fetch_imap_emails(
         _update_sync_status(settings, False, saved, duplicates, message, message)
         db.commit()
         log_action(db, company_id=company_id, user=None, action="email.fetch_error", entity_type="email", message=message)
+        log_flow_event(
+            db,
+            company_id=company_id,
+            event="email.sync.failed",
+            stage="sync",
+            message="La sincronización IMAP terminó con error.",
+            status="error",
+            metadata={
+                "mailbox": mailbox,
+                "found": found,
+                "downloaded": downloaded,
+                "saved": saved,
+                "duplicates": duplicates,
+                "errors": errors,
+                "error_type": type(exc).__name__,
+            },
+        )
         if sync_state and sync_session:
             _update_sync_checkpoint(
                 sync_state,
@@ -1159,8 +1324,29 @@ def _fetch_imap_emails(
                 total=found,
             )
         return {"ok": False, "found": found, "downloaded": downloaded, "saved": saved, "duplicates": duplicates, "discarded": discarded, "attachments": attachments_saved, "errors": errors, "message": message}
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        log_flow_event(
+            db,
+            company_id=company_id,
+            event="email.sync.failed",
+            stage="sync",
+            message="La sincronización IMAP terminó con una excepción inesperada.",
+            status="error",
+            metadata={
+                "mailbox": mailbox,
+                "found": found,
+                "downloaded": downloaded,
+                "saved": saved,
+                "duplicates": duplicates,
+                "errors": errors,
+                "error_type": exc.__class__.__name__,
+            },
+        )
+        raise
     finally:
         sync_lock.release()
+        flow_id_var.reset(flow_token)
 
 
 def read_latest_imap_emails(
@@ -1544,6 +1730,9 @@ def call_openai(settings: LLMSettings, messages: list[dict], model: str) -> dict
         "temperature": settings.temperature,
         "max_tokens": settings.max_tokens,
     }
+    reasoning_effort = resolve_reasoning_effort(getattr(settings, "reasoning_effort", None), model)
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
     request = urllib.request.Request(
         f"{base_url}/chat/completions",
         data=json.dumps(payload).encode(),
@@ -1555,12 +1744,19 @@ def call_openai(settings: LLMSettings, messages: list[dict], model: str) -> dict
         try:
             with urllib.request.urlopen(request, timeout=settings.timeout_seconds) as response:
                 data = json.loads(response.read().decode())
-            return {
+            message_data = data["choices"][0]["message"]
+            result = {
                 "ok": True,
                 "message": "Conexion OpenAI correcta.",
-                "content": data["choices"][0]["message"]["content"],
+                "content": message_data.get("content") or "",
                 "usage": data.get("usage") or {},
             }
+            # Providers may expose an explicit, user-facing summary of the
+            # reasoning. Never ingest private chain-of-thought fields.
+            reasoning_summary = message_data.get("reasoning_summary") or data.get("reasoning_summary")
+            if isinstance(reasoning_summary, str) and reasoning_summary.strip():
+                result["reasoning_summary"] = reasoning_summary.strip()
+            return result
         except urllib.error.HTTPError as exc:
             try:
                 detail = exc.read().decode(errors="ignore")
@@ -1610,5 +1806,37 @@ def extract_sample(db: Session, settings: LLMSettings, company_id: int, text: st
     if not result.get("validation_ok"):
         result["ok"] = False
         result["message"] = "La extraccion no paso la validacion estructurada."
+        return result
+    return result
+
+
+def validate_sample(
+    db: Session,
+    settings: LLMSettings,
+    company_id: int,
+    text: str,
+    extracted_content: dict,
+    prompt: str | None = None,
+) -> dict:
+    validation_input = (
+        "Texto recibido:\n"
+        f"{text}\n\n"
+        "Propuesta de extraccion:\n"
+        f"{json.dumps(extracted_content, ensure_ascii=False)}"
+    )
+    result = run_prompt_execution(
+        db,
+        company_id,
+        "validation",
+        settings,
+        validation_input,
+        provider_call=call_openai,
+        prompt_override=prompt,
+    )
+    if not result.get("ok"):
+        return result
+    if not result.get("validation_ok"):
+        result["ok"] = False
+        result["message"] = "La validacion no paso la validacion estructurada."
         return result
     return result
