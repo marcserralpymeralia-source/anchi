@@ -11,7 +11,7 @@ from typing import Any, Callable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, LEGACY_OPENAI_MODEL_FALLBACK, resolve_openai_runtime_model, resolve_reasoning_effort
+from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, LEGACY_OPENAI_MODEL_FALLBACK, completion_token_parameter_name, model_supports_reasoning, resolve_openai_runtime_model, resolve_reasoning_effort
 from app.core.observability import redact_sensitive_data
 from app.db.models import PromptExecution, PromptExecutionDetail, PromptTemplate, PromptVersion
 from app.logs.service import log_flow_event
@@ -318,11 +318,10 @@ def _trace_json(value: Any, *, anonymize: bool) -> str:
 
 
 def _effective_parameters(settings: Any, model: str) -> dict[str, Any]:
-    parameters: dict[str, Any] = {
-        "model": model,
-        "temperature": getattr(settings, "temperature", None),
-        "max_tokens": getattr(settings, "max_tokens", None),
-    }
+    parameters: dict[str, Any] = {"model": model}
+    if not model_supports_reasoning(model):
+        parameters["temperature"] = getattr(settings, "temperature", None)
+    parameters[completion_token_parameter_name(model)] = getattr(settings, "max_tokens", None)
     reasoning_effort = resolve_reasoning_effort(getattr(settings, "reasoning_effort", None), model)
     if reasoning_effort:
         parameters["reasoning_effort"] = reasoning_effort
