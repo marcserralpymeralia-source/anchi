@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, resolve_reasoning_effort
+from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, model_supports_reasoning, resolve_reasoning_effort
 from app.agent.extraction.prompts import ORDER_EXTRACTION_SYSTEM_PROMPT
 from app.agent.extraction.schema import (
     ORDER_EXTRACTION_SCHEMA_VERSION,
@@ -116,7 +116,6 @@ def _structured_extraction_payload(extraction_input: OrderExtractionInput, model
             {"role": "system", "content": ORDER_EXTRACTION_SYSTEM_PROMPT},
             {"role": "user", "content": extraction_input.combined_text()},
         ],
-        "temperature": 0,
         "response_format": {
             "type": "json_schema",
             "json_schema": {
@@ -126,6 +125,8 @@ def _structured_extraction_payload(extraction_input: OrderExtractionInput, model
             },
         },
     }
+    if not model_supports_reasoning(model):
+        payload["temperature"] = 0
     resolved_reasoning_effort = resolve_reasoning_effort(reasoning_effort, model)
     if resolved_reasoning_effort:
         payload["reasoning_effort"] = resolved_reasoning_effort

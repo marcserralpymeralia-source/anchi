@@ -93,6 +93,11 @@ def model_supports_reasoning(model: str | None) -> bool:
     )
 
 
+def completion_token_parameter_name(model: str | None) -> str:
+    """Return the Chat Completions output-limit parameter for a model family."""
+    return "max_completion_tokens" if model_supports_reasoning(model) else "max_tokens"
+
+
 def resolve_reasoning_effort(effort: str | None, model: str | None = None) -> str | None:
     if not model_supports_reasoning(model):
         return None

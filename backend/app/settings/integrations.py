@@ -21,7 +21,7 @@ from uuid import uuid4
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
-from app.agent.model_catalog import resolve_reasoning_effort
+from app.agent.model_catalog import completion_token_parameter_name, model_supports_reasoning, resolve_reasoning_effort
 from app.agent.prompt_runtime import run_prompt_execution
 from app.core.encryption import decrypt_secret
 from app.core.observability import flow_id_var
@@ -1727,9 +1727,10 @@ def call_openai(settings: LLMSettings, messages: list[dict], model: str) -> dict
     payload = {
         "model": model,
         "messages": messages,
-        "temperature": settings.temperature,
-        "max_tokens": settings.max_tokens,
     }
+    if not model_supports_reasoning(model):
+        payload["temperature"] = settings.temperature
+    payload[completion_token_parameter_name(model)] = settings.max_tokens
     reasoning_effort = resolve_reasoning_effort(getattr(settings, "reasoning_effort", None), model)
     if reasoning_effort:
         payload["reasoning_effort"] = reasoning_effort

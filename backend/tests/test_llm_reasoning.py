@@ -49,12 +49,18 @@ class LLMReasoningTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         reasoning_payload = json.loads(urlopen.call_args.args[0].data)
         self.assertEqual(reasoning_payload["reasoning_effort"], "high")
+        self.assertEqual(reasoning_payload["max_completion_tokens"], 100)
+        self.assertNotIn("max_tokens", reasoning_payload)
+        self.assertNotIn("temperature", reasoning_payload)
 
         urlopen.reset_mock()
         result = call_openai(llm_settings("high"), [{"role": "user", "content": "test"}], "gpt-4.1-mini")
         self.assertTrue(result["ok"])
         non_reasoning_payload = json.loads(urlopen.call_args.args[0].data)
         self.assertNotIn("reasoning_effort", non_reasoning_payload)
+        self.assertEqual(non_reasoning_payload["max_tokens"], 100)
+        self.assertNotIn("max_completion_tokens", non_reasoning_payload)
+        self.assertEqual(non_reasoning_payload["temperature"], 0.1)
 
     @patch("app.settings.integrations.decrypt_secret", return_value="api-key")
     @patch("app.settings.integrations.urllib.request.urlopen", return_value=ExplicitReasoningSummaryResponse())
