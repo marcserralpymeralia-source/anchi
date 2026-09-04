@@ -1,4 +1,4 @@
-{% from "components/icons.html" import icon_plus, icon_trash %}
+{% from "components/icons.html" import icon_plus, icon_trash, icon_check %}
 <div class="order-review-lines-block">
   <div class="order-lines-header-row">
     <div class="order-lines-title-group">
@@ -79,9 +79,18 @@
               >
 
               {% if proposed_product %}
-                <div class="order-review-proposal-badge">
-                  <span>Sugerencia: <strong>{{ proposed_product.reference }} · {{ proposed_product.name }}</strong> (selecciona para validar)</span>
-                </div>
+                <button
+                  type="button"
+                  class="order-review-proposal-badge is-clickable"
+                  data-apply-proposed
+                  data-product-id="{{ proposed_product.id }}"
+                  data-product-name="{{ proposed_product.name }}"
+                  data-product-ref="{{ proposed_product.reference }}"
+                  title="Haz clic para seleccionar y validar esta sugerencia automáticamente"
+                >
+                  <span class="proposal-icon">{{ icon_check(12) }}</span>
+                  <span>Sugerencia: <strong>{{ proposed_product.reference }} · {{ proposed_product.name }}</strong> (clic para aplicar)</span>
+                </button>
               {% elif line.doubt_reason %}
                 <div class="order-review-proposal-badge is-doubt">
                   <span>{{ line.doubt_reason }}</span>

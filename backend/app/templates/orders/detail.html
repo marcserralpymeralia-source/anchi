@@ -497,7 +497,23 @@ document.querySelectorAll("[data-product-autocomplete]").forEach((root) => {
   const input = root.querySelector("[data-product-input]");
   const productId = root.querySelector("[data-product-id]");
   const results = root.querySelector("[data-product-results]");
+  const proposalBtn = root.querySelector("[data-apply-proposed]");
   let timer;
+
+  if (proposalBtn) {
+    proposalBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const pId = proposalBtn.dataset.productId;
+      const pName = proposalBtn.dataset.productName;
+      if (pId) {
+        input.value = pName;
+        productId.value = String(pId);
+        const form = productId.form;
+        if (form) form.requestSubmit();
+      }
+    });
+  }
 
   function closeResults() {
     results.hidden = true;

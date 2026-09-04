@@ -10134,22 +10134,57 @@ dialog.settings-drawer .grid-4-cols {
 
 .order-review-proposal-badge {
   margin-top: 4px !important;
-  font-size: 11px !important;
+  font-size: 11.5px !important;
   color: #0f766e !important;
   background: #f0fdf4 !important;
-  padding: 3px 6px !important;
-  border-radius: 4px !important;
-  display: block !important;
-  border: 1px solid #dcfce7 !important;
-  line-height: 1.3 !important;
-  width: 100% !important;
+  padding: 3px 8px !important;
+  border-radius: 6px !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  border: 1px solid #bbf7d0 !important;
+  line-height: 1.35 !important;
+  width: auto !important;
+  max-width: 100% !important;
   box-sizing: border-box !important;
+  text-align: left !important;
+}
+
+.order-review-proposal-badge.is-clickable {
+  cursor: pointer !important;
+  transition: all 0.15s ease !important;
+  user-select: none !important;
+  box-shadow: 0 1px 2px rgba(15, 118, 110, 0.05) !important;
+  font: inherit !important;
+  font-size: 11.5px !important;
+}
+
+.order-review-proposal-badge.is-clickable:hover {
+  background: #dcfce7 !important;
+  border-color: #86efac !important;
+  color: #14532d !important;
+  box-shadow: 0 2px 4px rgba(15, 118, 110, 0.12) !important;
+  transform: translateY(-1px) !important;
+}
+
+.order-review-proposal-badge.is-clickable:active {
+  transform: translateY(0) !important;
+}
+
+.order-review-proposal-badge .proposal-icon {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  color: #16a34a !important;
+  flex-shrink: 0 !important;
 }
 
 .order-review-proposal-badge.is-doubt {
   color: #b45309 !important;
   background: #fffbeb !important;
   border-color: #fef3c7 !important;
+  display: block !important;
+  width: 100% !important;
 }
 
 .order-review-quantity {
