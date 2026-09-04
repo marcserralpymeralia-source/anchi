@@ -831,7 +831,7 @@ def _proxy_health_result(connection: ProxyConnection) -> tuple[bool, str, str]:
 
     try:
         timeout = httpx.Timeout(connect=2.0, read=4.0, write=4.0, pool=2.0)
-        with httpx.Client(timeout=timeout, verify=verify_tls, follow_redirects=False) as client:
+        with httpx.Client(timeout=timeout, verify=verify_tls, follow_redirects=False, trust_env=False) as client:
             response = client.get(
                 url,
                 auth=auth,
