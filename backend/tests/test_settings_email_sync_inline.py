@@ -452,8 +452,13 @@ class SettingsEmailSyncInlineHttpTests(unittest.TestCase):
             with performance_test_client(fixture) as client:
                 response = client.get("/settings")
                 self.assertEqual(response.status_code, 200)
-                self.assertIn("27/07 12:00", response.text)
-                self.assertNotIn("27/07 10:00", response.text)
+                email_module = client.get(
+                    "/settings/module/email",
+                    headers={"Accept": "text/html", "X-Requested-With": "fetch"},
+                )
+                self.assertEqual(email_module.status_code, 200)
+                self.assertIn("27/07 12:00", email_module.text)
+                self.assertNotIn("27/07 10:00", email_module.text)
         finally:
             master_engine.dispose()
             tenant_engine.dispose()
