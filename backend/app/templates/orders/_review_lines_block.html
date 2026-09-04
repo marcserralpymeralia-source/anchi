@@ -1,4 +1,4 @@
-{% from "components/icons.html" import icon_plus, icon_trash, icon_check %}
+{% from "components/icons.html" import icon_plus, icon_trash, icon_check, icon_alert_triangle %}
 <div class="order-review-lines-block">
   <div class="order-lines-header-row">
     <div class="order-lines-title-group">
@@ -81,7 +81,7 @@
               {% if proposed_product %}
                 <button
                   type="button"
-                  class="order-review-proposal-badge is-clickable"
+                  class="order-review-proposal-badge is-suggestion is-clickable"
                   data-apply-proposed
                   data-product-id="{{ proposed_product.id }}"
                   data-product-name="{{ proposed_product.name }}"
@@ -92,8 +92,15 @@
                   <span>Sugerencia: <strong>{{ proposed_product.reference }} · {{ proposed_product.name }}</strong> (clic para aplicar)</span>
                 </button>
               {% elif line.doubt_reason %}
+                {% set doubt_text = line.doubt_reason %}
+                {% if "sin_referencia" in doubt_text or "no encontrado" in doubt_text %}
+                  {% set doubt_text = "Producto no identificado · Selecciona o busca el producto arriba" %}
+                {% elif "revision por extraccion" in doubt_text %}
+                  {% set doubt_text = "Línea marcada para revisión manual" %}
+                {% endif %}
                 <div class="order-review-proposal-badge is-doubt">
-                  <span>{{ line.doubt_reason }}</span>
+                  <span class="proposal-icon">{{ icon_alert_triangle(12) }}</span>
+                  <span>{{ doubt_text }}</span>
                 </div>
               {% endif %}
 

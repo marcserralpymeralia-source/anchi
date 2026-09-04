@@ -10090,9 +10090,9 @@ dialog.settings-drawer .grid-4-cols {
 
 .order-ref-badge {
   display: inline-block !important;
-  padding: 2px 6px !important;
-  border-radius: 4px !important;
-  font-family: ui-monospace, SFMono-Regular, monospace !important;
+  padding: 2px 8px !important;
+  border-radius: 6px !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace !important;
   font-size: 11.5px !important;
   font-weight: 600 !important;
   max-width: 100% !important;
@@ -10102,13 +10102,15 @@ dialog.settings-drawer .grid-4-cols {
 }
 
 .order-ref-badge.is-validated {
-  background: #f1f5f9 !important;
+  background: #f8fafc !important;
   color: #334155 !important;
+  border: 1px solid #e2e8f0 !important;
 }
 
 .order-ref-badge.is-unvalidated {
-  background: #fef3c7 !important;
+  background: #fffbeb !important;
   color: #b45309 !important;
+  border: 1px solid #fef3c7 !important;
 }
 
 .order-review-description {
@@ -10133,28 +10135,31 @@ dialog.settings-drawer .grid-4-cols {
 }
 
 .order-review-proposal-badge {
-  margin-top: 4px !important;
+  margin-top: 5px !important;
   font-size: 11.5px !important;
-  color: #0f766e !important;
-  background: #f0fdf4 !important;
-  padding: 3px 8px !important;
+  padding: 3px 9px !important;
   border-radius: 6px !important;
   display: inline-flex !important;
   align-items: center !important;
-  gap: 5px !important;
-  border: 1px solid #bbf7d0 !important;
+  gap: 6px !important;
   line-height: 1.35 !important;
-  width: auto !important;
+  width: fit-content !important;
   max-width: 100% !important;
   box-sizing: border-box !important;
   text-align: left !important;
+}
+
+.order-review-proposal-badge.is-suggestion {
+  color: #15803d !important;
+  background: #f0fdf4 !important;
+  border: 1px solid #bbf7d0 !important;
+  box-shadow: 0 1px 2px rgba(22, 101, 52, 0.04) !important;
 }
 
 .order-review-proposal-badge.is-clickable {
   cursor: pointer !important;
   transition: all 0.15s ease !important;
   user-select: none !important;
-  box-shadow: 0 1px 2px rgba(15, 118, 110, 0.05) !important;
   font: inherit !important;
   font-size: 11.5px !important;
 }
@@ -10163,7 +10168,7 @@ dialog.settings-drawer .grid-4-cols {
   background: #dcfce7 !important;
   border-color: #86efac !important;
   color: #14532d !important;
-  box-shadow: 0 2px 4px rgba(15, 118, 110, 0.12) !important;
+  box-shadow: 0 2px 4px rgba(22, 101, 52, 0.1) !important;
   transform: translateY(-1px) !important;
 }
 
@@ -10171,20 +10176,28 @@ dialog.settings-drawer .grid-4-cols {
   transform: translateY(0) !important;
 }
 
+.order-review-proposal-badge.is-doubt {
+  color: #92400e !important;
+  background: #fffbeb !important;
+  border: 1px solid #fde68a !important;
+  box-shadow: 0 1px 2px rgba(146, 64, 14, 0.04) !important;
+  display: inline-flex !important;
+  width: fit-content !important;
+}
+
 .order-review-proposal-badge .proposal-icon {
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
-  color: #16a34a !important;
   flex-shrink: 0 !important;
 }
 
-.order-review-proposal-badge.is-doubt {
-  color: #b45309 !important;
-  background: #fffbeb !important;
-  border-color: #fef3c7 !important;
-  display: block !important;
-  width: 100% !important;
+.order-review-proposal-badge.is-suggestion .proposal-icon {
+  color: #16a34a !important;
+}
+
+.order-review-proposal-badge.is-doubt .proposal-icon {
+  color: #d97706 !important;
 }
 
 .order-review-quantity {
