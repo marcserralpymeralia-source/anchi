@@ -494,6 +494,8 @@ class SetupOnboardingTests(unittest.TestCase):
             self.assertEqual(fragment.status_code, 200)
             self.assertIn("Proxy de pruebas", fragment.text)
             self.assertIn("Sin tráfico", fragment.text)
+            self.assertIn("Probar conexión", fragment.text)
+            self.assertIn(f'data-proxy-test-url="/settings/proxies/{profile_id}/test"', fragment.text)
 
             with patch("app.settings.routes.httpx.Client") as http_client:
                 http_client_instance = http_client.return_value.__enter__.return_value

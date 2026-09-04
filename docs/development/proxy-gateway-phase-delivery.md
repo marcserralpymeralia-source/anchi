@@ -18,17 +18,22 @@ ninguna conexión hacia bases de datos.
 - Añadidas las migraciones tenant `2026.09.04.3` y `2026.09.04.4`; la segunda
   elimina los campos de destino de BBDD que tenía el prototipo inicial.
 - Preparado un gateway remoto en una carpeta aislada bajo `/root/anchi-proxy`.
-- El gateway escucha únicamente en loopback, responde a `/health` y rechaza
-  cualquier tráfico de datos con `503`.
+- El gateway escucha en el servidor remoto, responde a `/health` con
+  autenticación Basic y rechaza cualquier tráfico de datos con `503`.
 - Servicio instalado y habilitado con systemd para reinicio automático.
+- Se ha creado en el servidor remoto el usuario técnico `anchi-proxy-demo`.
+  Su contraseña aleatoria queda solo en `/root/anchi-proxy/config.env` con
+  permisos `600` y no se copia al repositorio ni a este documento.
 
 ## 3. Alcance no ejecutado
 
 - No se ha conectado ninguna base de datos real.
-- No se han abierto puertos públicos ni se ha configurado un dominio.
-- No se ha implementado todavía forwarding, autenticación de gateway,
-  allowlist, TLS/mTLS ni el adaptador que en el futuro consumirá el módulo de
-  BBDD.
+- Se ha abierto la escucha del servicio en `0.0.0.0:8787` únicamente para la
+  demo del healthcheck. El proveedor/red externa no permite actualmente la
+  conexión desde el equipo local a ese puerto; hay que resolver esa regla o
+  publicar el healthcheck detrás de HTTPS antes de usarlo desde Vercel.
+- No se ha implementado todavía forwarding, allowlist, TLS/mTLS ni el
+  adaptador que en el futuro consumirá el módulo de BBDD.
 
 ## 4. Diagnóstico previo
 
@@ -39,9 +44,9 @@ mecanismos para evitar una vía paralela de configuración.
 ## 5. Cambios realizados
 
 El perfil de proxy es solo configuración. Aunque se marque como habilitado,
-ningún consumidor de Anchi lo utiliza todavía. El botón de prueba queda
-desactivado en la interfaz y la ruta protegida devuelve `501` sin realizar
-operaciones de red.
+ningún consumidor de Anchi lo utiliza todavía. El botón de prueba consulta
+exclusivamente `GET /health` del gateway configurado, persiste el resultado y
+no envía destinos, consultas ni tráfico de base de datos.
 
 ## 6. Archivos modificados
 
@@ -69,7 +74,7 @@ operaciones de red.
 |---|---|---|
 | Perfil tenant-scoped | Evita mezclar configuración de proxy entre empresas | Configuración global compartida |
 | Contraseña cifrada | Reutiliza la protección existente | Texto plano o variables en HTML |
-| Gateway local-only | No hay dominio, TLS ni módulo consumidor listo | Exponer HTTP directo en la IP pública |
+| Healthcheck autenticado y sin forwarding | Permite probar que el gateway remoto está vivo sin tocar BBDD | Activar forwarding antes de tener TLS, aislamiento y allowlist |
 | Gateway stdlib | No añade dependencias al servidor remoto | Instalar un stack adicional para un stub |
 | `systemd` con `Restart=always` | Persistencia tras reinicio del proceso/host | Proceso manual o `screen` |
 
@@ -80,22 +85,23 @@ operaciones de red.
 | `python -m compileall -q app` con Python 3.14 del entorno local | Correcto |
 | Test directo de `_proxy_form_values` | Hosts válidos aceptados y URL/ruta/espacios rechazados |
 | Test directo de `_apply_tenant_proxy_connections` y `_apply_tenant_proxy_connection_scope` | Tabla creada y prototipo antiguo convertido a campos solo de proxy |
-| `python -m unittest tests.test_schema_migrations` | 21 tests OK |
+| `python -m unittest tests.test_schema_migrations` | 22 tests OK |
 | `systemd-analyze verify /etc/systemd/system/anchi-proxy.service` | Correcto |
 | `systemctl is-enabled anchi-proxy.service` | `enabled` |
 | `systemctl is-active anchi-proxy.service` | `active` |
-| `curl http://127.0.0.1:8787/health` | HTTP 200; `traffic_enabled=false` |
-| `curl http://127.0.0.1:8787/v1/test` | HTTP 503; sin forwarding |
+| `curl` local sin credenciales al healthcheck | HTTP 401 |
+| `curl` local autenticado al healthcheck | HTTP 200; `traffic_enabled=false` |
+| `curl` autenticado a `/v1/test` | HTTP 503; sin forwarding |
 | `systemctl restart anchi-proxy.service` + healthcheck | Correcto; vuelve a quedar activo |
-| `ss -ltnp` sobre el puerto del gateway | Listener únicamente en `127.0.0.1` |
+| `ss -ltnp` sobre el puerto del gateway | Listener en `0.0.0.0:8787` |
+| `Test-NetConnection 82.223.17.129:8787` desde Windows | No accesible; bloqueo externo pendiente |
 | `git diff --check` | Sin errores de whitespace en el diff |
 
 ## 10. Tests añadidos o modificados
 
 Se añadió cobertura del módulo de configuración, cifrado de contraseña,
-renderizado del fragmento y respuesta `501` del endpoint de prueba. La suite
-completa de `test_setup_onboarding.py` no se pudo ejecutar porque contiene un
-cambio local ajeno a esta fase con una línea con indentación inválida.
+renderizado del fragmento y healthcheck autenticado aislado de cualquier
+destino de datos.
 
 ## 11. Criterios de aceptación
 
@@ -103,15 +109,18 @@ cambio local ajeno a esta fase con una línea con indentación inválida.
 |---|---|---|
 | Configuración por tenant | Cumplido | Consulta y endpoints filtran por `company_id` |
 | Secretos no visibles ni en claro | Cumplido | `password_encrypted` y test de descifrado |
-| Sin conexiones de datos desde Anchi | Cumplido | No hay llamada de red en el módulo; prueba `501` |
+| Sin conexiones de datos desde Anchi | Cumplido | Solo se consulta `/health`; los endpoints de datos siguen bloqueados |
 | Migración compatible | Cumplido | Migraciones registradas; conversión de la tabla antigua cubierta en test |
 | Servicio remoto resistente a reinicios | Cumplido | systemd enabled/active y restart validado |
-| Exposición pública segura | Pendiente | Requiere TLS/mTLS y política de acceso antes de activar forwarding |
+| Exposición pública segura | Pendiente | El healthcheck demo usa HTTP Basic sin TLS; requiere HTTPS/mTLS antes de uso real |
 
 ## 12. Riesgos y observaciones pendientes
 
-- El gateway corre como servicio aislado y no debe exponerse públicamente en
-  HTTP antes de incorporar autenticación y TLS/mTLS.
+- La escucha pública actual es solo para un healthcheck de demo y usa HTTP
+  Basic sin TLS; la contraseña debe considerarse temporal y rotarse.
+- El puerto 8787 está bloqueado desde el equipo local por una regla externa;
+  el botón de Anchi dará no disponible hasta corregirlo o usar un endpoint
+  HTTPS accesible.
 - La contraseña SSH compartida para esta preparación debe rotarse antes de
   cualquier uso continuado.
 - El test local de onboarding debe corregirse en el cambio que lo introdujo;
@@ -119,9 +128,10 @@ cambio local ajeno a esta fase con una línea con indentación inválida.
 
 ## 13. Desviaciones respecto al alcance inicial
 
-El gateway queda deliberadamente limitado a healthcheck y rechazo de tráfico.
-Esto mantiene el requisito de no pasar todavía peticiones por el proxy hasta
-que exista el módulo de destino y evita activar una ruta insegura por defecto.
+El gateway queda deliberadamente limitado a healthcheck autenticado y rechazo
+de tráfico. Esto mantiene el requisito de no pasar todavía peticiones por el
+proxy hasta que exista el módulo de destino y evita activar una ruta insegura
+por defecto.
 
 ## 14. Estado final de Git
 
