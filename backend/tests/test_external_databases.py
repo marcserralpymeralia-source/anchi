@@ -4,13 +4,14 @@ import os
 import sqlite3
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from sqlalchemy import select
 
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("ENABLE_DEMO_BOOTSTRAP", "false")
 
-from app.db.models import Customer, ExternalDatabaseConnection, ExternalDatabaseMapping
+from app.db.models import Customer, ExternalDatabaseConnection, ExternalDatabaseMapping, Product
 from app.external_databases.service import (
     scan_schema,
     sync_mapping,
@@ -41,6 +42,39 @@ class ExternalDatabaseTests(unittest.TestCase):
         finally:
             source.close()
         return source_path
+
+    def _create_product_source(self, root: str | Path) -> Path:
+        source_path = Path(root) / "external-products.sqlite3"
+        source = sqlite3.connect(source_path)
+        try:
+            source.execute(
+                "CREATE TABLE products_source (sku TEXT, product_name TEXT, price NUMERIC, discount NUMERIC)"
+            )
+            source.executemany(
+                "INSERT INTO products_source(sku, product_name, price, discount) VALUES (?, ?, ?, ?)",
+                [
+                    ("SKU-001", "Vaso de prueba", 12.5, 10),
+                    ("SKU-002", "Tapa de prueba", 4.25, 0),
+                ],
+            )
+            source.commit()
+        finally:
+            source.close()
+        return source_path
+
+    def test_sqlite_is_not_available_in_production(self):
+        with patch("app.external_databases.service.get_settings") as get_settings:
+            get_settings.return_value.environment = "production"
+            with self.assertRaisesRegex(ValueError, "SQLite solo está disponible"):
+                from app.external_databases.service import normalize_connection_values
+
+                normalize_connection_values(
+                    {
+                        "name": "Fuente local",
+                        "database_type": "sqlite",
+                        "database_name": "external.sqlite3",
+                    }
+                )
 
     def test_sqlite_read_only_scan_mapping_and_partial_sync(self):
         fixture = SetupFixture()
@@ -151,6 +185,9 @@ class ExternalDatabaseTests(unittest.TestCase):
             )
             self.assertEqual(scanned.status_code, 200)
             self.assertEqual(scanned.json()["schema"]["tables"][0]["name"], "customers_source")
+            restored_module = client.get("/settings/module/data-sources")
+            self.assertEqual(restored_module.status_code, 200)
+            self.assertIn("customers_source", restored_module.text)
 
             mapping = client.post(
                 f"/settings/data-sources/{connection_id}/mapping",
@@ -184,6 +221,14 @@ class ExternalDatabaseTests(unittest.TestCase):
             )
             self.assertEqual(synced.status_code, 200)
             self.assertEqual(synced.json()["result"]["created"], 2)
+            self.assertFalse(synced.json()["result"]["completed_without_errors"])
+            with fixture.TenantSession() as db:
+                saved_mapping = db.scalar(
+                    select(ExternalDatabaseMapping).where(ExternalDatabaseMapping.entity_type == "customers")
+                )
+                self.assertFalse(saved_mapping.last_sync_ok)
+                saved_connection = db.get(ExternalDatabaseConnection, connection_id)
+                self.assertIsNotNone(saved_connection.schema_snapshot_json)
 
             toggled = client.post(
                 f"/settings/data-sources/{connection_id}/toggle",
@@ -193,6 +238,68 @@ class ExternalDatabaseTests(unittest.TestCase):
             self.assertFalse(toggled.json()["enabled"])
         finally:
             cleanup()
+            fixture.cleanup()
+
+    def test_product_mapping_sync_populates_local_product_master(self):
+        fixture = SetupFixture()
+        try:
+            source_path = self._create_product_source(fixture.tempdir.name)
+            connection = ExternalDatabaseConnection(
+                company_id=1,
+                name="ERP productos demo",
+                database_type="sqlite",
+                host=":memory:",
+                port=0,
+                database_name=str(source_path),
+                schema_name="main",
+                username="",
+                enabled=True,
+                read_only=True,
+            )
+            mapping = ExternalDatabaseMapping(
+                company_id=1,
+                connection=connection,
+                entity_type="products",
+                table_schema="main",
+                table_name="products_source",
+                field_map_json='{"reference":"sku","name":"product_name","sale_price":"price","discount_percent":"discount"}',
+                sync_enabled=True,
+                sync_limit=10,
+            )
+            with fixture.TenantSession() as db:
+                db.add(connection)
+                db.commit()
+                schema = scan_schema(connection)
+                normalized = validate_mapping_payload(
+                    "products",
+                    {"reference": "sku", "name": "product_name", "sale_price": "price"},
+                    schema,
+                )
+                self.assertEqual(normalized["reference"], "sku")
+                db.add(mapping)
+                db.commit()
+                result = sync_mapping(db, connection, mapping, company_id=1, actor_id=1)
+                self.assertEqual(result["rows_read"], 2)
+                self.assertEqual(result["created"], 2)
+                self.assertTrue(result["completed_without_errors"])
+                products = db.scalars(
+                    select(Product).where(Product.company_id == 1).order_by(Product.reference)
+                ).all()
+                self.assertEqual([product.reference for product in products], ["SKU-001", "SKU-002"])
+                self.assertEqual(products[0].sale_price, 12.5)
+                self.assertEqual(products[0].discount_percent, 10.0)
+                source_path = Path(source_path)
+                source = sqlite3.connect(source_path)
+                try:
+                    source.execute("UPDATE products_source SET product_name = ? WHERE sku = ?", ("Vaso actualizado", "SKU-001"))
+                    source.commit()
+                finally:
+                    source.close()
+                rerun = sync_mapping(db, connection, mapping, company_id=1, actor_id=1)
+                self.assertEqual(rerun["created"], 0)
+                self.assertEqual(rerun["updated"], 2)
+                self.assertEqual(db.scalar(select(Product.name).where(Product.reference == "SKU-001")), "Vaso actualizado")
+        finally:
             fixture.cleanup()
 
 

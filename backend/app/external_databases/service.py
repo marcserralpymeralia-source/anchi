@@ -2,18 +2,20 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import MetaData, Table, create_engine, inspect, select, text
+from sqlalchemy import MetaData, Table, create_engine, func, inspect, select, text
 from sqlalchemy.engine import Engine, URL
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.core.encryption import decrypt_secret
-from app.db.models import ExternalDatabaseConnection, ExternalDatabaseMapping, ProxyConnection
+from app.db.models import Customer, ExternalDatabaseConnection, ExternalDatabaseMapping, Product, ProxyConnection
 from app.master_data.service import upsert_customer, upsert_product
 
 logger = logging.getLogger(__name__)
@@ -96,6 +98,10 @@ def normalize_connection_values(data: dict[str, Any], existing: ExternalDatabase
     database_type = str(data.get("database_type") or "postgresql").strip().lower()
     if database_type not in SUPPORTED_DATABASE_TYPES:
         raise ExternalDatabaseError("El tipo de base de datos no está soportado.")
+    settings = get_settings()
+    running_on_vercel = os.getenv("VERCEL") == "1" or bool(os.getenv("VERCEL_ENV"))
+    if database_type == "sqlite" and (settings.environment == "production" or running_on_vercel):
+        raise ExternalDatabaseError("SQLite solo está disponible en entornos de desarrollo, demo o pruebas.")
     host = _validate_host(str(data.get("host") or (existing.host if existing else "")), database_type)
     try:
         port = int(data.get("port") or (existing.port if existing else SUPPORTED_DATABASE_TYPES[database_type]["default_port"]))
@@ -103,6 +109,8 @@ def normalize_connection_values(data: dict[str, Any], existing: ExternalDatabase
         raise ExternalDatabaseError("El puerto debe ser un número válido.") from exc
     if database_type != "sqlite" and not 1 <= port <= 65535:
         raise ExternalDatabaseError("El puerto debe estar entre 1 y 65535.")
+    if database_type == "sqlite":
+        port = 0
     database_name = str(data.get("database_name") or (existing.database_name if existing else "")).strip()
     if not database_name or len(database_name) > 255:
         raise ExternalDatabaseError("El nombre de la base de datos es obligatorio.")
@@ -113,6 +121,8 @@ def normalize_connection_values(data: dict[str, Any], existing: ExternalDatabase
     if database_type != "sqlite" and not username:
         raise ExternalDatabaseError("El usuario de la base de datos es obligatorio.")
     ssl_mode = str(data.get("ssl_mode") or (existing.ssl_mode if existing else "require")).strip().lower()
+    if database_type == "sqlite":
+        ssl_mode = "disable"
     if ssl_mode not in SSL_MODES:
         raise ExternalDatabaseError("El modo SSL indicado no es válido.")
     proxy_raw = str(data.get("proxy_connection_id") or "").strip()
@@ -223,21 +233,29 @@ def scan_schema(connection: ExternalDatabaseConnection) -> dict[str, Any]:
         _run_read_only_probe(engine)
         inspector = inspect(engine)
         schema = None if connection.database_type == "sqlite" else (connection.schema_name or "public")
-        table_names = inspector.get_table_names(schema=schema)[:MAX_TABLES]
+        all_table_names = inspector.get_table_names(schema=schema)
+        table_names = sorted(all_table_names, key=str.casefold)[:MAX_TABLES]
         tables: list[dict[str, Any]] = []
-        for table_name in sorted(table_names, key=str.casefold):
-            columns = inspector.get_columns(table_name, schema=schema)[:MAX_COLUMNS]
+        for table_name in table_names:
+            all_columns = inspector.get_columns(table_name, schema=schema)
+            columns = all_columns[:MAX_COLUMNS]
             tables.append(
                 {
                     "schema": schema or "main",
                     "name": table_name,
+                    "columns_truncated": len(all_columns) > MAX_COLUMNS,
                     "columns": [
                         {"name": column.get("name"), "type": str(column.get("type") or ""), "nullable": bool(column.get("nullable", True))}
                         for column in columns
                     ],
                 }
             )
-        return {"schema": schema or "main", "tables": tables, "truncated": len(table_names) >= MAX_TABLES}
+        return {
+            "schema": schema or "main",
+            "tables": tables,
+            "truncated": len(all_table_names) > MAX_TABLES,
+            "table_count": len(all_table_names),
+        }
     except (ExternalDatabaseError, SQLAlchemyError, OSError) as exc:
         raise ExternalDatabaseError(_safe_error_message(exc)) from exc
     finally:
@@ -336,7 +354,11 @@ def read_mapping_rows(connection: ExternalDatabaseConnection, mapping: ExternalD
         selected = [table.c[source].label(target) for target, source in field_map.items() if source in table.c]
         if not selected:
             raise ExternalDatabaseError("El mapeo no contiene columnas utilizables.")
-        statement = select(*selected).limit(safe_limit)
+        statement = select(*selected)
+        identity_source = field_map.get("code" if mapping.entity_type == "customers" else "reference")
+        if identity_source in table.c:
+            statement = statement.order_by(table.c[identity_source].asc())
+        statement = statement.limit(safe_limit)
         with engine.connect() as conn:
             transaction = conn.begin()
             try:
@@ -358,6 +380,8 @@ def preview_mapping(connection: ExternalDatabaseConnection, mapping: ExternalDat
 
 
 def sync_mapping(db: Session, connection: ExternalDatabaseConnection, mapping: ExternalDatabaseMapping, company_id: int, actor_id: int | None) -> dict[str, Any]:
+    if connection.company_id != company_id or mapping.company_id != company_id or mapping.connection_id != connection.id:
+        raise ExternalDatabaseError("La fuente y el mapeo no pertenecen a la compañía indicada.")
     rows = read_mapping_rows(connection, mapping, mapping.sync_limit or 500)
     field_map = _mapping_dict(mapping)
     counts = {"created": 0, "updated": 0, "skipped": 0, "errors": 0}
@@ -386,18 +410,43 @@ def sync_mapping(db: Session, connection: ExternalDatabaseConnection, mapping: E
             continue
         try:
             payload = {target: _source_text(row.get(target)) for target in field_map}
+            # The configured code/reference is the authoritative external key.
+            # Do not let a changed product name create a second local record.
+            existing_entity = None
+            normalized_identity = identity.lower()
+            if mapping.entity_type == "customers":
+                existing_entity = db.scalar(
+                    select(Customer).where(
+                        Customer.company_id == company_id,
+                        Customer.deleted_at.is_(None),
+                        func.lower(Customer.code) == normalized_identity,
+                    )
+                )
+            else:
+                existing_entity = db.scalar(
+                    select(Product).where(
+                        Product.company_id == company_id,
+                        Product.deleted_at.is_(None),
+                        func.lower(Product.reference) == normalized_identity,
+                    )
+                )
             with db.begin_nested():
                 if mapping.entity_type == "customers":
-                    outcome = upsert_customer(db, company_id=company_id, data=payload, source="external_database", actor_id=actor_id)
+                    outcome = upsert_customer(db, company_id=company_id, data=payload, source="external_database", actor_id=actor_id, customer_id=existing_entity.id if existing_entity else None)
                 else:
-                    outcome = upsert_product(db, company_id=company_id, data=payload, source="external_database", actor_id=actor_id)
+                    outcome = upsert_product(db, company_id=company_id, data=payload, source="external_database", actor_id=actor_id, product_id=existing_entity.id if existing_entity else None)
             counts[outcome.action] = counts.get(outcome.action, 0) + 1
         except (SQLAlchemyError, ValueError, TypeError) as exc:
             counts["errors"] += 1
             if len(errors) < 10:
                 errors.append(f"Fila {index}: {_safe_error_message(exc)}")
     db.commit()
-    return {"rows_read": len(rows), **counts, "errors_detail": errors}
+    return {
+        "rows_read": len(rows),
+        **counts,
+        "errors_detail": errors,
+        "completed_without_errors": counts["errors"] == 0,
+    }
 
 
 def connection_summary(connection: ExternalDatabaseConnection) -> dict[str, Any]:
@@ -422,6 +471,7 @@ def connection_summary(connection: ExternalDatabaseConnection) -> dict[str, Any]
         "last_scan_at": connection.last_scan_at.isoformat() if connection.last_scan_at else None,
         "last_scan_ok": connection.last_scan_ok,
         "last_scan_message": connection.last_scan_message,
+        "schema_snapshot_available": bool(connection.schema_snapshot_json),
     }
 
 

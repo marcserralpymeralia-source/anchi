@@ -421,6 +421,16 @@ def _settings_module_context(request: Request, db: Session, user: TenantUser, mo
             .order_by(ExternalDatabaseMapping.entity_type.asc(), ExternalDatabaseMapping.id.asc())
         ).all()
         external_mappings: dict[int, list[dict]] = {}
+        external_schemas: dict[int, dict] = {}
+        for connection in external_connections:
+            if not connection.schema_snapshot_json or not connection.last_scan_ok or not connection.last_test_ok:
+                continue
+            try:
+                snapshot = json.loads(connection.schema_snapshot_json)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(snapshot, dict) and isinstance(snapshot.get("tables"), list):
+                external_schemas[connection.id] = snapshot
         for mapping in mappings:
             try:
                 external_mappings.setdefault(mapping.connection_id, []).append(mapping_summary(mapping))
@@ -429,6 +439,7 @@ def _settings_module_context(request: Request, db: Session, user: TenantUser, mo
         context.update(
             external_database_connections=external_connections,
             external_database_mappings=external_mappings,
+            external_database_schemas=external_schemas,
             proxy_connections=proxies,
             can_edit_external_databases=can_edit_external_databases(user),
             database_type_options=database_type_options(),
@@ -2210,6 +2221,8 @@ async def save_external_database(request: Request, db: Session = Depends(get_ten
         from app.core.encryption import encrypt_secret
 
         connection.password_encrypted = encrypt_secret(password)
+    elif values["database_type"] == "sqlite":
+        connection.password_encrypted = None
     connection.read_only = True
     if configuration_changed:
         connection.status = "not_tested"
@@ -2219,6 +2232,7 @@ async def save_external_database(request: Request, db: Session = Depends(get_ten
         connection.last_scan_at = None
         connection.last_scan_ok = None
         connection.last_scan_message = None
+        connection.schema_snapshot_json = None
     connection.updated_by = resolve_updated_by_id(db, user)
     connection.updated_at = datetime.now(timezone.utc)
     if values["enabled"]:
@@ -2317,6 +2331,7 @@ def scan_external_database(connection_id: int, request: Request, db: Session = D
         connection.last_scan_ok = True
         connection.last_scan_message = f"Esquema leído: {len(schema['tables'])} tablas disponibles."
         connection.last_scan_at = now
+        connection.schema_snapshot_json = json.dumps(schema, ensure_ascii=False, separators=(",", ":"))
         connection.status = "scanned"
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="settings.external_database.scan", entity_type="external_database", entity_id=connection.id, message=connection.last_scan_message, metadata={"table_count": len(schema["tables"]), "read_only": True})
@@ -2401,13 +2416,22 @@ def sync_external_database_mapping(connection_id: int, entity_type: str, request
         return JSONResponse({"ok": False, "message": "No existe un mapeo guardado para esta entidad."}, status_code=404)
     if not connection.enabled:
         return JSONResponse({"ok": False, "message": "Activa la conexión antes de sincronizar sus datos."}, status_code=422)
+    if not connection.last_test_ok:
+        return JSONResponse({"ok": False, "message": "Prueba la conexión correctamente antes de sincronizar sus datos."}, status_code=422)
+    if not connection.last_scan_ok:
+        return JSONResponse({"ok": False, "message": "Escanea el esquema correctamente antes de sincronizar sus datos."}, status_code=422)
     if not mapping.sync_enabled:
         return JSONResponse({"ok": False, "message": "Activa la sincronización del mapeo antes de ejecutarla."}, status_code=422)
     try:
         result = sync_mapping(db, connection, mapping, user.company_id, user.id)
         mapping.last_sync_at = datetime.now(timezone.utc)
-        mapping.last_sync_ok = True
-        mapping.last_sync_message = f"Sincronización completada: {result['rows_read']} filas leídas."
+        has_errors = bool(result.get("errors"))
+        mapping.last_sync_ok = not has_errors
+        mapping.last_sync_message = (
+            f"Sincronización completada: {result['rows_read']} filas leídas, "
+            f"{result['created']} creadas, {result['updated']} actualizadas, "
+            f"{result['skipped']} omitidas y {result['errors']} con error."
+        )
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="settings.external_database.mapping.sync", entity_type="external_database_mapping", entity_id=mapping.id, message=mapping.last_sync_message, metadata={"entity_type": entity_type, "rows_read": result["rows_read"], "read_only_source": True})
         return JSONResponse({"ok": True, "message": mapping.last_sync_message, "result": result})

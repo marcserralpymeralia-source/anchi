@@ -909,6 +909,17 @@ def _apply_tenant_external_database_connections(engine, dry_run: bool) -> list[s
     return actions
 
 
+def _apply_tenant_external_database_schema_snapshot(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Keep the last safe schema snapshot available to the settings UI."""
+
+    return ensure_columns(
+        engine,
+        "external_database_connections",
+        {"schema_snapshot_json": "TEXT"},
+        dry_run=dry_run,
+    )
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -993,6 +1004,12 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant external database connections",
         checksum=checksum_text("tenant", "external_database_connections", "external_database_mappings", "read_only", "field_map_json"),
         upgrade=_apply_tenant_external_database_connections,
+    ),
+    MigrationSpec(
+        version="2026.09.07.2",
+        name="tenant external database schema snapshots",
+        checksum=checksum_text("tenant", "external_database_schema_snapshots", "external_database_connections", "schema_snapshot_json"),
+        upgrade=_apply_tenant_external_database_schema_snapshot,
     ),
 ]
 

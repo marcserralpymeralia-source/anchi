@@ -25,7 +25,7 @@ from app.master.models import CompanyMembership, EmailSyncState, MasterCompany, 
 from app.master.provisioning import _ensure_master_user  # noqa: E402
 from app.migrations.inspection import discover_sqlite_files, inspect_database_url, inventory_records, simulate_sqlite_reference  # noqa: E402
 from app.migrations.helpers import table_exists  # noqa: E402
-from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, MASTER_EMAIL_SYNC_STATE_COLUMNS, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_master_email_sync_state_repair, _apply_tenant_email_favorites, _apply_tenant_knowledge_entries, _apply_tenant_order_archiving, _apply_tenant_product_embeddings, _apply_tenant_proxy_connection_scope, _apply_tenant_proxy_connections  # noqa: E402
+from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, MASTER_EMAIL_SYNC_STATE_COLUMNS, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_master_email_sync_state_repair, _apply_tenant_email_favorites, _apply_tenant_external_database_schema_snapshot, _apply_tenant_knowledge_entries, _apply_tenant_order_archiving, _apply_tenant_product_embeddings, _apply_tenant_proxy_connection_scope, _apply_tenant_proxy_connections  # noqa: E402
 from app.tenancy.database import get_tenant_engine  # noqa: E402
 from app.tenancy.migrations import tenant_migration_report, upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import run_worker_cycle  # noqa: E402
@@ -52,6 +52,16 @@ class SchemaMigrationTests(unittest.TestCase):
     def _create_tables_without_ledger(self, engine, base_metadata):  # noqa: ANN001
         tables = [table for name, table in base_metadata.tables.items() if name != "schema_migrations"]
         base_metadata.create_all(engine, tables=tables)
+
+    def test_external_database_snapshot_migration_repairs_existing_table(self):
+        with self.tenant_engine.begin() as conn:
+            conn.execute(text("CREATE TABLE external_database_connections (id INTEGER PRIMARY KEY, name VARCHAR(120))"))
+
+        actions = _apply_tenant_external_database_schema_snapshot(self.tenant_engine, dry_run=False)
+
+        self.assertTrue(actions)
+        columns = {column["name"] for column in inspect(self.tenant_engine).get_columns("external_database_connections")}
+        self.assertIn("schema_snapshot_json", columns)
 
     def _seed_master_catalog(self, tenant_url: str) -> None:
         self._create_tables_without_ledger(self.master_engine, MasterBase.metadata)

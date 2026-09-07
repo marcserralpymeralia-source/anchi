@@ -1392,7 +1392,7 @@
 
       <div class="external-database-list">
           {% for connection in external_database_connections %}
-          <article class="external-database-card" data-external-database-card data-connection-id="{{ connection.id }}" data-external-mappings='{{ (external_database_mappings.get(connection.id, []) if external_database_mappings is defined else []) | tojson }}'>
+          <article class="external-database-card" data-external-database-card data-connection-id="{{ connection.id }}" data-external-test-ok="{{ 'true' if connection.last_test_ok else 'false' }}" data-external-schema='{{ (external_database_schemas.get(connection.id, {}) if external_database_schemas is defined else {}) | tojson }}' data-external-mappings='{{ (external_database_mappings.get(connection.id, []) if external_database_mappings is defined else []) | tojson }}'>
             <div class="external-database-card-head">
               <div>
                 <strong>{{ connection.name }}</strong>
@@ -1419,19 +1419,19 @@
             </div>
             <p class="settings-status-note external-database-action-status" data-external-status role="status" aria-live="polite" hidden></p>
             {% if can_edit_external_databases %}
-              <form class="external-database-edit-form stack" data-external-edit-form method="post" action="/settings/data-sources" hidden>
+              <form class="external-database-edit-form stack" data-external-edit-form data-external-db-form method="post" action="/settings/data-sources" hidden>
                 <input type="hidden" name="id" value="{{ connection.id }}">
                 <div class="form-grid">
                   <label>Nombre<input name="name" value="{{ connection.name }}" required></label>
                   <label>Motor<select name="database_type" data-database-type>{% for option in database_type_options %}<option value="{{ option.value }}" data-default-port="{{ option.default_port }}" {% if connection.database_type == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
-                  <label>Host o IP<input name="host" value="{{ connection.host }}" required></label>
+                  <label>Host o IP<input name="host" value="{{ connection.host }}"></label>
                   <label>Puerto<input name="port" type="number" min="1" max="65535" value="{{ connection.port }}"></label>
                   <label>Base de datos<input name="database_name" value="{{ connection.database_name }}" required></label>
                   <label>Esquema<input name="schema_name" value="{{ connection.schema_name }}"></label>
                   <label>Usuario<input name="username" value="{{ connection.username }}"></label>
                   <label>Contraseña<input name="password" type="password" autocomplete="new-password" placeholder="{{ mask_secret(connection.password_encrypted) or 'Introduce una contraseña' }}"></label>
                   <label>SSL<select name="ssl_mode"><option value="require" {% if connection.ssl_mode == 'require' %}selected{% endif %}>Cifrado requerido</option><option value="verify-full" {% if connection.ssl_mode == 'verify-full' %}selected{% endif %}>Verificar certificado</option><option value="disable" {% if connection.ssl_mode == 'disable' %}selected{% endif %}>Desactivado</option></select></label>
-                  <label>Proxy de salida<select name="proxy_connection_id"><option value="">Sin proxy</option>{% for proxy in proxy_connections %}<option value="{{ proxy.id }}" {% if connection.proxy_connection_id == proxy.id %}selected{% endif %}>{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>{% endfor %}</select></label>
+                  <label>Proxy de salida<select name="proxy_connection_id"><option value="">Sin proxy</option>{% for proxy in proxy_connections %}<option value="{{ proxy.id }}" {% if connection.proxy_connection_id == proxy.id %}selected{% endif %}>{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>{% endfor %}</select><small class="muted">El túnel de base de datos por proxy se habilitará en una fase posterior.</small></label>
                   <label class="checkbox-card span-2">Activar esta fuente (desactiva otras fuentes al guardar)<input name="enabled" type="checkbox" {% if connection.enabled %}checked{% endif %}></label>
                 </div>
                 <div class="drawer-actions"><button type="submit" class="primary" data-loading-text="Guardando...">Guardar conexión</button><button type="button" class="secondary" data-external-edit-cancel>Cancelar</button></div>
@@ -1463,20 +1463,20 @@
 
 {% if can_edit_external_databases %}
 <dialog id="external-database-create-dialog" class="edit-dialog" onclick="if (event.target === this) this.close();">
-  <form class="stack" method="post" action="/settings/data-sources" data-external-create-form>
+  <form class="stack" method="post" action="/settings/data-sources" data-external-create-form data-external-db-form>
     <div class="dialog-header"><h2>Nueva fuente de datos</h2><button type="button" class="secondary compact-button modal-close-btn" onclick="this.closest('dialog').close()">{{ icon_close(14) }}</button></div>
     <p class="muted">La conexión se guardará cifrada. Anchi solo consultará el esquema y los registros que mapees.</p>
     <div class="form-grid">
       <label>Nombre de la conexión<input name="name" placeholder="ERP de la empresa" required></label>
       <label>Motor<select name="database_type" data-database-type>{% for option in database_type_options %}<option value="{{ option.value }}" data-default-port="{{ option.default_port }}" {% if option.value == 'postgresql' %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
-      <label>Host o IP<input name="host" placeholder="db.empresa.com" required></label>
+      <label>Host o IP<input name="host" placeholder="db.empresa.com"></label>
       <label>Puerto<input name="port" type="number" value="5432" min="1" max="65535"></label>
       <label>Base de datos<input name="database_name" placeholder="erp_produccion" required></label>
       <label>Esquema<input name="schema_name" value="public"></label>
-      <label>Usuario<input name="username" required></label>
-      <label>Contraseña<input name="password" type="password" autocomplete="new-password" required></label>
+      <label>Usuario<input name="username"></label>
+      <label>Contraseña<input name="password" type="password" autocomplete="new-password"></label>
       <label>SSL<select name="ssl_mode"><option value="require" selected>Cifrado requerido</option><option value="verify-full">Verificar certificado</option><option value="disable">Desactivado</option></select></label>
-      <label>Proxy de salida<select name="proxy_connection_id"><option value="">Sin proxy</option>{% for proxy in proxy_connections %}<option value="{{ proxy.id }}">{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>{% endfor %}</select></label>
+      <label>Proxy de salida<select name="proxy_connection_id"><option value="">Sin proxy</option>{% for proxy in proxy_connections %}<option value="{{ proxy.id }}">{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>{% endfor %}</select><small class="muted">El túnel de base de datos por proxy se habilitará en una fase posterior.</small></label>
       <label class="checkbox-card span-2">Activar tras guardar<input name="enabled" type="checkbox"></label>
     </div>
     <div class="actions"><button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancelar</button><button type="submit" class="primary">Guardar fuente</button></div>
@@ -2042,6 +2042,8 @@
         loadedDialog.dataset.settingsLoaded = "true";
         dialog.replaceWith(loadedDialog);
         bindModelSelectors(loadedDialog);
+        initializeExternalDatabaseForms(loadedDialog);
+        initializeExternalDatabaseCards(loadedDialog);
         if (globalThis.AnchiEmailBackfill) globalThis.AnchiEmailBackfill.bindBackfillForms(loadedDialog);
         loadedDialog.showModal();
         return loadedDialog;
@@ -2151,6 +2153,45 @@
   function externalJson(response) {
     return response.json().catch(() => ({ok: false, message: `La respuesta no es válida (HTTP ${response.status}).`}));
   }
+  function syncExternalDatabaseForm(form) {
+    if (!form) return;
+    const databaseType = form.querySelector("[data-database-type]")?.value;
+    const sqlite = databaseType === "sqlite";
+    const host = form.querySelector("[name='host']");
+    const port = form.querySelector("[name='port']");
+    const username = form.querySelector("[name='username']");
+    const password = form.querySelector("[name='password']");
+    const ssl = form.querySelector("[name='ssl_mode']");
+    if (host) { host.required = !sqlite; host.disabled = sqlite; }
+    if (port) { port.required = !sqlite; port.disabled = sqlite; }
+    if (username) { username.required = !sqlite; username.disabled = sqlite; }
+    if (password) {
+      password.required = !sqlite && form.matches("[data-external-create-form]");
+      password.disabled = sqlite;
+    }
+    if (ssl) {
+      if (sqlite) ssl.value = "disable";
+      ssl.disabled = sqlite;
+    }
+  }
+  function initializeExternalDatabaseForms(root = document) {
+    root.querySelectorAll("[data-external-db-form]").forEach((form) => syncExternalDatabaseForm(form));
+  }
+  function initializeExternalDatabaseCards(root = document) {
+    root.querySelectorAll("[data-external-database-card]").forEach((card) => {
+      if (card.dataset.externalTestOk !== "true") return;
+      const rawSchema = card.dataset.externalSchema;
+      if (!rawSchema || rawSchema === "{}") return;
+      try {
+        const schema = JSON.parse(rawSchema);
+        if (!schema || !Array.isArray(schema.tables)) return;
+        const mappings = JSON.parse(card.dataset.externalMappings || "[]");
+        renderExternalSchema(card, schema, Array.isArray(mappings) ? mappings : []);
+      } catch (_error) {
+        console.warn("No se pudo restaurar el esquema externo guardado");
+      }
+    });
+  }
   function externalTableForPanel(panel) {
     const card = panel?.closest("[data-external-database-card]");
     const tableSelect = panel?.querySelector("[data-mapping-table]");
@@ -2158,6 +2199,7 @@
   }
   function updateExternalMappingActions(panel) {
     const table = externalTableForPanel(panel);
+    const connectionReady = panel?.closest("[data-external-database-card]")?.dataset.externalTestOk === "true";
     const saved = panel?._savedMapping && table && panel._savedMapping.table_name === table.name ? panel._savedMapping : null;
     const dirty = panel?.dataset.mappingDirty === "true";
     const syncEnabled = Boolean(panel?.querySelector("[data-sync-enabled]")?.checked);
@@ -2165,8 +2207,8 @@
     const preview = panel?.querySelector("[data-preview-mapping]");
     const sync = panel?.querySelector("[data-sync-mapping]");
     if (save) save.disabled = !table;
-    if (preview) preview.disabled = !saved || dirty;
-    if (sync) sync.disabled = !saved || dirty || !syncEnabled;
+    if (preview) preview.disabled = !connectionReady || !saved || dirty;
+    if (sync) sync.disabled = !connectionReady || !saved || dirty || !syncEnabled;
   }
   function renderExternalMappingFields(panel) {
     const wrapper = panel?.querySelector("[data-mapping-fields]");
@@ -2193,13 +2235,15 @@
     updateExternalMappingActions(panel);
   }
   function renderExternalSchema(card, schema, mappings = []) {
+    if (!schema || !Array.isArray(schema.tables)) return;
     card._externalSchema = schema;
+    card.dataset.externalTestOk = "true";
     card._externalMappings = Object.fromEntries((mappings || []).map((mapping) => [mapping.entity_type, mapping]));
     const panel = card.querySelector("[data-external-schema]");
     if (!panel) return;
     panel.hidden = false;
     const summary = card.querySelector("[data-external-schema-summary]");
-    if (summary) summary.textContent = `${schema.tables.length} tablas disponibles${schema.truncated ? " (resultado limitado)" : ""}`;
+    if (summary) summary.textContent = `${schema.table_count || schema.tables.length} tablas disponibles${schema.truncated ? " (resultado limitado)" : ""}`;
     card.querySelectorAll("[data-external-mapping]").forEach((mappingPanel) => {
       const select = mappingPanel.querySelector("[data-mapping-table]");
       select.replaceChildren(new Option("Selecciona una tabla…", ""));
@@ -2229,9 +2273,11 @@
   document.addEventListener("change", (event) => {
     const databaseType = event.target.closest("[data-database-type]");
     if (databaseType) {
-      const port = databaseType.closest("form")?.querySelector("[name='port']");
+      const form = databaseType.closest("form");
+      const port = form?.querySelector("[name='port']");
       const selected = databaseType.selectedOptions[0];
-      if (port && selected?.dataset.defaultPort && (!port.value || port.value === "5432" || port.value === "3306")) port.value = selected.dataset.defaultPort;
+      if (port && selected?.dataset.defaultPort && (!port.value || port.value === "0" || port.value === "5432" || port.value === "3306")) port.value = selected.dataset.defaultPort;
+      syncExternalDatabaseForm(form);
     }
     const tableSelect = event.target.closest("[data-mapping-table]");
     if (tableSelect) renderExternalMappingFields(tableSelect.closest("[data-external-mapping]"));
@@ -2273,6 +2319,7 @@
         const response = await fetch(`/settings/data-sources/${connectionId}/test`, {method: "POST", credentials: "same-origin", headers: {"Accept": "application/json", "X-Requested-With": "fetch"}});
         const payload = await externalJson(response);
         externalStatus(card, payload.message || "Prueba finalizada.", payload.ok ? "success" : "error");
+        card.dataset.externalTestOk = payload.ok ? "true" : "false";
         const scan = card.querySelector("[data-external-scan]");
         if (scan) scan.disabled = !payload.ok;
       } catch (_error) { externalStatus(card, "No se pudo completar la prueba. Revisa la configuración.", "error"); }
@@ -2322,7 +2369,8 @@
         const payload = await externalJson(response);
         if (!response.ok || !payload.ok) throw new Error(payload.message || "La operación no se pudo completar.");
         if (previewButton) renderExternalPreview(mappingPanel, payload);
-        if (status) { status.className = "settings-status-note is-success"; status.textContent = payload.message || `${payload.count || payload.result?.rows_read || 0} registros procesados.`; }
+        const partial = syncButton && Number(payload.result?.errors || 0) > 0;
+        if (status) { status.className = `settings-status-note ${partial ? "is-error" : "is-success"}`; status.textContent = payload.message || `${payload.count || payload.result?.rows_read || 0} registros procesados.`; }
       } catch (error) { if (status) { status.className = "settings-status-note is-error"; status.textContent = error.message; } }
       finally { button.disabled = false; }
     }

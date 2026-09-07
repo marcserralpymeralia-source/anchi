@@ -150,7 +150,6 @@ def _conversation_card(conversation: Conversation, customers: dict[int, Customer
         "preview": preview,
         "date": _message_date(latest) if latest else conversation.last_activity_at,
         "unread": unread,
-        "message_count": len(messages),
         "latest_outbound": latest_outbound,
         "latest_status": latest_status,
         "messages": [_message_payload(message) for message in messages],

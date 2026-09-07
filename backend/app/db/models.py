@@ -351,6 +351,7 @@ class ExternalDatabaseConnection(Base):
     last_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_scan_ok: Mapped[bool | None] = mapped_column(Boolean)
     last_scan_message: Mapped[str | None] = mapped_column(Text)
+    schema_snapshot_json: Mapped[str | None] = mapped_column(Text)
     updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
