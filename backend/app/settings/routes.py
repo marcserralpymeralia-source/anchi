@@ -11,7 +11,7 @@ from time import perf_counter
 import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
-from sqlalchemy import case, func, select
+from sqlalchemy import case, func, select, update
 from sqlalchemy.orm import Session
 
 from app.core.templating import templates
@@ -389,12 +389,15 @@ def _settings_module_context(request: Request, db: Session, user: TenantUser, mo
     elif module_key == "ftp":
         context.update(ftp=get_or_create_settings(db, FTPSettings, user.company_id), mask_secret=mask_secret)
     elif module_key == "proxies":
+        proxies = db.scalars(
+            select(ProxyConnection)
+            .where(ProxyConnection.company_id == user.company_id)
+            .order_by(ProxyConnection.name.asc(), ProxyConnection.id.asc())
+        ).all()
+        active_proxy = next((p for p in proxies if p.enabled), None)
         context.update(
-            proxy_connections=db.scalars(
-                select(ProxyConnection)
-                .where(ProxyConnection.company_id == user.company_id)
-                .order_by(ProxyConnection.name.asc(), ProxyConnection.id.asc())
-            ).all(),
+            proxy_connections=proxies,
+            active_proxy=active_proxy,
             can_edit_proxies=can_edit_proxies(user),
             mask_secret=mask_secret,
         )
@@ -898,6 +901,18 @@ async def save_proxy_connection(request: Request, db: Session = Depends(get_tena
         connection.password_encrypted = encrypt_secret(password)
     connection.updated_by = resolve_updated_by_id(db, user)
     connection.updated_at = datetime.now(timezone.utc)
+
+    # If this profile is set to enabled, deactivate all other profiles for this company (only one active at a time)
+    if values.get("enabled"):
+        db.flush()
+        db.execute(
+            update(ProxyConnection)
+            .where(
+                ProxyConnection.company_id == user.company_id,
+                ProxyConnection.id != connection.id,
+            )
+            .values(enabled=False, updated_at=datetime.now(timezone.utc))
+        )
     try:
         db.commit()
     except Exception as exc:  # noqa: BLE001
@@ -905,8 +920,81 @@ async def save_proxy_connection(request: Request, db: Session = Depends(get_tena
         if "UNIQUE" in str(exc).upper() or "DUPLICATE" in str(exc).upper():
             return JSONResponse({"ok": False, "message": "Ya existe un perfil con ese nombre."}, status_code=409)
         raise
-    log_action(db, company_id=user.company_id, user=user, action="settings.proxy.save", entity_type="proxy_connection", entity_id=connection.id, message="Perfil de proxy guardado")
+    log_action(db, company_id=user.company_id, user=user, action="settings.proxy.save", entity_type="proxy_connection", entity_id=connection.id, message=f"Perfil de proxy guardado: {connection.name}")
     return redirect_or_json(request, {"ok": True, "id": connection.id, "message": "Perfil de proxy guardado."}, "proxies")
+
+
+@router.post("/proxies/{proxy_id}/toggle")
+def toggle_proxy_connection(proxy_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if not can_edit_proxies(user):
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede configurar proxies."}, status_code=403)
+    connection = db.scalar(
+        select(ProxyConnection).where(ProxyConnection.id == proxy_id, ProxyConnection.company_id == user.company_id)
+    )
+    if connection is None:
+        return JSONResponse({"ok": False, "message": "No se encontró el perfil de proxy."}, status_code=404)
+
+    new_enabled = not connection.enabled
+    if new_enabled:
+        # Enforce single active proxy: disable all other profiles for this company
+        db.execute(
+            update(ProxyConnection)
+            .where(ProxyConnection.company_id == user.company_id, ProxyConnection.id != connection.id)
+            .values(enabled=False, updated_at=datetime.now(timezone.utc))
+        )
+        connection.enabled = True
+    else:
+        connection.enabled = False
+
+    connection.updated_by = resolve_updated_by_id(db, user)
+    connection.updated_at = datetime.now(timezone.utc)
+    db.commit()
+
+    action_label = "activado" if connection.enabled else "desactivado"
+    log_action(
+        db,
+        company_id=user.company_id,
+        user=user,
+        action="settings.proxy.toggle",
+        entity_type="proxy_connection",
+        entity_id=connection.id,
+        message=f"Perfil de proxy {action_label}: {connection.name}",
+    )
+    return redirect_or_json(
+        request,
+        {"ok": True, "id": connection.id, "enabled": connection.enabled, "message": f"Perfil '{connection.name}' {action_label}."},
+        "proxies",
+    )
+
+
+@router.post("/proxies/{proxy_id}/delete")
+def delete_proxy_connection(proxy_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if not can_edit_proxies(user):
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede configurar proxies."}, status_code=403)
+    connection = db.scalar(
+        select(ProxyConnection).where(ProxyConnection.id == proxy_id, ProxyConnection.company_id == user.company_id)
+    )
+    if connection is None:
+        return JSONResponse({"ok": False, "message": "No se encontró el perfil de proxy."}, status_code=404)
+
+    proxy_name = connection.name
+    db.delete(connection)
+    db.commit()
+
+    log_action(
+        db,
+        company_id=user.company_id,
+        user=user,
+        action="settings.proxy.delete",
+        entity_type="proxy_connection",
+        entity_id=proxy_id,
+        message=f"Perfil de proxy eliminado: {proxy_name}",
+    )
+    return redirect_or_json(
+        request,
+        {"ok": True, "id": proxy_id, "message": f"Perfil '{proxy_name}' eliminado correctamente."},
+        "proxies",
+    )
 
 
 @router.post("/proxies/{proxy_id}/test")
@@ -1001,7 +1089,9 @@ def save_email_section(db: Session, settings: EmailSettings, data: dict, user: T
 
 
 def redirect_or_json(request: Request, payload: dict, anchor: str = "email"):
-    if request.method == "PUT" or "application/json" in request.headers.get("content-type", ""):
+    content_type = request.headers.get("content-type", "")
+    accept = request.headers.get("accept", "")
+    if request.method == "PUT" or "application/json" in content_type or "application/json" in accept:
         return JSONResponse(payload)
     referer = request.headers.get("referer", "")
     if "channels" in referer:

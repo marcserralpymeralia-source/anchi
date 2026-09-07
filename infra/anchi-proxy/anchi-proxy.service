@@ -1,5 +1,5 @@
 [Unit]
-Description=Anchi inactive proxy gateway
+Description=Anchi health-only proxy gateway
 After=network-online.target
 Wants=network-online.target
 

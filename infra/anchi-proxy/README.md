@@ -15,13 +15,22 @@ Copy this folder to `/root/anchi-proxy`, copy `config.env.example` to
 ```sh
 systemctl daemon-reload
 systemctl enable --now anchi-proxy.service
+. ./config.env
 curl --fail --user "$PROXY_AUTH_USERNAME:$PROXY_AUTH_PASSWORD" http://127.0.0.1:8787/health
 ss -ltnp | grep ':8787'
 ```
 
-For the temporary closed-demo setup, the listener may use `0.0.0.0:8787` so
-Anchi can check it remotely. This is HTTP Basic Auth without TLS: use only a
-temporary credential and only for the health check. Do not use it for real
-credentials or production traffic. The future forwarding implementation must
-add TLS/mTLS, tenant isolation, allowlists, timeouts, audit logging without
-secrets, and a narrowly scoped destination adapter before activation.
+The recommended external setup is an HTTPS reverse proxy on port `443` with
+the server's valid certificate, forwarding only `/health` to
+`http://127.0.0.1:8787/health`. Keep port `8787` on loopback and pass the Basic
+Auth header through to the gateway. In Anchi, configure the TLS hostname on
+port `443`, with certificate verification enabled.
+
+`apache-health-vhost.conf.example` contains a minimal Apache template for
+that publication. Keep the actual certificate paths and hostname outside the
+repository when installing it.
+
+Do not expose port `8787` directly or use HTTP Basic Auth over the public
+internet. The future forwarding implementation must add tenant isolation,
+allowlists, timeouts, audit logging without secrets, and a narrowly scoped
+destination adapter before activation.

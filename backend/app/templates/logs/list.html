@@ -85,6 +85,10 @@
 
       {# Right Actions (Download, Delete, Counter) #}
       <div class="logs-toolbar-right">
+        <a class="order-toolbar-btn" href="/logs?search=whatsapp" title="Mostrar actividad y errores de WhatsApp">
+          {{ icon_filter(13) }}
+          <span>WhatsApp</span>
+        </a>
         <span class="logs-count-chip">{{ logs|length }} eventos</span>
         <a class="order-toolbar-btn" href="{{ download_url }}" title="Descargar registro de logs en formato .log">
           {{ icon_download(13) }}

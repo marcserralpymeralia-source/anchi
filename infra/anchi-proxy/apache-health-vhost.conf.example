@@ -1,0 +1,27 @@
+# Example HTTPS-only publication for the health endpoint.
+# Replace the hostname and certificate paths before enabling this site.
+<IfModule mod_ssl.c>
+<VirtualHost *:443>
+    ServerName proxy.example.com
+
+    SSLEngine on
+    SSLCertificateFile "/etc/letsencrypt/live/proxy.example.com/fullchain.pem"
+    SSLCertificateKeyFile "/etc/letsencrypt/live/proxy.example.com/privkey.pem"
+    SSLProtocol all -SSLv3 -TLSv1 -TLSv1.1
+
+    Header always set Strict-Transport-Security "max-age=31536000"
+    ProxyRequests Off
+    ProxyPreserveHost On
+    RequestHeader set X-Forwarded-Proto "https"
+
+    # The gateway itself enforces Basic Auth. No database destination is
+    # exposed by this vhost.
+    ProxyPass "/health" "http://127.0.0.1:8787/health"
+    ProxyPassReverse "/health" "http://127.0.0.1:8787/health"
+
+    DocumentRoot "/var/www/empty"
+    <Directory "/var/www/empty">
+        Require all denied
+    </Directory>
+</VirtualHost>
+</IfModule>
