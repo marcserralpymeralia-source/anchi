@@ -32,7 +32,7 @@ Existía la estructura inicial de fuentes y mapeos, pero faltaban persistencia d
 
 ## 5. Cambios realizados
 
-La conexión se configura desde Ajustes → Fuentes de datos. El flujo recomendado es:
+La conexión se configura desde Ajustes → BBDD. El flujo recomendado es:
 
 1. Crear la fuente y guardarla.
 2. Ejecutar “Probar conexión”.

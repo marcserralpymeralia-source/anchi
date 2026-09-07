@@ -170,6 +170,7 @@ class ExternalDatabaseTests(unittest.TestCase):
             module = client.get("/settings/module/data-sources")
             self.assertEqual(module.status_code, 200)
             self.assertIn('id="settings-data-sources"', module.text)
+            self.assertIn("<h3>BBDD</h3>", module.text)
             self.assertIn("ERP de pruebas", module.text)
 
             tested = client.post(
@@ -188,6 +189,7 @@ class ExternalDatabaseTests(unittest.TestCase):
             restored_module = client.get("/settings/module/data-sources")
             self.assertEqual(restored_module.status_code, 200)
             self.assertIn("customers_source", restored_module.text)
+            self.assertIn('id="external-database-create-dialog"', restored_module.text)
 
             mapping = client.post(
                 f"/settings/data-sources/{connection_id}/mapping",

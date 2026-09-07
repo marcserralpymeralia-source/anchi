@@ -1360,7 +1360,7 @@
 <dialog id="settings-data-sources" class="settings-drawer settings-drawer-wide">
   <div class="drawer-head">
     <div>
-      <h3>Fuentes de datos</h3>
+      <h3>BBDD</h3>
       <p class="muted">Conecta una base de datos externa en modo estrictamente lectura y decide qué tablas alimentan clientes y productos.</p>
     </div>
     <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
@@ -1392,7 +1392,7 @@
 
       {% if not external_database_connections %}
         <div class="external-database-empty proxy-empty-card">
-          <p class="muted" style="margin:0 0 10px 0;">No hay fuentes de datos externas conectadas.</p>
+          <p class="muted" style="margin:0 0 10px 0;">No hay bases de datos externas conectadas.</p>
           {% if can_edit_external_databases %}
             <button type="button" class="secondary compact-button" onclick="document.getElementById('external-database-create-dialog').showModal();">
               {{ icon_plus(13) }}
@@ -2125,11 +2125,22 @@
         const parsed = new DOMParser().parseFromString(html, "text/html");
         const loadedDialog = parsed.getElementById(`settings-${id}`);
         if (!loadedDialog) throw new Error("El bloque de configuración no está disponible");
+        const auxiliaryDialogs = Array.from(parsed.body.children).filter((element) => (
+          element.tagName === "DIALOG" && element.id && element.id !== loadedDialog.id
+        ));
         loadedDialog.dataset.settingsLoaded = "true";
         dialog.replaceWith(loadedDialog);
+        auxiliaryDialogs.forEach((auxiliaryDialog) => {
+          document.getElementById(auxiliaryDialog.id)?.remove();
+          document.body.append(auxiliaryDialog);
+        });
         bindModelSelectors(loadedDialog);
         initializeExternalDatabaseForms(loadedDialog);
         initializeExternalDatabaseCards(loadedDialog);
+        auxiliaryDialogs.forEach((auxiliaryDialog) => {
+          bindModelSelectors(auxiliaryDialog);
+          initializeExternalDatabaseForms(auxiliaryDialog);
+        });
         if (globalThis.AnchiEmailBackfill) globalThis.AnchiEmailBackfill.bindBackfillForms(loadedDialog);
         loadedDialog.showModal();
         return loadedDialog;

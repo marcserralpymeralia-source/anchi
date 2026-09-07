@@ -57,7 +57,7 @@ SETTINGS_SEARCH_CATALOG = [
     {"module_key": "export", "module_label": "Exportación", "title": "Formato de exportación", "detail": "CSV, JSON, separadores y plantilla", "search_text": "exportación CSV JSON encoding fecha separador plantilla cabecera líneas"},
     {"module_key": "ftp", "module_label": "FTP/SFTP", "title": "Destino de exportación", "detail": "FTP, FTPS, host, credenciales y reintentos", "search_text": "FTP FTPS SFTP host puerto usuario contraseña clave privada destino reintentos timeout"},
     {"module_key": "proxies", "module_label": "Proxies", "title": "Acceso al gateway", "detail": "Perfiles de acceso para el futuro gateway de red", "search_text": "proxy proxies gateway conexión externa IP host puerto protocolo usuario contraseña TLS HTTP HTTPS SOCKS5"},
-    {"module_key": "data-sources", "module_label": "Fuentes de datos", "title": "Base de datos externa", "detail": "Conexión de solo lectura, escaneo de tablas y mapeo de clientes y productos", "search_text": "base de datos externa conexión PostgreSQL MySQL MariaDB SQLite host puerto esquema usuario contraseña tablas columnas clientes productos campos mapeo sincronizar proxy solo lectura"},
+    {"module_key": "data-sources", "module_label": "BBDD", "title": "Base de datos externa", "detail": "Conexiones de solo lectura, escaneo de tablas y mapeo de clientes y productos", "search_text": "BBDD base de datos bases de datos externa conexión conexiones PostgreSQL MySQL MariaDB SQLite host puerto esquema usuario contraseña tablas columnas clientes productos campos mapeo sincronizar proxy solo lectura"},
     {"module_key": "advanced", "module_label": "Avanzado", "title": "Prompts y versiones", "detail": "Configuración técnica y logs", "search_text": "avanzado prompts versiones logs técnicos"},
 ]
 
@@ -659,7 +659,7 @@ def build_settings_dashboard(
         state("export", "Exportación", "ready" if export.file_type and export.filename_template else "pending", f"{export.file_type.upper() if export.file_type else 'Sin formato'} · {export.filename_template or 'sin plantilla'}", "Configurar"),
         state("ftp", "FTP/SFTP", "ready" if ftp.host and ftp.username else "pending", f"{ftp.connection_type.upper()} · {ftp.host or 'host pendiente'}", "Configurar"),
         state("proxies", "Proxies", "ready", f"{proxy_connection_count} perfiles · tráfico del gateway inactivo", "Configurar"),
-        state("data-sources", "Fuentes de datos", "ready" if external_database_count else "pending", f"{external_database_count} conexiones · lectura segura", "Configurar"),
+        state("data-sources", "BBDD", "ready" if external_database_count else "pending", f"{external_database_count} conexiones · lectura segura", "Configurar"),
         state("alerts", "Alertas", "ready", f"{metrics['llm_errors']} errores · {metrics['doubtful_emails']} dudosos", "Ver"),
         state("users", "Usuarios y permisos", "ready", "Roles y accesos activos", "Abrir"),
         state("advanced", "Avanzado", "optional" if user.role.name == "Superadmin" else "locked", f"{prompt_count} prompts · logs técnicos", "Abrir"),
@@ -2178,7 +2178,7 @@ def _external_database_response(request: Request, payload: dict, anchor: str = "
 @router.api_route("/data-sources", methods=["POST", "PUT"])
 async def save_external_database(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not can_edit_external_databases(user):
-        return JSONResponse({"ok": False, "message": "Solo Administrador puede configurar fuentes de datos."}, status_code=403)
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede configurar BBDD."}, status_code=403)
     data = await request_data(request)
     raw_id = str(data.get("id") or "").strip()
     existing = None
@@ -2259,7 +2259,7 @@ async def save_external_database(request: Request, db: Session = Depends(get_ten
 @router.post("/data-sources/{connection_id}/toggle")
 def toggle_external_database(connection_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not can_edit_external_databases(user):
-        return JSONResponse({"ok": False, "message": "Solo Administrador puede activar fuentes de datos."}, status_code=403)
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede activar BBDD."}, status_code=403)
     connection = _external_database_for_user(db, user, connection_id)
     if connection is None:
         return JSONResponse({"ok": False, "message": "No se encontró la conexión indicada."}, status_code=404)
@@ -2293,7 +2293,7 @@ def toggle_external_database(connection_id: int, request: Request, db: Session =
 @router.post("/data-sources/{connection_id}/test")
 def test_external_database(connection_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not can_edit_external_databases(user):
-        return JSONResponse({"ok": False, "message": "Solo Administrador puede probar fuentes de datos."}, status_code=403)
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede probar BBDD."}, status_code=403)
     connection = _external_database_for_user(db, user, connection_id)
     if connection is None:
         return JSONResponse({"ok": False, "message": "No se encontró la conexión indicada."}, status_code=404)
@@ -2321,7 +2321,7 @@ def test_external_database(connection_id: int, request: Request, db: Session = D
 @router.post("/data-sources/{connection_id}/scan")
 def scan_external_database(connection_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not can_edit_external_databases(user):
-        return JSONResponse({"ok": False, "message": "Solo Administrador puede escanear fuentes de datos."}, status_code=403)
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede escanear BBDD."}, status_code=403)
     connection = _external_database_for_user(db, user, connection_id)
     if connection is None:
         return JSONResponse({"ok": False, "message": "No se encontró la conexión indicada."}, status_code=404)
@@ -2395,7 +2395,7 @@ async def save_external_database_mapping(connection_id: int, request: Request, d
 @router.post("/data-sources/{connection_id}/mapping/{entity_type}/preview")
 def preview_external_database_mapping(connection_id: int, entity_type: str, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not can_edit_external_databases(user):
-        return JSONResponse({"ok": False, "message": "Solo Administrador puede consultar una fuente de datos."}, status_code=403)
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede consultar BBDD."}, status_code=403)
     connection = _external_database_for_user(db, user, connection_id)
     mapping = db.scalar(select(ExternalDatabaseMapping).where(ExternalDatabaseMapping.connection_id == connection_id, ExternalDatabaseMapping.company_id == user.company_id, ExternalDatabaseMapping.entity_type == entity_type))
     if connection is None or mapping is None:
@@ -2409,7 +2409,7 @@ def preview_external_database_mapping(connection_id: int, entity_type: str, requ
 @router.post("/data-sources/{connection_id}/mapping/{entity_type}/sync")
 def sync_external_database_mapping(connection_id: int, entity_type: str, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not can_edit_external_databases(user):
-        return JSONResponse({"ok": False, "message": "Solo Administrador puede sincronizar fuentes de datos."}, status_code=403)
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede sincronizar BBDD."}, status_code=403)
     connection = _external_database_for_user(db, user, connection_id)
     mapping = db.scalar(select(ExternalDatabaseMapping).where(ExternalDatabaseMapping.connection_id == connection_id, ExternalDatabaseMapping.company_id == user.company_id, ExternalDatabaseMapping.entity_type == entity_type))
     if connection is None or mapping is None:

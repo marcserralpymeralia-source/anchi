@@ -423,7 +423,8 @@ class WhatsAppInboxTests(unittest.TestCase):
             # PDF preview card and action buttons
             self.assertIn("wa-bubble-doc-card", response.text)
             self.assertIn("wa-doc-iframe", response.text)
-            self.assertIn("Guardar como…", response.text)
+            self.assertIn("wa-doc-btn", response.text)
+            self.assertNotIn("Guardar como…", response.text)
             # Audio player card
             self.assertIn("wa-bubble-audio-card", response.text)
             self.assertIn("wa-audio-control", response.text)

@@ -65,10 +65,6 @@
                       <a class="wa-doc-btn" href="{{ attachment.href }}" target="_blank">
                         {{ icon_eye(13) }} Ver
                       </a>
-                      <span class="wa-doc-btn-divider"></span>
-                      <a class="wa-doc-btn" href="{{ attachment.download_href }}" download="{{ attachment.filename }}">
-                        {{ icon_download(13) }} Guardar como…
-                      </a>
                     </div>
                   </div>
                 {% elif attachment.kind == "audio" %}
@@ -96,10 +92,6 @@
                     <div class="wa-doc-btn-grid">
                       <a class="wa-doc-btn" href="{{ attachment.href }}" target="_blank">
                         {{ icon_eye(13) }} Ver
-                      </a>
-                      <span class="wa-doc-btn-divider"></span>
-                      <a class="wa-doc-btn" href="{{ attachment.download_href }}" download="{{ attachment.filename }}">
-                        {{ icon_download(13) }} Guardar como…
                       </a>
                     </div>
                   </div>
