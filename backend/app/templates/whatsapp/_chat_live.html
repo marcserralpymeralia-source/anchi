@@ -1,5 +1,22 @@
 {% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_check, icon_check_check, icon_clock, icon_alert_triangle, icon_user, icon_download, icon_eye, icon_image, icon_file_text, icon_play, icon_refresh %}
 
+{% macro message_meta_time(msg) %}
+  <time datetime="{{ msg.date.isoformat() if msg.date else '' }}">{{ msg.date|local_dt(tenant_timezone, "%H:%M", "--") }}</time>
+  {% if msg.direction == "outbound" %}
+    {% if msg.status == "read" %}
+      <span class="wa-status-tick wa-tick-read" title="Leído">{{ icon_check_check(15) }}</span>
+    {% elif msg.status == "delivered" %}
+      <span class="wa-status-tick wa-tick-delivered" title="Entregado">{{ icon_check_check(15) }}</span>
+    {% elif msg.status in ["sent", "accepted"] %}
+      <span class="wa-status-tick wa-tick-sent" title="Enviado a Meta">{{ icon_check(14) }}</span>
+    {% elif msg.status in ["failed", "error"] %}
+      <span class="wa-status-tick wa-tick-failed" title="Error en el envío">{{ icon_alert_triangle(13) }}</span>
+    {% else %}
+      <span class="wa-status-tick wa-tick-pending" title="Pendiente de confirmación">{{ icon_clock(12) }}</span>
+    {% endif %}
+  {% endif %}
+{% endmacro %}
+
 {% if selected %}
   <header class="channel-chat-header">
     <div class="channel-chat-identity">
@@ -32,7 +49,8 @@
         </div>
         {% set ns.prev_date = current_date %}
       {% endif %}
-      <article class="channel-chat-message {{ message.direction }}">
+      {% set is_doc_card = message.attachments and not message.text and message.attachments|length == 1 and message.attachments[0].available and message.attachments[0].kind in ["pdf", "doc", "sheet", "text", "file"] %}
+      <article class="channel-chat-message {{ message.direction }}{% if is_doc_card %} wa-msg-doc-card{% endif %}">
         {% if message.text %}
           <div class="channel-chat-message-text">{{ message.text }}</div>
         {% endif %}
@@ -50,7 +68,7 @@
                 {% elif attachment.kind == "pdf" %}
                   <div class="wa-bubble-doc-card">
                     <div class="wa-doc-preview-area" onclick="window.open('{{ attachment.href }}', '_blank')" title="Clic para ver">
-                      <iframe src="{{ attachment.href }}#toolbar=0&navpanes=0&scrollbar=0" class="wa-doc-iframe" loading="lazy" tabindex="-1"></iframe>
+                      <iframe src="{{ attachment.href }}#view=FitH&toolbar=0&navpanes=0&scrollbar=0" class="wa-doc-iframe" loading="lazy" tabindex="-1"></iframe>
                     </div>
                     <div class="wa-doc-info-bar">
                       <div class="wa-doc-badge pdf">
@@ -60,6 +78,11 @@
                         <span class="wa-doc-filename" title="{{ attachment.filename }}">{{ attachment.filename }}</span>
                         <span class="wa-doc-meta">PDF · {{ attachment.size }}</span>
                       </div>
+                      {% if is_doc_card %}
+                        <div class="wa-doc-meta-time">
+                          {{ message_meta_time(message) }}
+                        </div>
+                      {% endif %}
                     </div>
                     <div class="wa-doc-btn-grid">
                       <a class="wa-doc-btn" href="{{ attachment.href }}" target="_blank">
@@ -88,6 +111,11 @@
                         <span class="wa-doc-filename" title="{{ attachment.filename }}">{{ attachment.filename }}</span>
                         <span class="wa-doc-meta">{{ attachment.content_type }} · {{ attachment.size }}</span>
                       </div>
+                      {% if is_doc_card %}
+                        <div class="wa-doc-meta-time">
+                          {{ message_meta_time(message) }}
+                        </div>
+                      {% endif %}
                     </div>
                     <div class="wa-doc-btn-grid">
                       <a class="wa-doc-btn" href="{{ attachment.href }}" target="_blank">
@@ -126,22 +154,11 @@
             {% endfor %}
           </div>
         {% endif %}
-        <div class="channel-chat-message-meta-inline">
-          <time datetime="{{ message.date.isoformat() if message.date else '' }}">{{ message.date|local_dt(tenant_timezone, "%H:%M", "--") }}</time>
-          {% if message.direction == "outbound" %}
-            {% if message.status == "read" %}
-              <span class="wa-status-tick wa-tick-read" title="Leído">{{ icon_check_check(15) }}</span>
-            {% elif message.status == "delivered" %}
-              <span class="wa-status-tick wa-tick-delivered" title="Entregado">{{ icon_check_check(15) }}</span>
-            {% elif message.status in ["sent", "accepted"] %}
-              <span class="wa-status-tick wa-tick-sent" title="Enviado a Meta">{{ icon_check(14) }}</span>
-            {% elif message.status in ["failed", "error"] %}
-              <span class="wa-status-tick wa-tick-failed" title="Error en el envío">{{ icon_alert_triangle(13) }}</span>
-            {% else %}
-              <span class="wa-status-tick wa-tick-pending" title="Pendiente de confirmación">{{ icon_clock(12) }}</span>
-            {% endif %}
-          {% endif %}
-        </div>
+        {% if not is_doc_card %}
+          <div class="channel-chat-message-meta-inline">
+            {{ message_meta_time(message) }}
+          </div>
+        {% endif %}
       </article>
     {% endfor %}
   </div>

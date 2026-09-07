@@ -10,7 +10,7 @@ import ssl
 from sqlalchemy.orm import Session
 
 from app.core.encryption import decrypt_secret
-from app.db.models import ExportFile, ExportSettings, FTPSettings, Order
+from app.db.models import ExportFile, ExportSettings, FTPConnection, FTPSettings, Order
 from app.settings.service import get_or_create_settings
 
 
@@ -340,7 +340,7 @@ class ImplicitFTP_TLS(ftplib.FTP_TLS):
 class FTPService:
     SUPPORTED_TYPES = {"ftp", "ftps_explicit", "ftps_implicit"}
 
-    def _credentials(self, settings: FTPSettings) -> tuple[str, str]:
+    def _credentials(self, settings: FTPSettings | FTPConnection) -> tuple[str, str]:
         username = (settings.username or "").strip()
         password = decrypt_secret(settings.password_encrypted) or ""
         if not username:
@@ -349,7 +349,9 @@ class FTPService:
             raise ValueError("Falta la contraseña de la conexion de exportacion.")
         return username, password
 
-    def _client(self, settings: FTPSettings):
+    def _client(self, settings: FTPSettings | FTPConnection):
+        if getattr(settings, "proxy_connection_id", None):
+            raise ValueError("El túnel FTP mediante proxy aún no está habilitado.")
         connection_type = (settings.connection_type or "").strip().lower()
         if connection_type not in self.SUPPORTED_TYPES:
             raise ValueError(
@@ -379,7 +381,7 @@ class FTPService:
         client.connect(host, port)
         return client
 
-    def _login(self, client, settings: FTPSettings) -> None:
+    def _login(self, client, settings: FTPSettings | FTPConnection) -> None:
         username, password = self._credentials(settings)
         connection_type = (settings.connection_type or "").strip().lower()
 
@@ -390,7 +392,7 @@ class FTPService:
 
         client.set_pasv(bool(settings.passive_mode))
 
-    def test_connection(self, settings: FTPSettings) -> bool:
+    def test_connection(self, settings: FTPSettings | FTPConnection) -> bool:
         client = self._client(settings)
         try:
             self._login(client, settings)
@@ -408,7 +410,7 @@ class FTPService:
     def send(
         self,
         export_file: ExportFile,
-        settings: FTPSettings,
+        settings: FTPSettings | FTPConnection,
         *,
         encoding: str = "utf-8",
     ) -> bool:

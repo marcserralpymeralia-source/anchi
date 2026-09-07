@@ -19,6 +19,8 @@ from app.whatsapp.service import (
     WHATSAPP_SUPPORTED_AUDIO_EXTENSIONS,
     WHATSAPP_SUPPORTED_DOCUMENT_EXTENSIONS,
     WHATSAPP_SUPPORTED_DOCUMENT_MIME_TYPES,
+    WHATSAPP_SUPPORTED_IMAGE_EXTENSIONS,
+    WHATSAPP_SUPPORTED_IMAGE_MIME_TYPES,
     download_whatsapp_media,
     send_manual_response,
     whatsapp_config,
@@ -455,7 +457,8 @@ async def whatsapp_inbox_reply(
         extension = Path(upload.filename).suffix.lower()
         is_audio = content_type in WHATSAPP_SUPPORTED_AUDIO_MIME_TYPES or extension in WHATSAPP_SUPPORTED_AUDIO_EXTENSIONS
         is_document = content_type in WHATSAPP_SUPPORTED_DOCUMENT_MIME_TYPES or extension in WHATSAPP_SUPPORTED_DOCUMENT_EXTENSIONS
-        if not (is_audio or is_document):
+        is_image = content_type in WHATSAPP_SUPPORTED_IMAGE_MIME_TYPES or extension in WHATSAPP_SUPPORTED_IMAGE_EXTENSIONS
+        if not (is_audio or is_document or is_image):
             return _redirect_to_conversation(conversation_id, error="attachment_type_not_supported")
         attachment_payloads.append(
             {
@@ -463,6 +466,7 @@ async def whatsapp_inbox_reply(
                 "content_type": content_type,
                 "content": payload,
                 "is_audio": is_audio,
+                "is_image": is_image,
             }
         )
 

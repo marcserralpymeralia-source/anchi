@@ -920,6 +920,55 @@ def _apply_tenant_external_database_schema_snapshot(engine, dry_run: bool) -> li
     )
 
 
+def _apply_tenant_ftp_connections(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Create FTP profiles and copy the legacy per-tenant FTP settings once."""
+
+    from app.db.models import FTPConnection
+
+    actions: list[str] = []
+    with engine.connect() as conn:
+        table_names = set(inspect(conn).get_table_names())
+        target_exists = FTPConnection.__tablename__ in table_names
+        source_exists = "ftp_settings" in table_names
+        target_count = 0
+        if target_exists:
+            target_count = int(conn.execute(text("SELECT COUNT(*) FROM ftp_connections")).scalar() or 0)
+
+    if not target_exists:
+        actions.append("CREATE TABLE ftp_connections (...)")
+        if not dry_run:
+            FTPConnection.__table__.create(bind=engine, checkfirst=True)
+
+    # Fresh databases may already have the model-created table, while older
+    # deployments have only ftp_settings.  In both cases the copy is safe and
+    # idempotent because it only runs while the new table is empty.
+    if not source_exists or target_count:
+        return actions
+
+    actions.append("COPY ftp_settings INTO ftp_connections")
+    if not dry_run:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO ftp_connections
+                    (company_id, name, connection_type, host, port, username,
+                     password_encrypted, private_key_encrypted, destination_path,
+                     passive_mode, overwrite_files, retries, timeout_seconds,
+                     proxy_connection_id, created_at, updated_at)
+                    SELECT company_id, 'Conexión FTP principal', connection_type,
+                           host, port, username, password_encrypted,
+                           private_key_encrypted, destination_path, passive_mode,
+                           overwrite_files, retries, timeout_seconds, NULL,
+                           CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    FROM ftp_settings
+                    WHERE host IS NOT NULL AND TRIM(host) <> ''
+                    """
+                )
+            )
+    return actions
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -1010,6 +1059,12 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant external database schema snapshots",
         checksum=checksum_text("tenant", "external_database_schema_snapshots", "external_database_connections", "schema_snapshot_json"),
         upgrade=_apply_tenant_external_database_schema_snapshot,
+    ),
+    MigrationSpec(
+        version="2026.09.07.3",
+        name="tenant FTP connection profiles",
+        checksum=checksum_text("tenant", "ftp_connection_profiles", "ftp_connections", "ftp_settings"),
+        upgrade=_apply_tenant_ftp_connections,
     ),
 ]
 

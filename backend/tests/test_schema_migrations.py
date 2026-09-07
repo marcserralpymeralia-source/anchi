@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.security import hash_password, verify_password  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import BackgroundJob, Conversation, Customer, Email, EmailSettings, JobAttempt, KnowledgeEntry, Order, OrderLine, ProductEmbedding, ProxyConnection, TenantSchemaMigration  # noqa: E402
+from app.db.models import BackgroundJob, Conversation, Customer, Email, EmailSettings, FTPConnection, JobAttempt, KnowledgeEntry, Order, OrderLine, ProductEmbedding, ProxyConnection, TenantSchemaMigration  # noqa: E402
 from app.jobs.service import enqueue_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.migrations import CURRENT_MASTER_SCHEMA_CHECKSUM, CURRENT_MASTER_SCHEMA_NAME, CURRENT_MASTER_SCHEMA_VERSION, master_migration_report, upgrade_master_schema  # noqa: E402
@@ -25,7 +25,7 @@ from app.master.models import CompanyMembership, EmailSyncState, MasterCompany, 
 from app.master.provisioning import _ensure_master_user  # noqa: E402
 from app.migrations.inspection import discover_sqlite_files, inspect_database_url, inventory_records, simulate_sqlite_reference  # noqa: E402
 from app.migrations.helpers import table_exists  # noqa: E402
-from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, MASTER_EMAIL_SYNC_STATE_COLUMNS, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_master_email_sync_state_repair, _apply_tenant_email_favorites, _apply_tenant_external_database_schema_snapshot, _apply_tenant_knowledge_entries, _apply_tenant_order_archiving, _apply_tenant_product_embeddings, _apply_tenant_proxy_connection_scope, _apply_tenant_proxy_connections  # noqa: E402
+from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, MASTER_EMAIL_SYNC_STATE_COLUMNS, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_master_email_sync_state_repair, _apply_tenant_email_favorites, _apply_tenant_external_database_schema_snapshot, _apply_tenant_ftp_connections, _apply_tenant_knowledge_entries, _apply_tenant_order_archiving, _apply_tenant_product_embeddings, _apply_tenant_proxy_connection_scope, _apply_tenant_proxy_connections  # noqa: E402
 from app.tenancy.database import get_tenant_engine  # noqa: E402
 from app.tenancy.migrations import tenant_migration_report, upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import run_worker_cycle  # noqa: E402
@@ -62,6 +62,37 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertTrue(actions)
         columns = {column["name"] for column in inspect(self.tenant_engine).get_columns("external_database_connections")}
         self.assertIn("schema_snapshot_json", columns)
+
+    def test_ftp_migration_copies_legacy_settings_into_profile(self):
+        self._create_tables_without_ledger(self.tenant_engine, Base.metadata)
+        with self.tenant_engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO ftp_settings
+                    (company_id, connection_type, host, port, username,
+                     password_encrypted, destination_path, passive_mode,
+                     overwrite_files, retries, timeout_seconds)
+                    VALUES
+                    (1, 'ftps_explicit', 'legacy.ftp.example.com', 21,
+                     'legacy-user', 'encrypted-password', '/legacy', true,
+                     false, 2, 30)
+                    """
+                )
+            )
+
+        actions = _apply_tenant_ftp_connections(self.tenant_engine, dry_run=False)
+
+        self.assertIn("COPY ftp_settings INTO ftp_connections", actions)
+        with self.tenant_engine.connect() as conn:
+            row = conn.execute(
+                text("SELECT name, host, username, destination_path FROM ftp_connections WHERE company_id = 1")
+            ).one()
+        self.assertEqual(row.name, "Conexión FTP principal")
+        self.assertEqual(row.host, "legacy.ftp.example.com")
+        self.assertEqual(row.username, "legacy-user")
+        self.assertEqual(row.destination_path, "/legacy")
+        self.assertEqual(set(FTPConnection.__table__.columns.keys()), {column["name"] for column in inspect(self.tenant_engine).get_columns("ftp_connections")})
 
     def _seed_master_catalog(self, tenant_url: str) -> None:
         self._create_tables_without_ledger(self.master_engine, MasterBase.metadata)

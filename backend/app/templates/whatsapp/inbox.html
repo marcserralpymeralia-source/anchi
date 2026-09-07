@@ -8,7 +8,7 @@
     <div class="channel-inbox-notice success" role="status">Mensaje enviado a Meta correctamente.</div>
   {% elif error %}
     <div class="channel-inbox-notice error" role="alert">
-      {% if error == "whatsapp_not_ready" %}WhatsApp todavía no está listo para enviar mensajes.{% elif error == "attachment_too_large" %}El tamaño total de los archivos supera el límite configurado.{% elif error == "attachment_type_not_supported" %}Solo se admiten PDF, DOC, DOCX, TXT y audio.{% elif error == "empty_message" %}Escribe un mensaje o adjunta un archivo.{% else %}No se pudo enviar el mensaje. Revisa la conexión de WhatsApp e inténtalo de nuevo.{% endif %}
+      {% if error == "whatsapp_not_ready" %}WhatsApp todavía no está listo para enviar mensajes.{% elif error == "attachment_too_large" %}El tamaño total de los archivos supera el límite configurado.{% elif error == "attachment_type_not_supported" %}Solo se admiten PDF, DOC, DOCX, TXT, imágenes y audio.{% elif error == "empty_message" %}Escribe un mensaje o adjunta un archivo.{% else %}No se pudo enviar el mensaje. Revisa la conexión de WhatsApp e inténtalo de nuevo.{% endif %}
     </div>
   {% endif %}
 
@@ -37,8 +37,8 @@
 
           <div class="channel-chat-compose-main-row">
             <div class="channel-chat-input-pill">
-              <label class="channel-chat-attach-btn" title="Adjuntar archivo (PDF, DOC, DOCX, TXT, audio)">
-                <input type="file" name="files" id="wa-file-input" multiple accept=".pdf,.doc,.docx,.txt,audio/*" onchange="handleFileSelection(this)">
+              <label class="channel-chat-attach-btn" title="Adjuntar archivo (PDF, DOC, DOCX, TXT, imágenes, audio)">
+                <input type="file" name="files" id="wa-file-input" multiple accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,image/jpeg,image/png,audio/*" onchange="handleFileSelection(this)">
                 <span class="attach-btn-inner">{{ icon_paperclip(18) }}</span>
               </label>
 

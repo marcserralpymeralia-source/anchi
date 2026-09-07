@@ -155,7 +155,7 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         config = whatsapp_config(db, 1)
         channel = db.scalar(select(InputChannel).where(InputChannel.company_id == 1, InputChannel.key == "whatsapp"))
         self.assertTrue(channel.supports_documents)
-        self.assertFalse(channel.supports_images)
+        self.assertTrue(channel.supports_images)
         db.close()
         self.assertTrue(verify_webhook_token(config, "verify-123"))
         self.assertFalse(verify_webhook_token(config, "wrong"))
@@ -553,7 +553,7 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertEqual(duplicate.last_processed_at.replace(tzinfo=None), datetime(2026, 8, 30))
         db.close()
 
-    def test_media_policy_only_allows_documents_text_and_audio(self):
+    def test_media_policy_allows_images_and_rejects_unsupported_documents(self):
         payload = {
             "entry": [
                 {
@@ -571,7 +571,7 @@ class WhatsAppIntegrationTests(unittest.TestCase):
             ]
         }
         event = parse_payload_events(payload)[0]
-        self.assertFalse(event["attachments"][0]["downloadable"])
+        self.assertTrue(event["attachments"][0]["downloadable"])
 
         legacy_doc_payload = {
             "entry": [
@@ -600,6 +600,61 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         }
         legacy_doc_event = parse_payload_events(legacy_doc_payload)[0]
         self.assertFalse(legacy_doc_event["attachments"][0]["downloadable"])
+
+    def test_image_media_is_downloaded_and_stored_without_text_extraction(self):
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "metadata": {"phone_number_id": "pn-123", "business_account_id": "ba-123"},
+                                "messages": [
+                                    {
+                                        "id": "wa-image-download-1",
+                                        "from": "+34600000000",
+                                        "type": "image",
+                                        "image": {"id": "image-download-1", "mime_type": "image/jpeg", "file_size": 4},
+                                    }
+                                ],
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+        db = self.TenantSession()
+        message = persist_event(db, 1, parse_payload_events(payload)[0])
+
+        def handler(request):
+            if request.url.host == "graph.facebook.com":
+                return httpx.Response(
+                    200,
+                    json={
+                        "url": "https://lookaside.fbsbx.com/image-download-1",
+                        "mime_type": "image/jpeg",
+                        "file_size": 4,
+                    },
+                )
+            if request.url.host == "lookaside.fbsbx.com":
+                return httpx.Response(200, content=b"jpeg")
+            return httpx.Response(404, json={"error": {"message": "unexpected request"}})
+
+        storage_root = Path(self.tempdir.name) / "image-storage"
+        with patch.dict(os.environ, {"TEMP_STORAGE_DIR": str(storage_root)}):
+            async def run_download():
+                async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                    return await download_whatsapp_media(db, company_id=1, inbound_message_id=message.id, client=client)
+
+            result = asyncio.run(run_download())
+
+        attachment = db.scalar(select(MessageAttachment).where(MessageAttachment.inbound_message_id == message.id))
+        self.assertEqual(result["downloaded"], 1)
+        self.assertFalse(result["ready_for_processing"])
+        self.assertEqual(attachment.extraction_status, "stored")
+        self.assertIsNone(attachment.extracted_text)
+        self.assertTrue(Path(attachment.storage_path).is_file())
+        db.close()
 
     def test_unsupported_attachment_never_reports_ready_for_pipeline(self):
         db = self.TenantSession()
@@ -633,7 +688,7 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertFalse(result["ready_for_processing"])
         db.close()
 
-    def test_unsupported_media_without_caption_does_not_enter_order_pipeline(self):
+    def test_image_without_caption_is_stored_but_does_not_enter_order_pipeline(self):
         payload = {
             "entry": [
                 {
@@ -659,10 +714,10 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         event = parse_payload_events(payload)[0]
 
         self.assertIsNone(event["text_content"])
-        self.assertFalse(whatsapp_event_requires_media_download(event))
+        self.assertTrue(whatsapp_event_requires_media_download(event))
         self.assertFalse(whatsapp_event_has_processable_content(event))
 
-    def test_media_with_caption_keeps_text_pipeline_available(self):
+    def test_image_with_caption_waits_for_media_before_text_pipeline(self):
         payload = {
             "entry": [
                 {
@@ -687,7 +742,8 @@ class WhatsAppIntegrationTests(unittest.TestCase):
 
         event = parse_payload_events(payload)[0]
 
-        self.assertTrue(whatsapp_event_has_processable_content(event))
+        self.assertTrue(whatsapp_event_requires_media_download(event))
+        self.assertFalse(whatsapp_event_has_processable_content(event))
 
     def test_malformed_media_size_does_not_break_ingestion(self):
         payload = {

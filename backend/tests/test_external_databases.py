@@ -11,7 +11,7 @@ from sqlalchemy import select
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("ENABLE_DEMO_BOOTSTRAP", "false")
 
-from app.db.models import Customer, ExternalDatabaseConnection, ExternalDatabaseMapping, Product
+from app.db.models import Customer, ExternalDatabaseConnection, ExternalDatabaseMapping, Product, ProxyConnection
 from app.external_databases.service import (
     scan_schema,
     sync_mapping,
@@ -144,9 +144,51 @@ class ExternalDatabaseTests(unittest.TestCase):
                 follow_redirects=False,
             )
             self.assertEqual(login.status_code, 303)
+            with fixture.TenantSession() as db:
+                proxy = ProxyConnection(
+                    company_id=1,
+                    name="Gateway de pruebas",
+                    proxy_host="proxy.example.test",
+                    proxy_port=8443,
+                    proxy_protocol="https",
+                    tls_mode="verify",
+                    enabled=True,
+                )
+                db.add(proxy)
+                db.commit()
+                proxy_id = proxy.id
             saved = client.post(
                 "/settings/data-sources",
                 data={
+                    "name": "ERP de pruebas",
+                    "database_type": "sqlite",
+                    "host": ":memory:",
+                    "port": "0",
+                    "database_name": str(source_path),
+                    "schema_name": "main",
+                    "username": "",
+                    "ssl_mode": "disable",
+                    "proxy_connection_id": str(proxy_id),
+                    "enabled": "on",
+                },
+                follow_redirects=False,
+            )
+            self.assertEqual(saved.status_code, 303)
+            with fixture.TenantSession() as db:
+                connection = db.scalar(
+                    select(ExternalDatabaseConnection).where(ExternalDatabaseConnection.name == "ERP de pruebas")
+                )
+                self.assertIsNotNone(connection)
+                connection_id = connection.id
+                self.assertEqual(connection.proxy_connection_id, proxy_id)
+
+            # The profile selection is persisted, but the current gateway
+            # transport is intentionally not active yet, so clear it before
+            # exercising the direct SQLite demo connection below.
+            cleared_proxy = client.post(
+                "/settings/data-sources",
+                data={
+                    "id": str(connection_id),
                     "name": "ERP de pruebas",
                     "database_type": "sqlite",
                     "host": ":memory:",
@@ -159,19 +201,14 @@ class ExternalDatabaseTests(unittest.TestCase):
                 },
                 follow_redirects=False,
             )
-            self.assertEqual(saved.status_code, 303)
-            with fixture.TenantSession() as db:
-                connection = db.scalar(
-                    select(ExternalDatabaseConnection).where(ExternalDatabaseConnection.name == "ERP de pruebas")
-                )
-                self.assertIsNotNone(connection)
-                connection_id = connection.id
+            self.assertEqual(cleared_proxy.status_code, 303)
 
             module = client.get("/settings/module/data-sources")
             self.assertEqual(module.status_code, 200)
             self.assertIn('id="settings-data-sources"', module.text)
             self.assertIn("<h3>BBDD</h3>", module.text)
             self.assertIn("ERP de pruebas", module.text)
+            self.assertIn("Gateway de pruebas", module.text)
 
             tested = client.post(
                 f"/settings/data-sources/{connection_id}/test",

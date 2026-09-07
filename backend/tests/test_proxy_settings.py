@@ -20,13 +20,12 @@ class ProxySettingsTests(unittest.TestCase):
     def _login(self, client, email="admin@setup.local", password="setup-password"):
         return client.post("/login", data={"email": email, "password": password}, follow_redirects=False)
 
-    def test_single_active_proxy_invariant_on_create_and_edit(self):
+    def test_proxy_profiles_are_not_selected_globally(self):
         fixture = SetupFixture()
         client, cleanup = fixture.client()
         try:
             self._login(client)
 
-            # 1. Create first proxy with enabled=True
             res1 = client.post(
                 "/settings/proxies",
                 data={
@@ -35,7 +34,6 @@ class ProxySettingsTests(unittest.TestCase):
                     "proxy_port": "8080",
                     "proxy_protocol": "https",
                     "tls_mode": "verify",
-                    "enabled": "on",
                 },
                 follow_redirects=False,
             )
@@ -44,10 +42,8 @@ class ProxySettingsTests(unittest.TestCase):
             with fixture.TenantSession() as db:
                 p1 = db.scalar(select(ProxyConnection).where(ProxyConnection.name == "Proxy Primario"))
                 self.assertIsNotNone(p1)
-                self.assertTrue(p1.enabled)
                 p1_id = p1.id
 
-            # 2. Create second proxy with enabled=True
             res2 = client.post(
                 "/settings/proxies",
                 data={
@@ -56,7 +52,6 @@ class ProxySettingsTests(unittest.TestCase):
                     "proxy_port": "8081",
                     "proxy_protocol": "http",
                     "tls_mode": "verify",
-                    "enabled": "on",
                 },
                 follow_redirects=False,
             )
@@ -66,38 +61,36 @@ class ProxySettingsTests(unittest.TestCase):
                 p1 = db.get(ProxyConnection, p1_id)
                 p2 = db.scalar(select(ProxyConnection).where(ProxyConnection.name == "Proxy Secundario"))
                 self.assertIsNotNone(p2)
-                self.assertTrue(p2.enabled)
-                # p1 must be deactivated automatically!
-                self.assertFalse(p1.enabled)
-                p2_id = p2.id
 
-            # 3. Edit p1 to re-enable it
             res3 = client.post(
                 "/settings/proxies",
                 data={
-                    "id": str(p1_id),
+                    "id": str(p1.id),
                     "name": "Proxy Primario Reeditado",
                     "proxy_host": "proxy1.example.com",
                     "proxy_port": "8080",
                     "proxy_protocol": "https",
                     "tls_mode": "verify",
-                    "enabled": "on",
                 },
                 follow_redirects=False,
             )
             self.assertEqual(res3.status_code, 303)
 
-            with fixture.TenantSession() as db:
-                p1 = db.get(ProxyConnection, p1_id)
-                p2 = db.get(ProxyConnection, p2_id)
-                self.assertTrue(p1.enabled)
-                self.assertFalse(p2.enabled)
+            view = client.get("/settings/module/proxies")
+            self.assertEqual(view.status_code, 200)
+            self.assertIn("Proxy Primario Reeditado", view.text)
+            self.assertIn("Proxy Secundario", view.text)
+            self.assertNotIn("Gateway de Anchi", view.text)
+            self.assertNotIn("Perfil activo", view.text)
+            self.assertNotIn("Activar", view.text)
+            self.assertNotIn("Desactivar", view.text)
+            self.assertNotIn("Perfil habilitado", view.text)
 
         finally:
             cleanup()
             fixture.cleanup()
 
-    def test_proxy_toggle_endpoint_and_view_rendering(self):
+    def test_proxy_profiles_view_keeps_profile_actions(self):
         fixture = SetupFixture()
         client, cleanup = fixture.client()
         try:
@@ -111,7 +104,6 @@ class ProxySettingsTests(unittest.TestCase):
                     proxy_port=3128,
                     proxy_protocol="https",
                     tls_mode="verify",
-                    enabled=True,
                 )
                 p2 = ProxyConnection(
                     company_id=1,
@@ -120,50 +112,20 @@ class ProxySettingsTests(unittest.TestCase):
                     proxy_port=3129,
                     proxy_protocol="http",
                     tls_mode="disabled",
-                    enabled=False,
                 )
                 db.add_all([p1, p2])
                 db.commit()
                 db.refresh(p1)
                 db.refresh(p2)
-                p1_id, p2_id = p1.id, p2.id
+                p1_id = p1.id
 
-            # Verify view shows Proxy Alpha as active
             view1 = client.get("/settings/module/proxies")
             self.assertEqual(view1.status_code, 200)
-            self.assertIn("Proxy activo", view1.text)
             self.assertIn("Proxy Alpha", view1.text)
-            self.assertIn("Activar", view1.text)  # Button on Beta
-
-            # Toggle Beta ON
-            toggle_beta = client.post(f"/settings/proxies/{p2_id}/toggle", follow_redirects=False)
-            self.assertEqual(toggle_beta.status_code, 303)
-
-            with fixture.TenantSession() as db:
-                p1 = db.get(ProxyConnection, p1_id)
-                p2 = db.get(ProxyConnection, p2_id)
-                self.assertFalse(p1.enabled)
-                self.assertTrue(p2.enabled)
-
-            # Toggle Beta OFF (now 0 active proxies)
-            toggle_beta_off = client.post(
-                f"/settings/proxies/{p2_id}/toggle",
-                headers={"Accept": "application/json"},
-            )
-            self.assertEqual(toggle_beta_off.status_code, 200)
-            self.assertFalse(toggle_beta_off.json()["enabled"])
-
-            with fixture.TenantSession() as db:
-                p1 = db.get(ProxyConnection, p1_id)
-                p2 = db.get(ProxyConnection, p2_id)
-                self.assertFalse(p1.enabled)
-                self.assertFalse(p2.enabled)
-
-            # Verify view shows Direct Connection (no active proxy)
-            view2 = client.get("/settings/module/proxies")
-            self.assertEqual(view2.status_code, 200)
-            self.assertIn("Conexión directa", view2.text)
-            self.assertIn("Sin proxy activo", view2.text)
+            self.assertIn("Proxy Beta", view1.text)
+            self.assertIn("Probar conexión", view1.text)
+            self.assertIn("Editar", view1.text)
+            self.assertIn(f"/settings/proxies/{p1_id}/test", view1.text)
 
         finally:
             cleanup()
@@ -257,10 +219,6 @@ class ProxySettingsTests(unittest.TestCase):
 
             # Login as operator
             self._login(client, email="operator@setup.local", password="operator-password")
-
-            # Try to toggle -> should be 403 Forbidden
-            toggle_res = client.post(f"/settings/proxies/{proxy_id}/toggle")
-            self.assertEqual(toggle_res.status_code, 403)
 
             # Try to delete -> should be 403 Forbidden
             delete_res = client.post(f"/settings/proxies/{proxy_id}/delete")

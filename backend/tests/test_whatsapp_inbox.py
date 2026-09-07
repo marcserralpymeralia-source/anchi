@@ -261,6 +261,41 @@ class WhatsAppInboxTests(unittest.TestCase):
         fixture.cleanup()
         self.assertEqual(result["provider_message_id"], "wamid.document-1")
 
+    def test_media_send_uploads_file_then_sends_image_message(self):
+        fixture = build_performance_fixture("small")
+        conversation_id = self._seed_whatsapp(fixture)
+        engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        with session() as db:
+            def handler(request):
+                if request.url.path.endswith("/media"):
+                    self.assertIn("multipart/form-data", request.headers.get("content-type", ""))
+                    return httpx.Response(200, json={"id": "media-image-1"})
+                self.assertTrue(request.url.path.endswith("/messages"))
+                payload = json.loads(request.content)
+                self.assertEqual(payload["type"], "image")
+                self.assertEqual(payload["image"]["id"], "media-image-1")
+                self.assertNotIn("filename", payload["image"])
+                return httpx.Response(200, json={"messages": [{"id": "wamid.image-1"}]})
+
+            async def run_send():
+                async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                    return await send_whatsapp_media(
+                        db,
+                        company_id=1,
+                        conversation_id=conversation_id,
+                        content=b"image",
+                        filename="foto.jpg",
+                        content_type="image/jpeg",
+                        is_image=True,
+                        client=client,
+                    )
+
+            result = asyncio.run(run_send())
+        engine.dispose()
+        fixture.cleanup()
+        self.assertEqual(result["provider_message_id"], "wamid.image-1")
+
     def test_delivery_ticks_and_authentic_chat_rendering(self):
         fixture = build_performance_fixture("small")
         conversation_id = self._seed_whatsapp(fixture)
@@ -406,7 +441,36 @@ class WhatsAppInboxTests(unittest.TestCase):
                 extraction_status="pending",
                 is_image=True,
             )
-            db.add_all([att_img, att_pdf, att_audio, att_pending])
+            msg_doc_only, _ = upsert_inbound_message(
+                db,
+                company_id=1,
+                channel_key="whatsapp",
+                provider="meta",
+                external_id="wamid.doc-only-test",
+                sender="+34618741297",
+                recipients=["+34910000000"],
+                subject="Documento solo",
+                text_content="",
+                external_thread_id="+34600000000",
+                received_at=utcnow(),
+                content_type="media",
+                direction="inbound",
+            )
+            msg_doc_only.conversation_id = conversation_id
+            msg_doc_only.status = "received"
+            db.flush()
+
+            att_doc_only = MessageAttachment(
+                company_id=1,
+                inbound_message_id=msg_doc_only.id,
+                filename="Pedido_A_260216.pdf",
+                content_type="application/pdf",
+                size_bytes=355737,
+                storage_path="mock/path/Pedido_A_260216.pdf",
+                extraction_status="extracted",
+                is_pdf=True,
+            )
+            db.add_all([att_img, att_pdf, att_audio, att_pending, att_doc_only])
             db.commit()
             pending_att_id = att_pending.id
         engine.dispose()
@@ -425,6 +489,9 @@ class WhatsAppInboxTests(unittest.TestCase):
             self.assertIn("wa-doc-iframe", response.text)
             self.assertIn("wa-doc-btn", response.text)
             self.assertNotIn("Guardar como…", response.text)
+            # Document single card full bleed layout without double border
+            self.assertIn("wa-msg-doc-card", response.text)
+            self.assertIn("wa-doc-meta-time", response.text)
             # Audio player card
             self.assertIn("wa-bubble-audio-card", response.text)
             self.assertIn("wa-audio-control", response.text)

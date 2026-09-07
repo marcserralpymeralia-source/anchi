@@ -24,7 +24,7 @@ from app.master.database import get_master_db
 from app.master.service import TenantUser
 from app.master.models import EmailSyncState
 from app.core.encryption import decrypt_secret, encrypt_secret, mask_secret
-from app.db.models import AuditLog, BrandingSettings, Company, Customer, DecisionSettings, Email, EmailSettings, EmailTemplate, ExportSettings, ExternalDatabaseConnection, ExternalDatabaseMapping, FTPSettings, InputChannel, InboundMessage, LLMSettings, Order, Product, PromptExecution, PromptExecutionDetail, PromptTemplate, PromptVersion, ProxyConnection, ScoringSettings
+from app.db.models import AuditLog, BrandingSettings, Company, Customer, DecisionSettings, Email, EmailSettings, EmailTemplate, ExportSettings, ExternalDatabaseConnection, ExternalDatabaseMapping, FTPConnection, FTPSettings, InputChannel, InboundMessage, LLMSettings, Order, Product, PromptExecution, PromptExecutionDetail, PromptTemplate, PromptVersion, ProxyConnection, ScoringSettings
 from app.db.models import BackgroundJob
 from app.logs.service import log_action
 from app.settings.agent_config import agent_metrics, agent_status, apply_safety_level, improvement_suggestions
@@ -390,17 +390,30 @@ def _settings_module_context(request: Request, db: Session, user: TenantUser, mo
     elif module_key == "export":
         context["export"] = get_or_create_settings(db, ExportSettings, user.company_id)
     elif module_key == "ftp":
-        context.update(ftp=get_or_create_settings(db, FTPSettings, user.company_id), mask_secret=mask_secret)
+        ftp_connections = db.scalars(
+            select(FTPConnection)
+            .where(FTPConnection.company_id == user.company_id)
+            .order_by(FTPConnection.name.asc(), FTPConnection.id.asc())
+        ).all()
+        proxies = db.scalars(
+            select(ProxyConnection)
+            .where(ProxyConnection.company_id == user.company_id)
+            .order_by(ProxyConnection.name.asc(), ProxyConnection.id.asc())
+        ).all()
+        context.update(
+            ftp_connections=ftp_connections,
+            proxy_connections=proxies,
+            can_edit_ftp=can_edit_ftp(user),
+            mask_secret=mask_secret,
+        )
     elif module_key == "proxies":
         proxies = db.scalars(
             select(ProxyConnection)
             .where(ProxyConnection.company_id == user.company_id)
             .order_by(ProxyConnection.name.asc(), ProxyConnection.id.asc())
         ).all()
-        active_proxy = next((p for p in proxies if p.enabled), None)
         context.update(
             proxy_connections=proxies,
-            active_proxy=active_proxy,
             can_edit_proxies=can_edit_proxies(user),
             mask_secret=mask_secret,
         )
@@ -470,7 +483,11 @@ def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: 
     decision_settings = get_or_create_settings(db, DecisionSettings, user.company_id)
     company = db.get(Company, user.company_id)
     email_settings = get_or_create_settings(db, EmailSettings, user.company_id)
-    ftp_settings = get_or_create_settings(db, FTPSettings, user.company_id)
+    ftp_settings = db.scalar(
+        select(FTPConnection)
+        .where(FTPConnection.company_id == user.company_id)
+        .order_by(FTPConnection.name.asc(), FTPConnection.id.asc())
+    ) or get_or_create_settings(db, FTPSettings, user.company_id)
     proxy_connection_count = db.scalar(
         select(func.count(ProxyConnection.id)).where(ProxyConnection.company_id == user.company_id)
     ) or 0
@@ -600,7 +617,7 @@ def build_settings_dashboard(
     company: Company | None = None,
     branding: BrandingSettings | None = None,
     email: EmailSettings | None = None,
-    ftp: FTPSettings | None = None,
+    ftp: FTPSettings | FTPConnection | None = None,
     proxy_connection_count: int | None = None,
     external_database_count: int | None = None,
     export: ExportSettings | None = None,
@@ -831,6 +848,10 @@ def can_edit_external_databases(user: TenantUser) -> bool:
     return user.role.name in {"Administrador", "Superadmin"}
 
 
+def can_edit_ftp(user: TenantUser) -> bool:
+    return user.role.name in {"Administrador", "Superadmin"}
+
+
 _PROXY_PROTOCOLS = {"http", "https", "socks5", "other"}
 _PROXY_TLS_MODES = {"verify", "required", "disabled"}
 _HOSTNAME_RE = re.compile(r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
@@ -876,7 +897,6 @@ def _proxy_form_values(data: dict) -> dict:
         "proxy_protocol": protocol,
         "username": str(data.get("username") or "").strip() or None,
         "tls_mode": tls_mode,
-        "enabled": str(data.get("enabled") or "").lower() in {"on", "true", "1"},
         "notes": str(data.get("notes") or "").strip() or None,
     }
 
@@ -962,17 +982,6 @@ async def save_proxy_connection(request: Request, db: Session = Depends(get_tena
     connection.updated_by = resolve_updated_by_id(db, user)
     connection.updated_at = datetime.now(timezone.utc)
 
-    # If this profile is set to enabled, deactivate all other profiles for this company (only one active at a time)
-    if values.get("enabled"):
-        db.flush()
-        db.execute(
-            update(ProxyConnection)
-            .where(
-                ProxyConnection.company_id == user.company_id,
-                ProxyConnection.id != connection.id,
-            )
-            .values(enabled=False, updated_at=datetime.now(timezone.utc))
-        )
     try:
         db.commit()
     except Exception as exc:  # noqa: BLE001
@@ -984,49 +993,6 @@ async def save_proxy_connection(request: Request, db: Session = Depends(get_tena
     return redirect_or_json(request, {"ok": True, "id": connection.id, "message": "Perfil de proxy guardado."}, "proxies")
 
 
-@router.post("/proxies/{proxy_id}/toggle")
-def toggle_proxy_connection(proxy_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
-    if not can_edit_proxies(user):
-        return JSONResponse({"ok": False, "message": "Solo Administrador puede configurar proxies."}, status_code=403)
-    connection = db.scalar(
-        select(ProxyConnection).where(ProxyConnection.id == proxy_id, ProxyConnection.company_id == user.company_id)
-    )
-    if connection is None:
-        return JSONResponse({"ok": False, "message": "No se encontró el perfil de proxy."}, status_code=404)
-
-    new_enabled = not connection.enabled
-    if new_enabled:
-        # Enforce single active proxy: disable all other profiles for this company
-        db.execute(
-            update(ProxyConnection)
-            .where(ProxyConnection.company_id == user.company_id, ProxyConnection.id != connection.id)
-            .values(enabled=False, updated_at=datetime.now(timezone.utc))
-        )
-        connection.enabled = True
-    else:
-        connection.enabled = False
-
-    connection.updated_by = resolve_updated_by_id(db, user)
-    connection.updated_at = datetime.now(timezone.utc)
-    db.commit()
-
-    action_label = "activado" if connection.enabled else "desactivado"
-    log_action(
-        db,
-        company_id=user.company_id,
-        user=user,
-        action="settings.proxy.toggle",
-        entity_type="proxy_connection",
-        entity_id=connection.id,
-        message=f"Perfil de proxy {action_label}: {connection.name}",
-    )
-    return redirect_or_json(
-        request,
-        {"ok": True, "id": connection.id, "enabled": connection.enabled, "message": f"Perfil '{connection.name}' {action_label}."},
-        "proxies",
-    )
-
-
 @router.post("/proxies/{proxy_id}/delete")
 def delete_proxy_connection(proxy_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not can_edit_proxies(user):
@@ -1036,6 +1002,18 @@ def delete_proxy_connection(proxy_id: int, request: Request, db: Session = Depen
     )
     if connection is None:
         return JSONResponse({"ok": False, "message": "No se encontró el perfil de proxy."}, status_code=404)
+
+    ftp_usage = db.scalar(
+        select(FTPConnection.id).where(FTPConnection.proxy_connection_id == proxy_id).limit(1)
+    )
+    database_usage = db.scalar(
+        select(ExternalDatabaseConnection.id).where(ExternalDatabaseConnection.proxy_connection_id == proxy_id).limit(1)
+    )
+    if ftp_usage or database_usage:
+        return JSONResponse(
+            {"ok": False, "message": "No se puede eliminar este perfil porque está asociado a una conexión. Desasígnalo primero."},
+            status_code=409,
+        )
 
     proxy_name = connection.name
     db.delete(connection)
@@ -1132,6 +1110,196 @@ def test_proxy_connection(proxy_id: int, request: Request, db: Session = Depends
             status_code=200 if ok else 502,
         )
     return RedirectResponse("/settings#proxies", status_code=303)
+
+
+_FTP_CONNECTION_TYPES = {"ftp", "ftps_explicit", "ftps_implicit"}
+
+
+def _ftp_connection_for_user(db: Session, user: TenantUser, connection_id: int) -> FTPConnection | None:
+    return db.scalar(
+        select(FTPConnection).where(
+            FTPConnection.id == connection_id,
+            FTPConnection.company_id == user.company_id,
+        )
+    )
+
+
+def _ftp_form_values(data: dict, existing: FTPConnection | None = None) -> dict:
+    name = str(data.get("name") or (existing.name if existing else "")).strip()
+    if not name or len(name) > 120:
+        raise ValueError("El nombre de la conexión es obligatorio y no puede superar 120 caracteres.")
+
+    connection_type = str(data.get("connection_type") or (existing.connection_type if existing else "ftps_explicit")).strip().lower()
+    if connection_type not in _FTP_CONNECTION_TYPES:
+        raise ValueError("El tipo de conexión FTP no es válido.")
+
+    raw_host = str(data.get("host") or (existing.host if existing else "")).strip()
+    if not raw_host:
+        raise ValueError("El host de la conexión FTP es obligatorio.")
+    host = _validate_proxy_host(raw_host)
+
+    try:
+        port = int(data.get("port") or (existing.port if existing else (990 if connection_type == "ftps_implicit" else 21)))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("El puerto FTP debe ser un número entre 1 y 65535.") from exc
+    if not 1 <= port <= 65535:
+        raise ValueError("El puerto FTP debe ser un número entre 1 y 65535.")
+
+    username = str(data.get("username") or (existing.username if existing else "")).strip()
+    if not username:
+        raise ValueError("El usuario de la conexión FTP es obligatorio.")
+
+    destination_path = str(data.get("destination_path") or (existing.destination_path if existing else "/")).strip() or "/"
+    if len(destination_path) > 500:
+        raise ValueError("La ruta destino no puede superar 500 caracteres.")
+
+    try:
+        retries = int(data.get("retries") or (existing.retries if existing else 2))
+        timeout_seconds = int(data.get("timeout_seconds") or (existing.timeout_seconds if existing else 30))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Reintentos y timeout deben ser números válidos.") from exc
+    if retries < 0 or retries > 20:
+        raise ValueError("Los reintentos deben estar entre 0 y 20.")
+    if timeout_seconds < 1 or timeout_seconds > 3600:
+        raise ValueError("El timeout debe estar entre 1 y 3600 segundos.")
+
+    raw_proxy_id = str(data.get("proxy_connection_id") or "").strip()
+    try:
+        proxy_connection_id = int(raw_proxy_id) if raw_proxy_id else None
+    except ValueError as exc:
+        raise ValueError("El perfil proxy seleccionado no es válido.") from exc
+
+    return {
+        "name": name,
+        "connection_type": connection_type,
+        "host": host,
+        "port": port,
+        "username": username,
+        "destination_path": destination_path,
+        "retries": retries,
+        "timeout_seconds": timeout_seconds,
+        "passive_mode": str(data.get("passive_mode") or "").lower() in {"on", "true", "1"},
+        "overwrite_files": str(data.get("overwrite_files") or "").lower() in {"on", "true", "1"},
+        "proxy_connection_id": proxy_connection_id,
+    }
+
+
+def _ftp_response(request: Request, payload: dict, anchor: str = "ftp"):
+    if "application/json" in (request.headers.get("accept") or "") or "application/json" in (request.headers.get("content-type") or ""):
+        status_code = int(payload.pop("_status_code", 200) or 200)
+        return JSONResponse(payload, status_code=status_code)
+    return RedirectResponse(f"/settings#{anchor}", status_code=303)
+
+
+@router.api_route("/ftp", methods=["POST", "PUT"])
+async def save_ftp_connection(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if not can_edit_ftp(user):
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede configurar FTP."}, status_code=403)
+    data = await request_data(request)
+    raw_id = str(data.get("id") or "").strip()
+    existing = None
+    if raw_id:
+        try:
+            existing = _ftp_connection_for_user(db, user, int(raw_id))
+        except ValueError:
+            existing = None
+        if existing is None:
+            return JSONResponse({"ok": False, "message": "No se encontró la conexión FTP indicada."}, status_code=404)
+
+    try:
+        values = _ftp_form_values(data, existing)
+        password = str(data.get("password") or "").strip()
+        private_key = str(data.get("private_key") or "").strip()
+        if existing is None and not password:
+            raise ValueError("La contraseña de la conexión FTP es obligatoria.")
+        if values["proxy_connection_id"] is not None:
+            proxy = db.scalar(
+                select(ProxyConnection).where(
+                    ProxyConnection.id == values["proxy_connection_id"],
+                    ProxyConnection.company_id == user.company_id,
+                )
+            )
+            if proxy is None:
+                raise ValueError("El perfil proxy seleccionado no pertenece a esta compañía.")
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=422)
+
+    connection = existing or FTPConnection(company_id=user.company_id)
+    db.add(connection)
+    previous_values = {
+        key: getattr(existing, key, None)
+        for key in ("name", "connection_type", "host", "port", "username", "destination_path", "retries", "timeout_seconds", "passive_mode", "overwrite_files", "proxy_connection_id")
+    }
+    configuration_changed = existing is None or any(previous_values.get(key) != values.get(key) for key in previous_values)
+    for key, value in values.items():
+        setattr(connection, key, value)
+    if password and password not in {"********", "••••••••"}:
+        connection.password_encrypted = encrypt_secret(password)
+        configuration_changed = True
+    if private_key and private_key not in {"********", "••••••••"}:
+        connection.private_key_encrypted = encrypt_secret(private_key)
+        configuration_changed = True
+    connection.updated_by = resolve_updated_by_id(db, user)
+    connection.updated_at = datetime.now(timezone.utc)
+    if configuration_changed:
+        connection.last_test_at = None
+        connection.last_test_ok = None
+        connection.last_test_message = None
+    try:
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        if "UNIQUE" in str(exc).upper() or "DUPLICATE" in str(exc).upper():
+            return JSONResponse({"ok": False, "message": "Ya existe una conexión FTP con ese nombre."}, status_code=409)
+        raise
+    log_action(db, company_id=user.company_id, user=user, action="settings.ftp.save", entity_type="ftp_connection", entity_id=connection.id, message=f"Conexión FTP guardada: {connection.name}")
+    return _ftp_response(request, {"ok": True, "id": connection.id, "message": "Conexión FTP guardada correctamente."})
+
+
+@router.post("/ftp/{connection_id}/delete")
+def delete_ftp_connection(connection_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if not can_edit_ftp(user):
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede configurar FTP."}, status_code=403)
+    connection = _ftp_connection_for_user(db, user, connection_id)
+    if connection is None:
+        return JSONResponse({"ok": False, "message": "No se encontró la conexión FTP indicada."}, status_code=404)
+    name = connection.name
+    db.delete(connection)
+    db.commit()
+    log_action(db, company_id=user.company_id, user=user, action="settings.ftp.delete", entity_type="ftp_connection", entity_id=connection_id, message=f"Conexión FTP eliminada: {name}")
+    return _ftp_response(request, {"ok": True, "id": connection_id, "message": f"Conexión FTP '{name}' eliminada correctamente."})
+
+
+@router.post("/ftp/{connection_id}/test")
+def test_ftp_connection(connection_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if not can_edit_ftp(user):
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede probar FTP."}, status_code=403)
+    connection = _ftp_connection_for_user(db, user, connection_id)
+    if connection is None:
+        return JSONResponse({"ok": False, "message": "No se encontró la conexión FTP indicada."}, status_code=404)
+    from app.exports.service import FTPService
+
+    now = datetime.now(timezone.utc)
+    try:
+        FTPService().test_connection(connection)
+        ok, message = True, "Conexión FTP validada correctamente."
+    except Exception as exc:  # noqa: BLE001
+        ok, message = False, _safe_error_message(exc)
+    connection.last_test_at = now
+    connection.last_test_ok = ok
+    connection.last_test_message = message
+    db.commit()
+    log_action(
+        db,
+        company_id=user.company_id,
+        user=user,
+        action="settings.ftp.test",
+        entity_type="ftp_connection",
+        entity_id=connection.id,
+        message=message,
+        metadata={"connection_type": connection.connection_type, "host": connection.host, "proxy_connection_id": connection.proxy_connection_id, "ok": ok},
+    )
+    return _ftp_response(request, {"ok": ok, "message": message, "checked_at": now.isoformat(), "_status_code": 200 if ok else 502})
 
 
 async def request_data(request: Request) -> dict:

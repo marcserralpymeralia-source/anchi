@@ -89,7 +89,7 @@
         <div class="section-title-row">
           <div>
             <h4>Estado</h4>
-            <p class="muted">{{ item.status_label }}</p>
+            <p class="muted">{{ "Canal operativo y recibiendo mensajes en tiempo real." if item.state == "ready" else item.status_label }}</p>
           </div>
           <span class="badge channel-state {{ item.state }}">{{ item.status_label }}</span>
         </div>

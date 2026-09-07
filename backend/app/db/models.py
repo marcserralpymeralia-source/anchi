@@ -320,6 +320,41 @@ class ProxyConnection(Base):
     __table_args__ = (UniqueConstraint("company_id", "name"),)
 
 
+class FTPConnection(Base):
+    """Tenant-owned FTP/FTPS destination profile.
+
+    Multiple destinations may coexist for one tenant.  The optional proxy is
+    stored here so a future export transport can select the correct network
+    hop without making the proxy global.
+    """
+
+    __tablename__ = "ftp_connections"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    connection_type: Mapped[str] = mapped_column(String(20), default="ftps_explicit")
+    host: Mapped[str | None] = mapped_column(String(255))
+    port: Mapped[int] = mapped_column(Integer, default=21)
+    username: Mapped[str | None] = mapped_column(String(255))
+    password_encrypted: Mapped[str | None] = mapped_column(Text)
+    private_key_encrypted: Mapped[str | None] = mapped_column(Text)
+    destination_path: Mapped[str] = mapped_column(String(500), default="/")
+    passive_mode: Mapped[bool] = mapped_column(Boolean, default=True)
+    overwrite_files: Mapped[bool] = mapped_column(Boolean, default=False)
+    retries: Mapped[int] = mapped_column(Integer, default=2)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=30)
+    proxy_connection_id: Mapped[int | None] = mapped_column(ForeignKey("proxy_connections.id"), index=True)
+    last_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_test_ok: Mapped[bool | None] = mapped_column(Boolean)
+    last_test_message: Mapped[str | None] = mapped_column(Text)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (UniqueConstraint("company_id", "name"),)
+
+
 class ExternalDatabaseConnection(Base):
     """Read-only connection profile for a customer's source database.
 

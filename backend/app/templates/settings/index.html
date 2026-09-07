@@ -1097,45 +1097,167 @@
 {% endif %}
 
 {% if settings_fragment == "ftp" %}
-<dialog id="settings-ftp" class="settings-drawer">
+<dialog id="settings-ftp" class="settings-drawer settings-drawer-wide">
   <div class="drawer-head">
     <div>
       <h3>FTP / FTPS</h3>
-      <p class="muted">Destino de exportación y credenciales.</p>
+      <p class="muted">Perfiles de destinos de exportación y credenciales.</p>
     </div>
     <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
   </div>
-  <form class="drawer-body stack js-loading-form" method="post" action="/settings/ftp">
+  <div class="drawer-body stack external-databases-drawer">
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Conexiones configuradas ({{ ftp_connections|length }})</h4>
+          <p class="muted">Las credenciales se cifran y cada destino puede usar un perfil proxy distinto.</p>
+        </div>
+        {% if can_edit_ftp %}
+          <button type="button" class="secondary compact-button" onclick="document.getElementById('ftp-create-dialog').showModal();">
+            {{ icon_plus(13) }}
+            <span>Añadir conexión</span>
+          </button>
+        {% endif %}
+      </div>
+
+      {% if not ftp_connections %}
+        <div class="external-database-empty proxy-empty-card">
+          <p class="muted" style="margin:0 0 10px 0;">No hay conexiones FTP configuradas.</p>
+          {% if can_edit_ftp %}
+            <button type="button" class="secondary compact-button" onclick="document.getElementById('ftp-create-dialog').showModal();">
+              {{ icon_plus(13) }}
+              <span>Crear primera conexión</span>
+            </button>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      <div class="external-database-list proxy-cards-list">
+        {% for connection in ftp_connections %}
+          <article class="external-database-card proxy-profile-card" id="ftp-card-{{ connection.id }}" data-ftp-card>
+            <div class="proxy-card-header">
+              <div class="proxy-card-title-group">
+                <strong class="proxy-card-name">{{ connection.name }}</strong>
+                <span class="badge">{{ {'ftp': 'FTP', 'ftps_explicit': 'FTPS explícito', 'ftps_implicit': 'FTPS implícito'}.get(connection.connection_type, connection.connection_type|upper) }}</span>
+                {% if connection.last_test_ok %}
+                  <span class="badge status-confirmed">Conectada</span>
+                {% elif connection.last_test_ok is false %}
+                  <span class="badge status-doubtful">Con avisos</span>
+                {% else %}
+                  <span class="badge status-doubtful">Sin probar</span>
+                {% endif %}
+              </div>
+              <span class="proxy-card-endpoint"><code>{{ connection.host }}:{{ connection.port }}</code></span>
+            </div>
+
+            <div class="proxy-card-body">
+              <div class="proxy-card-meta-row">
+                <span class="muted">Usuario: <strong style="color:var(--text, #0f172a);">{{ connection.username or '—' }}</strong></span>
+                <span class="muted">·</span>
+                <span class="muted">Destino: <strong style="color:var(--text, #0f172a);">{{ connection.destination_path or '/' }}</strong></span>
+                <span class="muted">·</span>
+                <span class="muted">Proxy: <strong style="color:var(--text, #0f172a);">{{ 'Configurado' if connection.proxy_connection_id else 'Sin proxy' }}</strong></span>
+              </div>
+              {% if connection.last_test_message %}
+                <p class="settings-status-note external-database-last-status {% if connection.last_test_ok %}is-success{% else %}is-error{% endif %}">{{ connection.last_test_message }}</p>
+              {% endif %}
+            </div>
+
+            <div class="proxy-card-actions">
+              <div class="proxy-card-actions-left">
+                {% if can_edit_ftp %}
+                  <button type="button" class="secondary compact-button" data-ftp-test data-ftp-test-url="/settings/ftp/{{ connection.id }}/test" data-loading-text="Probando...">{{ icon_refresh(14) }} Probar conexión</button>
+                  <button type="button" class="secondary compact-button" data-ftp-edit-toggle>Editar</button>
+                  <form method="post" action="/settings/ftp/{{ connection.id }}/delete" class="js-loading-form" style="margin:0;" onsubmit="return confirm('¿Eliminar esta conexión FTP?');">
+                    <button type="submit" class="secondary compact-button" data-loading-text="Eliminando...">Eliminar</button>
+                  </form>
+                {% endif %}
+              </div>
+            </div>
+
+            <p class="settings-status-note external-database-action-status" data-ftp-status role="status" aria-live="polite" hidden></p>
+
+            {% if can_edit_ftp %}
+              <div class="proxy-edit-container external-database-edit-container" data-ftp-edit-form hidden>
+                <div class="proxy-edit-head-row">
+                  <strong>Editar conexión: {{ connection.name }}</strong>
+                  <button type="button" class="secondary compact-button" data-ftp-edit-cancel>Cerrar</button>
+                </div>
+                <form class="stack js-loading-form" method="post" action="/settings/ftp">
+                  <input type="hidden" name="id" value="{{ connection.id }}">
+                  <div class="form-grid">
+                    <label>Nombre de la conexión<input name="name" value="{{ connection.name }}" required></label>
+                    <label>Tipo<select name="connection_type"><option value="ftp" {% if connection.connection_type == 'ftp' %}selected{% endif %}>FTP</option><option value="ftps_explicit" {% if connection.connection_type == 'ftps_explicit' %}selected{% endif %}>FTPS explícito</option><option value="ftps_implicit" {% if connection.connection_type == 'ftps_implicit' %}selected{% endif %}>FTPS implícito</option></select></label>
+                    <label>Host o IP<input name="host" value="{{ connection.host }}" required></label>
+                    <label>Puerto<input name="port" type="number" min="1" max="65535" value="{{ connection.port }}" required></label>
+                    <label>Usuario<input name="username" value="{{ connection.username or '' }}" required></label>
+                    <label>Contraseña<input name="password" type="password" autocomplete="new-password" placeholder="{{ mask_secret(connection.password_encrypted) or 'Introduce una contraseña' }}"></label>
+                    <label>Clave privada (opcional)<input name="private_key" type="password" autocomplete="new-password" placeholder="{{ mask_secret(connection.private_key_encrypted) or 'No configurada' }}"></label>
+                    <label>Ruta destino<input name="destination_path" value="{{ connection.destination_path or '/' }}" required></label>
+                    <label>Reintentos<input name="retries" type="number" min="0" max="20" value="{{ connection.retries }}"></label>
+                    <label>Timeout (segundos)<input name="timeout_seconds" type="number" min="1" max="3600" value="{{ connection.timeout_seconds }}"></label>
+                    <label>Perfil proxy (opcional)
+                      <select name="proxy_connection_id" {% if not proxy_connections %}disabled{% endif %}>
+                        <option value="">Sin proxy</option>
+                        {% for proxy in proxy_connections %}<option value="{{ proxy.id }}" {% if connection.proxy_connection_id == proxy.id %}selected{% endif %}>{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>{% endfor %}
+                      </select>
+                      <small class="muted">Se guarda para este destino. El túnel FTP se activará cuando esté disponible.</small>
+                    </label>
+                    <label class="checkbox-card">Modo pasivo<input name="passive_mode" type="checkbox" {% if connection.passive_mode %}checked{% endif %}></label>
+                    <label class="checkbox-card">Sobrescribir archivos<input name="overwrite_files" type="checkbox" {% if connection.overwrite_files %}checked{% endif %}></label>
+                  </div>
+                  <div class="drawer-actions">
+                    <button type="submit" class="primary" data-loading-text="Guardando...">Guardar conexión</button>
+                    <button type="button" class="secondary compact-button" data-ftp-edit-cancel>Cancelar</button>
+                  </div>
+                </form>
+              </div>
+            {% endif %}
+          </article>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+</dialog>
+
+{% if can_edit_ftp %}
+<dialog id="ftp-create-dialog" class="edit-dialog" onclick="if (event.target === this) this.close();">
+  <form class="stack js-loading-form" method="post" action="/settings/ftp">
+    <div class="dialog-header">
+      <div>
+        <h2>Nueva conexión FTP</h2>
+        <p class="muted" style="margin:2px 0 0; font-size:12.5px;">Destino cifrado para exportaciones.</p>
+      </div>
+      <button type="button" class="secondary compact-button modal-close-btn" onclick="this.closest('dialog').close()" title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
+    </div>
     <div class="form-grid">
-      <label>Tipo
-        <select name="connection_type">
-          <option value="ftp" {% if ftp.connection_type == "ftp" %}selected{% endif %}>FTP</option>
-          <option value="ftps_explicit" {% if ftp.connection_type == "ftps_explicit" %}selected{% endif %}>FTPS explícito</option>
-          <option value="ftps_implicit" {% if ftp.connection_type == "ftps_implicit" %}selected{% endif %}>FTPS implícito</option>
+      <label>Nombre de la conexión<input name="name" placeholder="FTP de la empresa" required></label>
+      <label>Tipo<select name="connection_type"><option value="ftp">FTP</option><option value="ftps_explicit" selected>FTPS explícito</option><option value="ftps_implicit">FTPS implícito</option></select></label>
+      <label>Host o IP<input name="host" placeholder="ftp.empresa.com" required></label>
+      <label>Puerto<input name="port" type="number" value="21" min="1" max="65535" required></label>
+      <label>Usuario<input name="username" required></label>
+      <label>Contraseña<input name="password" type="password" autocomplete="new-password" required></label>
+      <label>Clave privada (opcional)<input name="private_key" type="password" autocomplete="new-password"></label>
+      <label>Ruta destino<input name="destination_path" value="/" required></label>
+      <label>Reintentos<input name="retries" type="number" min="0" max="20" value="2"></label>
+      <label>Timeout (segundos)<input name="timeout_seconds" type="number" min="1" max="3600" value="30"></label>
+      <label>Perfil proxy (opcional)
+        <select name="proxy_connection_id" {% if not proxy_connections %}disabled{% endif %}>
+          <option value="">Sin proxy</option>
+          {% for proxy in proxy_connections %}<option value="{{ proxy.id }}">{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>{% endfor %}
         </select>
+        <small class="muted">Se guarda para este destino. El túnel FTP se activará cuando esté disponible.</small>
       </label>
-      <label>Host<input name="host" value="{{ ftp.host or '' }}"></label>
-      <label>Puerto<input name="port" type="number" value="{{ ftp.port }}"></label>
-      <label>Usuario<input name="username" value="{{ ftp.username or '' }}"></label>
-      <label>Password<input name="password_encrypted" type="password" placeholder="{{ mask_secret(ftp.password_encrypted) }}"></label>
-      <label>Clave privada<input name="private_key_encrypted" type="password" placeholder="{{ mask_secret(ftp.private_key_encrypted) }}"></label>
-      <label>Ruta destino<input name="destination_path" value="{{ ftp.destination_path }}"></label>
-      <label>Reintentos<input name="retries" type="number" value="{{ ftp.retries }}"></label>
-      <label>Timeout<input name="timeout_seconds" type="number" value="{{ ftp.timeout_seconds }}"></label>
-      <label>Pasivo<input name="passive_mode" type="checkbox" {% if ftp.passive_mode %}checked{% endif %}></label>
-      <label>Sobrescribir<input name="overwrite_files" type="checkbox" {% if ftp.overwrite_files %}checked{% endif %}></label>
+      <label class="checkbox-card">Modo pasivo<input name="passive_mode" type="checkbox" checked></label>
+      <label class="checkbox-card">Sobrescribir archivos<input name="overwrite_files" type="checkbox"></label>
     </div>
-    <div class="drawer-actions">
-      <button data-loading-text="Guardando...">Guardar FTP</button>
+    <div class="actions">
+      <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancelar</button>
+      <button type="submit" class="primary" data-loading-text="Guardando...">Guardar conexión</button>
     </div>
-  </form>
-  <form class="drawer-body js-loading-form" method="post" action="/settings/test/ftp">
-    <div class="drawer-actions">
-      <button class="secondary" data-loading-text="Probando...">Probar conexión FTP / FTPS</button>
-    </div>
-    <p class="muted">La prueba utiliza los datos guardados actualmente y no envía ningún pedido ni fichero.</p>
   </form>
 </dialog>
+{% endif %}
 {% endif %}
 
 {% if settings_fragment == "proxies" %}
@@ -1148,37 +1270,12 @@
     <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
   </div>
   <div class="drawer-body stack">
-    {# 1. Infrastructure / Gateway Status Card #}
-    <section class="drawer-card">
-      <div class="section-title-row">
-        <div>
-          <h4>Gateway de Anchi</h4>
-        </div>
-        <span class="badge status-doubtful">Sin tráfico</span>
-      </div>
-
-      <div class="settings-kpis">
-        <div>
-          <span>Estado de red</span>
-          <strong>{{ "Proxy activo" if active_proxy else "Conexión directa" }}</strong>
-        </div>
-        <div>
-          <span>Perfil activo</span>
-          <strong>{{ active_proxy.name if active_proxy else "Sin proxy activo" }}</strong>
-        </div>
-        <div>
-          <span>Destino de salida</span>
-          <strong>{{ (active_proxy.proxy_protocol|upper ~ " · " ~ active_proxy.proxy_host ~ ":" ~ active_proxy.proxy_port) if active_proxy else "Sin proxy" }}</strong>
-        </div>
-      </div>
-    </section>
-
-    {# 2. Section header with profile count & action #}
+    {# Proxy profiles are selected per BBDD connection, never globally. #}
     <section class="drawer-card">
       <div class="section-title-row">
         <div>
           <h4>Perfiles configurados ({{ proxy_connections|length }})</h4>
-          <p class="muted">Solo un perfil puede estar activo simultáneamente.</p>
+          <p class="muted">Selecciona el perfil que necesites al configurar cada conexión de BBDD.</p>
         </div>
         {% if can_edit_proxies %}
           <button type="button" class="secondary compact-button" onclick="document.getElementById('proxy-create-dialog').showModal();">
@@ -1188,7 +1285,7 @@
         {% endif %}
       </div>
 
-      {# 3. Empty state if no profiles #}
+      {# Empty state if no profiles #}
       {% if not proxy_connections %}
         <div class="proxy-empty-card">
           <p class="muted" style="margin:0 0 10px 0;">No hay perfiles de proxy configurados.</p>
@@ -1201,16 +1298,13 @@
         </div>
       {% endif %}
 
-      {# 4. List of profiles #}
+      {# List of profiles #}
       <div class="proxy-cards-list">
         {% for proxy in proxy_connections %}
           <article class="proxy-profile-card" id="proxy-card-{{ proxy.id }}">
             <div class="proxy-card-header">
               <div class="proxy-card-title-group">
                 <strong class="proxy-card-name">{{ proxy.name }}</strong>
-                <span class="badge {% if proxy.enabled %}status-confirmed{% else %}status-doubtful{% endif %}">
-                  {{ "Activo" if proxy.enabled else "Inactivo" }}
-                </span>
                 <span class="badge">{{ proxy.proxy_protocol|upper }}</span>
               </div>
               <span class="proxy-card-endpoint">{{ proxy.proxy_host }}:{{ proxy.proxy_port }}</span>
@@ -1242,16 +1336,6 @@
 
             <div class="proxy-card-actions">
               <div class="proxy-card-actions-left">
-                {% if can_edit_proxies %}
-                  <form method="post" action="/settings/proxies/{{ proxy.id }}/toggle" class="js-loading-form" style="margin:0;">
-                    {% if proxy.enabled %}
-                      <button type="submit" class="secondary compact-button" data-loading-text="Desactivando...">Desactivar</button>
-                    {% else %}
-                      <button type="submit" class="secondary compact-button" data-loading-text="Activando...">Activar</button>
-                    {% endif %}
-                  </form>
-                {% endif %}
-
                 <button class="secondary compact-button js-proxy-test" type="button" data-proxy-test-url="/settings/proxies/{{ proxy.id }}/test" data-loading-text="Comprobando...">Probar conexión</button>
 
                 {% if can_edit_proxies %}
@@ -1299,7 +1383,6 @@
                     </select>
                   </label>
                   <label class="span-2">Notas<textarea name="notes" rows="2">{{ proxy.notes or '' }}</textarea></label>
-                  <label class="checkbox-card span-2">Perfil habilitado (al activarse, desactivará los demás perfiles automáticamente)<input name="enabled" type="checkbox" {% if proxy.enabled %}checked{% endif %}></label>
                 </div>
                 <div class="drawer-actions">
                   <button type="submit" class="primary" data-loading-text="Guardando...">Guardar cambios</button>
@@ -1313,7 +1396,7 @@
        </div>
     </section>
 
-    {# 5. New Profile Modal Dialog (Initially Hidden) #}
+    {# New Profile Modal Dialog (Initially Hidden) #}
     {% if can_edit_proxies %}
       <dialog id="proxy-create-dialog" class="edit-dialog" onclick="if (event.target === this) this.close();">
         <form class="stack js-loading-form" method="post" action="/settings/proxies">
@@ -1343,7 +1426,6 @@
               </select>
             </label>
             <label class="span-2">Notas<textarea name="notes" rows="2" placeholder="Uso previsto o contacto técnico"></textarea></label>
-            <label class="checkbox-card span-2">Establecer como perfil activo al guardar (desactivará los demás perfiles)<input name="enabled" type="checkbox"></label>
           </div>
           <div class="actions">
             <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancelar</button>
@@ -1468,7 +1550,19 @@
                     <label>Usuario<input name="username" value="{{ connection.username }}"></label>
                     <label>Contraseña<input name="password" type="password" autocomplete="new-password" placeholder="{{ mask_secret(connection.password_encrypted) or 'Introduce una contraseña' }}"></label>
                     <label>SSL<select name="ssl_mode"><option value="require" {% if connection.ssl_mode == 'require' %}selected{% endif %}>Cifrado requerido</option><option value="verify-full" {% if connection.ssl_mode == 'verify-full' %}selected{% endif %}>Verificar certificado</option><option value="disable" {% if connection.ssl_mode == 'disable' %}selected{% endif %}>Desactivado</option></select></label>
-                    <label>Proxy de salida<select name="proxy_connection_id"><option value="">Sin proxy</option>{% for proxy in proxy_connections %}<option value="{{ proxy.id }}" {% if connection.proxy_connection_id == proxy.id %}selected{% endif %}>{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>{% endfor %}</select><small class="muted">El túnel de base de datos por proxy se habilitará en una fase posterior.</small></label>
+                    <label>Perfil proxy (opcional)
+                      <select name="proxy_connection_id" data-proxy-profile-select {% if not proxy_connections %}disabled{% endif %}>
+                        {% if proxy_connections %}
+                          <option value="">Sin proxy</option>
+                          {% for proxy in proxy_connections %}
+                            <option value="{{ proxy.id }}" {% if connection.proxy_connection_id == proxy.id %}selected{% endif %}>{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>
+                          {% endfor %}
+                        {% else %}
+                          <option value="">No hay perfiles configurados</option>
+                        {% endif %}
+                      </select>
+                      <small class="muted">Selecciona un perfil creado en Ajustes → Proxies. El túnel de base de datos se habilitará en una fase posterior.</small>
+                    </label>
                     <label class="checkbox-card span-2">Activar esta fuente (desactiva otras fuentes al guardar)<input name="enabled" type="checkbox" {% if connection.enabled %}checked{% endif %}></label>
                   </div>
                   <div class="drawer-actions">
@@ -1549,7 +1643,19 @@
       <label>Usuario<input name="username"></label>
       <label>Contraseña<input name="password" type="password" autocomplete="new-password"></label>
       <label>SSL<select name="ssl_mode"><option value="require" selected>Cifrado requerido</option><option value="verify-full">Verificar certificado</option><option value="disable">Desactivado</option></select></label>
-      <label>Proxy de salida<select name="proxy_connection_id"><option value="">Sin proxy</option>{% for proxy in proxy_connections %}<option value="{{ proxy.id }}">{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>{% endfor %}</select><small class="muted">El túnel de base de datos por proxy se habilitará en una fase posterior.</small></label>
+      <label>Perfil proxy (opcional)
+        <select name="proxy_connection_id" data-proxy-profile-select {% if not proxy_connections %}disabled{% endif %}>
+          {% if proxy_connections %}
+            <option value="">Sin proxy</option>
+            {% for proxy in proxy_connections %}
+              <option value="{{ proxy.id }}">{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>
+            {% endfor %}
+          {% else %}
+            <option value="">No hay perfiles configurados</option>
+          {% endif %}
+        </select>
+        <small class="muted">Selecciona un perfil creado en Ajustes → Proxies. El túnel de base de datos se habilitará en una fase posterior.</small>
+      </label>
       <label class="checkbox-card span-2">Activar tras guardar<input name="enabled" type="checkbox"></label>
     </div>
     <div class="actions">
@@ -2230,6 +2336,52 @@
       button.disabled = false;
     }
   });
+  document.addEventListener("click", async (event) => {
+    const testButton = event.target.closest("[data-ftp-test]");
+    const editToggle = event.target.closest("[data-ftp-edit-toggle]");
+    const editCancel = event.target.closest("[data-ftp-edit-cancel]");
+    if (editToggle || editCancel) {
+      event.preventDefault();
+      const card = (editToggle || editCancel).closest("[data-ftp-card]");
+      const editor = card?.querySelector("[data-ftp-edit-form]");
+      if (editor) editor.hidden = Boolean(editCancel);
+      return;
+    }
+    if (!testButton) return;
+    event.preventDefault();
+    if (testButton.disabled) return;
+    const card = testButton.closest("[data-ftp-card]");
+    const status = card?.querySelector("[data-ftp-status]");
+    const originalText = testButton.textContent;
+    testButton.textContent = testButton.dataset.loadingText || "Probando...";
+    testButton.disabled = true;
+    if (status) {
+      status.hidden = false;
+      status.className = "settings-status-note external-database-action-status is-pending";
+      status.textContent = "Comprobando la conexión FTP…";
+    }
+    try {
+      const response = await fetch(testButton.dataset.ftpTestUrl, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {"Accept": "application/json", "X-Requested-With": "fetch"},
+      });
+      const payload = await response.json().catch(() => ({ok: false, message: `La prueba no devolvió una respuesta válida (HTTP ${response.status}).`}));
+      if (status) {
+        status.className = `settings-status-note external-database-action-status ${payload.ok ? "is-success" : "is-error"}`;
+        status.textContent = payload.message || (payload.ok ? "Conexión FTP validada correctamente." : "No se pudo comprobar la conexión FTP.");
+      }
+    } catch (_error) {
+      if (status) {
+        status.className = "settings-status-note external-database-action-status is-error";
+        status.textContent = "No se pudo completar la prueba. Revisa la conexión e inténtalo de nuevo.";
+      }
+    } finally {
+      testButton.textContent = originalText;
+      testButton.disabled = false;
+    }
+  });
+
   function externalStatus(card, message, kind = "pending") {
     const status = card?.querySelector("[data-external-status]");
     if (!status) return;
