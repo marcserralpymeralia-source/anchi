@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% from "components/icons.html" import icon_archive, icon_archive_restore, icon_close, icon_dashboard, icon_edit, icon_filter, icon_list, icon_plus, icon_search, icon_sliders %}
 {% set archived_view = filters.archived %}
+{% set cards_view = filters.view == "cards" and not archived_view %}
 {% set title = "Archivos" if archived_view else "Pedidos" %}
-{% set orders_reset_url = "/orders?archived=true" if archived_view else "/orders" %}
+{% set orders_reset_url = "/orders?view=list&archived=true" if archived_view else ("/orders?view=cards" if cards_view else "/orders?view=list") %}
 {% block head_extra %}<link rel="stylesheet" href="{{ asset_url('database-compact.css') }}">{% endblock %}
 {% block content %}
 
@@ -49,11 +50,11 @@
         {# Left section: View Switcher #}
         {% if not archived_view %}
           <nav class="dock-segment-group" aria-label="Cambiar vista">
-            <a class="dock-segment-btn" href="{{ view_cards_url }}" title="Vista de tarjetas">
+            <a class="dock-segment-btn {% if cards_view %}is-active{% endif %}" href="{{ view_cards_url }}" {% if cards_view %}aria-current="page"{% endif %} title="Vista de tarjetas">
               {{ icon_dashboard(14) }}
               <span>Tarjetas</span>
             </a>
-            <a class="dock-segment-btn is-active" href="{{ view_list_url }}" aria-current="page" title="Vista de listado">
+            <a class="dock-segment-btn {% if not cards_view %}is-active{% endif %}" href="{{ view_list_url }}" {% if not cards_view %}aria-current="page"{% endif %} title="Vista de listado">
               {{ icon_list(14) }}
               <span>Lista</span>
             </a>
@@ -64,7 +65,7 @@
         {# Main interactive filter form #}
         <form class="dock-main-form" method="get" action="/orders" id="orders-main-filter-form">
           <input type="hidden" name="page" value="1">
-          <input type="hidden" name="view" value="list">
+          <input type="hidden" name="view" value="{{ filters.view }}">
           <input type="hidden" name="mode" value="{{ filters.mode or 'all' }}">
           <input type="hidden" name="sort" value="{{ filters.sort or 'date_desc' }}">
           {% if archived_view %}<input type="hidden" name="archived" value="true">{% endif %}
@@ -104,7 +105,7 @@
           </summary>
           <div class="dock-popover-flyout">
             <form class="dock-flyout-form" method="get" action="/orders">
-              <input type="hidden" name="view" value="list">
+              <input type="hidden" name="view" value="{{ filters.view }}">
               <input type="hidden" name="page" value="1">
               <input type="hidden" name="mode" value="{{ filters.mode or 'all' }}">
               <input type="hidden" name="search" value="{{ filters.search or '' }}">
@@ -225,12 +226,12 @@
       {# Status Tabs Strip #}
       <div class="dock-active-strip">
         <div class="workbench-tabs">
-          <a class="workbench-tab {% if not filters.status or filters.status == 'all' %}active{% endif %}" href="/orders?view=list{% if filters.search %}&search={{ filters.search|urlencode }}{% endif %}{% if filters.customer_id %}&customer_id={{ filters.customer_id }}{% endif %}{% if filters.date_range %}&date_range={{ filters.date_range }}{% endif %}{% if filters.date_from %}&date_from={{ filters.date_from }}{% endif %}{% if filters.date_to %}&date_to={{ filters.date_to }}{% endif %}{% if archived_view %}&archived=true{% endif %}">
+          <a class="workbench-tab {% if not filters.status or filters.status == 'all' %}active{% endif %}" href="{{ status_urls['all'] }}">
             <span>Todos los estados</span><strong>{{ status_counts['all'] if (status_counts and 'all' in status_counts) else pagination.total_items }}</strong>
           </a>
           {% for st in statuses %}
             {% if st %}
-              <a class="workbench-tab {% if filters.status == st %}active{% endif %}" href="/orders?view=list&status={{ st }}{% if filters.search %}&search={{ filters.search|urlencode }}{% endif %}{% if filters.customer_id %}&customer_id={{ filters.customer_id }}{% endif %}{% if filters.date_range %}&date_range={{ filters.date_range }}{% endif %}{% if filters.date_from %}&date_from={{ filters.date_from }}{% endif %}{% if filters.date_to %}&date_to={{ filters.date_to }}{% endif %}{% if archived_view %}&archived=true{% endif %}">
+              <a class="workbench-tab {% if filters.status == st %}active{% endif %}" href="{{ status_urls[st] }}">
                 <span>{{ st|status_label }}</span><strong>{{ status_counts[st] if (status_counts and st in status_counts) else 0 }}</strong>
               </a>
             {% endif %}
@@ -238,11 +239,14 @@
         </div>
 
         {% if filters.customer_or_sender or filters.search or filters.date_range or filters.customer_id or filters.score_min or filters.score_max or filters.origin or filters.email_type or (filters.status and filters.status != 'all') or filters.date_from or filters.date_to %}
-          <a href="/orders?view=list{% if archived_view %}&archived=true{% endif %}" class="dock-clear-all-btn" style="margin-left:auto;">Restablecer filtros</a>
+          <a href="{{ orders_reset_url }}" class="dock-clear-all-btn" style="margin-left:auto;">Restablecer filtros</a>
         {% endif %}
       </div>
     </div>
   </div>
+  {% if cards_view %}
+    {% include "orders/_cards.html" %}
+  {% else %}
   <div class="database-table-wrap">
     <table class="data-table review-table database-table database-table-orders database-table-compact" data-resizable-table data-table-key="orders" data-min-table-width="1648">
       <colgroup>
@@ -321,8 +325,14 @@
       </tbody>
     </table>
   </div>
+  {% endif %}
   {% include "components/pagination.html" %}
 </section>
+
+{% if cards_view %}
+  {% include "components/workbench_detail_modal.html" %}
+  <script src="{{ asset_url('js/workbench-dashboard.js') }}" defer></script>
+{% endif %}
 
 <script>
 function applySort(sortVal) {

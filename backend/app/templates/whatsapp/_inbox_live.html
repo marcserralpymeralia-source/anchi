@@ -1,0 +1,7 @@
+{% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_check, icon_check_check, icon_clock, icon_alert_triangle, icon_user, icon_download, icon_eye, icon_image, icon_file_text, icon_play, icon_refresh %}
+<div id="whatsapp-live-update" data-live-revision="{{ live_revision }}">
+  {% include "whatsapp/_contacts_live.html" %}
+  <div id="whatsapp-chat-live-content">
+    {% include "whatsapp/_chat_live.html" %}
+  </div>
+</div>

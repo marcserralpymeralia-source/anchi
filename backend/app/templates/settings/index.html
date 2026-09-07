@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_search , icon_close %}
+{% from "components/icons.html" import icon_search, icon_close, icon_plus, icon_trash, icon_check, icon_edit, icon_building, icon_refresh, icon_eye, icon_database, icon_shield %}
 {% set title = "Configuración" %}
 {% block head_extra %}<script src="{{ asset_url('js/settings-email-backfill.js') }}" defer></script>{% endblock %}
 {% macro state_label(state) -%}
@@ -150,7 +150,7 @@
             <h3>{{ module.label }}</h3>
             <span class="module-state {{ module.state }}">{{ state_label(module.state) }}</span>
           </div>
-          {% if module.key in ["general", "identity", "ai", "scoring", "decision", "export", "ftp"] or (module.key == "advanced" and user.role.name == "Superadmin") %}
+          {% if module.key in ["general", "identity", "ai", "scoring", "decision", "export", "ftp", "proxies", "data-sources"] or (module.key == "advanced" and user.role.name == "Superadmin") %}
             <button type="button" class="secondary compact-button" data-open-settings="{{ module.key }}">Configurar</button>
           {% elif module.key == "advanced" %}
             <span class="muted">Solo Superadmin</span>
@@ -167,6 +167,8 @@
             <a class="button secondary compact-button" href="/users">Abrir</a>
           {% elif module.key == "alerts" %}
             <a class="button secondary compact-button" href="/alerts">Ver</a>
+          {% elif module.key == "data-sources" %}
+            <span class="muted">Clientes y productos externos en modo lectura</span>
           {% elif module.key == "advanced" and user.role.name != "Superadmin" %}
             <span class="muted">Disponible para Superadmin</span>
           {% endif %}
@@ -600,7 +602,7 @@
           </div>
           <p class="muted">Por defecto solo se importarán correos nuevos desde ahora. La primera sincronización se confirma antes de importar y nunca trae histórico ilimitado.</p>
         </details>
-        <p class="muted">En Vercel la sincronización automática queda guardada, pero la ejecución debe venir de un cron o servicio externo.</p>
+        <p class="muted">La sincronización automática se ejecuta en Vercel cada cinco minutos y respeta la frecuencia configurada para esta cuenta.</p>
         <div class="drawer-actions email-sync-actions">
           <button data-loading-text="Guardando...">Guardar configuración</button>
           <button class="secondary js-loading-form" formaction="/settings/email/initial-sync/preview" formmethod="post" data-loading-text="Preparando..." data-confirm="Previsualizar la sincronización inicial con el historial elegido?">Previsualizar importación inicial</button>
@@ -877,8 +879,8 @@
           </div>
         </div>
         <div class="form-grid">
-          <input type="hidden" name="sample_text" value="Cliente de prueba solicita 10 unidades del articulo de prueba.">
-          <p class="muted span-2">El flujo usa un texto de ejemplo interno para probar los modelos seleccionados de clasificación, extracción y validación. No confirma ni exporta ningún pedido.</p>
+          <input type="hidden" name="sample_text" value="Cliente Valid SL (código C001) solicita 10 unidades de Caja Kraft 30 (referencia KRAFT-30-BOX) y 5 paquetes de Bolsa eco (referencia BOLSA-ECO-10).">
+          <p class="muted span-2">El flujo usa una muestra demo coherente con clientes y productos sembrados para probar los modelos seleccionados de clasificación, extracción y validación. No confirma ni exporta ningún pedido.</p>
         </div>
         <div class="settings-status-note agent-flow-test-status {% if not llm.last_test_message %}is-hidden{% endif %}" data-agent-flow-test-status role="status" aria-live="polite">
           <strong>Resultado de la última prueba</strong>
@@ -1095,45 +1097,574 @@
 {% endif %}
 
 {% if settings_fragment == "ftp" %}
-<dialog id="settings-ftp" class="settings-drawer">
+<dialog id="settings-ftp" class="settings-drawer settings-drawer-wide">
   <div class="drawer-head">
     <div>
       <h3>FTP / FTPS</h3>
-      <p class="muted">Destino de exportación y credenciales.</p>
+      <p class="muted">Perfiles de destinos de exportación y credenciales.</p>
     </div>
     <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
   </div>
-  <form class="drawer-body stack js-loading-form" method="post" action="/settings/ftp">
+  <div class="drawer-body stack external-databases-drawer">
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Conexiones configuradas ({{ ftp_connections|length }})</h4>
+          <p class="muted">Las credenciales se cifran y cada destino puede usar un perfil proxy distinto.</p>
+        </div>
+        {% if can_edit_ftp %}
+          <button type="button" class="secondary compact-button" onclick="document.getElementById('ftp-create-dialog').showModal();">
+            {{ icon_plus(13) }}
+            <span>Añadir conexión</span>
+          </button>
+        {% endif %}
+      </div>
+
+      {% if not ftp_connections %}
+        <div class="external-database-empty proxy-empty-card">
+          <p class="muted" style="margin:0 0 10px 0;">No hay conexiones FTP configuradas.</p>
+          {% if can_edit_ftp %}
+            <button type="button" class="secondary compact-button" onclick="document.getElementById('ftp-create-dialog').showModal();">
+              {{ icon_plus(13) }}
+              <span>Crear primera conexión</span>
+            </button>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      <div class="external-database-list proxy-cards-list">
+        {% for connection in ftp_connections %}
+          <article class="external-database-card proxy-profile-card" id="ftp-card-{{ connection.id }}" data-ftp-card>
+            <div class="proxy-card-header">
+              <div class="proxy-card-title-group">
+                <strong class="proxy-card-name">{{ connection.name }}</strong>
+                <span class="badge">{{ {'ftp': 'FTP', 'ftps_explicit': 'FTPS explícito', 'ftps_implicit': 'FTPS implícito'}.get(connection.connection_type, connection.connection_type|upper) }}</span>
+                {% if connection.last_test_ok %}
+                  <span class="badge status-confirmed">Conectada</span>
+                {% elif connection.last_test_ok is false %}
+                  <span class="badge status-doubtful">Con avisos</span>
+                {% else %}
+                  <span class="badge status-doubtful">Sin probar</span>
+                {% endif %}
+              </div>
+              <span class="proxy-card-endpoint"><code>{{ connection.host }}:{{ connection.port }}</code></span>
+            </div>
+
+            <div class="proxy-card-body">
+              <div class="proxy-card-meta-row">
+                <span class="muted">Usuario: <strong style="color:var(--text, #0f172a);">{{ connection.username or '—' }}</strong></span>
+                <span class="muted">·</span>
+                <span class="muted">Destino: <strong style="color:var(--text, #0f172a);">{{ connection.destination_path or '/' }}</strong></span>
+                <span class="muted">·</span>
+                <span class="muted">Proxy: <strong style="color:var(--text, #0f172a);">{{ 'Configurado' if connection.proxy_connection_id else 'Sin proxy' }}</strong></span>
+              </div>
+              {% if connection.last_test_message %}
+                <p class="settings-status-note external-database-last-status {% if connection.last_test_ok %}is-success{% else %}is-error{% endif %}">{{ connection.last_test_message }}</p>
+              {% endif %}
+            </div>
+
+            <div class="proxy-card-actions">
+              <div class="proxy-card-actions-left">
+                {% if can_edit_ftp %}
+                  <button type="button" class="secondary compact-button" data-ftp-test data-ftp-test-url="/settings/ftp/{{ connection.id }}/test" data-loading-text="Probando...">{{ icon_refresh(14) }} Probar conexión</button>
+                  <button type="button" class="secondary compact-button" data-ftp-edit-toggle>Editar</button>
+                  <form method="post" action="/settings/ftp/{{ connection.id }}/delete" class="js-loading-form" style="margin:0;" onsubmit="return confirm('¿Eliminar esta conexión FTP?');">
+                    <button type="submit" class="secondary compact-button" data-loading-text="Eliminando...">Eliminar</button>
+                  </form>
+                {% endif %}
+              </div>
+            </div>
+
+            <p class="settings-status-note external-database-action-status" data-ftp-status role="status" aria-live="polite" hidden></p>
+
+            {% if can_edit_ftp %}
+              <div class="proxy-edit-container external-database-edit-container" data-ftp-edit-form hidden>
+                <div class="proxy-edit-head-row">
+                  <strong>Editar conexión: {{ connection.name }}</strong>
+                  <button type="button" class="secondary compact-button" data-ftp-edit-cancel>Cerrar</button>
+                </div>
+                <form class="stack js-loading-form" method="post" action="/settings/ftp">
+                  <input type="hidden" name="id" value="{{ connection.id }}">
+                  <div class="form-grid">
+                    <label>Nombre de la conexión<input name="name" value="{{ connection.name }}" required></label>
+                    <label>Tipo<select name="connection_type"><option value="ftp" {% if connection.connection_type == 'ftp' %}selected{% endif %}>FTP</option><option value="ftps_explicit" {% if connection.connection_type == 'ftps_explicit' %}selected{% endif %}>FTPS explícito</option><option value="ftps_implicit" {% if connection.connection_type == 'ftps_implicit' %}selected{% endif %}>FTPS implícito</option></select></label>
+                    <label>Host o IP<input name="host" value="{{ connection.host }}" required></label>
+                    <label>Puerto<input name="port" type="number" min="1" max="65535" value="{{ connection.port }}" required></label>
+                    <label>Usuario<input name="username" value="{{ connection.username or '' }}" required></label>
+                    <label>Contraseña<input name="password" type="password" autocomplete="new-password" placeholder="{{ mask_secret(connection.password_encrypted) or 'Introduce una contraseña' }}"></label>
+                    <label>Clave privada (opcional)<input name="private_key" type="password" autocomplete="new-password" placeholder="{{ mask_secret(connection.private_key_encrypted) or 'No configurada' }}"></label>
+                    <label>Ruta destino<input name="destination_path" value="{{ connection.destination_path or '/' }}" required></label>
+                    <label>Reintentos<input name="retries" type="number" min="0" max="20" value="{{ connection.retries }}"></label>
+                    <label>Timeout (segundos)<input name="timeout_seconds" type="number" min="1" max="3600" value="{{ connection.timeout_seconds }}"></label>
+                    <label>Perfil proxy (opcional)
+                      <select name="proxy_connection_id" {% if not proxy_connections %}disabled{% endif %}>
+                        <option value="">Sin proxy</option>
+                        {% for proxy in proxy_connections %}<option value="{{ proxy.id }}" {% if connection.proxy_connection_id == proxy.id %}selected{% endif %}>{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>{% endfor %}
+                      </select>
+                      <small class="muted">Se guarda para este destino. El túnel FTP se activará cuando esté disponible.</small>
+                    </label>
+                    <label class="checkbox-card">Modo pasivo<input name="passive_mode" type="checkbox" {% if connection.passive_mode %}checked{% endif %}></label>
+                    <label class="checkbox-card">Sobrescribir archivos<input name="overwrite_files" type="checkbox" {% if connection.overwrite_files %}checked{% endif %}></label>
+                  </div>
+                  <div class="drawer-actions">
+                    <button type="submit" class="primary" data-loading-text="Guardando...">Guardar conexión</button>
+                    <button type="button" class="secondary compact-button" data-ftp-edit-cancel>Cancelar</button>
+                  </div>
+                </form>
+              </div>
+            {% endif %}
+          </article>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+</dialog>
+
+{% if can_edit_ftp %}
+<dialog id="ftp-create-dialog" class="edit-dialog" onclick="if (event.target === this) this.close();">
+  <form class="stack js-loading-form" method="post" action="/settings/ftp">
+    <div class="dialog-header">
+      <div>
+        <h2>Nueva conexión FTP</h2>
+        <p class="muted" style="margin:2px 0 0; font-size:12.5px;">Destino cifrado para exportaciones.</p>
+      </div>
+      <button type="button" class="secondary compact-button modal-close-btn" onclick="this.closest('dialog').close()" title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
+    </div>
     <div class="form-grid">
-      <label>Tipo
-        <select name="connection_type">
-          <option value="ftp" {% if ftp.connection_type == "ftp" %}selected{% endif %}>FTP</option>
-          <option value="ftps_explicit" {% if ftp.connection_type == "ftps_explicit" %}selected{% endif %}>FTPS explícito</option>
-          <option value="ftps_implicit" {% if ftp.connection_type == "ftps_implicit" %}selected{% endif %}>FTPS implícito</option>
+      <label>Nombre de la conexión<input name="name" placeholder="FTP de la empresa" required></label>
+      <label>Tipo<select name="connection_type"><option value="ftp">FTP</option><option value="ftps_explicit" selected>FTPS explícito</option><option value="ftps_implicit">FTPS implícito</option></select></label>
+      <label>Host o IP<input name="host" placeholder="ftp.empresa.com" required></label>
+      <label>Puerto<input name="port" type="number" value="21" min="1" max="65535" required></label>
+      <label>Usuario<input name="username" required></label>
+      <label>Contraseña<input name="password" type="password" autocomplete="new-password" required></label>
+      <label>Clave privada (opcional)<input name="private_key" type="password" autocomplete="new-password"></label>
+      <label>Ruta destino<input name="destination_path" value="/" required></label>
+      <label>Reintentos<input name="retries" type="number" min="0" max="20" value="2"></label>
+      <label>Timeout (segundos)<input name="timeout_seconds" type="number" min="1" max="3600" value="30"></label>
+      <label>Perfil proxy (opcional)
+        <select name="proxy_connection_id" {% if not proxy_connections %}disabled{% endif %}>
+          <option value="">Sin proxy</option>
+          {% for proxy in proxy_connections %}<option value="{{ proxy.id }}">{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>{% endfor %}
         </select>
+        <small class="muted">Se guarda para este destino. El túnel FTP se activará cuando esté disponible.</small>
       </label>
-      <label>Host<input name="host" value="{{ ftp.host or '' }}"></label>
-      <label>Puerto<input name="port" type="number" value="{{ ftp.port }}"></label>
-      <label>Usuario<input name="username" value="{{ ftp.username or '' }}"></label>
-      <label>Password<input name="password_encrypted" type="password" placeholder="{{ mask_secret(ftp.password_encrypted) }}"></label>
-      <label>Clave privada<input name="private_key_encrypted" type="password" placeholder="{{ mask_secret(ftp.private_key_encrypted) }}"></label>
-      <label>Ruta destino<input name="destination_path" value="{{ ftp.destination_path }}"></label>
-      <label>Reintentos<input name="retries" type="number" value="{{ ftp.retries }}"></label>
-      <label>Timeout<input name="timeout_seconds" type="number" value="{{ ftp.timeout_seconds }}"></label>
-      <label>Pasivo<input name="passive_mode" type="checkbox" {% if ftp.passive_mode %}checked{% endif %}></label>
-      <label>Sobrescribir<input name="overwrite_files" type="checkbox" {% if ftp.overwrite_files %}checked{% endif %}></label>
+      <label class="checkbox-card">Modo pasivo<input name="passive_mode" type="checkbox" checked></label>
+      <label class="checkbox-card">Sobrescribir archivos<input name="overwrite_files" type="checkbox"></label>
     </div>
-    <div class="drawer-actions">
-      <button data-loading-text="Guardando...">Guardar FTP</button>
+    <div class="actions">
+      <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancelar</button>
+      <button type="submit" class="primary" data-loading-text="Guardando...">Guardar conexión</button>
     </div>
-  </form>
-  <form class="drawer-body js-loading-form" method="post" action="/settings/test/ftp">
-    <div class="drawer-actions">
-      <button class="secondary" data-loading-text="Probando...">Probar conexión FTP / FTPS</button>
-    </div>
-    <p class="muted">La prueba utiliza los datos guardados actualmente y no envía ningún pedido ni fichero.</p>
   </form>
 </dialog>
+{% endif %}
+{% endif %}
+
+{% if settings_fragment == "proxies" %}
+<dialog id="settings-proxies" class="settings-drawer settings-drawer-wide">
+  <div class="drawer-head">
+    <div>
+      <h3>Proxies</h3>
+      <p class="muted">Perfiles de acceso para el futuro gateway de red.</p>
+    </div>
+    <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
+  </div>
+  <div class="drawer-body stack">
+    {# Proxy profiles are selected per BBDD connection, never globally. #}
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Perfiles configurados ({{ proxy_connections|length }})</h4>
+          <p class="muted">Selecciona el perfil que necesites al configurar cada conexión de BBDD.</p>
+        </div>
+        {% if can_edit_proxies %}
+          <button type="button" class="secondary compact-button" onclick="document.getElementById('proxy-create-dialog').showModal();">
+            {{ icon_plus(13) }}
+            <span>Añadir perfil</span>
+          </button>
+        {% endif %}
+      </div>
+
+      {# Empty state if no profiles #}
+      {% if not proxy_connections %}
+        <div class="proxy-empty-card">
+          <p class="muted" style="margin:0 0 10px 0;">No hay perfiles de proxy configurados.</p>
+          {% if can_edit_proxies %}
+            <button type="button" class="secondary compact-button" onclick="document.getElementById('proxy-create-dialog').showModal();">
+              {{ icon_plus(13) }}
+              <span>Crear primer perfil de proxy</span>
+            </button>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      {# List of profiles #}
+      <div class="proxy-cards-list">
+        {% for proxy in proxy_connections %}
+          <article class="proxy-profile-card" id="proxy-card-{{ proxy.id }}">
+            <div class="proxy-card-header">
+              <div class="proxy-card-title-group">
+                <strong class="proxy-card-name">{{ proxy.name }}</strong>
+                <span class="badge">{{ proxy.proxy_protocol|upper }}</span>
+              </div>
+              <span class="proxy-card-endpoint">{{ proxy.proxy_host }}:{{ proxy.proxy_port }}</span>
+            </div>
+
+            <div class="proxy-card-body">
+              <div class="proxy-card-meta-row">
+                <span class="muted">Usuario: <strong style="color:var(--text, #0f172a);">{{ proxy.username or 'Sin autenticación' }}</strong></span>
+                <span class="muted">·</span>
+                <span class="muted">Seguridad: <strong style="color:var(--text, #0f172a);">{{ "TLS Verificado" if proxy.tls_mode == "verify" else ("TLS Obligatorio" if proxy.tls_mode == "required" else "Sin TLS") }}</strong></span>
+                {% if proxy.notes %}
+                  <span class="muted">·</span>
+                  <span class="muted">Notas: <em>{{ proxy.notes }}</em></span>
+                {% endif %}
+              </div>
+
+              {% if proxy.last_test_at %}
+                <div class="proxy-card-health-row">
+                  <span class="muted">Última comprobación: {{ proxy.last_test_at.strftime("%d/%m/%Y %H:%M") }}</span>
+                  <span class="badge {% if proxy.last_test_ok %}status-confirmed{% else %}status-doubtful{% endif %}">
+                    {{ "Accesible" if proxy.last_test_ok else "Error" }}
+                  </span>
+                  {% if proxy.last_test_message %}
+                    <small class="muted">{{ proxy.last_test_message }}</small>
+                  {% endif %}
+                </div>
+              {% endif %}
+            </div>
+
+            <div class="proxy-card-actions">
+              <div class="proxy-card-actions-left">
+                <button class="secondary compact-button js-proxy-test" type="button" data-proxy-test-url="/settings/proxies/{{ proxy.id }}/test" data-loading-text="Comprobando...">Probar conexión</button>
+
+                {% if can_edit_proxies %}
+                  <button type="button" class="secondary compact-button" onclick="const f = document.getElementById('proxy-edit-{{ proxy.id }}'); f.hidden = !f.hidden;">Editar</button>
+                {% endif %}
+              </div>
+
+              {% if can_edit_proxies %}
+                <div class="proxy-card-actions-right">
+                  <form method="post" action="/settings/proxies/{{ proxy.id }}/delete" class="js-loading-form" data-confirm="¿Seguro que deseas eliminar el perfil '{{ proxy.name }}'?" style="margin:0;">
+                    <button type="submit" class="secondary compact-button danger" data-loading-text="Eliminando...">Eliminar</button>
+                  </form>
+                </div>
+              {% endif %}
+            </div>
+
+            <p class="settings-status-note proxy-test-status" data-proxy-test-status role="status" aria-live="polite" hidden></p>
+
+          {% if can_edit_proxies %}
+            <div id="proxy-edit-{{ proxy.id }}" class="proxy-edit-container" hidden>
+              <div class="proxy-edit-head-row">
+                <strong>Editar datos del perfil: {{ proxy.name }}</strong>
+                <button type="button" class="secondary compact-button" onclick="document.getElementById('proxy-edit-{{ proxy.id }}').hidden = true;">Cerrar</button>
+              </div>
+              <form class="stack js-loading-form" method="post" action="/settings/proxies">
+                <input type="hidden" name="id" value="{{ proxy.id }}">
+                <div class="form-grid">
+                  <label>Nombre del perfil<input name="name" value="{{ proxy.name }}" required></label>
+                  <label>Tipo de proxy
+                    <select name="proxy_protocol">
+                      {% for value, label in [("http", "HTTP"), ("https", "HTTPS"), ("socks5", "SOCKS5"), ("other", "Otro")] %}
+                        <option value="{{ value }}" {% if proxy.proxy_protocol == value %}selected{% endif %}>{{ label }}</option>
+                      {% endfor %}
+                    </select>
+                  </label>
+                  <label>Host o IP del proxy<input name="proxy_host" value="{{ proxy.proxy_host }}" required></label>
+                  <label>Puerto del proxy<input name="proxy_port" type="number" min="1" max="65535" value="{{ proxy.proxy_port }}" required></label>
+                  <label>Usuario del proxy<input name="username" value="{{ proxy.username or '' }}" placeholder="Opcional"></label>
+                  <label>Contraseña<input name="password" type="password" placeholder="{{ mask_secret(proxy.password_encrypted) or 'No guardada' }}" autocomplete="new-password"></label>
+                  <label>Protección TLS del proxy
+                    <select name="tls_mode">
+                      <option value="verify" {% if proxy.tls_mode == "verify" %}selected{% endif %}>Verificar certificado</option>
+                      <option value="required" {% if proxy.tls_mode == "required" %}selected{% endif %}>TLS obligatorio</option>
+                      <option value="disabled" {% if proxy.tls_mode == "disabled" %}selected{% endif %}>Desactivado (solo pruebas)</option>
+                    </select>
+                  </label>
+                  <label class="span-2">Notas<textarea name="notes" rows="2">{{ proxy.notes or '' }}</textarea></label>
+                </div>
+                <div class="drawer-actions">
+                  <button type="submit" class="primary" data-loading-text="Guardando...">Guardar cambios</button>
+                  <button type="button" class="secondary compact-button" onclick="document.getElementById('proxy-edit-{{ proxy.id }}').hidden = true;">Cancelar</button>
+                </div>
+              </form>
+            </div>
+          {% endif %}
+        </article>
+      {% endfor %}
+       </div>
+    </section>
+
+    {# New Profile Modal Dialog (Initially Hidden) #}
+    {% if can_edit_proxies %}
+      <dialog id="proxy-create-dialog" class="edit-dialog" onclick="if (event.target === this) this.close();">
+        <form class="stack js-loading-form" method="post" action="/settings/proxies">
+          <div class="dialog-header">
+            <h2>Nuevo perfil de proxy</h2>
+            <button type="button" class="secondary compact-button modal-close-btn" onclick="this.closest('dialog').close()" title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
+          </div>
+          <div class="form-grid">
+            <label>Nombre del perfil<input name="name" placeholder="Ej: Proxy Empresa Europa" required></label>
+            <label>Tipo de proxy
+              <select name="proxy_protocol">
+                <option value="http">HTTP</option>
+                <option value="https" selected>HTTPS</option>
+                <option value="socks5">SOCKS5</option>
+                <option value="other">Otro</option>
+              </select>
+            </label>
+            <label>Host o IP del proxy<input name="proxy_host" placeholder="192.0.2.10 o proxy.dominio.com" required></label>
+            <label>Puerto del proxy<input name="proxy_port" type="number" min="1" max="65535" value="8787" required></label>
+            <label>Usuario del proxy<input name="username" placeholder="Opcional"></label>
+            <label>Contraseña<input name="password" type="password" autocomplete="new-password" placeholder="Opcional"></label>
+            <label>Protección TLS del proxy
+              <select name="tls_mode">
+                <option value="verify">Verificar certificado</option>
+                <option value="required">TLS obligatorio</option>
+                <option value="disabled">Desactivado (solo pruebas)</option>
+              </select>
+            </label>
+            <label class="span-2">Notas<textarea name="notes" rows="2" placeholder="Uso previsto o contacto técnico"></textarea></label>
+          </div>
+          <div class="actions">
+            <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancelar</button>
+            <button type="submit" class="primary" data-loading-text="Guardando...">Guardar perfil</button>
+          </div>
+        </form>
+      </dialog>
+    {% endif %}
+  </div>
+</dialog>
+{% endif %}
+
+{% if settings_fragment == "data-sources" %}
+<dialog id="settings-data-sources" class="settings-drawer settings-drawer-wide">
+  <div class="drawer-head">
+    <div>
+      <h3>BBDD</h3>
+      <p class="muted">Conecta una base de datos externa en modo estrictamente lectura y decide qué tablas alimentan clientes y productos.</p>
+    </div>
+    <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
+  </div>
+  <div class="drawer-body stack external-databases-drawer">
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Conexiones configuradas ({{ external_database_connections|length }})</h4>
+          <p class="muted">Las credenciales se cifran y nunca se muestran ni se escriben en los logs.</p>
+        </div>
+        {% if can_edit_external_databases %}
+          <button type="button" class="secondary compact-button" onclick="document.getElementById('external-database-create-dialog').showModal();">
+            {{ icon_plus(13) }}
+            <span>Añadir conexión</span>
+          </button>
+        {% endif %}
+      </div>
+
+      {% if not external_database_connections %}
+        <div class="external-database-empty proxy-empty-card">
+          <p class="muted" style="margin:0 0 10px 0;">No hay bases de datos externas conectadas.</p>
+          {% if can_edit_external_databases %}
+            <button type="button" class="secondary compact-button" onclick="document.getElementById('external-database-create-dialog').showModal();">
+              {{ icon_plus(13) }}
+              <span>Crear primera conexión</span>
+            </button>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      <div class="external-database-list proxy-cards-list">
+        {% for connection in external_database_connections %}
+          <article class="external-database-card proxy-profile-card {% if connection.enabled %}is-enabled-card{% endif %}" id="connection-card-{{ connection.id }}" data-external-database-card data-connection-id="{{ connection.id }}" data-external-test-ok="{{ 'true' if connection.last_test_ok else 'false' }}" data-external-schema='{{ (external_database_schemas.get(connection.id, {}) if external_database_schemas is defined else {}) | tojson }}' data-external-mappings='{{ (external_database_mappings.get(connection.id, []) if external_database_mappings is defined else []) | tojson }}'>
+            <div class="proxy-card-header">
+              <div class="proxy-card-title-group">
+                <strong class="proxy-card-name">{{ connection.name }}</strong>
+                <span class="badge {% if connection.enabled %}status-confirmed{% else %}status-doubtful{% endif %}">
+                  {{ "Activa" if connection.enabled else "Inactiva" }}
+                </span>
+                <span class="badge {% if connection.status in ['connected', 'scanned'] %}status-confirmed{% elif connection.status == 'error' %}status-doubtful{% endif %}">
+                  {{ {'not_tested': 'Sin probar', 'connected': 'Conectada', 'scanned': 'Esquema leído', 'error': 'Con avisos'}.get(connection.status, connection.status) }}
+                </span>
+                <span class="badge">{{ connection.database_type|upper }}</span>
+              </div>
+              <span class="proxy-card-endpoint"><code>{{ connection.host }}{% if connection.port %}:{{ connection.port }}{% endif %}</code></span>
+            </div>
+
+            <div class="proxy-card-body">
+              <div class="proxy-card-meta-row">
+                <span class="muted">Base: <strong style="color:var(--text, #0f172a);">{{ connection.database_name }}</strong></span>
+                <span class="muted">·</span>
+                <span class="muted">Esquema: <strong style="color:var(--text, #0f172a);">{{ connection.schema_name or 'default' }}</strong></span>
+                <span class="muted">·</span>
+                <span class="muted">Usuario: <strong style="color:var(--text, #0f172a);">{{ connection.username or '—' }}</strong></span>
+                <span class="muted">·</span>
+                <span class="muted">SSL: <strong style="color:var(--text, #0f172a);">{{ 'Requerido' if connection.ssl_mode == 'require' else ('Verificado' if connection.ssl_mode == 'verify-full' else 'Desactivado') }}</strong></span>
+                {% if connection.proxy_connection_id %}
+                  <span class="muted">·</span>
+                  <span class="muted">Proxy: <strong style="color:var(--text, #0f172a);">Configurado</strong></span>
+                {% endif %}
+              </div>
+
+              {% if connection.last_test_message %}
+                <p class="settings-status-note external-database-last-status {% if connection.last_test_ok %}is-success{% else %}is-error{% endif %}">
+                  {{ connection.last_test_message }}
+                </p>
+              {% endif %}
+            </div>
+
+            <div class="proxy-card-actions">
+              <div class="proxy-card-actions-left">
+                {% if can_edit_external_databases %}
+                  <form method="post" action="/settings/data-sources/{{ connection.id }}/toggle" class="js-loading-form" style="margin:0;">
+                    {% if connection.enabled %}
+                      <button type="submit" class="secondary compact-button" data-loading-text="Desactivando...">Desactivar</button>
+                    {% else %}
+                      <button type="submit" class="secondary compact-button proxy-activate-btn" data-loading-text="Activando...">Activar</button>
+                    {% endif %}
+                  </form>
+                  <button type="button" class="secondary compact-button" data-external-test>{{ icon_refresh(14) }} Probar conexión</button>
+                  <button type="button" class="secondary compact-button" data-external-scan {% if not connection.last_test_ok %}disabled{% endif %}>{{ icon_search(14) }} Escanear esquema</button>
+                  <button type="button" class="secondary compact-button" data-external-edit-toggle>Editar</button>
+                {% endif %}
+              </div>
+            </div>
+
+            <p class="settings-status-note external-database-action-status" data-external-status role="status" aria-live="polite" hidden></p>
+
+            {% if can_edit_external_databases %}
+              <div class="proxy-edit-container external-database-edit-container" data-external-edit-form hidden>
+                <div class="proxy-edit-head-row">
+                  <strong>Editar conexión: {{ connection.name }}</strong>
+                  <button type="button" class="secondary compact-button" data-external-edit-cancel>Cerrar</button>
+                </div>
+                <form class="stack js-loading-form" data-external-db-form method="post" action="/settings/data-sources">
+                  <input type="hidden" name="id" value="{{ connection.id }}">
+                  <div class="form-grid">
+                    <label>Nombre de la conexión<input name="name" value="{{ connection.name }}" required></label>
+                    <label>Motor<select name="database_type" data-database-type>{% for option in database_type_options %}<option value="{{ option.value }}" data-default-port="{{ option.default_port }}" {% if connection.database_type == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
+                    <label>Host o IP<input name="host" value="{{ connection.host }}"></label>
+                    <label>Puerto<input name="port" type="number" min="1" max="65535" value="{{ connection.port }}"></label>
+                    <label>Base de datos<input name="database_name" value="{{ connection.database_name }}" required></label>
+                    <label>Esquema<input name="schema_name" value="{{ connection.schema_name }}"></label>
+                    <label>Usuario<input name="username" value="{{ connection.username }}"></label>
+                    <label>Contraseña<input name="password" type="password" autocomplete="new-password" placeholder="{{ mask_secret(connection.password_encrypted) or 'Introduce una contraseña' }}"></label>
+                    <label>SSL<select name="ssl_mode"><option value="require" {% if connection.ssl_mode == 'require' %}selected{% endif %}>Cifrado requerido</option><option value="verify-full" {% if connection.ssl_mode == 'verify-full' %}selected{% endif %}>Verificar certificado</option><option value="disable" {% if connection.ssl_mode == 'disable' %}selected{% endif %}>Desactivado</option></select></label>
+                    <label>Perfil proxy (opcional)
+                      <select name="proxy_connection_id" data-proxy-profile-select {% if not proxy_connections %}disabled{% endif %}>
+                        {% if proxy_connections %}
+                          <option value="">Sin proxy</option>
+                          {% for proxy in proxy_connections %}
+                            <option value="{{ proxy.id }}" {% if connection.proxy_connection_id == proxy.id %}selected{% endif %}>{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>
+                          {% endfor %}
+                        {% else %}
+                          <option value="">No hay perfiles configurados</option>
+                        {% endif %}
+                      </select>
+                      <small class="muted">Selecciona un perfil creado en Ajustes → Proxies. El túnel de base de datos se habilitará en una fase posterior.</small>
+                    </label>
+                    <label class="checkbox-card span-2">Activar esta fuente (desactiva otras fuentes al guardar)<input name="enabled" type="checkbox" {% if connection.enabled %}checked{% endif %}></label>
+                  </div>
+                  <div class="drawer-actions">
+                    <button type="submit" class="primary" data-loading-text="Guardando...">Guardar conexión</button>
+                    <button type="button" class="secondary compact-button" data-external-edit-cancel>Cancelar</button>
+                  </div>
+                </form>
+              </div>
+            {% endif %}
+
+            <div class="external-schema-panel" data-external-schema hidden>
+              <div class="external-schema-head">
+                <div>
+                  <strong>{{ icon_database(14) }} Esquema disponible</strong>
+                  <span class="muted" data-external-schema-summary></span>
+                </div>
+                <button type="button" class="secondary compact-button" data-external-schema-close>{{ icon_close(12) }} Cerrar esquema</button>
+              </div>
+              <div class="external-mapping-grid">
+                {% for entity_type, fields in entity_field_options.items() %}
+                  <section class="external-mapping-panel" data-external-mapping data-entity-type="{{ entity_type }}">
+                    <div class="section-title-row">
+                      <div>
+                        <h5>{{ 'Clientes' if entity_type == 'customers' else 'Productos' }}</h5>
+                        <p class="muted">Elige tabla y vincula los campos mínimos.</p>
+                      </div>
+                      <span class="badge">Solo lectura</span>
+                    </div>
+                    <label style="margin-top: 10px;">Tabla origen
+                      <select data-mapping-table disabled>
+                        <option>Escanea el esquema para empezar</option>
+                      </select>
+                    </label>
+                    <div class="external-field-mapping-list" data-mapping-fields></div>
+                    <label class="checkbox-card external-sync-option">
+                      <input type="checkbox" data-sync-enabled> Permitir sincronización manual de esta tabla
+                    </label>
+                    <div class="external-mapping-actions">
+                      <button type="button" class="primary compact-button" data-save-mapping disabled>Guardar mapeo</button>
+                      <button type="button" class="secondary compact-button" data-preview-mapping disabled>Previsualizar</button>
+                      <button type="button" class="secondary compact-button" data-sync-mapping disabled>Sincronizar ahora</button>
+                    </div>
+                    <p class="settings-status-note" data-mapping-status hidden role="status" aria-live="polite"></p>
+                    <div class="external-preview-table-wrap" data-mapping-preview hidden>
+                      <table class="data-table">
+                        <thead data-preview-head></thead>
+                        <tbody data-preview-body></tbody>
+                      </table>
+                    </div>
+                  </section>
+                {% endfor %}
+              </div>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+</dialog>
+
+{% if can_edit_external_databases %}
+<dialog id="external-database-create-dialog" class="edit-dialog" onclick="if (event.target === this) this.close();">
+  <form class="stack js-loading-form" method="post" action="/settings/data-sources" data-external-create-form data-external-db-form>
+    <div class="dialog-header">
+      <div>
+        <h2>Nueva fuente de datos</h2>
+        <p class="muted" style="margin:2px 0 0; font-size:12.5px;">Conexión externa cifrada en modo estrictamente lectura.</p>
+      </div>
+      <button type="button" class="secondary compact-button modal-close-btn" onclick="this.closest('dialog').close()" title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
+    </div>
+    <div class="form-grid">
+      <label>Nombre de la conexión<input name="name" placeholder="ERP de la empresa" required></label>
+      <label>Motor<select name="database_type" data-database-type>{% for option in database_type_options %}<option value="{{ option.value }}" data-default-port="{{ option.default_port }}" {% if option.value == 'postgresql' %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
+      <label>Host o IP<input name="host" placeholder="db.empresa.com"></label>
+      <label>Puerto<input name="port" type="number" value="5432" min="1" max="65535"></label>
+      <label>Base de datos<input name="database_name" placeholder="erp_produccion" required></label>
+      <label>Esquema<input name="schema_name" value="public"></label>
+      <label>Usuario<input name="username"></label>
+      <label>Contraseña<input name="password" type="password" autocomplete="new-password"></label>
+      <label>SSL<select name="ssl_mode"><option value="require" selected>Cifrado requerido</option><option value="verify-full">Verificar certificado</option><option value="disable">Desactivado</option></select></label>
+      <label>Perfil proxy (opcional)
+        <select name="proxy_connection_id" data-proxy-profile-select {% if not proxy_connections %}disabled{% endif %}>
+          {% if proxy_connections %}
+            <option value="">Sin proxy</option>
+            {% for proxy in proxy_connections %}
+              <option value="{{ proxy.id }}">{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>
+            {% endfor %}
+          {% else %}
+            <option value="">No hay perfiles configurados</option>
+          {% endif %}
+        </select>
+        <small class="muted">Selecciona un perfil creado en Ajustes → Proxies. El túnel de base de datos se habilitará en una fase posterior.</small>
+      </label>
+      <label class="checkbox-card span-2">Activar tras guardar<input name="enabled" type="checkbox"></label>
+    </div>
+    <div class="actions">
+      <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancelar</button>
+      <button type="submit" class="primary" data-loading-text="Guardando...">Guardar fuente</button>
+    </div>
+  </form>
+</dialog>
+{% endif %}
 {% endif %}
 
 {% if settings_fragment == "advanced" %}
@@ -1690,9 +2221,22 @@
         const parsed = new DOMParser().parseFromString(html, "text/html");
         const loadedDialog = parsed.getElementById(`settings-${id}`);
         if (!loadedDialog) throw new Error("El bloque de configuración no está disponible");
+        const auxiliaryDialogs = Array.from(parsed.querySelectorAll("dialog")).filter((element) => (
+          element !== loadedDialog && element.id && !loadedDialog.contains(element)
+        ));
         loadedDialog.dataset.settingsLoaded = "true";
         dialog.replaceWith(loadedDialog);
+        auxiliaryDialogs.forEach((auxiliaryDialog) => {
+          document.getElementById(auxiliaryDialog.id)?.remove();
+          document.body.append(auxiliaryDialog);
+        });
         bindModelSelectors(loadedDialog);
+        initializeExternalDatabaseForms(loadedDialog);
+        initializeExternalDatabaseCards(loadedDialog);
+        auxiliaryDialogs.forEach((auxiliaryDialog) => {
+          bindModelSelectors(auxiliaryDialog);
+          initializeExternalDatabaseForms(auxiliaryDialog);
+        });
         if (globalThis.AnchiEmailBackfill) globalThis.AnchiEmailBackfill.bindBackfillForms(loadedDialog);
         loadedDialog.showModal();
         return loadedDialog;
@@ -1735,6 +2279,339 @@
       const dialog = document.getElementById(`settings-${id}`);
       if (dialog) dialog.remove();
       openSettingsDrawer(id);
+    }
+  });
+
+  function checkSettingsHash() {
+    const hash = window.location.hash.replace("#", "").trim();
+    if (hash && ["general", "identity", "email", "ai", "scoring", "decision", "export", "ftp", "proxies", "data-sources", "advanced"].includes(hash)) {
+      openSettingsDrawer(hash);
+    }
+  }
+  window.addEventListener("hashchange", checkSettingsHash);
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", checkSettingsHash);
+  } else {
+    checkSettingsHash();
+  }
+
+  document.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-proxy-test-url]");
+    if (!button) return;
+    event.preventDefault();
+    if (button.disabled) return;
+    const card = button.closest(".proxy-profile-card") || button.closest("form");
+    const status = card?.querySelector("[data-proxy-test-status]");
+    const originalText = button.textContent;
+    button.textContent = button.dataset.loadingText || "Comprobando...";
+    button.disabled = true;
+    if (status) {
+      status.hidden = false;
+      status.className = "settings-status-note proxy-test-status is-pending";
+      status.textContent = "Comprobando el endpoint de salud del gateway…";
+    }
+    try {
+      const response = await fetch(button.dataset.proxyTestUrl, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {"Accept": "application/json", "X-Requested-With": "fetch"},
+      });
+      let payload;
+      try {
+        payload = await response.json();
+      } catch (_error) {
+        payload = {ok: false, message: `La prueba devolvió una respuesta no válida (HTTP ${response.status}).`};
+      }
+      if (status) {
+        status.className = `settings-status-note proxy-test-status ${payload.ok ? "is-success" : "is-error"}`;
+        status.textContent = payload.message || (payload.ok ? "Gateway accesible." : "No se pudo comprobar el gateway.");
+      }
+    } catch (_error) {
+      if (status) {
+        status.className = "settings-status-note proxy-test-status is-error";
+        status.textContent = "No se pudo completar la prueba. Revisa la conexión e inténtalo de nuevo.";
+      }
+    } finally {
+      button.textContent = originalText;
+      button.disabled = false;
+    }
+  });
+  document.addEventListener("click", async (event) => {
+    const testButton = event.target.closest("[data-ftp-test]");
+    const editToggle = event.target.closest("[data-ftp-edit-toggle]");
+    const editCancel = event.target.closest("[data-ftp-edit-cancel]");
+    if (editToggle || editCancel) {
+      event.preventDefault();
+      const card = (editToggle || editCancel).closest("[data-ftp-card]");
+      const editor = card?.querySelector("[data-ftp-edit-form]");
+      if (editor) editor.hidden = Boolean(editCancel);
+      return;
+    }
+    if (!testButton) return;
+    event.preventDefault();
+    if (testButton.disabled) return;
+    const card = testButton.closest("[data-ftp-card]");
+    const status = card?.querySelector("[data-ftp-status]");
+    const originalText = testButton.textContent;
+    testButton.textContent = testButton.dataset.loadingText || "Probando...";
+    testButton.disabled = true;
+    if (status) {
+      status.hidden = false;
+      status.className = "settings-status-note external-database-action-status is-pending";
+      status.textContent = "Comprobando la conexión FTP…";
+    }
+    try {
+      const response = await fetch(testButton.dataset.ftpTestUrl, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {"Accept": "application/json", "X-Requested-With": "fetch"},
+      });
+      const payload = await response.json().catch(() => ({ok: false, message: `La prueba no devolvió una respuesta válida (HTTP ${response.status}).`}));
+      if (status) {
+        status.className = `settings-status-note external-database-action-status ${payload.ok ? "is-success" : "is-error"}`;
+        status.textContent = payload.message || (payload.ok ? "Conexión FTP validada correctamente." : "No se pudo comprobar la conexión FTP.");
+      }
+    } catch (_error) {
+      if (status) {
+        status.className = "settings-status-note external-database-action-status is-error";
+        status.textContent = "No se pudo completar la prueba. Revisa la conexión e inténtalo de nuevo.";
+      }
+    } finally {
+      testButton.textContent = originalText;
+      testButton.disabled = false;
+    }
+  });
+
+  function externalStatus(card, message, kind = "pending") {
+    const status = card?.querySelector("[data-external-status]");
+    if (!status) return;
+    status.hidden = false;
+    status.className = `settings-status-note external-database-action-status is-${kind}`;
+    status.textContent = message;
+  }
+  function externalJson(response) {
+    return response.json().catch(() => ({ok: false, message: `La respuesta no es válida (HTTP ${response.status}).`}));
+  }
+  function syncExternalDatabaseForm(form) {
+    if (!form) return;
+    const databaseType = form.querySelector("[data-database-type]")?.value;
+    const sqlite = databaseType === "sqlite";
+    const host = form.querySelector("[name='host']");
+    const port = form.querySelector("[name='port']");
+    const username = form.querySelector("[name='username']");
+    const password = form.querySelector("[name='password']");
+    const ssl = form.querySelector("[name='ssl_mode']");
+    if (host) { host.required = !sqlite; host.disabled = sqlite; }
+    if (port) { port.required = !sqlite; port.disabled = sqlite; }
+    if (username) { username.required = !sqlite; username.disabled = sqlite; }
+    if (password) {
+      password.required = !sqlite && form.matches("[data-external-create-form]");
+      password.disabled = sqlite;
+    }
+    if (ssl) {
+      if (sqlite) ssl.value = "disable";
+      ssl.disabled = sqlite;
+    }
+  }
+  function initializeExternalDatabaseForms(root = document) {
+    root.querySelectorAll("[data-external-db-form]").forEach((form) => syncExternalDatabaseForm(form));
+  }
+  function initializeExternalDatabaseCards(root = document) {
+    root.querySelectorAll("[data-external-database-card]").forEach((card) => {
+      if (card.dataset.externalTestOk !== "true") return;
+      const rawSchema = card.dataset.externalSchema;
+      if (!rawSchema || rawSchema === "{}") return;
+      try {
+        const schema = JSON.parse(rawSchema);
+        if (!schema || !Array.isArray(schema.tables)) return;
+        const mappings = JSON.parse(card.dataset.externalMappings || "[]");
+        renderExternalSchema(card, schema, Array.isArray(mappings) ? mappings : []);
+      } catch (_error) {
+        console.warn("No se pudo restaurar el esquema externo guardado");
+      }
+    });
+  }
+  function externalTableForPanel(panel) {
+    const card = panel?.closest("[data-external-database-card]");
+    const tableSelect = panel?.querySelector("[data-mapping-table]");
+    return (card?._externalSchema?.tables || []).find((table) => table.name === tableSelect?.value) || null;
+  }
+  function updateExternalMappingActions(panel) {
+    const table = externalTableForPanel(panel);
+    const connectionReady = panel?.closest("[data-external-database-card]")?.dataset.externalTestOk === "true";
+    const saved = panel?._savedMapping && table && panel._savedMapping.table_name === table.name ? panel._savedMapping : null;
+    const dirty = panel?.dataset.mappingDirty === "true";
+    const syncEnabled = Boolean(panel?.querySelector("[data-sync-enabled]")?.checked);
+    const save = panel?.querySelector("[data-save-mapping]");
+    const preview = panel?.querySelector("[data-preview-mapping]");
+    const sync = panel?.querySelector("[data-sync-mapping]");
+    if (save) save.disabled = !table;
+    if (preview) preview.disabled = !connectionReady || !saved || dirty;
+    if (sync) sync.disabled = !connectionReady || !saved || dirty || !syncEnabled;
+  }
+  function renderExternalMappingFields(panel) {
+    const wrapper = panel?.querySelector("[data-mapping-fields]");
+    if (!wrapper) return;
+    const table = externalTableForPanel(panel);
+    const columns = table?.columns || [];
+    const sourceOptions = columns.map((column) => `<option value="${escapeHtml(String(column.name))}">${escapeHtml(String(column.name))} · ${escapeHtml(String(column.type || ""))}</option>`).join("");
+    const fields = panel.dataset.entityType === "customers"
+      ? [["code", "Código", true], ["fiscal_name", "Razón social", true], ["commercial_name", "Nombre comercial", false], ["primary_email", "Email", false], ["phone", "Teléfono", false], ["tax_id", "CIF / NIF", false], ["address", "Dirección", false], ["city", "Ciudad", false], ["province", "Provincia", false], ["country", "País", false], ["category", "Categoría", false], ["status", "Estado", false]]
+      : [["reference", "Referencia", true], ["name", "Nombre", true], ["alternative_code", "Código alternativo", false], ["description", "Descripción", false], ["brand", "Marca", false], ["usual_supplier", "Proveedor habitual", false], ["family", "Familia", false], ["subfamily", "Subfamilia", false], ["format", "Formato", false], ["sale_unit", "Unidad de venta", false], ["ean", "EAN", false], ["sale_price", "Precio", false], ["discount_percent", "Descuento %", false], ["status", "Estado", false]];
+    const saved = panel._savedMapping && table && panel._savedMapping.table_name === table.name ? panel._savedMapping : null;
+    wrapper.replaceChildren();
+    fields.forEach(([key, label, required]) => {
+      const field = document.createElement("label");
+      field.className = "external-field-mapping";
+      field.innerHTML = `<span>${label}${required ? " *" : ""}</span><select data-map-field="${key}" ${table ? "" : "disabled"}><option value="">No importar</option>${sourceOptions}</select>`;
+      const select = field.querySelector("[data-map-field]");
+      if (select && saved?.field_map?.[key]) select.value = saved.field_map[key];
+      wrapper.append(field);
+    });
+    const syncToggle = panel.querySelector("[data-sync-enabled]");
+    if (syncToggle) syncToggle.checked = Boolean(saved?.sync_enabled);
+    panel.dataset.mappingDirty = "false";
+    updateExternalMappingActions(panel);
+  }
+  function renderExternalSchema(card, schema, mappings = []) {
+    if (!schema || !Array.isArray(schema.tables)) return;
+    card._externalSchema = schema;
+    card.dataset.externalTestOk = "true";
+    card._externalMappings = Object.fromEntries((mappings || []).map((mapping) => [mapping.entity_type, mapping]));
+    const panel = card.querySelector("[data-external-schema]");
+    if (!panel) return;
+    panel.hidden = false;
+    const summary = card.querySelector("[data-external-schema-summary]");
+    if (summary) summary.textContent = `${schema.table_count || schema.tables.length} tablas disponibles${schema.truncated ? " (resultado limitado)" : ""}`;
+    card.querySelectorAll("[data-external-mapping]").forEach((mappingPanel) => {
+      const select = mappingPanel.querySelector("[data-mapping-table]");
+      select.replaceChildren(new Option("Selecciona una tabla…", ""));
+      schema.tables.forEach((table) => select.add(new Option(`${table.name} · ${table.columns.length} columnas`, table.name)));
+      select.disabled = false;
+      const saved = card._externalMappings[mappingPanel.dataset.entityType] || null;
+      mappingPanel._savedMapping = saved;
+      if (saved?.table_name && schema.tables.some((table) => table.name === saved.table_name)) select.value = saved.table_name;
+      renderExternalMappingFields(mappingPanel);
+    });
+  }
+  function renderExternalPreview(panel, payload) {
+    const wrapper = panel.querySelector("[data-mapping-preview]");
+    const head = panel.querySelector("[data-preview-head]");
+    const body = panel.querySelector("[data-preview-body]");
+    if (!wrapper || !head || !body) return;
+    head.replaceChildren();
+    body.replaceChildren();
+    const rows = payload.rows || [];
+    const keys = rows.length ? Object.keys(rows[0]) : Array.from(panel.querySelectorAll("[data-map-field]")).filter((field) => field.value).map((field) => field.dataset.mapField);
+    const headRow = document.createElement("tr");
+    keys.forEach((key) => { const cell = document.createElement("th"); cell.textContent = key; headRow.append(cell); });
+    head.append(headRow);
+    rows.forEach((row) => { const tr = document.createElement("tr"); keys.forEach((key) => { const td = document.createElement("td"); td.textContent = row[key] == null ? "" : String(row[key]); tr.append(td); }); body.append(tr); });
+    wrapper.hidden = false;
+  }
+  document.addEventListener("change", (event) => {
+    const databaseType = event.target.closest("[data-database-type]");
+    if (databaseType) {
+      const form = databaseType.closest("form");
+      const port = form?.querySelector("[name='port']");
+      const selected = databaseType.selectedOptions[0];
+      if (port && selected?.dataset.defaultPort && (!port.value || port.value === "0" || port.value === "5432" || port.value === "3306")) port.value = selected.dataset.defaultPort;
+      syncExternalDatabaseForm(form);
+    }
+    const tableSelect = event.target.closest("[data-mapping-table]");
+    if (tableSelect) renderExternalMappingFields(tableSelect.closest("[data-external-mapping]"));
+    const mappingField = event.target.closest("[data-map-field], [data-sync-enabled]");
+    if (mappingField) {
+      const panel = mappingField.closest("[data-external-mapping]");
+      if (panel) {
+        panel.dataset.mappingDirty = "true";
+        updateExternalMappingActions(panel);
+      }
+    }
+  });
+  document.addEventListener("click", async (event) => {
+    const testButton = event.target.closest("[data-external-test]");
+    const scanButton = event.target.closest("[data-external-scan]");
+    const saveMapping = event.target.closest("[data-save-mapping]");
+    const previewButton = event.target.closest("[data-preview-mapping]");
+    const syncButton = event.target.closest("[data-sync-mapping]");
+    const editToggle = event.target.closest("[data-external-edit-toggle]");
+    const editCancel = event.target.closest("[data-external-edit-cancel]");
+    const schemaClose = event.target.closest("[data-external-schema-close]");
+    if (editToggle || editCancel) {
+      const form = (editToggle || editCancel).closest("[data-external-database-card]")?.querySelector("[data-external-edit-form]");
+      if (form) form.hidden = editToggle ? !form.hidden : true;
+      return;
+    }
+    if (schemaClose) { schemaClose.closest("[data-external-schema]").hidden = true; return; }
+    if (!testButton && !scanButton && !saveMapping && !previewButton && !syncButton) return;
+    event.preventDefault();
+    const button = testButton || scanButton || saveMapping || previewButton || syncButton;
+    if (button.disabled) return;
+    const card = button.closest("[data-external-database-card]");
+    const connectionId = card?.dataset.connectionId;
+    if (!card || !connectionId) return;
+    button.disabled = true;
+    if (testButton) {
+      externalStatus(card, "Probando conexión de solo lectura…");
+      try {
+        const response = await fetch(`/settings/data-sources/${connectionId}/test`, {method: "POST", credentials: "same-origin", headers: {"Accept": "application/json", "X-Requested-With": "fetch"}});
+        const payload = await externalJson(response);
+        externalStatus(card, payload.message || "Prueba finalizada.", payload.ok ? "success" : "error");
+        card.dataset.externalTestOk = payload.ok ? "true" : "false";
+        const scan = card.querySelector("[data-external-scan]");
+        if (scan) scan.disabled = !payload.ok;
+      } catch (_error) { externalStatus(card, "No se pudo completar la prueba. Revisa la configuración.", "error"); }
+      finally { button.disabled = false; }
+      return;
+    }
+    if (scanButton) {
+      externalStatus(card, "Leyendo tablas y columnas sin modificar la fuente…");
+      try {
+        const response = await fetch(`/settings/data-sources/${connectionId}/scan`, {method: "POST", credentials: "same-origin", headers: {"Accept": "application/json", "X-Requested-With": "fetch"}});
+        const payload = await externalJson(response);
+        if (!response.ok || !payload.ok) throw new Error(payload.message || "No se pudo leer el esquema.");
+        renderExternalSchema(card, payload.schema, payload.mappings || []);
+        externalStatus(card, payload.message, "success");
+      } catch (error) { externalStatus(card, error.message || "No se pudo leer el esquema.", "error"); }
+      finally { button.disabled = false; }
+      return;
+    }
+    const mappingPanel = button.closest("[data-external-mapping]");
+    const entityType = mappingPanel?.dataset.entityType;
+    const tableSelect = mappingPanel?.querySelector("[data-mapping-table]");
+    const selectedTable = tableSelect?.value;
+    if (!mappingPanel || !entityType || !selectedTable) { externalStatus(card, "Selecciona una tabla y completa el mapeo mínimo.", "error"); button.disabled = false; return; }
+    if (saveMapping) {
+      const fieldMap = {};
+      mappingPanel.querySelectorAll("[data-map-field]").forEach((field) => { if (field.value) fieldMap[field.dataset.mapField] = field.value; });
+      const status = mappingPanel.querySelector("[data-mapping-status]");
+      if (status) { status.hidden = false; status.className = "settings-status-note is-pending"; status.textContent = "Validando y guardando el mapeo…"; }
+      try {
+        const response = await fetch(`/settings/data-sources/${connectionId}/mapping`, {method: "POST", credentials: "same-origin", headers: {"Accept": "application/json", "Content-Type": "application/json", "X-Requested-With": "fetch"}, body: JSON.stringify({entity_type: entityType, table_name: selectedTable, table_schema: card._externalSchema.schema, field_map: fieldMap, sync_enabled: Boolean(mappingPanel.querySelector("[data-sync-enabled]")?.checked), sync_limit: 500})});
+        const payload = await externalJson(response);
+        if (!response.ok || !payload.ok) throw new Error(payload.message || "No se pudo guardar el mapeo.");
+        mappingPanel._savedMapping = payload.mapping;
+        mappingPanel.dataset.mappingDirty = "false";
+        if (status) { status.className = "settings-status-note is-success"; status.textContent = "Mapeo guardado. Puedes previsualizarlo o sincronizarlo."; }
+        updateExternalMappingActions(mappingPanel);
+      } catch (error) { if (status) { status.className = "settings-status-note is-error"; status.textContent = error.message; } }
+      finally { button.disabled = false; }
+      return;
+    }
+    if (previewButton || syncButton) {
+      const status = mappingPanel.querySelector("[data-mapping-status]");
+      if (status) { status.hidden = false; status.className = "settings-status-note is-pending"; status.textContent = previewButton ? "Cargando una muestra…" : "Sincronizando registros…"; }
+      const action = previewButton ? "preview" : "sync";
+      try {
+        const response = await fetch(`/settings/data-sources/${connectionId}/mapping/${entityType}/${action}`, {method: "POST", credentials: "same-origin", headers: {"Accept": "application/json", "X-Requested-With": "fetch"}});
+        const payload = await externalJson(response);
+        if (!response.ok || !payload.ok) throw new Error(payload.message || "La operación no se pudo completar.");
+        if (previewButton) renderExternalPreview(mappingPanel, payload);
+        const partial = syncButton && Number(payload.result?.errors || 0) > 0;
+        if (status) { status.className = `settings-status-note ${partial ? "is-error" : "is-success"}`; status.textContent = payload.message || `${payload.count || payload.result?.rows_read || 0} registros procesados.`; }
+      } catch (error) { if (status) { status.className = "settings-status-note is-error"; status.textContent = error.message; } }
+      finally { button.disabled = false; }
     }
   });
   function renderAgentFlowTestResult(form, payload) {

@@ -44,6 +44,10 @@ WHATSAPP_SUPPORTED_DOCUMENT_MIME_TYPES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     "text/plain",
 }
+WHATSAPP_SUPPORTED_IMAGE_MIME_TYPES = {
+    "image/jpeg",
+    "image/png",
+}
 WHATSAPP_SUPPORTED_AUDIO_MIME_TYPES = {
     "audio/ogg",
     "audio/mpeg",
@@ -55,6 +59,7 @@ WHATSAPP_SUPPORTED_AUDIO_MIME_TYPES = {
 }
 WHATSAPP_SUPPORTED_AUDIO_EXTENSIONS = {".amr", ".m4a", ".mp3", ".ogg", ".wav", ".webm"}
 WHATSAPP_SUPPORTED_DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".txt"}
+WHATSAPP_SUPPORTED_IMAGE_EXTENSIONS = {".jpeg", ".jpg", ".png"}
 _PENDING_OUTBOUND_EXTERNAL_ID_PREFIX = "wa-pending-"
 
 @dataclass(slots=True)
@@ -94,7 +99,7 @@ def get_or_create_whatsapp_channel(db: Session, company_id: int) -> InputChannel
         channel.supports_attachments = True
         channel.supports_audio = True
         channel.supports_documents = True
-        channel.supports_images = False
+        channel.supports_images = True
         return channel
     channel = InputChannel(
         company_id=company_id,
@@ -107,7 +112,7 @@ def get_or_create_whatsapp_channel(db: Session, company_id: int) -> InputChannel
         supports_attachments=True,
         supports_audio=True,
         supports_documents=True,
-        supports_images=False,
+        supports_images=True,
     )
     db.add(channel)
     db.flush()
@@ -446,9 +451,17 @@ def _safe_media_filename(filename: str | None, media_id: str) -> str:
     return (candidate or media_id or "whatsapp-attachment")[:200]
 
 
-def _is_supported_media(filename: str | None, content_type: str | None, *, is_audio: bool = False) -> bool:
+def _is_supported_media(
+    filename: str | None,
+    content_type: str | None,
+    *,
+    is_audio: bool = False,
+    is_image: bool = False,
+) -> bool:
     normalized_type = str(content_type or "").strip().lower().split(";", 1)[0]
     extension = Path(str(filename or "")).suffix.lower()
+    if is_image:
+        return normalized_type in WHATSAPP_SUPPORTED_IMAGE_MIME_TYPES or extension in WHATSAPP_SUPPORTED_IMAGE_EXTENSIONS
     if is_audio:
         return normalized_type in WHATSAPP_SUPPORTED_AUDIO_MIME_TYPES or extension in WHATSAPP_SUPPORTED_AUDIO_EXTENSIONS
     return normalized_type in WHATSAPP_SUPPORTED_DOCUMENT_MIME_TYPES or extension in WHATSAPP_SUPPORTED_DOCUMENT_EXTENSIONS
@@ -522,6 +535,25 @@ def _extract_persisted_attachment(attachment: MessageAttachment, content: bytes)
     return result.status
 
 
+def _store_image_attachment(attachment: MessageAttachment) -> str:
+    """Mark an image as durably stored without sending it to the text extractor."""
+
+    attachment.extracted_text = None
+    attachment.extraction_status = "stored"
+    attachment.extraction_error = None
+    return attachment.extraction_status
+
+
+def _whatsapp_message_has_processable_text(message: InboundMessage) -> bool:
+    if str(message.original_content or "").strip():
+        return True
+    return any(
+        str(value or "").strip()
+        for attachment in message.attachments or []
+        for value in (attachment.extracted_text, attachment.ocr_text, attachment.transcription_text)
+    )
+
+
 def _whatsapp_media_ready_for_processing(message: InboundMessage) -> bool:
     pending_statuses = {
         "pending",
@@ -531,7 +563,12 @@ def _whatsapp_media_ready_for_processing(message: InboundMessage) -> bool:
         "storage_error",
         "unsupported",
     }
-    return all((attachment.extraction_status or "pending") not in pending_statuses for attachment in message.attachments or [])
+    attachments = list(message.attachments or [])
+    if any((attachment.extraction_status or "pending") in pending_statuses for attachment in attachments):
+        return False
+    # Images are stored for the conversation but are not text-extracted. Only
+    # enqueue the order pipeline when the message also has usable text.
+    return not attachments or _whatsapp_message_has_processable_text(message)
 
 
 async def download_whatsapp_media(
@@ -568,13 +605,18 @@ async def download_whatsapp_media(
     retryable_failure = False
     try:
         for attachment in attachments:
-            if not _is_supported_media(attachment.filename, attachment.content_type, is_audio=bool(attachment.is_audio)):
+            if not _is_supported_media(
+                attachment.filename,
+                attachment.content_type,
+                is_audio=bool(attachment.is_audio),
+                is_image=bool(attachment.is_image),
+            ):
                 attachment.extraction_status = "unsupported"
                 attachment.extraction_error = "Tipo de adjunto no soportado por la integración de WhatsApp."
                 skipped += 1
                 db.commit()
                 continue
-            if attachment.storage_path and attachment.extraction_status in {"extracted", "no_text_found", "transcription_pending"}:
+            if attachment.storage_path and attachment.extraction_status in {"extracted", "no_text_found", "stored", "transcription_pending"}:
                 skipped += 1
                 db.commit()
                 continue
@@ -585,7 +627,7 @@ async def download_whatsapp_media(
                 except Exception:  # noqa: BLE001
                     stored_content = None
                 if stored_content is not None:
-                    status = _extract_persisted_attachment(attachment, stored_content)
+                    status = _store_image_attachment(attachment) if attachment.is_image else _extract_persisted_attachment(attachment, stored_content)
                     skipped += 1
                     if status == "extraction_error":
                         failed += 1
@@ -613,6 +655,7 @@ async def download_whatsapp_media(
                     None,
                     normalized_remote_type,
                     is_audio=bool(attachment.is_audio),
+                    is_image=bool(attachment.is_image),
                 ):
                     raise WhatsAppEmbeddedSignupError(
                         "Meta devolvió un tipo de media no soportado.",
@@ -655,7 +698,7 @@ async def download_whatsapp_media(
             attachment.content_type = content_type
             attachment.size_bytes = len(content)
             attachment.storage_path = storage_path
-            status = _extract_persisted_attachment(attachment, content)
+            status = _store_image_attachment(attachment) if attachment.is_image else _extract_persisted_attachment(attachment, content)
             if status == "extraction_error":
                 failed += 1
             downloaded += 1
@@ -798,6 +841,7 @@ def _prepare_whatsapp_media_send(
     filename: str,
     content_type: str,
     is_audio: bool = False,
+    is_image: bool = False,
 ) -> tuple[WhatsAppTenantConfig, str]:
     conversation = db.get(Conversation, conversation_id)
     if not conversation or conversation.company_id != company_id:
@@ -807,7 +851,7 @@ def _prepare_whatsapp_media_send(
         raise WhatsAppEmbeddedSignupError("WhatsApp no está configurado para enviar archivos.", error_type="server_not_configured")
     if not content or len(content) > config.max_attachment_bytes:
         raise WhatsAppEmbeddedSignupError("El adjunto supera el tamaño máximo permitido.", error_type="media_too_large")
-    if not _is_supported_media(filename, content_type, is_audio=is_audio):
+    if not _is_supported_media(filename, content_type, is_audio=is_audio, is_image=is_image):
         raise WhatsAppEmbeddedSignupError("Tipo de adjunto no soportado por WhatsApp.", error_type="unsupported_media")
     recipient = _whatsapp_reply_recipient(
         db,
@@ -827,6 +871,7 @@ async def send_whatsapp_media(
     filename: str,
     content_type: str,
     is_audio: bool = False,
+    is_image: bool = False,
     client: httpx.AsyncClient | None = None,
 ) -> dict[str, Any]:
     config, recipient = _prepare_whatsapp_media_send(
@@ -837,6 +882,7 @@ async def send_whatsapp_media(
         filename=filename,
         content_type=content_type,
         is_audio=is_audio,
+        is_image=is_image,
     )
     owns_client = client is None
     graph_client = client or httpx.AsyncClient(timeout=get_settings().meta_request_timeout_seconds)
@@ -853,9 +899,9 @@ async def send_whatsapp_media(
         media_id = str(media_response.get("id") or "").strip()
         if not media_id:
             raise WhatsAppEmbeddedSignupError("Meta no devolvió el identificador del archivo.", error_type="invalid_response")
-        message_type = "audio" if is_audio else "document"
+        message_type = "image" if is_image else ("audio" if is_audio else "document")
         media_body: dict[str, str] = {"id": media_id}
-        if not is_audio:
+        if not is_audio and not is_image:
             media_body["filename"] = filename
         response = await _meta_request(
             graph_client,
@@ -2201,6 +2247,7 @@ def record_manual_response(
                 size_bytes=len(bytes(item.get("content") or b"")),
                 storage_path=storage_path,
                 is_pdf=filename.lower().endswith(".pdf") or content_type.lower() == "application/pdf",
+                is_image=bool(item.get("is_image")) or content_type.lower() in WHATSAPP_SUPPORTED_IMAGE_MIME_TYPES,
                 is_audio=bool(item.get("is_audio")) or content_type.lower().startswith("audio/"),
                 extraction_status=extraction_status,
                 extraction_error=extraction_error,
@@ -2286,6 +2333,7 @@ async def send_manual_response(
             filename=str(attachment.get("filename") or "whatsapp-attachment"),
             content_type=str(attachment.get("content_type") or "application/octet-stream"),
             is_audio=bool(attachment.get("is_audio")),
+            is_image=bool(attachment.get("is_image")),
         )
     sent_messages: list[InboundMessage] = []
     if clean_body or template_name:
@@ -2363,6 +2411,7 @@ async def send_manual_response(
                 filename=str(attachment.get("filename") or "whatsapp-attachment"),
                 content_type=str(attachment.get("content_type") or "application/octet-stream"),
                 is_audio=bool(attachment.get("is_audio")),
+                is_image=bool(attachment.get("is_image")),
                 client=client,
             )
         except Exception as exc:  # noqa: BLE001
@@ -2438,7 +2487,11 @@ def _message_attachments(message: dict[str, Any]) -> list[dict[str, Any]]:
                 "content_type": image.get("mime_type"),
                 "size_bytes": image.get("file_size"),
                 "is_image": True,
-                "downloadable": False,
+                "downloadable": _is_supported_media(
+                    image.get("filename") or "image.jpg",
+                    image.get("mime_type"),
+                    is_image=True,
+                ),
             }
         )
     elif message.get("type") == "audio":

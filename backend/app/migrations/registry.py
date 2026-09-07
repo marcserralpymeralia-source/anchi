@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.db.models import TenantSchemaMigration
 from app.master.models import MasterSchemaMigration
-from sqlalchemy import inspect
+from sqlalchemy import inspect, text
 
 from app.migrations.helpers import checksum_text, ensure_columns, ensure_unique_index
 from app.migrations.runner import MigrationSpec, registry_checksum
@@ -838,6 +838,137 @@ def _apply_tenant_llm_execution_details(engine, dry_run: bool) -> list[str]:  # 
     return ["CREATE TABLE prompt_execution_details (...)"]
 
 
+def _apply_tenant_proxy_connections(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    from app.db.models import ProxyConnection
+
+    with engine.connect() as conn:
+        if "proxy_connections" in inspect(conn).get_table_names():
+            if not dry_run:
+                ProxyConnection.__table__.create(bind=engine, checkfirst=True)
+            return []
+        if not dry_run:
+            ProxyConnection.__table__.create(bind=engine, checkfirst=True)
+    return ["CREATE TABLE proxy_connections (...)"]
+
+
+def _apply_tenant_proxy_connection_scope(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Remove the legacy database-destination fields from proxy profiles.
+
+    The first local version of this table mixed proxy and database settings.
+    Keep the migration explicit so existing demo tenants are upgraded to the
+    narrower contract without leaving database destination data in the proxy
+    configuration schema.
+    """
+
+    table_name = "proxy_connections"
+    with engine.connect() as conn:
+        if table_name not in inspect(conn).get_table_names():
+            return []
+        current_columns = {column["name"] for column in inspect(conn).get_columns(table_name)}
+
+    statements: list[str] = []
+    rename_pairs = (
+        ("destination_host", "proxy_host"),
+        ("destination_port", "proxy_port"),
+        ("destination_protocol", "proxy_protocol"),
+    )
+    for old_name, new_name in rename_pairs:
+        if old_name not in current_columns:
+            continue
+        if new_name in current_columns:
+            statement = f"ALTER TABLE {table_name} DROP COLUMN {old_name}"
+        else:
+            statement = f"ALTER TABLE {table_name} RENAME COLUMN {old_name} TO {new_name}"
+        statements.append(statement)
+        current_columns.discard(old_name)
+        current_columns.add(new_name)
+    if "database_name" in current_columns:
+        statements.append(f"ALTER TABLE {table_name} DROP COLUMN database_name")
+
+    if not dry_run and statements:
+        with engine.begin() as conn:
+            for statement in statements:
+                conn.execute(text(statement))
+    return statements
+
+
+def _apply_tenant_external_database_connections(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Create the tenant-owned, read-only external database configuration."""
+
+    from app.db.models import ExternalDatabaseConnection, ExternalDatabaseMapping
+
+    actions: list[str] = []
+    with engine.connect() as conn:
+        table_names = set(inspect(conn).get_table_names())
+    for model in (ExternalDatabaseConnection, ExternalDatabaseMapping):
+        if model.__tablename__ in table_names:
+            continue
+        actions.append(f"CREATE TABLE {model.__tablename__} (...)")
+        if not dry_run:
+            model.__table__.create(bind=engine, checkfirst=True)
+    return actions
+
+
+def _apply_tenant_external_database_schema_snapshot(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Keep the last safe schema snapshot available to the settings UI."""
+
+    return ensure_columns(
+        engine,
+        "external_database_connections",
+        {"schema_snapshot_json": "TEXT"},
+        dry_run=dry_run,
+    )
+
+
+def _apply_tenant_ftp_connections(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Create FTP profiles and copy the legacy per-tenant FTP settings once."""
+
+    from app.db.models import FTPConnection
+
+    actions: list[str] = []
+    with engine.connect() as conn:
+        table_names = set(inspect(conn).get_table_names())
+        target_exists = FTPConnection.__tablename__ in table_names
+        source_exists = "ftp_settings" in table_names
+        target_count = 0
+        if target_exists:
+            target_count = int(conn.execute(text("SELECT COUNT(*) FROM ftp_connections")).scalar() or 0)
+
+    if not target_exists:
+        actions.append("CREATE TABLE ftp_connections (...)")
+        if not dry_run:
+            FTPConnection.__table__.create(bind=engine, checkfirst=True)
+
+    # Fresh databases may already have the model-created table, while older
+    # deployments have only ftp_settings.  In both cases the copy is safe and
+    # idempotent because it only runs while the new table is empty.
+    if not source_exists or target_count:
+        return actions
+
+    actions.append("COPY ftp_settings INTO ftp_connections")
+    if not dry_run:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    """
+                    INSERT INTO ftp_connections
+                    (company_id, name, connection_type, host, port, username,
+                     password_encrypted, private_key_encrypted, destination_path,
+                     passive_mode, overwrite_files, retries, timeout_seconds,
+                     proxy_connection_id, created_at, updated_at)
+                    SELECT company_id, 'Conexión FTP principal', connection_type,
+                           host, port, username, password_encrypted,
+                           private_key_encrypted, destination_path, passive_mode,
+                           overwrite_files, retries, timeout_seconds, NULL,
+                           CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+                    FROM ftp_settings
+                    WHERE host IS NOT NULL AND TRIM(host) <> ''
+                    """
+                )
+            )
+    return actions
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -904,6 +1035,36 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant ai execution details",
         checksum=checksum_text("tenant", "ai_execution_details", "prompt_execution_details"),
         upgrade=_apply_tenant_llm_execution_details,
+    ),
+    MigrationSpec(
+        version="2026.09.04.3",
+        name="tenant proxy connection profiles",
+        checksum=checksum_text("tenant", "proxy_connection_profiles", "proxy_connections"),
+        upgrade=_apply_tenant_proxy_connections,
+    ),
+    MigrationSpec(
+        version="2026.09.04.4",
+        name="tenant proxy configuration scope",
+        checksum=checksum_text("tenant", "proxy_configuration_scope", "proxy_host", "proxy_port", "proxy_protocol"),
+        upgrade=_apply_tenant_proxy_connection_scope,
+    ),
+    MigrationSpec(
+        version="2026.09.07.1",
+        name="tenant external database connections",
+        checksum=checksum_text("tenant", "external_database_connections", "external_database_mappings", "read_only", "field_map_json"),
+        upgrade=_apply_tenant_external_database_connections,
+    ),
+    MigrationSpec(
+        version="2026.09.07.2",
+        name="tenant external database schema snapshots",
+        checksum=checksum_text("tenant", "external_database_schema_snapshots", "external_database_connections", "schema_snapshot_json"),
+        upgrade=_apply_tenant_external_database_schema_snapshot,
+    ),
+    MigrationSpec(
+        version="2026.09.07.3",
+        name="tenant FTP connection profiles",
+        checksum=checksum_text("tenant", "ftp_connection_profiles", "ftp_connections", "ftp_settings"),
+        upgrade=_apply_tenant_ftp_connections,
     ),
 ]
 

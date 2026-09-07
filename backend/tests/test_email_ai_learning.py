@@ -863,6 +863,31 @@ class EmailAiLearningTests(unittest.TestCase):
         self.assertFalse(validation.ok)
         self.assertEqual(validation.status, "invalid_json")
 
+    def test_prompt_validation_accepts_structured_validation_findings(self):
+        validation = validate_prompt_output(
+            "validation",
+            json.dumps(
+                {
+                    "advertencias": [
+                        {
+                            "tipo": "datos_incompletos",
+                            "campo": "fechas.entrega",
+                            "mensaje": "No se indicó la fecha de entrega.",
+                        }
+                    ],
+                    "bloqueos": [
+                        {
+                            "tipo": "validacion_no_disponible",
+                            "campo": "cliente",
+                            "mensaje": "No hay datos maestros para esta prueba.",
+                        }
+                    ],
+                }
+            ),
+        )
+        self.assertTrue(validation.ok)
+        self.assertEqual(validation.status, "valid")
+
     def test_evaluation_fixture_compares_expected_and_actual(self):
         fixture = Path(__file__).resolve().parent / "fixtures" / "agent_evaluation.json"
         summary = run_evaluation(fixture)

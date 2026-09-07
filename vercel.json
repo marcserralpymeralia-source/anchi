@@ -9,11 +9,11 @@
   "crons": [
     {
       "path": "/cron/email-sync",
-      "schedule": "0 0 * * *"
+      "schedule": "*/5 * * * *"
     },
     {
       "path": "/cron/jobs",
-      "schedule": "5 0 * * *"
+      "schedule": "*/5 * * * *"
     }
   ]
 }

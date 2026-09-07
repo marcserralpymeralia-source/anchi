@@ -289,6 +289,138 @@ class FTPSettings(Base):
     timeout_seconds: Mapped[int] = mapped_column(Integer, default=30)
 
 
+class ProxyConnection(Base):
+    """Tenant-owned access profile for the future outbound proxy gateway.
+
+    This table only stores configuration.  The application deliberately does
+    not use it to open sockets or connect to a customer database yet. Database
+    destination details belong to a separate database-connection module.
+    """
+
+    __tablename__ = "proxy_connections"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    proxy_host: Mapped[str] = mapped_column(String(255))
+    proxy_port: Mapped[int] = mapped_column(Integer, default=8787)
+    proxy_protocol: Mapped[str] = mapped_column(String(30), default="https")
+    username: Mapped[str | None] = mapped_column(String(255))
+    password_encrypted: Mapped[str | None] = mapped_column(Text)
+    tls_mode: Mapped[str] = mapped_column(String(30), default="verify")
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    notes: Mapped[str | None] = mapped_column(Text)
+    last_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_test_ok: Mapped[bool | None] = mapped_column(Boolean)
+    last_test_message: Mapped[str | None] = mapped_column(Text)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (UniqueConstraint("company_id", "name"),)
+
+
+class FTPConnection(Base):
+    """Tenant-owned FTP/FTPS destination profile.
+
+    Multiple destinations may coexist for one tenant.  The optional proxy is
+    stored here so a future export transport can select the correct network
+    hop without making the proxy global.
+    """
+
+    __tablename__ = "ftp_connections"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    connection_type: Mapped[str] = mapped_column(String(20), default="ftps_explicit")
+    host: Mapped[str | None] = mapped_column(String(255))
+    port: Mapped[int] = mapped_column(Integer, default=21)
+    username: Mapped[str | None] = mapped_column(String(255))
+    password_encrypted: Mapped[str | None] = mapped_column(Text)
+    private_key_encrypted: Mapped[str | None] = mapped_column(Text)
+    destination_path: Mapped[str] = mapped_column(String(500), default="/")
+    passive_mode: Mapped[bool] = mapped_column(Boolean, default=True)
+    overwrite_files: Mapped[bool] = mapped_column(Boolean, default=False)
+    retries: Mapped[int] = mapped_column(Integer, default=2)
+    timeout_seconds: Mapped[int] = mapped_column(Integer, default=30)
+    proxy_connection_id: Mapped[int | None] = mapped_column(ForeignKey("proxy_connections.id"), index=True)
+    last_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_test_ok: Mapped[bool | None] = mapped_column(Boolean)
+    last_test_message: Mapped[str | None] = mapped_column(Text)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (UniqueConstraint("company_id", "name"),)
+
+
+class ExternalDatabaseConnection(Base):
+    """Read-only connection profile for a customer's source database.
+
+    Credentials are encrypted at rest.  This profile is intentionally kept
+    separate from ``ProxyConnection``: a proxy is a network hop, while this
+    object describes the database that Anchi may inspect and read.
+    """
+
+    __tablename__ = "external_database_connections"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    database_type: Mapped[str] = mapped_column(String(30), default="postgresql")
+    host: Mapped[str] = mapped_column(String(255))
+    port: Mapped[int] = mapped_column(Integer, default=5432)
+    database_name: Mapped[str] = mapped_column(String(255))
+    schema_name: Mapped[str] = mapped_column(String(120), default="public")
+    username: Mapped[str] = mapped_column(String(255))
+    password_encrypted: Mapped[str | None] = mapped_column(Text)
+    ssl_mode: Mapped[str] = mapped_column(String(30), default="require")
+    proxy_connection_id: Mapped[int | None] = mapped_column(ForeignKey("proxy_connections.id"), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    read_only: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[str] = mapped_column(String(30), default="not_tested")
+    last_test_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_test_ok: Mapped[bool | None] = mapped_column(Boolean)
+    last_test_message: Mapped[str | None] = mapped_column(Text)
+    last_scan_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_scan_ok: Mapped[bool | None] = mapped_column(Boolean)
+    last_scan_message: Mapped[str | None] = mapped_column(Text)
+    schema_snapshot_json: Mapped[str | None] = mapped_column(Text)
+    updated_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    mappings: Mapped[list["ExternalDatabaseMapping"]] = relationship(back_populates="connection", cascade="all, delete-orphan")
+
+    __table_args__ = (UniqueConstraint("company_id", "name"),)
+
+
+class ExternalDatabaseMapping(Base):
+    """Field mapping from one external table into Anchi master data."""
+
+    __tablename__ = "external_database_mappings"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    connection_id: Mapped[int] = mapped_column(ForeignKey("external_database_connections.id", ondelete="CASCADE"), index=True)
+    entity_type: Mapped[str] = mapped_column(String(30))
+    table_schema: Mapped[str] = mapped_column(String(120), default="public")
+    table_name: Mapped[str] = mapped_column(String(255))
+    field_map_json: Mapped[str] = mapped_column(Text, default="{}")
+    sync_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    sync_limit: Mapped[int] = mapped_column(Integer, default=500)
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sync_ok: Mapped[bool | None] = mapped_column(Boolean)
+    last_sync_message: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    connection: Mapped[ExternalDatabaseConnection] = relationship(back_populates="mappings")
+
+    __table_args__ = (UniqueConstraint("company_id", "connection_id", "entity_type"),)
+
+
 class ExportSettings(Base):
     __tablename__ = "export_settings"
 

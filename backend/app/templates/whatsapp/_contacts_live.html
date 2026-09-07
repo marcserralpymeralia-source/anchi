@@ -1,0 +1,60 @@
+<div id="whatsapp-contacts-live-content">
+  <div class="channel-inbox-pane-header">
+    <div><strong>Contactos</strong><span class="muted">{{ summary.unread }} pendientes</span></div>
+    <span class="muted">{{ pagination.start_item }}–{{ pagination.end_item }} / {{ pagination.total_items }}</span>
+  </div>
+
+  <div class="channel-inbox-contact-list" role="list">
+    {% for conversation in conversations %}
+      <a class="channel-contact {% if selected and selected.id == conversation.id %}is-selected{% endif %} {% if conversation.unread %}is-unread{% endif %}" href="/whatsapp/inbox?conversation_id={{ conversation.id }}{% if search %}&search={{ search|urlencode }}{% endif %}" role="listitem">
+        <div class="channel-contact-avatar">
+          {% if conversation.name.startswith('+') %}
+            {{ icon_user(18) }}
+          {% else %}
+            <span>{{ conversation.name[:2]|upper }}</span>
+          {% endif %}
+        </div>
+        <div class="channel-contact-main">
+          <div class="channel-contact-top">
+            <strong class="channel-contact-name">{{ conversation.name }}</strong>
+            <time class="channel-contact-time">{{ conversation.date|local_dt(tenant_timezone, "%H:%M", "--") }}</time>
+          </div>
+          {% if conversation.detail and conversation.detail.strip() != conversation.name.strip() %}
+            <div class="channel-contact-detail">{{ conversation.detail }}</div>
+          {% endif %}
+          <div class="channel-contact-bottom">
+            <span class="channel-contact-preview">
+              {% if conversation.latest_outbound %}
+                {% if conversation.latest_status == "read" %}
+                  <span class="preview-tick preview-tick-read" title="Leído">{{ icon_check_check(14) }}</span>
+                {% elif conversation.latest_status == "delivered" %}
+                  <span class="preview-tick preview-tick-delivered" title="Entregado">{{ icon_check_check(14) }}</span>
+                {% elif conversation.latest_status in ["sent", "accepted"] %}
+                  <span class="preview-tick preview-tick-sent" title="Enviado">{{ icon_check(13) }}</span>
+                {% elif conversation.latest_status in ["failed", "error"] %}
+                  <span class="preview-tick preview-tick-failed" title="Error">{{ icon_alert_triangle(13) }}</span>
+                {% else %}
+                  <span class="preview-tick preview-tick-pending" title="Pendiente">{{ icon_clock(12) }}</span>
+                {% endif %}
+              {% endif %}
+              {{ conversation.preview }}
+            </span>
+            {% if conversation.unread %}<span class="channel-contact-unread-badge" aria-label="Mensajes pendientes"></span>{% endif %}
+          </div>
+        </div>
+      </a>
+    {% else %}
+      <div class="channel-inbox-empty-list">
+        {{ icon_whatsapp(28) }}
+        <strong>No hay conversaciones</strong>
+        <span class="muted">Cuando llegue un mensaje de WhatsApp aparecerá aquí.</span>
+      </div>
+    {% endfor %}
+  </div>
+
+  <div class="channel-inbox-pagination">
+    {% if pagination.has_previous %}<a href="/whatsapp/inbox?page={{ pagination.page - 1 }}{% if search %}&search={{ search|urlencode }}{% endif %}">Anterior</a>{% endif %}
+    <span>Página {{ pagination.page }} de {{ pagination.total_pages or 1 }}</span>
+    {% if pagination.has_next %}<a href="/whatsapp/inbox?page={{ pagination.page + 1 }}{% if search %}&search={{ search|urlencode }}{% endif %}">Siguiente</a>{% endif %}
+  </div>
+</div>

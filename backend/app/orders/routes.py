@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session, load_only, selectinload
 
 from app.agent.extraction.diagnostics import extraction_diagnostics_from_messages
 from app.core.templating import templates
-from app.dashboard.service import load_order_view_data, order_sender
+from app.dashboard.service import load_order_view_data, order_sender, orders_workbench_summary
 from app.agent.platform import LearningService
 from app.agent.services import MockAgentService, ScoringService
 from app.auth.dependencies import current_user
@@ -133,45 +133,9 @@ def list_orders(
     user: TenantUser = Depends(current_user),
 ):
     effective_search = search or customer_or_sender
-    if view == "cards" and not archived:
-        # Keep the card view on the same endpoint while delegating to the
-        # existing Bandeja renderer and query pipeline.
-        from app.pages.routes import dashboard
-
-        return dashboard(
-            request,
-            date_from=date_from,
-            date_to=date_to,
-            customer_id=str(customer_id or ""),
-            score_min=score_min,
-            score_max=score_max,
-            status=status,
-            email_type=email_type,
-            scoring_category=scoring_category,
-            sender=sender,
-            search=effective_search,
-            sort=sort,
-            mode=mode or "all",
-            agent_status=agent_status,
-            has_attachments=has_attachments,
-            order_status=order_status,
-            work_status=work_status,
-            issue_type=issue_type,
-            origin=origin,
-            reason=reason,
-            date_range=date_range,
-            quick_range=quick_range,
-            customer_or_sender=effective_search,
-            has_pdf=has_pdf,
-            requires_review=requires_review,
-            page=page,
-            page_size=page_size,
-            partial=partial,
-            db=db,
-            user=user,
-        )
 
     filters = {
+        "view": "cards" if view == "cards" and not archived else "list",
         "archived": archived,
         "date_from": date_from,
         "date_to": date_to,
@@ -237,7 +201,18 @@ def list_orders(
     view_query["view"] = "list"
     view_list_url = f"/orders?{urlencode(view_query)}"
     order_senders = {order.id: order_sender(order) for order in orders}
-    return templates.TemplateResponse("orders/list.html", {"request": request, "user": user, "orders": orders, "customers": customers, "statuses": statuses, "pagination": pagination, "filters": filters, "scoring": scoring, "categories": categories, "alerts": alerts, "status_counts": status_counts, "order_senders": order_senders, "view_cards_url": view_cards_url, "view_list_url": view_list_url})
+    workbench_items = orders_workbench_summary(order_view, filters)["items"] if filters["view"] == "cards" else []
+    current_query = {key: value for key, value in request.query_params.items() if key not in {"partial", "page", "status", "view"}}
+    current_query["page"] = 1
+
+    def status_url(status_value: str) -> str:
+        query = {"view": filters["view"], **current_query, "status": status_value}
+        return f"/orders?{urlencode(query)}"
+
+    status_urls = {"all": status_url("")}
+    for status_value in statuses:
+        status_urls[status_value] = status_url(status_value)
+    return templates.TemplateResponse("orders/list.html", {"request": request, "user": user, "orders": orders, "customers": customers, "statuses": statuses, "pagination": pagination, "filters": filters, "scoring": scoring, "categories": categories, "alerts": alerts, "status_counts": status_counts, "order_senders": order_senders, "view_cards_url": view_cards_url, "view_list_url": view_list_url, "workbench_items": workbench_items, "status_urls": status_urls})
 
 
 @router.post("/mock")

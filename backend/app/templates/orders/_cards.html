@@ -1,0 +1,35 @@
+<div class="work-queue" aria-label="Pedidos en vista de tarjetas">
+  {% for item in workbench_items %}
+    {% set score_value = item.score if item.score is not none else none %}
+    {% set confidence_key = "without" %}
+    {% if score_value is not none %}
+      {% if score_value >= 80 %}
+        {% set confidence_key = "strong" %}
+      {% elif score_value >= 60 %}
+        {% set confidence_key = "amber" %}
+      {% elif score_value >= 40 %}
+        {% set confidence_key = "low" %}
+      {% else %}
+        {% set confidence_key = "critical" %}
+      {% endif %}
+    {% endif %}
+
+    {# El estado de la tarjeta es el mismo estado que muestra la tabla. #}
+    {% set channel_label = item.channel or item.origin or "Canal" %}
+    {% set status_chip = item.order_status|status_label %}
+    {% if not status_chip %}
+      {% set status_chip = item.scoring_category|status_label %}
+    {% endif %}
+    {% if item.scoring_category == "blocked" %}
+      {% set status_chip = "No importable" %}
+    {% endif %}
+    {% set selection_id = item.order_id if item.order_id else item.email_id %}
+    {% set quick_process_label = "Confirmar" if item.kind == "order" and item.order_status_label == "Listo para confirmar" else "Procesar" %}
+    {% include "components/workbench_queue_item.html" %}
+  {% else %}
+    <article class="task-empty">
+      <strong>No hay pedidos para los filtros seleccionados.</strong>
+      <span>Prueba a cambiar o limpiar los filtros.</span>
+    </article>
+  {% endfor %}
+</div>

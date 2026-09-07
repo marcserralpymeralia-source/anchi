@@ -1,104 +1,303 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_send %}
+{% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_send, icon_check, icon_check_check, icon_clock, icon_alert_triangle, icon_user, icon_download, icon_eye, icon_image, icon_file_text, icon_play, icon_refresh %}
 {% set title = "Buzón de WhatsApp" %}
 {% block content %}
-<div class="channel-inbox-shell whatsapp-inbox-shell">
+<div class="channel-inbox-shell whatsapp-inbox-shell" data-whatsapp-live data-live-revision="{{ live_revision }}">
 
   {% if notice == "sent" %}
     <div class="channel-inbox-notice success" role="status">Mensaje enviado a Meta correctamente.</div>
   {% elif error %}
     <div class="channel-inbox-notice error" role="alert">
-      {% if error == "whatsapp_not_ready" %}WhatsApp todavía no está listo para enviar mensajes.{% elif error == "attachment_too_large" %}El tamaño total de los archivos supera el límite configurado.{% elif error == "attachment_type_not_supported" %}Solo se admiten PDF, DOC, DOCX, TXT y audio.{% elif error == "empty_message" %}Escribe un mensaje o adjunta un archivo.{% else %}No se pudo enviar el mensaje. Revisa la conexión de WhatsApp e inténtalo de nuevo.{% endif %}
+      {% if error == "whatsapp_not_ready" %}WhatsApp todavía no está listo para enviar mensajes.{% elif error == "attachment_too_large" %}El tamaño total de los archivos supera el límite configurado.{% elif error == "attachment_type_not_supported" %}Solo se admiten PDF, DOC, DOCX, TXT, imágenes y audio.{% elif error == "empty_message" %}Escribe un mensaje o adjunta un archivo.{% else %}No se pudo enviar el mensaje. Revisa la conexión de WhatsApp e inténtalo de nuevo.{% endif %}
     </div>
   {% endif %}
 
   <main class="channel-inbox-workspace">
     <aside class="channel-inbox-contacts">
-      <div class="channel-inbox-pane-header">
-        <div><strong>Contactos</strong><span class="muted">{{ summary.unread }} pendientes</span></div>
-        <span class="muted">{{ pagination.start_item }}–{{ pagination.end_item }} / {{ pagination.total_items }}</span>
-      </div>
       <form class="channel-inbox-search" method="get" action="/whatsapp/inbox">
         <span>{{ icon_search(15) }}</span>
         <input type="search" name="search" value="{{ search }}" placeholder="Buscar contacto o mensaje…" aria-label="Buscar contacto o mensaje">
       </form>
-      <div class="channel-inbox-contact-list" role="list">
-        {% for conversation in conversations %}
-          <a class="channel-contact {% if selected and selected.id == conversation.id %}is-selected{% endif %} {% if conversation.unread %}is-unread{% endif %}" href="/whatsapp/inbox?conversation_id={{ conversation.id }}{% if search %}&search={{ search|urlencode }}{% endif %}" role="listitem">
-            <span class="channel-contact-avatar">{{ conversation.name[:2]|upper }}</span>
-            <span class="channel-contact-main">
-              <span class="channel-contact-top"><strong>{{ conversation.name }}</strong><time>{{ conversation.date|local_dt(tenant_timezone, "%d %b %H:%M", "--") }}</time></span>
-              <span class="channel-contact-detail">{{ conversation.detail or "WhatsApp" }}</span>
-              <span class="channel-contact-preview">{{ conversation.preview }}</span>
-            </span>
-            {% if conversation.unread %}<span class="channel-contact-unread" aria-label="Mensajes pendientes"></span>{% endif %}
-          </a>
-        {% else %}
-          <div class="channel-inbox-empty-list">
-            {{ icon_whatsapp(28) }}
-            <strong>No hay conversaciones</strong>
-            <span class="muted">Cuando llegue un mensaje de WhatsApp aparecerá aquí.</span>
-          </div>
-        {% endfor %}
-      </div>
-      <div class="channel-inbox-pagination">
-        {% if pagination.has_previous %}<a href="/whatsapp/inbox?page={{ pagination.page - 1 }}{% if search %}&search={{ search|urlencode }}{% endif %}">Anterior</a>{% endif %}
-        <span>Página {{ pagination.page }} de {{ pagination.total_pages or 1 }}</span>
-        {% if pagination.has_next %}<a href="/whatsapp/inbox?page={{ pagination.page + 1 }}{% if search %}&search={{ search|urlencode }}{% endif %}">Siguiente</a>{% endif %}
-      </div>
+      {% include "whatsapp/_contacts_live.html" %}
     </aside>
 
     <section class="channel-inbox-chat" aria-live="polite">
+      <div id="whatsapp-chat-live-content">
+        {% include "whatsapp/_chat_live.html" %}
+      </div>
       {% if selected %}
-        <header class="channel-chat-header">
-          <div class="channel-chat-identity">
-            <span class="channel-contact-avatar large">{{ selected.name[:2]|upper }}</span>
-            <div><h3>{{ selected.name }}</h3><span class="muted">{{ selected.detail or "Conversación de WhatsApp" }}</span></div>
-          </div>
-          <div class="channel-chat-actions"><span class="badge">{{ selected.message_count }} mensajes</span></div>
-        </header>
-        <div class="channel-chat-messages" id="whatsapp-chat-messages">
-          {% for message in selected.messages %}
-            <article class="channel-chat-message {{ message.direction }}">
-              <div class="channel-chat-message-meta"><strong>{{ message.speaker }}</strong><time>{{ message.date|local_dt(tenant_timezone, "%d %b %Y, %H:%M", "--") }}</time>{% if message.direction == "outbound" %}<span class="muted">{{ message.status }}</span>{% endif %}</div>
-              {% if message.text %}<p>{{ message.text }}</p>{% endif %}
-              {% if message.attachments %}
-                <div class="channel-chat-attachments">
-                  {% for attachment in message.attachments %}
-                    {% if attachment.available %}<a class="channel-chat-attachment" href="{{ attachment.href }}" target="_blank"><span class="attachment-kind {{ attachment.kind }}">{{ attachment.kind|upper }}</span><span><strong>{{ attachment.filename }}</strong><small>{{ attachment.content_type }} · {{ attachment.size }}</small></span><span class="attachment-open">Abrir</span></a>{% else %}<div class="channel-chat-attachment is-pending"><span class="attachment-kind {{ attachment.kind }}">{{ attachment.kind|upper }}</span><span><strong>{{ attachment.filename }}</strong><small>{{ "Tipo no compatible" if attachment.status == "unsupported" else "Esperando descarga desde Meta" }} · {{ attachment.size }}</small></span></div>{% endif %}
-                  {% endfor %}
-                </div>
-              {% endif %}
-            </article>
-          {% endfor %}
-        </div>
         <form class="channel-chat-compose" method="post" action="/whatsapp/inbox/{{ selected.id }}/reply" enctype="multipart/form-data">
           <input type="hidden" name="idempotency_key" value="">
-          <textarea name="body" rows="3" maxlength="4096" placeholder="Escribe una respuesta…" {% if not ready_to_send %}disabled{% endif %}></textarea>
-          <div class="channel-chat-compose-footer">
-            <label class="channel-chat-file-picker"><input type="file" name="files" multiple accept=".pdf,.doc,.docx,.txt,audio/*"><span>{{ icon_paperclip(16) }} Adjuntar</span></label>
-            <span class="muted">PDF, DOC, DOCX, TXT y audio · ventana de respuesta de Meta</span>
-            <button class="button primary" type="submit" {% if not ready_to_send %}disabled{% endif %}>{{ icon_send(15) }} Enviar</button>
+
+          <div id="wa-selected-files" class="wa-selected-files-bar" style="display: none;" hidden>
+            <span class="wa-files-icon">{{ icon_paperclip(14) }}</span>
+            <span id="wa-files-names" class="wa-files-text"></span>
+            <button type="button" class="wa-files-clear" onclick="clearSelectedFiles()" title="Quitar archivos">×</button>
+          </div>
+
+          <div class="channel-chat-compose-main-row">
+            <div class="channel-chat-input-pill">
+              <label class="channel-chat-attach-btn" title="Adjuntar archivo (PDF, DOC, DOCX, TXT, imágenes, audio)">
+                <input type="file" name="files" id="wa-file-input" multiple accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,image/jpeg,image/png,audio/*" onchange="handleFileSelection(this)">
+                <span class="attach-btn-inner">{{ icon_paperclip(18) }}</span>
+              </label>
+
+              <textarea
+                name="body"
+                id="wa-message-input"
+                rows="1"
+                maxlength="4096"
+                placeholder="Escribe un mensaje…"
+                style="overflow: hidden; height: 22px;"
+                {% if not ready_to_send %}disabled{% endif %}
+              ></textarea>
+            </div>
+
+            <button class="channel-chat-send-btn" type="submit" title="Enviar mensaje" {% if not ready_to_send %}disabled{% endif %}>
+              {{ icon_send(17) }}
+            </button>
           </div>
         </form>
-        {% if not ready_to_send %}<p class="channel-chat-disabled-note">Conecta y activa el canal WhatsApp para poder responder desde Anchi.</p>{% endif %}
-      {% else %}
-        <div class="channel-chat-placeholder">
-          <span class="channel-inbox-mark whatsapp-mark">{{ icon_whatsapp(24) }}</span>
-          <h3>Selecciona una conversación</h3>
-          <p class="muted">Aquí podrás consultar el historial y responder sin salir de Anchi.</p>
-        </div>
       {% endif %}
     </section>
   </main>
 </div>
 <script>
+  (() => {
+    const liveRoot = document.querySelector("[data-whatsapp-live]");
+    if (!liveRoot) return;
+
+    const pageUrl = new URL(window.location.href);
+    const updateUrl = new URL("/whatsapp/inbox/updates", window.location.origin);
+    ["conversation_id", "search", "page", "page_size"].forEach((name) => {
+      const value = pageUrl.searchParams.get(name);
+      if (value !== null) updateUrl.searchParams.set(name, value);
+    });
+
+    const intervalMs = 5000;
+    let revision = liveRoot.dataset.liveRevision || "";
+    let timerId = null;
+    let activeController = null;
+    let stopped = false;
+
+    const schedule = (delay = intervalMs) => {
+      if (stopped || document.hidden) return;
+      if (timerId !== null) window.clearTimeout(timerId);
+      timerId = window.setTimeout(poll, delay);
+    };
+
+    const poll = async () => {
+      if (stopped || document.hidden) return;
+
+      const controller = new AbortController();
+      if (activeController) activeController.abort();
+      activeController = controller;
+      updateUrl.searchParams.set("since", revision);
+
+      try {
+        const response = await fetch(updateUrl, {
+          method: "GET",
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: { "Accept": "text/html" },
+          signal: controller.signal,
+        });
+
+        if (response.status === 304) return;
+        if (!response.ok) throw new Error(`WhatsApp live update failed (${response.status})`);
+
+        const html = await response.text();
+        const documentFragment = new DOMParser().parseFromString(html, "text/html");
+        const nextRevisionRoot = documentFragment.querySelector("#whatsapp-live-update");
+        const nextContacts = documentFragment.querySelector("#whatsapp-contacts-live-content");
+        const nextChat = documentFragment.querySelector("#whatsapp-chat-live-content");
+        const currentContacts = document.getElementById("whatsapp-contacts-live-content");
+        const currentChat = document.getElementById("whatsapp-chat-live-content");
+
+        if (!nextRevisionRoot || !nextContacts || !nextChat || !currentContacts || !currentChat) {
+          throw new Error("WhatsApp live update response is incomplete");
+        }
+
+        const currentMessages = document.getElementById("whatsapp-chat-messages");
+        const wasAtBottom = currentMessages
+          ? currentMessages.scrollHeight - currentMessages.scrollTop - currentMessages.clientHeight < 48
+          : true;
+        const previousScrollTop = currentMessages ? currentMessages.scrollTop : 0;
+
+        currentContacts.replaceWith(nextContacts);
+        currentChat.replaceWith(nextChat);
+        revision = nextRevisionRoot.dataset.liveRevision || revision;
+        liveRoot.dataset.liveRevision = revision;
+
+        const nextMessages = document.getElementById("whatsapp-chat-messages");
+        if (nextMessages) {
+          window.requestAnimationFrame(() => {
+            nextMessages.scrollTop = wasAtBottom ? nextMessages.scrollHeight : previousScrollTop;
+          });
+        }
+      } catch (error) {
+        if (error.name !== "AbortError") {
+          console.debug("WhatsApp live update unavailable", error);
+        }
+      } finally {
+        if (activeController === controller) {
+          activeController = null;
+          schedule();
+        }
+      }
+    };
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        if (timerId !== null) window.clearTimeout(timerId);
+        timerId = null;
+        return;
+      }
+      schedule(0);
+    });
+
+    window.addEventListener("beforeunload", () => {
+      stopped = true;
+      if (timerId !== null) window.clearTimeout(timerId);
+      if (activeController) activeController.abort();
+    }, { once: true });
+
+    schedule();
+  })();
+
   const chat = document.getElementById("whatsapp-chat-messages");
   if (chat) chat.scrollTop = chat.scrollHeight;
-  const compose = document.querySelector(".channel-chat-compose");
-  if (compose) compose.addEventListener("submit", () => {
-    const key = compose.querySelector("[name='idempotency_key']");
-    if (key && !key.value) key.value = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  }, { once: true });
+
+  const msgInput = document.getElementById("wa-message-input");
+  const composeForm = document.querySelector(".channel-chat-compose");
+
+  if (msgInput) {
+    msgInput.addEventListener("input", function() {
+      this.style.height = "auto";
+      const nextHeight = Math.min(this.scrollHeight, 120);
+      this.style.height = (nextHeight > 22 ? nextHeight : 22) + "px";
+      this.style.overflowY = this.scrollHeight > 120 ? "auto" : "hidden";
+    });
+
+    msgInput.addEventListener("keydown", function(e) {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        const hasText = this.value.trim().length > 0;
+        const fileInput = document.getElementById("wa-file-input");
+        const hasFiles = fileInput && fileInput.files && fileInput.files.length > 0;
+        if (hasText || hasFiles) {
+          if (composeForm) {
+            if (typeof composeForm.requestSubmit === "function") {
+              composeForm.requestSubmit();
+            } else {
+              composeForm.submit();
+            }
+          }
+        }
+      }
+    });
+  }
+
+  if (composeForm) {
+    composeForm.addEventListener("submit", () => {
+      const key = composeForm.querySelector("[name='idempotency_key']");
+      if (key && !key.value) key.value = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }, { once: true });
+  }
+
+  window.handleFileSelection = function(input) {
+    const bar = document.getElementById("wa-selected-files");
+    const label = document.getElementById("wa-files-names");
+    if (!bar || !label) return;
+    if (input.files && input.files.length > 0) {
+      const names = Array.from(input.files).map(f => f.name).join(", ");
+      label.textContent = names;
+      bar.hidden = false;
+      bar.style.display = "flex";
+    } else {
+      bar.hidden = true;
+      bar.style.display = "none";
+      label.textContent = "";
+    }
+  };
+
+  window.clearSelectedFiles = function() {
+    const input = document.getElementById("wa-file-input");
+    if (input) input.value = "";
+    const bar = document.getElementById("wa-selected-files");
+    const label = document.getElementById("wa-files-names");
+    if (bar) {
+      bar.hidden = true;
+      bar.style.display = "none";
+    }
+    if (label) label.textContent = "";
+  };
+
+  let currentLightboxZoom = 1;
+
+  window.openMediaLightbox = function(src, title, downloadHref) {
+    const modal = document.getElementById("wa-image-lightbox");
+    const img = document.getElementById("wa-lightbox-img");
+    const titleEl = document.getElementById("wa-lightbox-title");
+    const downloadEl = document.getElementById("wa-lightbox-download");
+    const zoomEl = document.getElementById("wa-lightbox-zoom-val");
+    if (!modal || !img) return;
+
+    currentLightboxZoom = 1;
+    img.src = src;
+    img.style.transform = "scale(1)";
+    if (titleEl) titleEl.textContent = title || "Imagen";
+    if (downloadEl) downloadEl.href = downloadHref || src;
+    if (zoomEl) zoomEl.textContent = "100%";
+    modal.classList.add("active");
+    document.body.style.overflow = "hidden";
+  };
+
+  window.closeMediaLightbox = function() {
+    const modal = document.getElementById("wa-image-lightbox");
+    if (modal) {
+      modal.classList.remove("active");
+    }
+    document.body.style.overflow = "";
+  };
+
+  window.handleLightboxBackdrop = function(e) {
+    if (e.target.id === "wa-image-lightbox" || e.target.classList.contains("wa-lightbox-body")) {
+      closeMediaLightbox();
+    }
+  };
+
+  window.zoomLightbox = function(delta) {
+    const img = document.getElementById("wa-lightbox-img");
+    const zoomEl = document.getElementById("wa-lightbox-zoom-val");
+    if (!img) return;
+    currentLightboxZoom = Math.max(0.5, Math.min(3.0, currentLightboxZoom + delta));
+    img.style.transform = `scale(${currentLightboxZoom})`;
+    if (zoomEl) zoomEl.textContent = `${Math.round(currentLightboxZoom * 100)}%`;
+  };
+
+  document.addEventListener("keydown", function(e) {
+    if (e.key === "Escape") {
+      closeMediaLightbox();
+    }
+  });
 </script>
+
+<div id="wa-image-lightbox" class="wa-lightbox-overlay" onclick="handleLightboxBackdrop(event)">
+  <div class="wa-lightbox-header">
+    <span id="wa-lightbox-title" class="wa-lightbox-title"></span>
+    <div class="wa-lightbox-actions">
+      <button type="button" class="wa-lightbox-action-btn" onclick="zoomLightbox(-0.25)" title="Reducir zoom">−</button>
+      <span id="wa-lightbox-zoom-val" class="wa-lightbox-zoom-val">100%</span>
+      <button type="button" class="wa-lightbox-action-btn" onclick="zoomLightbox(0.25)" title="Aumentar zoom">+</button>
+      <a id="wa-lightbox-download" href="" download class="wa-lightbox-action-btn" title="Descargar imagen">
+        {{ icon_download(15) }}
+      </a>
+      <button type="button" class="wa-lightbox-action-btn close" onclick="closeMediaLightbox()" title="Cerrar (Esc)">×</button>
+    </div>
+  </div>
+  <div class="wa-lightbox-body" onclick="handleLightboxBackdrop(event)">
+    <img id="wa-lightbox-img" src="" alt="" class="wa-lightbox-img" onclick="event.stopPropagation()">
+  </div>
+</div>
 {% endblock %}

@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -21,13 +22,15 @@ from app.core.encryption import decrypt_secret, encrypt_secret  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, LEGACY_OPENAI_MODEL_FALLBACK, resolve_openai_runtime_model  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import ChannelSetting, Company, Customer, EmailSettings, InputChannel, LLMSettings, Product, Role, User  # noqa: E402
+from app.db.models import AuditLog, ChannelSetting, Company, Customer, EmailSettings, InputChannel, LLMSettings, Product, ProxyConnection, Role, User  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.migrations import upgrade_master_schema  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.migrations.helpers import ensure_columns  # noqa: E402
 from app.settings.branding import get_or_create_branding  # noqa: E402
+from app.settings.integrations import AGENT_FLOW_DEMO_SAMPLE  # noqa: E402
 from app.settings.service import get_or_create_settings  # noqa: E402
+from app.logs.service import parse_audit_log_message  # noqa: E402
 from app.setup.service import get_setup_status, is_setup_operational  # noqa: E402
 from app.tenancy.database import clear_tenant_schema_cache, ensure_tenant_schema, get_tenant_engine  # noqa: E402
 from app.whatsapp.service import whatsapp_config  # noqa: E402
@@ -451,13 +454,139 @@ class SetupOnboardingTests(unittest.TestCase):
             self.assertNotIn('<dialog id="settings-email"', page.text)
             self.assertNotIn('<dialog id="settings-ai"', page.text)
 
-            for module_key in ["general", "identity", "email", "ai", "scoring", "decision", "export", "ftp", "advanced"]:
+            for module_key in ["general", "identity", "email", "ai", "scoring", "decision", "export", "ftp", "proxies", "advanced"]:
                 response = client.get(f"/settings/module/{module_key}")
                 self.assertEqual(response.status_code, 200, module_key)
                 self.assertIn(f'<dialog id="settings-{module_key}"', response.text)
 
             missing = client.get("/settings/module/not-a-module")
             self.assertEqual(missing.status_code, 404)
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+    def test_proxy_profiles_are_tenant_scoped_encrypted_and_healthcheck_isolated_from_data(self):
+        fixture = SetupFixture()
+        client, cleanup = fixture.client()
+        try:
+            self._login(client)
+            response = client.post(
+                "/settings/proxies",
+                data={
+                    "name": "Proxy de pruebas",
+                    "proxy_host": "proxy.example.test",
+                    "proxy_port": "8787",
+                    "proxy_protocol": "https",
+                    "username": "proxy-user",
+                    "password": "secret-value",
+                    "tls_mode": "verify",
+                },
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 303)
+
+            with fixture.TenantSession() as db:
+                profile = db.scalar(select(ProxyConnection).where(ProxyConnection.company_id == 1))
+                self.assertIsNotNone(profile)
+                self.assertNotEqual(profile.password_encrypted, "secret-value")
+                self.assertEqual(decrypt_secret(profile.password_encrypted), "secret-value")
+                profile_id = profile.id
+
+            fragment = client.get("/settings/module/proxies")
+            self.assertEqual(fragment.status_code, 200)
+            self.assertIn("Proxy de pruebas", fragment.text)
+            self.assertIn("Sin tráfico", fragment.text)
+            self.assertIn("Probar conexión", fragment.text)
+            self.assertIn(f'data-proxy-test-url="/settings/proxies/{profile_id}/test"', fragment.text)
+
+            with patch("app.settings.routes.httpx.Client") as http_client:
+                http_client_instance = http_client.return_value.__enter__.return_value
+                http_client_instance.get.return_value = SimpleNamespace(
+                    status_code=200,
+                    json=lambda: {"service": "anchi-proxy", "traffic_enabled": False},
+                )
+                test_response = client.post(
+                    f"/settings/proxies/{profile_id}/test",
+                    headers={"Accept": "application/json"},
+                )
+
+            self.assertEqual(test_response.status_code, 200)
+            self.assertEqual(test_response.json()["status"], "ready")
+            call = http_client_instance.get.call_args
+            self.assertEqual(call.args[0], "https://proxy.example.test:8787/health")
+            self.assertEqual(call.kwargs["auth"], ("proxy-user", "secret-value"))
+            self.assertNotIn("database", call.args[0])
+
+            with fixture.TenantSession() as db:
+                saved = db.get(ProxyConnection, profile_id)
+                self.assertTrue(saved.last_test_ok)
+                self.assertEqual(saved.last_test_message, "Gateway accesible. El tráfico de datos sigue desactivado.")
+                healthcheck_log = db.scalar(
+                    select(AuditLog)
+                    .where(AuditLog.company_id == 1, AuditLog.action == "settings.proxy.healthcheck")
+                    .order_by(AuditLog.id.desc())
+                )
+                self.assertIsNotNone(healthcheck_log)
+                audit_payload = parse_audit_log_message(healthcheck_log.message)
+                self.assertEqual(audit_payload["metadata"]["result"], "ready")
+                self.assertEqual(audit_payload["metadata"]["stage"], "gateway.health")
+                self.assertEqual(audit_payload["metadata"]["proxy_host"], "proxy.example.test")
+                self.assertEqual(audit_payload["metadata"]["proxy_port"], 8787)
+                self.assertTrue(audit_payload["metadata"]["auth_configured"])
+                self.assertNotIn("secret-value", healthcheck_log.message)
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+    def test_proxy_healthcheck_reports_tls_configuration_errors(self):
+        fixture = SetupFixture()
+        client, cleanup = fixture.client()
+        try:
+            self._login(client)
+            response = client.post(
+                "/settings/proxies",
+                data={
+                    "name": "Proxy TLS",
+                    "proxy_host": "82.223.17.129",
+                    "proxy_port": "443",
+                    "proxy_protocol": "https",
+                    "username": "proxy-user",
+                    "password": "secret-value",
+                    "tls_mode": "verify",
+                },
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 303)
+
+            with fixture.TenantSession() as db:
+                profile = db.scalar(select(ProxyConnection).where(ProxyConnection.company_id == 1))
+                self.assertIsNotNone(profile)
+                profile_id = profile.id
+
+            with patch("app.settings.routes.httpx.Client") as http_client:
+                http_client.return_value.__enter__.side_effect = httpx.ConnectError(
+                    "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
+                )
+                test_response = client.post(
+                    f"/settings/proxies/{profile_id}/test",
+                    headers={"Accept": "application/json"},
+                )
+
+            self.assertEqual(test_response.status_code, 502)
+            payload = test_response.json()
+            self.assertEqual(payload["status"], "tls_error")
+            self.assertIn("certificado TLS", payload["message"])
+            with fixture.TenantSession() as db:
+                healthcheck_log = db.scalar(
+                    select(AuditLog)
+                    .where(AuditLog.company_id == 1, AuditLog.action == "settings.proxy.healthcheck")
+                    .order_by(AuditLog.id.desc())
+                )
+                self.assertIsNotNone(healthcheck_log)
+                audit_payload = parse_audit_log_message(healthcheck_log.message)
+                self.assertEqual(audit_payload["metadata"]["result"], "tls_error")
+                self.assertEqual(audit_payload["metadata"]["status"], "error")
+                self.assertNotIn("secret-value", healthcheck_log.message)
         finally:
             cleanup()
             fixture.cleanup()
@@ -673,13 +802,16 @@ class SetupOnboardingTests(unittest.TestCase):
                 db.commit()
 
             captured_settings = {}
+            captured_inputs = {}
 
-            def fake_classify(_db, settings, _company_id, _text, _prompt):
+            def fake_classify(_db, settings, _company_id, text, _prompt):
                 captured_settings["classification"] = settings
+                captured_inputs["classification"] = text
                 return {"ok": True, "message": "Clasificación correcta", "model": settings.classification_model, "duration_ms": 11}
 
-            def fake_extract(_db, settings, _company_id, _text, _prompt):
+            def fake_extract(_db, settings, _company_id, text, _prompt):
                 captured_settings["extraction"] = settings
+                captured_inputs["extraction"] = text
                 return {
                     "ok": True,
                     "message": "Extracción correcta",
@@ -688,9 +820,11 @@ class SetupOnboardingTests(unittest.TestCase):
                     "validated_content": {"lineas": [{"referencia": "P001", "cantidad": 10}]},
                 }
 
-            def fake_validate(_db, settings, _company_id, _text, extracted_content, _prompt):
+            def fake_validate(_db, settings, _company_id, text, extracted_content, _prompt, validation_context):
                 captured_settings["validation"] = settings
+                captured_inputs["validation"] = text
                 self.assertEqual(extracted_content["lineas"][0]["referencia"], "P001")
+                self.assertIn("Datos maestros disponibles", validation_context)
                 return {"ok": True, "message": "Validación correcta", "model": settings.validation_model, "duration_ms": 33}
 
             with patch("app.settings.routes.classify_sample", side_effect=fake_classify), patch(
@@ -719,6 +853,9 @@ class SetupOnboardingTests(unittest.TestCase):
             self.assertTrue(payload["ok"])
             self.assertEqual([step["label"] for step in payload["steps"]], ["Clasificación", "Extracción", "Validación"])
             self.assertEqual([step["model"] for step in payload["steps"]], ["gpt-5.6-sol", "gpt-4.1", "gpt-5.6-validator"])
+            self.assertEqual(captured_inputs["classification"], AGENT_FLOW_DEMO_SAMPLE)
+            self.assertEqual(captured_inputs["extraction"], AGENT_FLOW_DEMO_SAMPLE)
+            self.assertEqual(captured_inputs["validation"], AGENT_FLOW_DEMO_SAMPLE)
             self.assertEqual(captured_settings["classification"].reasoning_effort, "high")
             self.assertEqual(captured_settings["validation"].validation_model, "gpt-5.6-validator")
 

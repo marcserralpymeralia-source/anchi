@@ -53,13 +53,13 @@ class MailInboxRoutesTests(unittest.TestCase):
         for item in expected:
             self.assertIn(item, routes)
 
-    def test_jobs_cron_requires_auth_and_runs_single_job(self):
+    def test_jobs_cron_requires_auth_and_runs_configured_batch(self):
         fixture = build_performance_fixture("small")
         try:
             with performance_test_client(fixture) as client:
                 unauthorized = client.get("/cron/jobs")
 
-                with patch(
+                with patch("app.cron.routes.get_settings", return_value=SimpleNamespace(cron_secret="test-cron-secret")), patch(
                     "app.cron.routes.run_worker_cycle",
                     return_value={
                         "tenants": 1,
@@ -69,12 +69,17 @@ class MailInboxRoutesTests(unittest.TestCase):
                         "blocked": 0,
                     },
                 ) as worker:
-                    authorized = client.get(
+                    spoofed = client.get(
                         "/cron/jobs",
                         headers={"x-vercel-cron": "1"},
                     )
+                    authorized = client.get(
+                        "/cron/jobs",
+                        headers={"Authorization": "Bearer test-cron-secret"},
+                    )
 
             self.assertEqual(unauthorized.status_code, 403)
+            self.assertEqual(spoofed.status_code, 403)
             self.assertEqual(authorized.status_code, 200)
 
             payload = authorized.json()
@@ -82,7 +87,7 @@ class MailInboxRoutesTests(unittest.TestCase):
             self.assertEqual(payload["attempted"], 1)
             self.assertEqual(payload["processed"], 1)
 
-            worker.assert_called_once_with(max_jobs=1)
+            worker.assert_called_once_with(max_jobs=5)
         finally:
             fixture.cleanup()
 

@@ -21,15 +21,19 @@ from app.workers.jobs_worker import run_worker_cycle
 router = APIRouter(prefix="/cron", tags=["cron"])
 
 
+def _cron_token(request: Request) -> str:
+    authorization = (request.headers.get("authorization") or "").strip()
+    if authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return authorization
+
+
 def _cron_authorized(request: Request) -> None:
     settings = get_settings()
     expected = (settings.cron_secret or "").strip()
-    if (request.headers.get("x-vercel-cron") or "").strip().lower() in {"1", "true", "yes"}:
-        return
     provided = (
         request.headers.get("x-cron-secret")
-        or request.query_params.get("secret")
-        or request.headers.get("authorization")
+        or _cron_token(request)
         or ""
     ).strip()
     if expected and provided == expected:
@@ -42,7 +46,9 @@ def _cron_authorized(request: Request) -> None:
 @router.api_route("/jobs", methods=["GET", "POST"])
 def jobs_cron(request: Request):
     _cron_authorized(request)
-    result = run_worker_cycle(max_jobs=1)
+    settings = get_settings()
+    batch_size = max(1, min(int(getattr(settings, "cron_job_batch_size", 5) or 5), 20))
+    result = run_worker_cycle(max_jobs=batch_size)
     return JSONResponse({"ok": True, **result})
 
 

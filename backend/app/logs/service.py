@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import AuditLog, User
 from app.core.observability import current_context, encode_structured_message, redact_sensitive_data
+from app.core.timezones import DEFAULT_TIMEZONE, format_local_datetime, resolve_timezone_name
 
 
 def _audit_user_id(db: Session, user: User | None) -> int | None:
@@ -91,9 +92,10 @@ def log_flow_event(
     )
 
 
-def audit_log_text(logs: list[AuditLog]) -> str:
+def audit_log_text(logs: list[AuditLog], *, timezone_name: str = DEFAULT_TIMEZONE) -> str:
     """Serialize tenant flow/audit events as a portable UTF-8 .log document."""
 
+    timezone_name = resolve_timezone_name(timezone_name)
     lines: list[str] = []
     for log in logs:
         parsed = parse_audit_log_message(log.message)
@@ -102,6 +104,8 @@ def audit_log_text(logs: list[AuditLog]) -> str:
         timestamp = log.created_at or datetime.now(timezone.utc)
         record = {
             "timestamp": timestamp.isoformat(),
+            "timestamp_local": format_local_datetime(timestamp, timezone_name, "%d/%m/%Y %H:%M:%S"),
+            "timezone": timezone_name,
             "action": log.action,
             "entity_type": log.entity_type,
             "entity_id": log.entity_id,

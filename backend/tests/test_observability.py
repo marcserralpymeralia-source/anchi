@@ -4,6 +4,7 @@ import asyncio
 import json
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -25,11 +26,11 @@ from app.core.middleware import branding_middleware  # noqa: E402
 from app.core.observability import decode_structured_message, observability_scope  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import AuditLog, BackgroundJob, PromptExecution  # noqa: E402
+from app.db.models import AuditLog, BackgroundJob, Company, PromptExecution  # noqa: E402
 from app.health.routes import health_live, health_ready  # noqa: E402
 from app.jobs.service import enqueue_job, job_payload, job_trace  # noqa: E402
 from app.logs.service import audit_log_text, log_action, log_flow_event  # noqa: E402
-from app.logs.routes import delete_logs, logs_download  # noqa: E402
+from app.logs.routes import _company_timezone_name, _serialize_audit_log, delete_logs, logs_download  # noqa: E402
 from app.agent.prompt_runtime import run_prompt_execution  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
@@ -141,6 +142,29 @@ class ObservabilityTests(unittest.TestCase):
         record = json.loads(exported.strip())
         self.assertEqual(record["metadata"]["flow_id"], "flow-email-1")
         self.assertEqual(record["metadata"]["access_token"], "[redacted]")
+        db.close()
+
+    def test_logs_use_tenant_timezone_for_display_and_export(self):
+        db = self.TenantSession()
+        db.add(Company(id=1, timezone="Europe/Madrid"))
+        db.commit()
+        self.assertEqual(_company_timezone_name(db, 1), "Europe/Madrid")
+
+        created_at = datetime(2026, 9, 4, 9, 50, 5, tzinfo=timezone.utc)
+        log = AuditLog(
+            company_id=1,
+            action="flow.email.persisted",
+            message="Correo guardado",
+            created_at=created_at,
+        )
+
+        serialized = _serialize_audit_log(log, timezone_name="Europe/Madrid")
+        self.assertEqual(serialized["created_label"], "04/09/2026 11:50:05")
+
+        record = json.loads(audit_log_text([log], timezone_name="Europe/Madrid").strip())
+        self.assertEqual(record["timestamp"], created_at.isoformat())
+        self.assertEqual(record["timestamp_local"], "04/09/2026 11:50:05")
+        self.assertEqual(record["timezone"], "Europe/Madrid")
         db.close()
 
     def test_log_download_and_delete_are_scoped_to_company(self):
