@@ -2,7 +2,7 @@
 {% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_send, icon_check, icon_check_check, icon_clock, icon_alert_triangle, icon_user, icon_download, icon_eye, icon_image, icon_file_text, icon_play, icon_refresh %}
 {% set title = "Buzón de WhatsApp" %}
 {% block content %}
-<div class="channel-inbox-shell whatsapp-inbox-shell">
+<div class="channel-inbox-shell whatsapp-inbox-shell" data-whatsapp-live data-live-revision="{{ live_revision }}">
 
   {% if notice == "sent" %}
     <div class="channel-inbox-notice success" role="status">Mensaje enviado a Meta correctamente.</div>
@@ -14,223 +14,18 @@
 
   <main class="channel-inbox-workspace">
     <aside class="channel-inbox-contacts">
-      <div class="channel-inbox-pane-header">
-        <div><strong>Contactos</strong><span class="muted">{{ summary.unread }} pendientes</span></div>
-        <span class="muted">{{ pagination.start_item }}–{{ pagination.end_item }} / {{ pagination.total_items }}</span>
-      </div>
       <form class="channel-inbox-search" method="get" action="/whatsapp/inbox">
         <span>{{ icon_search(15) }}</span>
         <input type="search" name="search" value="{{ search }}" placeholder="Buscar contacto o mensaje…" aria-label="Buscar contacto o mensaje">
       </form>
-      <div class="channel-inbox-contact-list" role="list">
-        {% for conversation in conversations %}
-          <a class="channel-contact {% if selected and selected.id == conversation.id %}is-selected{% endif %} {% if conversation.unread %}is-unread{% endif %}" href="/whatsapp/inbox?conversation_id={{ conversation.id }}{% if search %}&search={{ search|urlencode }}{% endif %}" role="listitem">
-            <div class="channel-contact-avatar">
-              {% if conversation.name.startswith('+') %}
-                {{ icon_user(18) }}
-              {% else %}
-                <span>{{ conversation.name[:2]|upper }}</span>
-              {% endif %}
-            </div>
-            <div class="channel-contact-main">
-              <div class="channel-contact-top">
-                <strong class="channel-contact-name">{{ conversation.name }}</strong>
-                <time class="channel-contact-time">{{ conversation.date|local_dt(tenant_timezone, "%H:%M", "--") }}</time>
-              </div>
-              {% if conversation.detail and conversation.detail.strip() != conversation.name.strip() %}
-                <div class="channel-contact-detail">{{ conversation.detail }}</div>
-              {% endif %}
-              <div class="channel-contact-bottom">
-                <span class="channel-contact-preview">
-                  {% if conversation.latest_outbound %}
-                    {% if conversation.latest_status == "read" %}
-                      <span class="preview-tick preview-tick-read" title="Leído">{{ icon_check_check(14) }}</span>
-                    {% elif conversation.latest_status == "delivered" %}
-                      <span class="preview-tick preview-tick-delivered" title="Entregado">{{ icon_check_check(14) }}</span>
-                    {% elif conversation.latest_status in ["sent", "accepted"] %}
-                      <span class="preview-tick preview-tick-sent" title="Enviado">{{ icon_check(13) }}</span>
-                    {% elif conversation.latest_status in ["failed", "error"] %}
-                      <span class="preview-tick preview-tick-failed" title="Error">{{ icon_alert_triangle(13) }}</span>
-                    {% else %}
-                      <span class="preview-tick preview-tick-pending" title="Pendiente">{{ icon_clock(12) }}</span>
-                    {% endif %}
-                  {% endif %}
-                  {{ conversation.preview }}
-                </span>
-                {% if conversation.unread %}<span class="channel-contact-unread-badge" aria-label="Mensajes pendientes"></span>{% endif %}
-              </div>
-            </div>
-          </a>
-        {% else %}
-          <div class="channel-inbox-empty-list">
-            {{ icon_whatsapp(28) }}
-            <strong>No hay conversaciones</strong>
-            <span class="muted">Cuando llegue un mensaje de WhatsApp aparecerá aquí.</span>
-          </div>
-        {% endfor %}
-      </div>
-      <div class="channel-inbox-pagination">
-        {% if pagination.has_previous %}<a href="/whatsapp/inbox?page={{ pagination.page - 1 }}{% if search %}&search={{ search|urlencode }}{% endif %}">Anterior</a>{% endif %}
-        <span>Página {{ pagination.page }} de {{ pagination.total_pages or 1 }}</span>
-        {% if pagination.has_next %}<a href="/whatsapp/inbox?page={{ pagination.page + 1 }}{% if search %}&search={{ search|urlencode }}{% endif %}">Siguiente</a>{% endif %}
-      </div>
+      {% include "whatsapp/_contacts_live.html" %}
     </aside>
 
     <section class="channel-inbox-chat" aria-live="polite">
+      <div id="whatsapp-chat-live-content">
+        {% include "whatsapp/_chat_live.html" %}
+      </div>
       {% if selected %}
-        <header class="channel-chat-header">
-          <div class="channel-chat-identity">
-            <div class="channel-chat-header-avatar">
-              {% if selected.name.startswith('+') %}
-                {{ icon_user(20) }}
-              {% else %}
-                <span>{{ selected.name[:2]|upper }}</span>
-              {% endif %}
-            </div>
-            <div class="channel-chat-header-info">
-              <h3>{{ selected.name }}</h3>
-              <span class="muted">
-                {% if selected.detail and selected.detail.strip() != selected.name.strip() %}
-                  {{ selected.detail }} ·
-                {% endif %}
-                WhatsApp
-              </span>
-            </div>
-          </div>
-          <div class="channel-chat-actions">
-            <span class="badge">{{ selected.message_count }} mensajes</span>
-          </div>
-        </header>
-
-        <div class="channel-chat-messages" id="whatsapp-chat-messages">
-          {% set ns = namespace(prev_date="") %}
-          {% for message in selected.messages %}
-            {% set current_date = message.date|local_dt(tenant_timezone, "%d %b %Y", "--") %}
-            {% if current_date != ns.prev_date and current_date != "--" %}
-              <div class="channel-chat-date-separator">
-                <span>{{ current_date }}</span>
-              </div>
-              {% set ns.prev_date = current_date %}
-            {% endif %}
-            <article class="channel-chat-message {{ message.direction }}">
-              {% if message.text %}
-                <div class="channel-chat-message-text">{{ message.text }}</div>
-              {% endif %}
-              {% if message.attachments %}
-                <div class="channel-chat-attachments">
-                  {% for attachment in message.attachments %}
-                    {% if attachment.available %}
-                      {% if attachment.kind == "image" %}
-                        <div class="wa-bubble-media-image" onclick="openMediaLightbox('{{ attachment.href }}', '{{ attachment.filename }}', '{{ attachment.download_href }}')" title="Ampliar imagen">
-                          <img src="{{ attachment.href }}" alt="{{ attachment.filename }}" class="wa-bubble-img" loading="lazy">
-                          <div class="wa-bubble-img-overlay">
-                            <span class="wa-img-zoom-hint">{{ icon_search(15) }} Ampliar</span>
-                          </div>
-                        </div>
-                      {% elif attachment.kind == "pdf" %}
-                        <div class="wa-bubble-doc-card">
-                          <div class="wa-doc-preview-area" onclick="window.open('{{ attachment.href }}', '_blank')" title="Clic para ver">
-                            <iframe src="{{ attachment.href }}#toolbar=0&navpanes=0&scrollbar=0" class="wa-doc-iframe" loading="lazy" tabindex="-1"></iframe>
-                          </div>
-                          <div class="wa-doc-info-bar">
-                            <div class="wa-doc-badge pdf">
-                              <span>PDF</span>
-                            </div>
-                            <div class="wa-doc-titles">
-                              <span class="wa-doc-filename" title="{{ attachment.filename }}">{{ attachment.filename }}</span>
-                              <span class="wa-doc-meta">PDF · {{ attachment.size }}</span>
-                            </div>
-                          </div>
-                          <div class="wa-doc-btn-grid">
-                            <a class="wa-doc-btn" href="{{ attachment.href }}" target="_blank">
-                              {{ icon_eye(13) }} Ver
-                            </a>
-                            <span class="wa-doc-btn-divider"></span>
-                            <a class="wa-doc-btn" href="{{ attachment.download_href }}" download="{{ attachment.filename }}">
-                              {{ icon_download(13) }} Guardar como…
-                            </a>
-                          </div>
-                        </div>
-                      {% elif attachment.kind == "audio" %}
-                        <div class="wa-bubble-audio-card">
-                          <audio controls preload="metadata" class="wa-audio-control">
-                            <source src="{{ attachment.href }}" type="{{ attachment.content_type }}">
-                            Tu navegador no soporta reproducción de audio.
-                          </audio>
-                          <div class="wa-audio-foot">
-                            <span class="wa-audio-name" title="{{ attachment.filename }}">{{ attachment.filename }}</span>
-                            <span class="wa-audio-size">{{ attachment.size }}</span>
-                          </div>
-                        </div>
-                      {% else %}
-                        <div class="wa-bubble-doc-card">
-                          <div class="wa-doc-info-bar">
-                            <div class="wa-doc-badge {{ attachment.kind }}">
-                              <span>{{ attachment.kind|upper }}</span>
-                            </div>
-                            <div class="wa-doc-titles">
-                              <span class="wa-doc-filename" title="{{ attachment.filename }}">{{ attachment.filename }}</span>
-                              <span class="wa-doc-meta">{{ attachment.content_type }} · {{ attachment.size }}</span>
-                            </div>
-                          </div>
-                          <div class="wa-doc-btn-grid">
-                            <a class="wa-doc-btn" href="{{ attachment.href }}" target="_blank">
-                              {{ icon_eye(13) }} Ver
-                            </a>
-                            <span class="wa-doc-btn-divider"></span>
-                            <a class="wa-doc-btn" href="{{ attachment.download_href }}" download="{{ attachment.filename }}">
-                              {{ icon_download(13) }} Guardar como…
-                            </a>
-                          </div>
-                        </div>
-                      {% endif %}
-                    {% else %}
-                      <div class="channel-chat-attachment is-pending wa-bubble-pending-card">
-                        <div class="wa-pending-icon-box">
-                          {% if attachment.kind == "image" %}
-                            {{ icon_image(18) }}
-                          {% elif attachment.kind == "audio" %}
-                            {{ icon_play(16) }}
-                          {% elif attachment.kind == "pdf" %}
-                            {{ icon_file_text(18) }}
-                          {% else %}
-                            {{ icon_paperclip(16) }}
-                          {% endif %}
-                        </div>
-                        <div class="wa-pending-content">
-                          <strong class="wa-pending-filename">{{ attachment.filename }}</strong>
-                          <small class="wa-pending-sub">{{ "Tipo no compatible" if attachment.status == "unsupported" else "Esperando descarga desde Meta" }} · {{ attachment.size }}</small>
-                        </div>
-                        {% if attachment.status != "unsupported" and selected %}
-                          <a href="/whatsapp/inbox/{{ selected.id }}/sync-media/{{ attachment.id }}" class="wa-pending-retry-btn" title="Reintentar descarga de Meta">
-                            {{ icon_refresh(13) }}
-                          </a>
-                        {% endif %}
-                      </div>
-                    {% endif %}
-                  {% endfor %}
-                </div>
-              {% endif %}
-              <div class="channel-chat-message-meta-inline">
-                <time datetime="{{ message.date.isoformat() if message.date else '' }}">{{ message.date|local_dt(tenant_timezone, "%H:%M", "--") }}</time>
-                {% if message.direction == "outbound" %}
-                  {% if message.status == "read" %}
-                    <span class="wa-status-tick wa-tick-read" title="Leído">{{ icon_check_check(15) }}</span>
-                  {% elif message.status == "delivered" %}
-                    <span class="wa-status-tick wa-tick-delivered" title="Entregado">{{ icon_check_check(15) }}</span>
-                  {% elif message.status in ["sent", "accepted"] %}
-                    <span class="wa-status-tick wa-tick-sent" title="Enviado a Meta">{{ icon_check(14) }}</span>
-                  {% elif message.status in ["failed", "error"] %}
-                    <span class="wa-status-tick wa-tick-failed" title="Error en el envío">{{ icon_alert_triangle(13) }}</span>
-                  {% else %}
-                    <span class="wa-status-tick wa-tick-pending" title="Pendiente de confirmación">{{ icon_clock(12) }}</span>
-                  {% endif %}
-                {% endif %}
-              </div>
-            </article>
-          {% endfor %}
-        </div>
-
         <form class="channel-chat-compose" method="post" action="/whatsapp/inbox/{{ selected.id }}/reply" enctype="multipart/form-data">
           <input type="hidden" name="idempotency_key" value="">
 
@@ -263,12 +58,6 @@
             </button>
           </div>
         </form>
-      {% else %}
-        <div class="channel-chat-placeholder">
-          <span class="channel-inbox-mark whatsapp-mark">{{ icon_whatsapp(24) }}</span>
-          <h3>Selecciona una conversación</h3>
-          <p class="muted">Aquí podrás consultar el historial y responder sin salir de Anchi.</p>
-        </div>
       {% endif %}
     </section>
   </main>

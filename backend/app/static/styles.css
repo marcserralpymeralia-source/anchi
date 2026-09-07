@@ -12638,3 +12638,148 @@ table.logs-table tr:hover td {
 .whatsapp-inbox-shell .wa-files-clear:hover {
   color: #ef4444 !important;
 }
+
+/* External database settings */
+.external-databases-drawer {
+  max-width: 1180px;
+}
+
+.external-database-safety-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  background: #f0fdfa;
+  border-color: #99f6e4;
+  color: #115e59;
+}
+
+.external-database-safety-note .muted {
+  color: #0f766e;
+}
+
+.external-database-list,
+.external-mapping-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.external-database-card,
+.external-mapping-panel {
+  min-width: 0;
+  border: 1px solid #dbe4e8;
+  border-radius: 10px;
+  background: #fff;
+  padding: 14px;
+}
+
+.external-database-card-head,
+.external-schema-head,
+.external-database-meta,
+.external-database-actions,
+.external-mapping-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.external-database-card-head,
+.external-schema-head {
+  justify-content: space-between;
+}
+
+.external-database-card-head > div,
+.external-schema-head > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.external-database-meta {
+  margin-top: 10px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.external-database-meta span {
+  padding-right: 8px;
+  border-right: 1px solid #e2e8f0;
+}
+
+.external-database-meta span:last-child {
+  border-right: 0;
+}
+
+.external-database-actions {
+  margin-top: 12px;
+}
+
+.external-database-empty {
+  display: grid;
+  gap: 5px;
+  justify-items: start;
+  padding: 24px 12px;
+  border-top: 1px solid #eef2f3;
+  border-bottom: 1px solid #eef2f3;
+}
+
+.external-database-edit-form,
+.external-schema-panel {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #eef2f3;
+}
+
+.external-mapping-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
+.external-field-mapping-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin-top: 12px;
+}
+
+.external-field-mapping {
+  min-width: 0;
+}
+
+.external-field-mapping > span {
+  display: block;
+  margin-bottom: 4px;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.external-sync-option {
+  margin-top: 12px;
+  font-size: 12px;
+}
+
+.external-mapping-actions {
+  margin-top: 12px;
+}
+
+.external-preview-table-wrap {
+  overflow: auto;
+  max-height: 260px;
+  margin-top: 12px;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+}
+
+.external-preview-table-wrap .data-table {
+  min-width: 520px;
+}
+
+@media (max-width: 760px) {
+  .external-mapping-grid,
+  .external-field-mapping-list {
+    grid-template-columns: 1fr;
+  }
+}

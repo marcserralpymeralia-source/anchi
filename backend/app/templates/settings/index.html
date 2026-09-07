@@ -1391,8 +1391,8 @@
       {% endif %}
 
       <div class="external-database-list">
-        {% for connection in external_database_connections %}
-          <article class="external-database-card" data-external-database-card data-connection-id="{{ connection.id }}">
+          {% for connection in external_database_connections %}
+          <article class="external-database-card" data-external-database-card data-connection-id="{{ connection.id }}" data-external-mappings='{{ (external_database_mappings.get(connection.id, []) if external_database_mappings is defined else []) | tojson }}'>
             <div class="external-database-card-head">
               <div>
                 <strong>{{ connection.name }}</strong>
@@ -1412,7 +1412,7 @@
             <div class="external-database-actions">
               {% if can_edit_external_databases %}
                 <button type="button" class="secondary compact-button" data-external-test>{{ icon_refresh(14) }} Probar conexión</button>
-                <button type="button" class="secondary compact-button" data-external-scan disabled>{{ icon_search(14) }} Escanear esquema</button>
+                <button type="button" class="secondary compact-button" data-external-scan {% if not connection.last_test_ok %}disabled{% endif %}>{{ icon_search(14) }} Escanear esquema</button>
                 <form method="post" action="/settings/data-sources/{{ connection.id }}/toggle" class="js-loading-form"><button type="submit" class="secondary compact-button">{{ 'Desactivar' if connection.enabled else 'Activar' }}</button></form>
                 <button type="button" class="secondary compact-button" data-external-edit-toggle>Editar</button>
               {% endif %}
@@ -1446,6 +1446,7 @@
                     <div class="section-title-row"><div><h5>{{ 'Clientes' if entity_type == 'customers' else 'Productos' }}</h5><p class="muted">Elige tabla y vincula los campos mínimos.</p></div><span class="badge">Solo lectura</span></div>
                     <label>Tabla origen<select data-mapping-table disabled><option>Escanea el esquema para empezar</option></select></label>
                     <div class="external-field-mapping-list" data-mapping-fields></div>
+                    <label class="checkbox-card external-sync-option"><input type="checkbox" data-sync-enabled> Permitir sincronización manual de esta tabla</label>
                     <div class="external-mapping-actions"><button type="button" class="primary compact-button" data-save-mapping disabled>Guardar mapeo</button><button type="button" class="secondary compact-button" data-preview-mapping disabled>Previsualizar</button><button type="button" class="secondary compact-button" data-sync-mapping disabled>Sincronizar ahora</button></div>
                     <p class="settings-status-note" data-mapping-status hidden role="status" aria-live="polite"></p>
                     <div class="external-preview-table-wrap" data-mapping-preview hidden><table class="data-table"><thead data-preview-head></thead><tbody data-preview-body></tbody></table></div>
@@ -2088,7 +2089,7 @@
 
   function checkSettingsHash() {
     const hash = window.location.hash.replace("#", "").trim();
-    if (hash && ["general", "identity", "email", "ai", "scoring", "decision", "export", "ftp", "proxies", "advanced"].includes(hash)) {
+    if (hash && ["general", "identity", "email", "ai", "scoring", "decision", "export", "ftp", "proxies", "data-sources", "advanced"].includes(hash)) {
       openSettingsDrawer(hash);
     }
   }
@@ -2155,6 +2156,18 @@
     const tableSelect = panel?.querySelector("[data-mapping-table]");
     return (card?._externalSchema?.tables || []).find((table) => table.name === tableSelect?.value) || null;
   }
+  function updateExternalMappingActions(panel) {
+    const table = externalTableForPanel(panel);
+    const saved = panel?._savedMapping && table && panel._savedMapping.table_name === table.name ? panel._savedMapping : null;
+    const dirty = panel?.dataset.mappingDirty === "true";
+    const syncEnabled = Boolean(panel?.querySelector("[data-sync-enabled]")?.checked);
+    const save = panel?.querySelector("[data-save-mapping]");
+    const preview = panel?.querySelector("[data-preview-mapping]");
+    const sync = panel?.querySelector("[data-sync-mapping]");
+    if (save) save.disabled = !table;
+    if (preview) preview.disabled = !saved || dirty;
+    if (sync) sync.disabled = !saved || dirty || !syncEnabled;
+  }
   function renderExternalMappingFields(panel) {
     const wrapper = panel?.querySelector("[data-mapping-fields]");
     if (!wrapper) return;
@@ -2164,18 +2177,24 @@
     const fields = panel.dataset.entityType === "customers"
       ? [["code", "Código", true], ["fiscal_name", "Razón social", true], ["commercial_name", "Nombre comercial", false], ["primary_email", "Email", false], ["phone", "Teléfono", false], ["tax_id", "CIF / NIF", false], ["address", "Dirección", false], ["city", "Ciudad", false], ["province", "Provincia", false], ["country", "País", false], ["category", "Categoría", false], ["status", "Estado", false]]
       : [["reference", "Referencia", true], ["name", "Nombre", true], ["alternative_code", "Código alternativo", false], ["description", "Descripción", false], ["brand", "Marca", false], ["usual_supplier", "Proveedor habitual", false], ["family", "Familia", false], ["subfamily", "Subfamilia", false], ["format", "Formato", false], ["sale_unit", "Unidad de venta", false], ["ean", "EAN", false], ["sale_price", "Precio", false], ["discount_percent", "Descuento %", false], ["status", "Estado", false]];
+    const saved = panel._savedMapping && table && panel._savedMapping.table_name === table.name ? panel._savedMapping : null;
     wrapper.replaceChildren();
     fields.forEach(([key, label, required]) => {
       const field = document.createElement("label");
       field.className = "external-field-mapping";
       field.innerHTML = `<span>${label}${required ? " *" : ""}</span><select data-map-field="${key}" ${table ? "" : "disabled"}><option value="">No importar</option>${sourceOptions}</select>`;
+      const select = field.querySelector("[data-map-field]");
+      if (select && saved?.field_map?.[key]) select.value = saved.field_map[key];
       wrapper.append(field);
     });
-    const enabled = Boolean(table);
-    panel.querySelectorAll("[data-save-mapping], [data-preview-mapping], [data-sync-mapping]").forEach((button) => { button.disabled = !enabled; });
+    const syncToggle = panel.querySelector("[data-sync-enabled]");
+    if (syncToggle) syncToggle.checked = Boolean(saved?.sync_enabled);
+    panel.dataset.mappingDirty = "false";
+    updateExternalMappingActions(panel);
   }
-  function renderExternalSchema(card, schema) {
+  function renderExternalSchema(card, schema, mappings = []) {
     card._externalSchema = schema;
+    card._externalMappings = Object.fromEntries((mappings || []).map((mapping) => [mapping.entity_type, mapping]));
     const panel = card.querySelector("[data-external-schema]");
     if (!panel) return;
     panel.hidden = false;
@@ -2186,6 +2205,9 @@
       select.replaceChildren(new Option("Selecciona una tabla…", ""));
       schema.tables.forEach((table) => select.add(new Option(`${table.name} · ${table.columns.length} columnas`, table.name)));
       select.disabled = false;
+      const saved = card._externalMappings[mappingPanel.dataset.entityType] || null;
+      mappingPanel._savedMapping = saved;
+      if (saved?.table_name && schema.tables.some((table) => table.name === saved.table_name)) select.value = saved.table_name;
       renderExternalMappingFields(mappingPanel);
     });
   }
@@ -2213,6 +2235,14 @@
     }
     const tableSelect = event.target.closest("[data-mapping-table]");
     if (tableSelect) renderExternalMappingFields(tableSelect.closest("[data-external-mapping]"));
+    const mappingField = event.target.closest("[data-map-field], [data-sync-enabled]");
+    if (mappingField) {
+      const panel = mappingField.closest("[data-external-mapping]");
+      if (panel) {
+        panel.dataset.mappingDirty = "true";
+        updateExternalMappingActions(panel);
+      }
+    }
   });
   document.addEventListener("click", async (event) => {
     const testButton = event.target.closest("[data-external-test]");
@@ -2255,7 +2285,7 @@
         const response = await fetch(`/settings/data-sources/${connectionId}/scan`, {method: "POST", credentials: "same-origin", headers: {"Accept": "application/json", "X-Requested-With": "fetch"}});
         const payload = await externalJson(response);
         if (!response.ok || !payload.ok) throw new Error(payload.message || "No se pudo leer el esquema.");
-        renderExternalSchema(card, payload.schema);
+        renderExternalSchema(card, payload.schema, payload.mappings || []);
         externalStatus(card, payload.message, "success");
       } catch (error) { externalStatus(card, error.message || "No se pudo leer el esquema.", "error"); }
       finally { button.disabled = false; }
@@ -2272,11 +2302,13 @@
       const status = mappingPanel.querySelector("[data-mapping-status]");
       if (status) { status.hidden = false; status.className = "settings-status-note is-pending"; status.textContent = "Validando y guardando el mapeo…"; }
       try {
-        const response = await fetch(`/settings/data-sources/${connectionId}/mapping`, {method: "POST", credentials: "same-origin", headers: {"Accept": "application/json", "Content-Type": "application/json", "X-Requested-With": "fetch"}, body: JSON.stringify({entity_type: entityType, table_name: selectedTable, table_schema: card._externalSchema.schema, field_map: fieldMap, sync_enabled: true, sync_limit: 500})});
+        const response = await fetch(`/settings/data-sources/${connectionId}/mapping`, {method: "POST", credentials: "same-origin", headers: {"Accept": "application/json", "Content-Type": "application/json", "X-Requested-With": "fetch"}, body: JSON.stringify({entity_type: entityType, table_name: selectedTable, table_schema: card._externalSchema.schema, field_map: fieldMap, sync_enabled: Boolean(mappingPanel.querySelector("[data-sync-enabled]")?.checked), sync_limit: 500})});
         const payload = await externalJson(response);
         if (!response.ok || !payload.ok) throw new Error(payload.message || "No se pudo guardar el mapeo.");
+        mappingPanel._savedMapping = payload.mapping;
+        mappingPanel.dataset.mappingDirty = "false";
         if (status) { status.className = "settings-status-note is-success"; status.textContent = "Mapeo guardado. Puedes previsualizarlo o sincronizarlo."; }
-        mappingPanel.querySelectorAll("[data-preview-mapping], [data-sync-mapping]").forEach((action) => { action.disabled = false; });
+        updateExternalMappingActions(mappingPanel);
       } catch (error) { if (status) { status.className = "settings-status-note is-error"; status.textContent = error.message; } }
       finally { button.disabled = false; }
       return;

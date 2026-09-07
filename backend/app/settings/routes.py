@@ -33,7 +33,7 @@ from app.settings.branding import branding_to_dict, delete_brand_asset, get_or_c
 from app.settings.email_config import TEMPLATE_VARIABLES, email_config_status, email_templates, ensure_default_email_templates, serialize_email_settings
 from app.settings.integrations import AGENT_FLOW_DEMO_SAMPLE, AGENT_FLOW_DEMO_VALIDATION_CONTEXT, classify_sample, extract_sample, preview_initial_imap_sync, run_initial_imap_sync, send_test_email, test_imap_connection, test_smtp_connection, validate_sample
 from app.settings.application import run_connection_test, update_settings_section_async
-from app.external_databases.service import ExternalDatabaseError, _safe_error_message, connection_summary, database_type_options, entity_field_options, normalize_connection_values, preview_mapping, scan_schema, sync_mapping, test_connection, validate_mapping_payload
+from app.external_databases.service import MAX_SYNC_ROWS, ExternalDatabaseError, _safe_error_message, connection_summary, database_type_options, entity_field_options, mapping_summary, normalize_connection_values, preview_mapping, scan_schema, sync_mapping, test_connection as test_external_database_connection, validate_mapping_payload
 from app.settings.service import get_or_create_settings, resolve_updated_by_id, update_with_form
 from app.dashboard.service import recent_processed_emails_overview
 from app.jobs.service import enqueue_job, execute_job_inline, job_payload
@@ -415,8 +415,20 @@ def _settings_module_context(request: Request, db: Session, user: TenantUser, mo
             .where(ProxyConnection.company_id == user.company_id)
             .order_by(ProxyConnection.name.asc(), ProxyConnection.id.asc())
         ).all()
+        mappings = db.scalars(
+            select(ExternalDatabaseMapping)
+            .where(ExternalDatabaseMapping.company_id == user.company_id)
+            .order_by(ExternalDatabaseMapping.entity_type.asc(), ExternalDatabaseMapping.id.asc())
+        ).all()
+        external_mappings: dict[int, list[dict]] = {}
+        for mapping in mappings:
+            try:
+                external_mappings.setdefault(mapping.connection_id, []).append(mapping_summary(mapping))
+            except ExternalDatabaseError:
+                logger.warning("Se ha omitido un mapeo externo inválido id=%s", mapping.id)
         context.update(
             external_database_connections=external_connections,
+            external_database_mappings=external_mappings,
             proxy_connections=proxies,
             can_edit_external_databases=can_edit_external_databases(user),
             database_type_options=database_type_options(),
@@ -1547,6 +1559,10 @@ def reset_company_default(db: Session = Depends(get_tenant_db), user: TenantUser
 
 @router.post("/{section}")
 async def update_settings(section: str, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    # Keep this compatibility route from swallowing the dedicated external
+    # database endpoint, which is declared later in this legacy module.
+    if section == "data-sources":
+        return await save_external_database(request, db, user)
     anchor = await update_settings_section_async(section, request, db, user)
     log_action(db, company_id=user.company_id, user=user, action=f"settings.{section}.update", entity_type="settings", message=f"Configuracion actualizada: {section}")
     return RedirectResponse(f"/settings#{anchor}", status_code=303)
@@ -2142,7 +2158,9 @@ def _external_database_for_user(db: Session, user: TenantUser, connection_id: in
 
 def _external_database_response(request: Request, payload: dict, anchor: str = "data-sources"):
     if "application/json" in (request.headers.get("accept") or "") or "application/json" in (request.headers.get("content-type") or ""):
-        return JSONResponse(payload, status_code=payload.pop("_status_code", 200))
+        status_code = int(payload.get("_status_code", 200) or 200)
+        response_payload = {key: value for key, value in payload.items() if key != "_status_code"}
+        return JSONResponse(response_payload, status_code=status_code)
     return RedirectResponse(f"/settings#{anchor}", status_code=303)
 
 
@@ -2177,6 +2195,13 @@ async def save_external_database(request: Request, db: Session = Depends(get_ten
     except ExternalDatabaseError as exc:
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=422)
 
+    previous_values = {
+        key: getattr(existing, key, None)
+        for key in ("name", "database_type", "host", "port", "database_name", "schema_name", "username", "ssl_mode", "proxy_connection_id")
+    }
+    configuration_changed = existing is None or any(previous_values.get(key) != values.get(key) for key in previous_values)
+    if password and password not in {"********", "••••••••"}:
+        configuration_changed = True
     connection = existing or ExternalDatabaseConnection(company_id=user.company_id)
     db.add(connection)
     for key, value in values.items():
@@ -2186,6 +2211,14 @@ async def save_external_database(request: Request, db: Session = Depends(get_ten
 
         connection.password_encrypted = encrypt_secret(password)
     connection.read_only = True
+    if configuration_changed:
+        connection.status = "not_tested"
+        connection.last_test_at = None
+        connection.last_test_ok = None
+        connection.last_test_message = None
+        connection.last_scan_at = None
+        connection.last_scan_ok = None
+        connection.last_scan_message = None
     connection.updated_by = resolve_updated_by_id(db, user)
     connection.updated_at = datetime.now(timezone.utc)
     if values["enabled"]:
@@ -2209,6 +2242,40 @@ async def save_external_database(request: Request, db: Session = Depends(get_ten
     return _external_database_response(request, {"ok": True, "id": connection.id, "message": "Conexión guardada correctamente."})
 
 
+@router.post("/data-sources/{connection_id}/toggle")
+def toggle_external_database(connection_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if not can_edit_external_databases(user):
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede activar fuentes de datos."}, status_code=403)
+    connection = _external_database_for_user(db, user, connection_id)
+    if connection is None:
+        return JSONResponse({"ok": False, "message": "No se encontró la conexión indicada."}, status_code=404)
+    connection.enabled = not bool(connection.enabled)
+    if connection.enabled:
+        db.execute(
+            update(ExternalDatabaseConnection)
+            .where(
+                ExternalDatabaseConnection.company_id == user.company_id,
+                ExternalDatabaseConnection.id != connection.id,
+            )
+            .values(enabled=False, updated_at=datetime.now(timezone.utc))
+        )
+    connection.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    log_action(
+        db,
+        company_id=user.company_id,
+        user=user,
+        action="settings.external_database.toggle",
+        entity_type="external_database",
+        entity_id=connection.id,
+        message=f"Conexión externa {'activada' if connection.enabled else 'desactivada'}: {connection.name}",
+    )
+    payload = {"ok": True, "id": connection.id, "enabled": bool(connection.enabled), "message": f"Conexión {'activada' if connection.enabled else 'desactivada'}."}
+    if "application/json" in (request.headers.get("accept") or ""):
+        return JSONResponse(payload)
+    return RedirectResponse("/settings#data-sources", status_code=303)
+
+
 @router.post("/data-sources/{connection_id}/test")
 def test_external_database(connection_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not can_edit_external_databases(user):
@@ -2216,7 +2283,7 @@ def test_external_database(connection_id: int, request: Request, db: Session = D
     connection = _external_database_for_user(db, user, connection_id)
     if connection is None:
         return JSONResponse({"ok": False, "message": "No se encontró la conexión indicada."}, status_code=404)
-    ok, message = test_connection(connection)
+    ok, message = test_external_database_connection(connection)
     now = datetime.now(timezone.utc)
     connection.last_test_at = now
     connection.last_test_ok = ok
@@ -2253,7 +2320,12 @@ def scan_external_database(connection_id: int, request: Request, db: Session = D
         connection.status = "scanned"
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="settings.external_database.scan", entity_type="external_database", entity_id=connection.id, message=connection.last_scan_message, metadata={"table_count": len(schema["tables"]), "read_only": True})
-        return JSONResponse({"ok": True, "schema": schema, "message": connection.last_scan_message, "scanned_at": now.isoformat()})
+        mappings = db.scalars(
+            select(ExternalDatabaseMapping)
+            .where(ExternalDatabaseMapping.connection_id == connection.id, ExternalDatabaseMapping.company_id == user.company_id)
+            .order_by(ExternalDatabaseMapping.entity_type.asc(), ExternalDatabaseMapping.id.asc())
+        ).all()
+        return JSONResponse({"ok": True, "schema": schema, "mappings": [mapping_summary(item) for item in mappings], "message": connection.last_scan_message, "scanned_at": now.isoformat()})
     except ExternalDatabaseError as exc:
         connection.last_scan_ok = False
         connection.last_scan_message = str(exc)
@@ -2275,6 +2347,8 @@ async def save_external_database_mapping(connection_id: int, request: Request, d
     entity_type = str(data.get("entity_type") or "").strip().lower()
     table_name = str(data.get("table_name") or "").strip()
     table_schema = str(data.get("table_schema") or connection.schema_name or "public").strip()
+    if connection.database_type == "sqlite":
+        table_schema = "main"
     try:
         raw_map = data.get("field_map") or data.get("field_map_json") or "{}"
         field_map = json.loads(raw_map) if isinstance(raw_map, str) else raw_map
@@ -2325,6 +2399,8 @@ def sync_external_database_mapping(connection_id: int, entity_type: str, request
     mapping = db.scalar(select(ExternalDatabaseMapping).where(ExternalDatabaseMapping.connection_id == connection_id, ExternalDatabaseMapping.company_id == user.company_id, ExternalDatabaseMapping.entity_type == entity_type))
     if connection is None or mapping is None:
         return JSONResponse({"ok": False, "message": "No existe un mapeo guardado para esta entidad."}, status_code=404)
+    if not connection.enabled:
+        return JSONResponse({"ok": False, "message": "Activa la conexión antes de sincronizar sus datos."}, status_code=422)
     if not mapping.sync_enabled:
         return JSONResponse({"ok": False, "message": "Activa la sincronización del mapeo antes de ejecutarla."}, status_code=422)
     try:

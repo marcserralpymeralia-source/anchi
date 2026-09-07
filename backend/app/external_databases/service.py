@@ -4,6 +4,7 @@ import json
 import logging
 import re
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import MetaData, Table, create_engine, inspect, select, text
@@ -59,6 +60,8 @@ MAX_TABLES = 200
 MAX_COLUMNS = 100
 MAX_PREVIEW_ROWS = 50
 MAX_SYNC_ROWS = 5000
+MAX_CELL_LENGTH = 2000
+UNSAFE_COLUMN_TYPE_MARKERS = ("blob", "bytea", "binary", "varbinary", "image")
 _HOST_RE = re.compile(r"^(?=.{1,253}$)[A-Za-z0-9][A-Za-z0-9_.:-]*$")
 
 
@@ -176,6 +179,12 @@ def _engine_for(connection: ExternalDatabaseConnection, password: str | None) ->
         query=query,
     )
     connect_args: dict[str, Any] = {"connect_timeout": 5}
+    if database_type == "mysql" and connection.ssl_mode != "disable":
+        # PyMySQL enables TLS when an SSL context/dict is supplied. Verification
+        # is opt-in because many customer installations expose a private CA.
+        connect_args["ssl"] = {}
+        if connection.ssl_mode == "verify-full":
+            connect_args.update(ssl_verify_cert=True, ssl_verify_identity=True)
     return create_engine(url, connect_args=connect_args, pool_pre_ping=True, pool_size=1, max_overflow=0)
 
 
@@ -243,12 +252,24 @@ def _mapping_dict(mapping: ExternalDatabaseMapping) -> dict[str, str]:
         raise ExternalDatabaseError("El mapeo guardado no es válido.") from exc
     if not isinstance(payload, dict):
         raise ExternalDatabaseError("El mapeo guardado no es válido.")
-    return {str(key): str(value) for key, value in payload.items() if str(key).strip() and str(value).strip()}
+    normalized = {str(key).strip(): str(value).strip() for key, value in payload.items() if str(key).strip() and str(value).strip()}
+    allowed = {key for key, _label, _required in ENTITY_FIELDS.get(mapping.entity_type, ())}
+    if not allowed:
+        raise ExternalDatabaseError("El tipo de datos del mapeo no es válido.")
+    if any(key not in allowed for key in normalized):
+        raise ExternalDatabaseError("El mapeo guardado contiene campos de destino no permitidos.")
+    return normalized
 
 
 def validate_mapping_payload(entity_type: str, field_map: dict[str, Any], schema_payload: dict[str, Any]) -> dict[str, str]:
     if entity_type not in ENTITY_FIELDS:
         raise ExternalDatabaseError("El tipo de datos a mapear no es válido.")
+    if not isinstance(field_map, dict):
+        raise ExternalDatabaseError("El mapeo de campos no es válido.")
+    allowed_targets = {key for key, _label, _required in ENTITY_FIELDS[entity_type]}
+    unknown_targets = [str(key).strip() for key in field_map if str(key).strip() not in allowed_targets]
+    if unknown_targets:
+        raise ExternalDatabaseError("El mapeo contiene campos de destino no permitidos.")
     available = {
         str(column["name"])
         for table in schema_payload.get("tables", [])
@@ -259,6 +280,13 @@ def validate_mapping_payload(entity_type: str, field_map: dict[str, Any], schema
     invalid = [source for source in normalized.values() if source not in available]
     if invalid:
         raise ExternalDatabaseError("El mapeo contiene columnas que ya no existen en el esquema escaneado.")
+    unsafe = []
+    for table in schema_payload.get("tables", []):
+        for column in table.get("columns", []):
+            if str(column.get("name")) in normalized.values() and any(marker in str(column.get("type") or "").lower() for marker in UNSAFE_COLUMN_TYPE_MARKERS):
+                unsafe.append(str(column.get("name")))
+    if unsafe:
+        raise ExternalDatabaseError("No se pueden mapear columnas binarias: " + ", ".join(sorted(set(unsafe))) + ".")
     missing = [key for key, _label, required in ENTITY_FIELDS[entity_type] if required and not normalized.get(key)]
     if missing:
         labels = {key: label for key, label, _required in ENTITY_FIELDS[entity_type]}
@@ -272,7 +300,30 @@ def _reflected_table(engine: Engine, mapping: ExternalDatabaseMapping) -> Table:
     table_names = set(inspector.get_table_names(schema=schema))
     if mapping.table_name not in table_names:
         raise ExternalDatabaseError("La tabla del mapeo ya no existe en la base de datos externa.")
-    return Table(mapping.table_name, MetaData(), schema=schema, autoload_with=engine)
+    table = Table(mapping.table_name, MetaData(), schema=schema, autoload_with=engine)
+    missing = [source for source in _mapping_dict(mapping).values() if source not in table.c]
+    if missing:
+        raise ExternalDatabaseError("El mapeo contiene columnas que ya no existen en la tabla externa.")
+    return table
+
+
+def _safe_external_value(value: Any) -> Any:
+    """Keep previews JSON serializable and prevent huge source cells in memory."""
+
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, Decimal):
+        return str(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, bytes):
+        return f"[contenido binario omitido: {len(value)} bytes]"
+    text_value = str(value)
+    return text_value if len(text_value) <= MAX_CELL_LENGTH else text_value[:MAX_CELL_LENGTH] + "…"
+
+
+def _source_text(value: Any) -> str:
+    return "" if value is None else str(value).strip()
 
 
 def read_mapping_rows(connection: ExternalDatabaseConnection, mapping: ExternalDatabaseMapping, limit: int) -> list[dict[str, Any]]:
@@ -291,7 +342,7 @@ def read_mapping_rows(connection: ExternalDatabaseConnection, mapping: ExternalD
             try:
                 if conn.dialect.name == "postgresql":
                     conn.exec_driver_sql("SET TRANSACTION READ ONLY")
-                return [dict(row) for row in conn.execute(statement).mappings().all()]
+                return [{key: _safe_external_value(value) for key, value in row.items()} for row in conn.execute(statement).mappings().all()]
             finally:
                 transaction.rollback()
     except (ExternalDatabaseError, SQLAlchemyError, OSError) as exc:
@@ -311,16 +362,37 @@ def sync_mapping(db: Session, connection: ExternalDatabaseConnection, mapping: E
     field_map = _mapping_dict(mapping)
     counts = {"created": 0, "updated": 0, "skipped": 0, "errors": 0}
     errors: list[str] = []
+    identity_field = "code" if mapping.entity_type == "customers" else "reference"
+    required_fields = {key for key, _label, required in ENTITY_FIELDS[mapping.entity_type] if required}
+    seen_identity: set[str] = set()
     for index, row in enumerate(rows, start=1):
+        identity = _source_text(row.get(identity_field))
+        if not identity:
+            counts["errors"] += 1
+            if len(errors) < 10:
+                errors.append(f"Fila {index}: falta el identificador {identity_field}.")
+            continue
+        if identity.casefold() in seen_identity:
+            counts["skipped"] += 1
+            if len(errors) < 10:
+                errors.append(f"Fila {index}: identificador {identity_field} duplicado; se omite para evitar una actualización ambigua.")
+            continue
+        seen_identity.add(identity.casefold())
+        missing_required = sorted(field for field in required_fields if not _source_text(row.get(field)))
+        if missing_required:
+            counts["errors"] += 1
+            if len(errors) < 10:
+                errors.append(f"Fila {index}: faltan campos obligatorios ({', '.join(missing_required)}).")
+            continue
         try:
-            payload = {target: str(row.get(target) or "").strip() for target in field_map}
-            if mapping.entity_type == "customers":
-                outcome = upsert_customer(db, company_id=company_id, data=payload, source="external_database", actor_id=actor_id)
-            else:
-                outcome = upsert_product(db, company_id=company_id, data=payload, source="external_database", actor_id=actor_id)
+            payload = {target: _source_text(row.get(target)) for target in field_map}
+            with db.begin_nested():
+                if mapping.entity_type == "customers":
+                    outcome = upsert_customer(db, company_id=company_id, data=payload, source="external_database", actor_id=actor_id)
+                else:
+                    outcome = upsert_product(db, company_id=company_id, data=payload, source="external_database", actor_id=actor_id)
             counts[outcome.action] = counts.get(outcome.action, 0) + 1
         except (SQLAlchemyError, ValueError, TypeError) as exc:
-            db.rollback()
             counts["errors"] += 1
             if len(errors) < 10:
                 errors.append(f"Fila {index}: {_safe_error_message(exc)}")
@@ -350,4 +422,19 @@ def connection_summary(connection: ExternalDatabaseConnection) -> dict[str, Any]
         "last_scan_at": connection.last_scan_at.isoformat() if connection.last_scan_at else None,
         "last_scan_ok": connection.last_scan_ok,
         "last_scan_message": connection.last_scan_message,
+    }
+
+
+def mapping_summary(mapping: ExternalDatabaseMapping) -> dict[str, Any]:
+    return {
+        "id": mapping.id,
+        "entity_type": mapping.entity_type,
+        "table_schema": mapping.table_schema,
+        "table_name": mapping.table_name,
+        "field_map": _mapping_dict(mapping),
+        "sync_enabled": bool(mapping.sync_enabled),
+        "sync_limit": int(mapping.sync_limit or 500),
+        "last_sync_at": mapping.last_sync_at.isoformat() if mapping.last_sync_at else None,
+        "last_sync_ok": mapping.last_sync_ok,
+        "last_sync_message": mapping.last_sync_message,
     }
