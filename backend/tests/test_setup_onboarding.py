@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import httpx
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -21,7 +22,7 @@ from app.core.encryption import decrypt_secret, encrypt_secret  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, LEGACY_OPENAI_MODEL_FALLBACK, resolve_openai_runtime_model  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import ChannelSetting, Company, Customer, EmailSettings, InputChannel, LLMSettings, Product, ProxyConnection, Role, User  # noqa: E402
+from app.db.models import AuditLog, ChannelSetting, Company, Customer, EmailSettings, InputChannel, LLMSettings, Product, ProxyConnection, Role, User  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.migrations import upgrade_master_schema  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
@@ -29,6 +30,7 @@ from app.migrations.helpers import ensure_columns  # noqa: E402
 from app.settings.branding import get_or_create_branding  # noqa: E402
 from app.settings.integrations import AGENT_FLOW_DEMO_SAMPLE  # noqa: E402
 from app.settings.service import get_or_create_settings  # noqa: E402
+from app.logs.service import parse_audit_log_message  # noqa: E402
 from app.setup.service import get_setup_status, is_setup_operational  # noqa: E402
 from app.tenancy.database import clear_tenant_schema_cache, ensure_tenant_schema, get_tenant_engine  # noqa: E402
 from app.whatsapp.service import whatsapp_config  # noqa: E402
@@ -519,6 +521,72 @@ class SetupOnboardingTests(unittest.TestCase):
                 saved = db.get(ProxyConnection, profile_id)
                 self.assertTrue(saved.last_test_ok)
                 self.assertEqual(saved.last_test_message, "Gateway accesible. El tráfico de datos sigue desactivado.")
+                healthcheck_log = db.scalar(
+                    select(AuditLog)
+                    .where(AuditLog.company_id == 1, AuditLog.action == "settings.proxy.healthcheck")
+                    .order_by(AuditLog.id.desc())
+                )
+                self.assertIsNotNone(healthcheck_log)
+                audit_payload = parse_audit_log_message(healthcheck_log.message)
+                self.assertEqual(audit_payload["metadata"]["result"], "ready")
+                self.assertEqual(audit_payload["metadata"]["stage"], "gateway.health")
+                self.assertEqual(audit_payload["metadata"]["proxy_host"], "proxy.example.test")
+                self.assertEqual(audit_payload["metadata"]["proxy_port"], 8787)
+                self.assertTrue(audit_payload["metadata"]["auth_configured"])
+                self.assertNotIn("secret-value", healthcheck_log.message)
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+    def test_proxy_healthcheck_reports_tls_configuration_errors(self):
+        fixture = SetupFixture()
+        client, cleanup = fixture.client()
+        try:
+            self._login(client)
+            response = client.post(
+                "/settings/proxies",
+                data={
+                    "name": "Proxy TLS",
+                    "proxy_host": "82.223.17.129",
+                    "proxy_port": "443",
+                    "proxy_protocol": "https",
+                    "username": "proxy-user",
+                    "password": "secret-value",
+                    "tls_mode": "verify",
+                },
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 303)
+
+            with fixture.TenantSession() as db:
+                profile = db.scalar(select(ProxyConnection).where(ProxyConnection.company_id == 1))
+                self.assertIsNotNone(profile)
+                profile_id = profile.id
+
+            with patch("app.settings.routes.httpx.Client") as http_client:
+                http_client.return_value.__enter__.side_effect = httpx.ConnectError(
+                    "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
+                )
+                test_response = client.post(
+                    f"/settings/proxies/{profile_id}/test",
+                    headers={"Accept": "application/json"},
+                )
+
+            self.assertEqual(test_response.status_code, 502)
+            payload = test_response.json()
+            self.assertEqual(payload["status"], "tls_error")
+            self.assertIn("certificado TLS", payload["message"])
+            with fixture.TenantSession() as db:
+                healthcheck_log = db.scalar(
+                    select(AuditLog)
+                    .where(AuditLog.company_id == 1, AuditLog.action == "settings.proxy.healthcheck")
+                    .order_by(AuditLog.id.desc())
+                )
+                self.assertIsNotNone(healthcheck_log)
+                audit_payload = parse_audit_log_message(healthcheck_log.message)
+                self.assertEqual(audit_payload["metadata"]["result"], "tls_error")
+                self.assertEqual(audit_payload["metadata"]["status"], "error")
+                self.assertNotIn("secret-value", healthcheck_log.message)
         finally:
             cleanup()
             fixture.cleanup()

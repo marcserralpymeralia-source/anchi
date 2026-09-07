@@ -1,6 +1,7 @@
 import logging
 import json
 import re
+import ssl
 from types import SimpleNamespace
 from datetime import datetime, timezone
 from datetime import date
@@ -839,6 +840,11 @@ def _proxy_health_result(connection: ProxyConnection) -> tuple[bool, str, str]:
             )
     except httpx.TimeoutException:
         return False, "timeout", "El gateway no respondió dentro del tiempo esperado."
+    except httpx.ConnectError as exc:
+        error_text = str(exc).upper()
+        if isinstance(exc.__cause__, ssl.SSLError) or "SSL" in error_text or "CERTIFICATE" in error_text:
+            return False, "tls_error", "No se pudo validar el certificado TLS. Usa el hostname del certificado del gateway o revisa la configuración TLS."
+        return False, "unreachable", "No se pudo conectar con el gateway configurado."
     except httpx.HTTPError:
         return False, "unreachable", "No se pudo conectar con el gateway configurado."
     except ValueError as exc:
@@ -913,14 +919,65 @@ def test_proxy_connection(proxy_id: int, request: Request, db: Session = Depends
     if connection is None:
         return JSONResponse({"ok": False, "message": "No se encontró el perfil de proxy."}, status_code=404)
     tested_at = datetime.now(timezone.utc)
+    started_at = perf_counter()
     try:
         ok, status, message = _proxy_health_result(connection)
     except ValueError as exc:
         ok, status, message = False, "invalid_configuration", str(exc)
+    duration_ms = round((perf_counter() - started_at) * 1000, 2)
     connection.last_test_at = tested_at
     connection.last_test_ok = ok
     connection.last_test_message = message
     db.commit()
+    healthcheck_metadata = {
+        "event": "settings.proxy.healthcheck",
+        "stage": "gateway.health",
+        "status": "success" if ok else "error",
+        "result": status,
+        "profile_name": connection.name,
+        "proxy_host": connection.proxy_host,
+        "proxy_port": connection.proxy_port,
+        "proxy_protocol": connection.proxy_protocol,
+        "tls_mode": connection.tls_mode,
+        "endpoint": "/health",
+        "auth_configured": bool(connection.username and connection.password_encrypted),
+        "duration_ms": duration_ms,
+    }
+    try:
+        log_action(
+            db,
+            company_id=user.company_id,
+            user=user,
+            action="settings.proxy.healthcheck",
+            entity_type="proxy_connection",
+            entity_id=connection.id,
+            message=f"Prueba del gateway: {message}",
+            metadata=healthcheck_metadata,
+        )
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.exception(
+            "settings.proxy.healthcheck.audit_log_failed",
+            extra={
+                "event": "settings.proxy.healthcheck.audit_log_failed",
+                "company_id": user.company_id,
+                "user_id": user.id,
+                "proxy_id": connection.id,
+                "result": status,
+            },
+        )
+    logger.info(
+        "settings.proxy.healthcheck.completed",
+        extra={
+            "event": "settings.proxy.healthcheck.completed",
+            "company_id": user.company_id,
+            "user_id": user.id,
+            "proxy_id": connection.id,
+            "result": status,
+            "ok": ok,
+            "duration_ms": duration_ms,
+        },
+    )
     if "application/json" in (request.headers.get("accept") or ""):
         return JSONResponse(
             {"ok": ok, "status": status, "message": message, "checked_at": tested_at.isoformat()},
