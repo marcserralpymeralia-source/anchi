@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_search, icon_close, icon_plus, icon_trash, icon_check, icon_edit, icon_building, icon_refresh, icon_eye %}
+{% from "components/icons.html" import icon_search, icon_close, icon_plus, icon_trash, icon_check, icon_edit, icon_building, icon_refresh, icon_eye, icon_database, icon_shield %}
 {% set title = "Configuración" %}
 {% block head_extra %}<script src="{{ asset_url('js/settings-email-backfill.js') }}" defer></script>{% endblock %}
 {% macro state_label(state) -%}
@@ -1366,9 +1366,14 @@
     <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
   </div>
   <div class="drawer-body stack external-databases-drawer">
-    <section class="drawer-card external-database-safety-note">
-      <strong>{{ icon_building(15) }} Lectura segura por defecto</strong>
-      <span class="muted">Anchi no ejecuta SQL escrito por el usuario, no modifica la base externa y limita las previsualizaciones y sincronizaciones.</span>
+    <section class="drawer-card external-database-overview-card">
+      <div class="external-database-banner is-safe">
+        <span class="external-database-pill-badge is-safe">{{ icon_shield(13) }} Lectura segura</span>
+        <div class="external-database-banner-info">
+          <strong>Modo estrictamente lectura y aislamiento por tenant</strong>
+          <span class="muted">Anchi no ejecuta SQL arbitrario, no modifica la base externa y limita las previsualizaciones y sincronizaciones hacia maestros locales.</span>
+        </div>
+      </div>
     </section>
 
     <section class="drawer-card">
@@ -1378,78 +1383,151 @@
           <p class="muted">Las credenciales se cifran y nunca se muestran ni se escriben en los logs.</p>
         </div>
         {% if can_edit_external_databases %}
-          <button type="button" class="secondary compact-button" onclick="document.getElementById('external-database-create-dialog').showModal();">{{ icon_plus(13) }} Añadir conexión</button>
+          <button type="button" class="secondary compact-button" onclick="document.getElementById('external-database-create-dialog').showModal();">
+            {{ icon_plus(13) }}
+            <span>Añadir conexión</span>
+          </button>
         {% endif %}
       </div>
 
       {% if not external_database_connections %}
-        <div class="external-database-empty">
-          <strong>Aún no hay una fuente conectada</strong>
-          <span class="muted">Añade los datos que te facilite la empresa y prueba la conexión antes de escanearla.</span>
-          {% if can_edit_external_databases %}<button type="button" class="secondary compact-button" onclick="document.getElementById('external-database-create-dialog').showModal();">Crear primera conexión</button>{% endif %}
+        <div class="external-database-empty proxy-empty-card">
+          <p class="muted" style="margin:0 0 10px 0;">No hay fuentes de datos externas conectadas.</p>
+          {% if can_edit_external_databases %}
+            <button type="button" class="secondary compact-button" onclick="document.getElementById('external-database-create-dialog').showModal();">
+              {{ icon_plus(13) }}
+              <span>Crear primera conexión</span>
+            </button>
+          {% endif %}
         </div>
       {% endif %}
 
-      <div class="external-database-list">
-          {% for connection in external_database_connections %}
-          <article class="external-database-card" data-external-database-card data-connection-id="{{ connection.id }}" data-external-test-ok="{{ 'true' if connection.last_test_ok else 'false' }}" data-external-schema='{{ (external_database_schemas.get(connection.id, {}) if external_database_schemas is defined else {}) | tojson }}' data-external-mappings='{{ (external_database_mappings.get(connection.id, []) if external_database_mappings is defined else []) | tojson }}'>
-            <div class="external-database-card-head">
-              <div>
-                <strong>{{ connection.name }}</strong>
-                <span class="badge {% if connection.status in ['connected', 'scanned'] %}status-confirmed{% elif connection.status == 'error' %}status-doubtful{% endif %}">{{ {'not_tested': 'Sin probar', 'connected': 'Conectada', 'scanned': 'Esquema leído', 'error': 'Con avisos'}.get(connection.status, connection.status) }}</span>
-                {% if connection.enabled %}<span class="badge status-confirmed">Activa</span>{% endif %}
+      <div class="external-database-list proxy-cards-list">
+        {% for connection in external_database_connections %}
+          <article class="external-database-card proxy-profile-card {% if connection.enabled %}is-enabled-card{% endif %}" id="connection-card-{{ connection.id }}" data-external-database-card data-connection-id="{{ connection.id }}" data-external-test-ok="{{ 'true' if connection.last_test_ok else 'false' }}" data-external-schema='{{ (external_database_schemas.get(connection.id, {}) if external_database_schemas is defined else {}) | tojson }}' data-external-mappings='{{ (external_database_mappings.get(connection.id, []) if external_database_mappings is defined else []) | tojson }}'>
+            <div class="proxy-card-header">
+              <div class="proxy-card-title-group">
+                <strong class="proxy-card-name">{{ connection.name }}</strong>
+                <span class="badge {% if connection.enabled %}status-confirmed{% else %}status-doubtful{% endif %}">
+                  {{ "Activa" if connection.enabled else "Inactiva" }}
+                </span>
+                <span class="badge {% if connection.status in ['connected', 'scanned'] %}status-confirmed{% elif connection.status == 'error' %}status-doubtful{% endif %}">
+                  {{ {'not_tested': 'Sin probar', 'connected': 'Conectada', 'scanned': 'Esquema leído', 'error': 'Con avisos'}.get(connection.status, connection.status) }}
+                </span>
+                <span class="badge">{{ connection.database_type|upper }}</span>
               </div>
-              <span class="muted">{{ connection.database_type|upper }} · {{ connection.host }}{% if connection.port %}:{{ connection.port }}{% endif %}</span>
+              <span class="proxy-card-endpoint"><code>{{ connection.host }}{% if connection.port %}:{{ connection.port }}{% endif %}</code></span>
             </div>
-            <div class="external-database-meta">
-              <span>Base: <strong>{{ connection.database_name }}</strong></span>
-              <span>Esquema: <strong>{{ connection.schema_name }}</strong></span>
-              <span>Usuario: <strong>{{ connection.username or '—' }}</strong></span>
-              <span>SSL: <strong>{{ connection.ssl_mode }}</strong></span>
-              {% if connection.proxy_connection_id %}<span>Proxy: <strong>Configurado</strong></span>{% endif %}
-            </div>
-            {% if connection.last_test_message %}<p class="settings-status-note external-database-last-status {% if connection.last_test_ok %}is-success{% else %}is-error{% endif %}">{{ connection.last_test_message }}</p>{% endif %}
-            <div class="external-database-actions">
-              {% if can_edit_external_databases %}
-                <button type="button" class="secondary compact-button" data-external-test>{{ icon_refresh(14) }} Probar conexión</button>
-                <button type="button" class="secondary compact-button" data-external-scan {% if not connection.last_test_ok %}disabled{% endif %}>{{ icon_search(14) }} Escanear esquema</button>
-                <form method="post" action="/settings/data-sources/{{ connection.id }}/toggle" class="js-loading-form"><button type="submit" class="secondary compact-button">{{ 'Desactivar' if connection.enabled else 'Activar' }}</button></form>
-                <button type="button" class="secondary compact-button" data-external-edit-toggle>Editar</button>
+
+            <div class="proxy-card-body">
+              <div class="proxy-card-meta-row">
+                <span class="muted">Base: <strong style="color:var(--text, #0f172a);">{{ connection.database_name }}</strong></span>
+                <span class="muted">·</span>
+                <span class="muted">Esquema: <strong style="color:var(--text, #0f172a);">{{ connection.schema_name or 'default' }}</strong></span>
+                <span class="muted">·</span>
+                <span class="muted">Usuario: <strong style="color:var(--text, #0f172a);">{{ connection.username or '—' }}</strong></span>
+                <span class="muted">·</span>
+                <span class="muted">SSL: <strong style="color:var(--text, #0f172a);">{{ 'Requerido' if connection.ssl_mode == 'require' else ('Verificado' if connection.ssl_mode == 'verify-full' else 'Desactivado') }}</strong></span>
+                {% if connection.proxy_connection_id %}
+                  <span class="muted">·</span>
+                  <span class="muted">Proxy: <strong style="color:var(--text, #0f172a);">Configurado</strong></span>
+                {% endif %}
+              </div>
+
+              {% if connection.last_test_message %}
+                <p class="settings-status-note external-database-last-status {% if connection.last_test_ok %}is-success{% else %}is-error{% endif %}">
+                  {{ connection.last_test_message }}
+                </p>
               {% endif %}
             </div>
+
+            <div class="proxy-card-actions">
+              <div class="proxy-card-actions-left">
+                {% if can_edit_external_databases %}
+                  <form method="post" action="/settings/data-sources/{{ connection.id }}/toggle" class="js-loading-form" style="margin:0;">
+                    {% if connection.enabled %}
+                      <button type="submit" class="secondary compact-button" data-loading-text="Desactivando...">Desactivar</button>
+                    {% else %}
+                      <button type="submit" class="secondary compact-button proxy-activate-btn" data-loading-text="Activando...">Activar</button>
+                    {% endif %}
+                  </form>
+                  <button type="button" class="secondary compact-button" data-external-test>{{ icon_refresh(14) }} Probar conexión</button>
+                  <button type="button" class="secondary compact-button" data-external-scan {% if not connection.last_test_ok %}disabled{% endif %}>{{ icon_search(14) }} Escanear esquema</button>
+                  <button type="button" class="secondary compact-button" data-external-edit-toggle>Editar</button>
+                {% endif %}
+              </div>
+            </div>
+
             <p class="settings-status-note external-database-action-status" data-external-status role="status" aria-live="polite" hidden></p>
+
             {% if can_edit_external_databases %}
-              <form class="external-database-edit-form stack" data-external-edit-form data-external-db-form method="post" action="/settings/data-sources" hidden>
-                <input type="hidden" name="id" value="{{ connection.id }}">
-                <div class="form-grid">
-                  <label>Nombre<input name="name" value="{{ connection.name }}" required></label>
-                  <label>Motor<select name="database_type" data-database-type>{% for option in database_type_options %}<option value="{{ option.value }}" data-default-port="{{ option.default_port }}" {% if connection.database_type == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
-                  <label>Host o IP<input name="host" value="{{ connection.host }}"></label>
-                  <label>Puerto<input name="port" type="number" min="1" max="65535" value="{{ connection.port }}"></label>
-                  <label>Base de datos<input name="database_name" value="{{ connection.database_name }}" required></label>
-                  <label>Esquema<input name="schema_name" value="{{ connection.schema_name }}"></label>
-                  <label>Usuario<input name="username" value="{{ connection.username }}"></label>
-                  <label>Contraseña<input name="password" type="password" autocomplete="new-password" placeholder="{{ mask_secret(connection.password_encrypted) or 'Introduce una contraseña' }}"></label>
-                  <label>SSL<select name="ssl_mode"><option value="require" {% if connection.ssl_mode == 'require' %}selected{% endif %}>Cifrado requerido</option><option value="verify-full" {% if connection.ssl_mode == 'verify-full' %}selected{% endif %}>Verificar certificado</option><option value="disable" {% if connection.ssl_mode == 'disable' %}selected{% endif %}>Desactivado</option></select></label>
-                  <label>Proxy de salida<select name="proxy_connection_id"><option value="">Sin proxy</option>{% for proxy in proxy_connections %}<option value="{{ proxy.id }}" {% if connection.proxy_connection_id == proxy.id %}selected{% endif %}>{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>{% endfor %}</select><small class="muted">El túnel de base de datos por proxy se habilitará en una fase posterior.</small></label>
-                  <label class="checkbox-card span-2">Activar esta fuente (desactiva otras fuentes al guardar)<input name="enabled" type="checkbox" {% if connection.enabled %}checked{% endif %}></label>
+              <div class="proxy-edit-container external-database-edit-container" data-external-edit-form hidden>
+                <div class="proxy-edit-head-row">
+                  <strong>Editar conexión: {{ connection.name }}</strong>
+                  <button type="button" class="secondary compact-button" data-external-edit-cancel>Cerrar</button>
                 </div>
-                <div class="drawer-actions"><button type="submit" class="primary" data-loading-text="Guardando...">Guardar conexión</button><button type="button" class="secondary" data-external-edit-cancel>Cancelar</button></div>
-              </form>
+                <form class="stack js-loading-form" data-external-db-form method="post" action="/settings/data-sources">
+                  <input type="hidden" name="id" value="{{ connection.id }}">
+                  <div class="form-grid">
+                    <label>Nombre de la conexión<input name="name" value="{{ connection.name }}" required></label>
+                    <label>Motor<select name="database_type" data-database-type>{% for option in database_type_options %}<option value="{{ option.value }}" data-default-port="{{ option.default_port }}" {% if connection.database_type == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
+                    <label>Host o IP<input name="host" value="{{ connection.host }}"></label>
+                    <label>Puerto<input name="port" type="number" min="1" max="65535" value="{{ connection.port }}"></label>
+                    <label>Base de datos<input name="database_name" value="{{ connection.database_name }}" required></label>
+                    <label>Esquema<input name="schema_name" value="{{ connection.schema_name }}"></label>
+                    <label>Usuario<input name="username" value="{{ connection.username }}"></label>
+                    <label>Contraseña<input name="password" type="password" autocomplete="new-password" placeholder="{{ mask_secret(connection.password_encrypted) or 'Introduce una contraseña' }}"></label>
+                    <label>SSL<select name="ssl_mode"><option value="require" {% if connection.ssl_mode == 'require' %}selected{% endif %}>Cifrado requerido</option><option value="verify-full" {% if connection.ssl_mode == 'verify-full' %}selected{% endif %}>Verificar certificado</option><option value="disable" {% if connection.ssl_mode == 'disable' %}selected{% endif %}>Desactivado</option></select></label>
+                    <label>Proxy de salida<select name="proxy_connection_id"><option value="">Sin proxy</option>{% for proxy in proxy_connections %}<option value="{{ proxy.id }}" {% if connection.proxy_connection_id == proxy.id %}selected{% endif %}>{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>{% endfor %}</select><small class="muted">El túnel de base de datos por proxy se habilitará en una fase posterior.</small></label>
+                    <label class="checkbox-card span-2">Activar esta fuente (desactiva otras fuentes al guardar)<input name="enabled" type="checkbox" {% if connection.enabled %}checked{% endif %}></label>
+                  </div>
+                  <div class="drawer-actions">
+                    <button type="submit" class="primary" data-loading-text="Guardando...">Guardar conexión</button>
+                    <button type="button" class="secondary compact-button" data-external-edit-cancel>Cancelar</button>
+                  </div>
+                </form>
+              </div>
             {% endif %}
 
             <div class="external-schema-panel" data-external-schema hidden>
-              <div class="external-schema-head"><div><strong>Esquema disponible</strong><span class="muted" data-external-schema-summary></span></div><button type="button" class="secondary compact-button" data-external-schema-close>Cerrar esquema</button></div>
+              <div class="external-schema-head">
+                <div>
+                  <strong>{{ icon_database(14) }} Esquema disponible</strong>
+                  <span class="muted" data-external-schema-summary></span>
+                </div>
+                <button type="button" class="secondary compact-button" data-external-schema-close>{{ icon_close(12) }} Cerrar esquema</button>
+              </div>
               <div class="external-mapping-grid">
                 {% for entity_type, fields in entity_field_options.items() %}
                   <section class="external-mapping-panel" data-external-mapping data-entity-type="{{ entity_type }}">
-                    <div class="section-title-row"><div><h5>{{ 'Clientes' if entity_type == 'customers' else 'Productos' }}</h5><p class="muted">Elige tabla y vincula los campos mínimos.</p></div><span class="badge">Solo lectura</span></div>
-                    <label>Tabla origen<select data-mapping-table disabled><option>Escanea el esquema para empezar</option></select></label>
+                    <div class="section-title-row">
+                      <div>
+                        <h5>{{ 'Clientes' if entity_type == 'customers' else 'Productos' }}</h5>
+                        <p class="muted">Elige tabla y vincula los campos mínimos.</p>
+                      </div>
+                      <span class="badge">Solo lectura</span>
+                    </div>
+                    <label style="margin-top: 10px;">Tabla origen
+                      <select data-mapping-table disabled>
+                        <option>Escanea el esquema para empezar</option>
+                      </select>
+                    </label>
                     <div class="external-field-mapping-list" data-mapping-fields></div>
-                    <label class="checkbox-card external-sync-option"><input type="checkbox" data-sync-enabled> Permitir sincronización manual de esta tabla</label>
-                    <div class="external-mapping-actions"><button type="button" class="primary compact-button" data-save-mapping disabled>Guardar mapeo</button><button type="button" class="secondary compact-button" data-preview-mapping disabled>Previsualizar</button><button type="button" class="secondary compact-button" data-sync-mapping disabled>Sincronizar ahora</button></div>
+                    <label class="checkbox-card external-sync-option">
+                      <input type="checkbox" data-sync-enabled> Permitir sincronización manual de esta tabla
+                    </label>
+                    <div class="external-mapping-actions">
+                      <button type="button" class="primary compact-button" data-save-mapping disabled>Guardar mapeo</button>
+                      <button type="button" class="secondary compact-button" data-preview-mapping disabled>Previsualizar</button>
+                      <button type="button" class="secondary compact-button" data-sync-mapping disabled>Sincronizar ahora</button>
+                    </div>
                     <p class="settings-status-note" data-mapping-status hidden role="status" aria-live="polite"></p>
-                    <div class="external-preview-table-wrap" data-mapping-preview hidden><table class="data-table"><thead data-preview-head></thead><tbody data-preview-body></tbody></table></div>
+                    <div class="external-preview-table-wrap" data-mapping-preview hidden>
+                      <table class="data-table">
+                        <thead data-preview-head></thead>
+                        <tbody data-preview-body></tbody>
+                      </table>
+                    </div>
                   </section>
                 {% endfor %}
               </div>
@@ -1463,9 +1541,14 @@
 
 {% if can_edit_external_databases %}
 <dialog id="external-database-create-dialog" class="edit-dialog" onclick="if (event.target === this) this.close();">
-  <form class="stack" method="post" action="/settings/data-sources" data-external-create-form data-external-db-form>
-    <div class="dialog-header"><h2>Nueva fuente de datos</h2><button type="button" class="secondary compact-button modal-close-btn" onclick="this.closest('dialog').close()">{{ icon_close(14) }}</button></div>
-    <p class="muted">La conexión se guardará cifrada. Anchi solo consultará el esquema y los registros que mapees.</p>
+  <form class="stack js-loading-form" method="post" action="/settings/data-sources" data-external-create-form data-external-db-form>
+    <div class="dialog-header">
+      <div>
+        <h2>Nueva fuente de datos</h2>
+        <p class="muted" style="margin:2px 0 0; font-size:12.5px;">Conexión externa cifrada en modo estrictamente lectura.</p>
+      </div>
+      <button type="button" class="secondary compact-button modal-close-btn" onclick="this.closest('dialog').close()" title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
+    </div>
     <div class="form-grid">
       <label>Nombre de la conexión<input name="name" placeholder="ERP de la empresa" required></label>
       <label>Motor<select name="database_type" data-database-type>{% for option in database_type_options %}<option value="{{ option.value }}" data-default-port="{{ option.default_port }}" {% if option.value == 'postgresql' %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
@@ -1479,7 +1562,10 @@
       <label>Proxy de salida<select name="proxy_connection_id"><option value="">Sin proxy</option>{% for proxy in proxy_connections %}<option value="{{ proxy.id }}">{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>{% endfor %}</select><small class="muted">El túnel de base de datos por proxy se habilitará en una fase posterior.</small></label>
       <label class="checkbox-card span-2">Activar tras guardar<input name="enabled" type="checkbox"></label>
     </div>
-    <div class="actions"><button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancelar</button><button type="submit" class="primary">Guardar fuente</button></div>
+    <div class="actions">
+      <button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancelar</button>
+      <button type="submit" class="primary" data-loading-text="Guardando...">Guardar fuente</button>
+    </div>
   </form>
 </dialog>
 {% endif %}
