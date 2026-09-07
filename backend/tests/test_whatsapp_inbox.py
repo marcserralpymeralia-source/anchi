@@ -4,6 +4,7 @@ import os
 import unittest
 import asyncio
 import json
+import re
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -150,6 +151,52 @@ class WhatsAppInboxTests(unittest.TestCase):
             cleanup()
             fixture.cleanup()
         self.assertEqual(response.status_code, 404)
+
+    def test_live_updates_return_not_modified_until_conversation_changes(self):
+        fixture = build_performance_fixture("small")
+        conversation_id = self._seed_whatsapp(fixture)
+        client, cleanup = self._client_for(fixture)
+        try:
+            self._login(client, fixture)
+            url = f"/whatsapp/inbox/updates?conversation_id={conversation_id}"
+            first = client.get(url)
+            self.assertEqual(first.status_code, 200)
+            self.assertIn('id="whatsapp-live-update"', first.text)
+            self.assertIn("Necesitamos confirmar la entrega.", first.text)
+            revision_match = re.search(r'data-live-revision="([a-f0-9]+)"', first.text)
+            self.assertIsNotNone(revision_match)
+            revision = revision_match.group(1)
+
+            unchanged = client.get(f"{url}&since={revision}")
+            self.assertEqual(unchanged.status_code, 304)
+
+            engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+            session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+            with session() as db:
+                message, _ = upsert_inbound_message(
+                    db,
+                    company_id=1,
+                    channel_key="whatsapp",
+                    provider="meta",
+                    external_id="wamid.live-update-test",
+                    sender="+34600000000",
+                    recipients=["+34910000000"],
+                    subject="Actualización en tiempo real",
+                    text_content="Este mensaje debe aparecer sin recargar.",
+                    external_thread_id="+34600000000",
+                    received_at=utcnow(),
+                    content_type="text",
+                )
+                message.status = "received"
+                db.commit()
+            engine.dispose()
+
+            changed = client.get(f"{url}&since={revision}")
+            self.assertEqual(changed.status_code, 200)
+            self.assertIn("Este mensaje debe aparecer sin recargar.", changed.text)
+        finally:
+            cleanup()
+            fixture.cleanup()
 
     def test_reply_accepts_supported_attachment_and_delegates_to_whatsapp_service(self):
         fixture = build_performance_fixture("small")

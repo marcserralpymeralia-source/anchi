@@ -1,10 +1,11 @@
+import hashlib
 import logging
 from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile
-from fastapi.responses import PlainTextResponse, RedirectResponse
-from sqlalchemy import exists, or_, select
+from fastapi.responses import PlainTextResponse, RedirectResponse, Response
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.auth.dependencies import current_user
@@ -165,6 +166,126 @@ def _redirect_to_conversation(conversation_id: int, *, notice: str | None = None
     return RedirectResponse(f"/whatsapp/inbox?{urlencode(params)}", status_code=303)
 
 
+def _inbox_conditions(*, company_id: int, channel_id: int, search: str) -> list:
+    conditions = [
+        Conversation.company_id == company_id,
+        Conversation.channel_id == channel_id,
+    ]
+    if search:
+        like = f"%{search}%"
+        conditions.append(
+            or_(
+                Conversation.subject.ilike(like),
+                Conversation.external_thread_id.ilike(like),
+                exists(
+                    select(1).where(
+                        InboundMessage.conversation_id == Conversation.id,
+                        InboundMessage.company_id == company_id,
+                        or_(InboundMessage.sender.ilike(like), InboundMessage.original_content.ilike(like)),
+                    )
+                ),
+            )
+        )
+    return conditions
+
+
+def _load_inbox_data(
+    db: Session,
+    *,
+    company_id: int,
+    channel_id: int,
+    conversation_id: int | None,
+    search: str,
+    page: int,
+    page_size: int,
+) -> dict:
+    conditions = _inbox_conditions(company_id=company_id, channel_id=channel_id, search=search)
+    conversations = db.scalars(
+        select(Conversation)
+        .where(*conditions)
+        .options(selectinload(Conversation.messages).selectinload(InboundMessage.attachments))
+        .order_by(Conversation.last_activity_at.desc(), Conversation.id.desc())
+    ).unique().all()
+    customer_ids = {conversation.customer_id for conversation in conversations if conversation.customer_id}
+    customers = {}
+    if customer_ids:
+        customers = {
+            customer.id: customer
+            for customer in db.scalars(
+                select(Customer).where(Customer.company_id == company_id, Customer.id.in_(customer_ids))
+            ).all()
+        }
+    cards = [_conversation_card(conversation, customers) for conversation in conversations]
+    page, page_size = normalize_page(page, page_size)
+    total_items = len(cards)
+    total_pages = (total_items + page_size - 1) // page_size if total_items else 0
+    start = (page - 1) * page_size
+    page_cards = cards[start : start + page_size]
+
+    selected = next((card for card in cards if card["id"] == conversation_id), None)
+    if selected is None and page_cards:
+        selected = page_cards[0]
+    if selected is not None and selected not in page_cards:
+        page_cards = [selected, *page_cards]
+    return {
+        "conditions": conditions,
+        "cards": cards,
+        "page_cards": page_cards,
+        "selected": selected,
+        "customers": customers,
+        "page": page,
+        "page_size": page_size,
+        "total_items": total_items,
+        "total_pages": total_pages,
+        "start": start,
+        "normalized_search": search,
+    }
+
+
+def _inbox_live_revision(db: Session, conditions: list) -> str:
+    row = db.execute(
+        select(
+            func.count(func.distinct(Conversation.id)),
+            func.max(Conversation.updated_at),
+            func.max(InboundMessage.updated_at),
+            func.max(InboundMessage.last_processed_at),
+            func.max(InboundMessage.id),
+        )
+        .select_from(Conversation)
+        .outerjoin(InboundMessage, InboundMessage.conversation_id == Conversation.id)
+        .where(*conditions)
+    ).one()
+    source = "|".join(str(value or "") for value in row)
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
+def _inbox_partial_context(request: Request, user: TenantUser, channel: InputChannel, data: dict, revision: str) -> dict:
+    return {
+        "request": request,
+        "user": user,
+        "channel": channel,
+        "conversations": data["page_cards"],
+        "selected": data["selected"],
+        "search": data["normalized_search"],
+        "summary": {
+            "conversations": data["total_items"],
+            "unread": sum(1 for card in data["cards"] if card["unread"]),
+        },
+        "pagination": {
+            "page": data["page"],
+            "page_size": data["page_size"],
+            "total_items": data["total_items"],
+            "total_pages": data["total_pages"],
+            "has_previous": data["page"] > 1,
+            "has_next": data["page"] < data["total_pages"],
+            "start_item": data["start"] + 1 if data["total_items"] else 0,
+            "end_item": min(data["start"] + data["page_size"], data["total_items"]),
+            "allowed_page_sizes": (15, 30, 50, 100),
+        },
+        "live_revision": revision,
+    }
+
+
 @router.get("/whatsapp/inbox")
 async def whatsapp_inbox(
     request: Request,
@@ -181,53 +302,19 @@ async def whatsapp_inbox(
 
     config = whatsapp_config(db, user.company_id)
     normalized_search = search.strip()
-    conditions = [
-        Conversation.company_id == user.company_id,
-        Conversation.channel_id == channel.id,
-    ]
-    if normalized_search:
-        like = f"%{normalized_search}%"
-        conditions.append(
-            or_(
-                Conversation.subject.ilike(like),
-                Conversation.external_thread_id.ilike(like),
-                exists(
-                    select(1).where(
-                        InboundMessage.conversation_id == Conversation.id,
-                        InboundMessage.company_id == user.company_id,
-                        or_(InboundMessage.sender.ilike(like), InboundMessage.original_content.ilike(like)),
-                    )
-                ),
-            )
-        )
-
-    conversations = db.scalars(
-        select(Conversation)
-        .where(*conditions)
-        .options(selectinload(Conversation.messages).selectinload(InboundMessage.attachments))
-        .order_by(Conversation.last_activity_at.desc(), Conversation.id.desc())
-    ).unique().all()
-    customer_ids = {conversation.customer_id for conversation in conversations if conversation.customer_id}
-    customers = {}
-    if customer_ids:
-        customers = {
-            customer.id: customer
-            for customer in db.scalars(
-                select(Customer).where(Customer.company_id == user.company_id, Customer.id.in_(customer_ids))
-            ).all()
-        }
-    cards = [_conversation_card(conversation, customers) for conversation in conversations]
-    page, page_size = normalize_page(page, page_size)
-    total_items = len(cards)
-    total_pages = (total_items + page_size - 1) // page_size if total_items else 0
-    start = (page - 1) * page_size
-    page_cards = cards[start : start + page_size]
-
-    selected = next((card for card in cards if card["id"] == conversation_id), None)
-    if selected is None and page_cards:
-        selected = page_cards[0]
-    if selected is not None and selected not in page_cards:
-        page_cards = [selected, *page_cards]
+    data = _load_inbox_data(
+        db,
+        company_id=user.company_id,
+        channel_id=channel.id,
+        conversation_id=conversation_id,
+        search=normalized_search,
+        page=page,
+        page_size=page_size,
+    )
+    cards = data["cards"]
+    page_cards = data["page_cards"]
+    selected = data["selected"]
+    customers = data["customers"]
 
     if selected is not None and config.access_token and config.phone_number_id:
         selected_conv = db.get(Conversation, selected["id"])
@@ -256,6 +343,7 @@ async def whatsapp_inbox(
                     page_cards = [selected if c["id"] == selected["id"] else c for c in page_cards]
 
     ready_to_send = whatsapp_outbound_is_ready(db, user.company_id, config=config)
+    live_revision = _inbox_live_revision(db, data["conditions"])
     return templates.TemplateResponse(
         "whatsapp/inbox.html",
         {
@@ -269,24 +357,60 @@ async def whatsapp_inbox(
             "selected": selected,
             "search": normalized_search,
             "summary": {
-                "conversations": total_items,
+                "conversations": data["total_items"],
                 "unread": sum(1 for card in cards if card["unread"]),
             },
             "pagination": {
-                "page": page,
-                "page_size": page_size,
-                "total_items": total_items,
-                "total_pages": total_pages,
-                "has_previous": page > 1,
-                "has_next": page < total_pages,
-                "start_item": start + 1 if total_items else 0,
-                "end_item": min(start + page_size, total_items),
+                "page": data["page"],
+                "page_size": data["page_size"],
+                "total_items": data["total_items"],
+                "total_pages": data["total_pages"],
+                "has_previous": data["page"] > 1,
+                "has_next": data["page"] < data["total_pages"],
+                "start_item": data["start"] + 1 if data["total_items"] else 0,
+                "end_item": min(data["start"] + data["page_size"], data["total_items"]),
                 "allowed_page_sizes": (15, 30, 50, 100),
             },
             "notice": request.query_params.get("notice"),
             "error": request.query_params.get("error"),
+            "live_revision": live_revision,
         },
     )
+
+
+@router.get("/whatsapp/inbox/updates", include_in_schema=False)
+async def whatsapp_inbox_updates(
+    request: Request,
+    conversation_id: int | None = None,
+    search: str = "",
+    page: int = 1,
+    page_size: int = 30,
+    since: str = "",
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    channel = _channel(db, user.company_id)
+    if not channel:
+        return PlainTextResponse("El canal WhatsApp no está activo para este tenant.", status_code=404)
+
+    data = _load_inbox_data(
+        db,
+        company_id=user.company_id,
+        channel_id=channel.id,
+        conversation_id=conversation_id,
+        search=search.strip(),
+        page=page,
+        page_size=page_size,
+    )
+    revision = _inbox_live_revision(db, data["conditions"])
+    headers = {"Cache-Control": "no-store", "ETag": f'"{revision}"'}
+    if since and since == revision:
+        return Response(status_code=304, headers=headers)
+
+    context = _inbox_partial_context(request, user, channel, data, revision)
+    response = templates.TemplateResponse("whatsapp/_inbox_live.html", context)
+    response.headers.update(headers)
+    return response
 
 
 @router.post("/whatsapp/inbox/{conversation_id}/reply")
