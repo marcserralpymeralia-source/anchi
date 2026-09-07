@@ -49,9 +49,9 @@ def _attachment_kind(filename: str, content_type: str | None, *, is_pdf: bool = 
     content_type = (content_type or "").lower()
     if is_pdf or content_type == "application/pdf" or lowered.endswith(".pdf"):
         return "pdf"
-    if is_image or content_type.startswith("image/"):
+    if is_image or content_type.startswith("image/") or lowered.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".svg")):
         return "image"
-    if is_audio or content_type.startswith("audio/"):
+    if is_audio or content_type.startswith("audio/") or lowered.endswith((".ogg", ".opus", ".mp3", ".wav", ".m4a", ".aac")):
         return "audio"
     if lowered.endswith(".csv") or content_type in {"text/csv", "application/csv"}:
         return "csv"

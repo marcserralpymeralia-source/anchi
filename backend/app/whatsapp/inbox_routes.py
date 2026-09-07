@@ -1,5 +1,4 @@
-from __future__ import annotations
-
+import logging
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -11,7 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.auth.dependencies import current_user
 from app.core.pagination import normalize_page
 from app.core.templating import templates
-from app.db.models import Conversation, Customer, InboundMessage, InputChannel
+from app.db.models import Conversation, Customer, InboundMessage, InputChannel, MessageAttachment
 from app.master.service import TenantUser
 from app.tenancy.database import get_tenant_db
 from app.whatsapp.service import (
@@ -19,11 +18,13 @@ from app.whatsapp.service import (
     WHATSAPP_SUPPORTED_AUDIO_EXTENSIONS,
     WHATSAPP_SUPPORTED_DOCUMENT_EXTENSIONS,
     WHATSAPP_SUPPORTED_DOCUMENT_MIME_TYPES,
+    download_whatsapp_media,
     send_manual_response,
     whatsapp_config,
     whatsapp_outbound_is_ready,
 )
 
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["whatsapp-inbox"])
 
@@ -41,15 +42,20 @@ def _channel(db: Session, company_id: int) -> InputChannel | None:
 def _attachment_kind(filename: str | None, content_type: str | None, *, is_audio: bool = False) -> str:
     extension = Path(filename or "").suffix.lower()
     mime = (content_type or "").lower().split(";", 1)[0]
-    if is_audio or mime.startswith("audio/"):
+    if is_audio or mime.startswith("audio/") or extension in {".ogg", ".opus", ".mp3", ".wav", ".m4a", ".aac"}:
         return "audio"
     if mime == "application/pdf" or extension == ".pdf":
         return "pdf"
-    if extension == ".docx" or mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+    if extension in {".docx", ".doc"} or mime in {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/msword",
+    }:
         return "doc"
+    if extension in {".xlsx", ".xls"} or "spreadsheet" in mime or "excel" in mime:
+        return "sheet"
     if mime.startswith("text/") or extension == ".txt":
         return "text"
-    if mime.startswith("image/"):
+    if mime.startswith("image/") or extension in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".svg"}:
         return "image"
     return "file"
 
@@ -81,6 +87,7 @@ def _message_payload(message: InboundMessage) -> dict:
                 "size": _format_bytes(attachment.size_bytes),
                 "available": available,
                 "href": f"/channels/inbound/{message.id}/attachments/{attachment.id}/preview" if available else "",
+                "download_href": f"/channels/inbound/{message.id}/attachments/{attachment.id}" if available else "",
                 "status": attachment.extraction_status or "pending",
             }
         )
@@ -90,7 +97,7 @@ def _message_payload(message: InboundMessage) -> dict:
         "speaker": "Anchi" if outbound else (message.sender or "Contacto"),
         "text": message.original_content or "",
         "date": _message_date(message),
-        "status": message.status,
+        "status": str(message.status or "").lower(),
         "attachments": attachments,
     }
 
@@ -109,6 +116,8 @@ def _conversation_card(conversation: Conversation, customers: dict[int, Customer
         else (latest_inbound.sender if latest_inbound else conversation.external_thread_id or "Contacto sin identificar")
     )
     contact_detail = latest_inbound.sender if latest_inbound and customer else conversation.external_thread_id or ""
+    if contact_detail and contact_detail.strip() == str(contact_name).strip():
+        contact_detail = ""
     preview = (latest.original_content or "") if latest else "Sin mensajes todavía"
     if not preview and latest and latest.attachments:
         preview = latest.attachments[0].filename or "Archivo adjunto"
@@ -116,6 +125,8 @@ def _conversation_card(conversation: Conversation, customers: dict[int, Customer
         message.direction == "inbound" and message.status in {"received", "queued", "processing"}
         for message in messages
     )
+    latest_outbound = (latest.direction == "outbound") if latest else False
+    latest_status = str(latest.status or "").lower() if latest and latest_outbound else ""
     return {
         "id": conversation.id,
         "name": contact_name,
@@ -124,6 +135,8 @@ def _conversation_card(conversation: Conversation, customers: dict[int, Customer
         "date": _message_date(latest) if latest else conversation.last_activity_at,
         "unread": unread,
         "message_count": len(messages),
+        "latest_outbound": latest_outbound,
+        "latest_status": latest_status,
         "messages": [_message_payload(message) for message in messages],
     }
 
@@ -138,7 +151,7 @@ def _redirect_to_conversation(conversation_id: int, *, notice: str | None = None
 
 
 @router.get("/whatsapp/inbox")
-def whatsapp_inbox(
+async def whatsapp_inbox(
     request: Request,
     conversation_id: int | None = None,
     search: str = "",
@@ -200,6 +213,32 @@ def whatsapp_inbox(
         selected = page_cards[0]
     if selected is not None and selected not in page_cards:
         page_cards = [selected, *page_cards]
+
+    if selected is not None and config.access_token and config.phone_number_id:
+        selected_conv = db.get(Conversation, selected["id"])
+        if selected_conv and selected_conv.messages:
+            needs_refresh = False
+            for msg in selected_conv.messages:
+                has_pending = any(
+                    not att.storage_path and (att.extraction_status or "pending") == "pending"
+                    for att in (msg.attachments or [])
+                )
+                if has_pending:
+                    try:
+                        await download_whatsapp_media(db, company_id=user.company_id, inbound_message_id=msg.id)
+                        needs_refresh = True
+                    except Exception as exc:
+                        logger.warning("Auto-downloading media for message %s failed: %s", msg.id, exc)
+            if needs_refresh:
+                db.expire_all()
+                refreshed_conv = db.scalar(
+                    select(Conversation)
+                    .where(Conversation.id == selected["id"])
+                    .options(selectinload(Conversation.messages).selectinload(InboundMessage.attachments))
+                )
+                if refreshed_conv:
+                    selected = _conversation_card(refreshed_conv, customers)
+                    page_cards = [selected if c["id"] == selected["id"] else c for c in page_cards]
 
     ready_to_send = whatsapp_outbound_is_ready(db, user.company_id, config=config)
     return templates.TemplateResponse(
@@ -302,3 +341,19 @@ async def whatsapp_inbox_reply(
     except Exception:  # noqa: BLE001
         return _redirect_to_conversation(conversation_id, error="send_failed")
     return _redirect_to_conversation(conversation_id, notice="sent")
+
+
+@router.get("/whatsapp/inbox/{conversation_id}/sync-media/{attachment_id}")
+async def sync_media_attachment(
+    conversation_id: int,
+    attachment_id: int,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    attachment = db.get(MessageAttachment, attachment_id)
+    if attachment and attachment.inbound_message_id:
+        try:
+            await download_whatsapp_media(db, company_id=user.company_id, inbound_message_id=attachment.inbound_message_id)
+        except Exception as exc:
+            logger.warning("Manual sync of whatsapp media failed: %s", exc)
+    return RedirectResponse(f"/whatsapp/inbox?conversation_id={conversation_id}", status_code=303)

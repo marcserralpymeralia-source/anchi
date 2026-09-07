@@ -600,7 +600,7 @@
           </div>
           <p class="muted">Por defecto solo se importarán correos nuevos desde ahora. La primera sincronización se confirma antes de importar y nunca trae histórico ilimitado.</p>
         </details>
-        <p class="muted">En Vercel la sincronización automática queda guardada, pero la ejecución debe venir de un cron o servicio externo.</p>
+        <p class="muted">La sincronización automática se ejecuta en Vercel cada cinco minutos y respeta la frecuencia configurada para esta cuenta.</p>
         <div class="drawer-actions email-sync-actions">
           <button data-loading-text="Guardando...">Guardar configuración</button>
           <button class="secondary js-loading-form" formaction="/settings/email/initial-sync/preview" formmethod="post" data-loading-text="Preparando..." data-confirm="Previsualizar la sincronización inicial con el historial elegido?">Previsualizar importación inicial</button>
@@ -1147,7 +1147,7 @@
   </div>
   <div class="drawer-body stack">
     {# 1. Infrastructure / Gateway Status Card #}
-    <section class="drawer-card proxy-overview-card">
+    <section class="drawer-card">
       <div class="section-title-row">
         <div>
           <h4>Gateway de Anchi</h4>
@@ -1155,151 +1155,118 @@
         <span class="badge status-doubtful">Sin tráfico</span>
       </div>
 
-      {# Banner of currently active proxy #}
-      {% if active_proxy %}
-        <div class="proxy-active-banner is-active">
-          <div class="proxy-active-pill-badge is-active">
-            {{ icon_check(13) }}
-            <span>Proxy activo</span>
-          </div>
-          <div class="proxy-active-info">
-            <div class="proxy-active-title">
-              <strong>{{ active_proxy.name }}</strong>
-              <span class="log-entity-badge">{{ active_proxy.proxy_protocol|upper }}</span>
-              <code>{{ active_proxy.proxy_host }}:{{ active_proxy.proxy_port }}</code>
-            </div>
-            <p class="muted">Solo este perfil canalizará el tráfico de red cuando se habilite el gateway.</p>
-          </div>
+      <div class="settings-kpis">
+        <div>
+          <span>Estado de red</span>
+          <strong>{{ "Proxy activo" if active_proxy else "Conexión directa" }}</strong>
         </div>
-      {% else %}
-        <div class="proxy-active-banner is-inactive">
-          <div class="proxy-active-pill-badge is-inactive">
-            <span>Conexión directa</span>
-          </div>
-          <div class="proxy-active-info">
-            <strong>Sin proxy activo</strong>
-            <p class="muted">Actualmente no hay ningún proxy habilitado. Las conexiones operarán de forma directa sin proxy.</p>
-          </div>
+        <div>
+          <span>Perfil activo</span>
+          <strong>{{ active_proxy.name if active_proxy else "Sin proxy activo" }}</strong>
         </div>
-      {% endif %}
+        <div>
+          <span>Destino de salida</span>
+          <strong>{{ (active_proxy.proxy_protocol|upper ~ " · " ~ active_proxy.proxy_host ~ ":" ~ active_proxy.proxy_port) if active_proxy else "Sin proxy" }}</strong>
+        </div>
+      </div>
     </section>
 
     {# 2. Section header with profile count & action #}
-    <div class="proxy-section-header">
-      <div>
-        <h4>Perfiles configurados ({{ proxy_connections|length }})</h4>
-        <p class="muted">Solo un perfil puede estar activo simultáneamente. Al activar uno, los demás se desactivarán automáticamente.</p>
-      </div>
-      {% if can_edit_proxies %}
-        <button type="button" class="button secondary compact-button" onclick="document.getElementById('proxy-create-dialog').showModal();">
-          {{ icon_plus(13) }}
-          <span>Añadir perfil</span>
-        </button>
-      {% endif %}
-    </div>
-
-    {# 3. Empty state if no profiles #}
-    {% if not proxy_connections %}
-      <section class="drawer-card proxy-empty-card">
-        <h4>Sin perfiles configurados</h4>
-        <p class="muted">Puedes dejar preparado un perfil ahora y activarlo más adelante, cuando se habilite el consumo del gateway.</p>
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Perfiles configurados ({{ proxy_connections|length }})</h4>
+          <p class="muted">Solo un perfil puede estar activo simultáneamente.</p>
+        </div>
         {% if can_edit_proxies %}
-          <button type="button" class="button primary compact-button" style="margin-top:10px;" onclick="document.getElementById('proxy-create-dialog').showModal();">
+          <button type="button" class="secondary compact-button" onclick="document.getElementById('proxy-create-dialog').showModal();">
             {{ icon_plus(13) }}
-            <span>Crear primer perfil de proxy</span>
+            <span>Añadir perfil</span>
           </button>
         {% endif %}
-      </section>
-    {% endif %}
+      </div>
 
-    {# 4. List of profiles #}
-    <div class="proxy-cards-list">
-      {% for proxy in proxy_connections %}
-        <article class="drawer-card proxy-profile-card {% if proxy.enabled %}is-enabled-card{% endif %}" id="proxy-card-{{ proxy.id }}">
-          <div class="proxy-card-header">
-            <div class="proxy-card-title-group">
-              <strong class="proxy-card-name">{{ proxy.name }}</strong>
-              <span class="badge {% if proxy.enabled %}status-confirmed{% else %}status-doubtful{% endif %}">
-                {{ "Habilitado" if proxy.enabled else "Deshabilitado" }}
-              </span>
-              <span class="log-entity-badge">{{ proxy.proxy_protocol|upper }}</span>
-              <span class="log-stage-badge">{{ "TLS Verificado" if proxy.tls_mode == "verify" else ("TLS Obligatorio" if proxy.tls_mode == "required" else "TLS Desactivado") }}</span>
-            </div>
-            <div class="proxy-card-endpoint">
-              <code>{{ proxy.proxy_protocol }}://{{ proxy.proxy_host }}:{{ proxy.proxy_port }}</code>
-            </div>
-          </div>
+      {# 3. Empty state if no profiles #}
+      {% if not proxy_connections %}
+        <div class="proxy-empty-card">
+          <p class="muted" style="margin:0 0 10px 0;">No hay perfiles de proxy configurados.</p>
+          {% if can_edit_proxies %}
+            <button type="button" class="secondary compact-button" onclick="document.getElementById('proxy-create-dialog').showModal();">
+              {{ icon_plus(13) }}
+              <span>Crear primer perfil de proxy</span>
+            </button>
+          {% endif %}
+        </div>
+      {% endif %}
 
-          <div class="proxy-card-body">
-            <div class="proxy-card-meta-row">
-              <span class="proxy-card-meta-item">
-                {% if proxy.username %}
-                  Usuario: <strong>{{ proxy.username }}</strong>
-                {% else %}
-                  <span class="muted">Sin autenticación</span>
-                {% endif %}
-              </span>
-              {% if proxy.notes %}
-                <span class="proxy-card-meta-divider">·</span>
-                <span class="proxy-card-meta-item muted">Notas: <em>{{ proxy.notes }}</em></span>
-              {% endif %}
-            </div>
-
-            <div class="proxy-card-health-row">
-              {% if proxy.last_test_at %}
-                <span class="muted">Última comprobación: {{ proxy.last_test_at.strftime("%d/%m/%Y %H:%M") }}</span>
-                {% if proxy.last_test_ok %}
-                  <span class="badge status-confirmed" style="font-size:10px; padding:1px 6px;">Accesible</span>
-                {% else %}
-                  <span class="badge status-error" style="font-size:10px; padding:1px 6px;">Error</span>
-                {% endif %}
-                <small class="muted proxy-health-msg">{{ proxy.last_test_message }}</small>
-              {% else %}
-                <span class="muted" style="font-size:11px;">Pendiente de comprobación</span>
-              {% endif %}
-            </div>
-          </div>
-
-          <div class="proxy-card-actions">
-            <div class="proxy-card-actions-left">
-              {% if can_edit_proxies %}
-                <form method="post" action="/settings/proxies/{{ proxy.id }}/toggle" class="js-loading-form" style="margin:0;">
-                  {% if proxy.enabled %}
-                    <button type="submit" class="button secondary compact-button" data-loading-text="Desactivando..." title="Desactivar este proxy">
-                      <span>Desactivar</span>
-                    </button>
-                  {% else %}
-                    <button type="submit" class="button secondary compact-button proxy-activate-btn" data-loading-text="Activando..." title="Activar este proxy (desactivará los demás automáticamente)">
-                      {{ icon_check(12) }}
-                      <span>Activar (único)</span>
-                    </button>
-                  {% endif %}
-                </form>
-
-                <button class="secondary compact-button js-proxy-test" type="button" data-proxy-test-url="/settings/proxies/{{ proxy.id }}/test" data-loading-text="Comprobando...">Probar conexión</button>
-
-                <button type="button" class="secondary compact-button" onclick="const f = document.getElementById('proxy-edit-{{ proxy.id }}'); f.toggleAttribute('hidden'); if(!f.hasAttribute('hidden')) f.scrollIntoView({behavior:'smooth'});" title="Modificar datos del perfil">
-                  {{ icon_edit(12) }}
-                  <span>Editar</span>
-                </button>
-              {% else %}
-                <button class="secondary compact-button js-proxy-test" type="button" data-proxy-test-url="/settings/proxies/{{ proxy.id }}/test" data-loading-text="Comprobando...">Probar conexión</button>
-              {% endif %}
-            </div>
-
-            {% if can_edit_proxies %}
-              <div class="proxy-card-actions-right">
-                <form method="post" action="/settings/proxies/{{ proxy.id }}/delete" class="js-loading-form" data-confirm="¿Seguro que deseas eliminar el perfil '{{ proxy.name }}'? Esta acción no se puede deshacer." style="margin:0;">
-                  <button type="submit" class="button secondary compact-button is-danger" data-loading-text="Eliminando..." title="Eliminar este perfil de proxy">
-                    {{ icon_trash(12) }}
-                    <span>Eliminar</span>
-                  </button>
-                </form>
+      {# 4. List of profiles #}
+      <div class="proxy-cards-list">
+        {% for proxy in proxy_connections %}
+          <article class="proxy-profile-card" id="proxy-card-{{ proxy.id }}">
+            <div class="proxy-card-header">
+              <div class="proxy-card-title-group">
+                <strong class="proxy-card-name">{{ proxy.name }}</strong>
+                <span class="badge {% if proxy.enabled %}status-confirmed{% else %}status-doubtful{% endif %}">
+                  {{ "Activo" if proxy.enabled else "Inactivo" }}
+                </span>
+                <span class="badge">{{ proxy.proxy_protocol|upper }}</span>
               </div>
-            {% endif %}
-          </div>
+              <span class="proxy-card-endpoint">{{ proxy.proxy_host }}:{{ proxy.proxy_port }}</span>
+            </div>
 
-          <p class="settings-status-note proxy-test-status" data-proxy-test-status role="status" aria-live="polite" hidden></p>
+            <div class="proxy-card-body">
+              <div class="proxy-card-meta-row">
+                <span class="muted">Usuario: <strong style="color:var(--text, #0f172a);">{{ proxy.username or 'Sin autenticación' }}</strong></span>
+                <span class="muted">·</span>
+                <span class="muted">Seguridad: <strong style="color:var(--text, #0f172a);">{{ "TLS Verificado" if proxy.tls_mode == "verify" else ("TLS Obligatorio" if proxy.tls_mode == "required" else "Sin TLS") }}</strong></span>
+                {% if proxy.notes %}
+                  <span class="muted">·</span>
+                  <span class="muted">Notas: <em>{{ proxy.notes }}</em></span>
+                {% endif %}
+              </div>
+
+              {% if proxy.last_test_at %}
+                <div class="proxy-card-health-row">
+                  <span class="muted">Última comprobación: {{ proxy.last_test_at.strftime("%d/%m/%Y %H:%M") }}</span>
+                  <span class="badge {% if proxy.last_test_ok %}status-confirmed{% else %}status-doubtful{% endif %}">
+                    {{ "Accesible" if proxy.last_test_ok else "Error" }}
+                  </span>
+                  {% if proxy.last_test_message %}
+                    <small class="muted">{{ proxy.last_test_message }}</small>
+                  {% endif %}
+                </div>
+              {% endif %}
+            </div>
+
+            <div class="proxy-card-actions">
+              <div class="proxy-card-actions-left">
+                {% if can_edit_proxies %}
+                  <form method="post" action="/settings/proxies/{{ proxy.id }}/toggle" class="js-loading-form" style="margin:0;">
+                    {% if proxy.enabled %}
+                      <button type="submit" class="secondary compact-button" data-loading-text="Desactivando...">Desactivar</button>
+                    {% else %}
+                      <button type="submit" class="secondary compact-button" data-loading-text="Activando...">Activar</button>
+                    {% endif %}
+                  </form>
+                {% endif %}
+
+                <button class="secondary compact-button js-proxy-test" type="button" data-proxy-test-url="/settings/proxies/{{ proxy.id }}/test" data-loading-text="Comprobando...">Probar conexión</button>
+
+                {% if can_edit_proxies %}
+                  <button type="button" class="secondary compact-button" onclick="const f = document.getElementById('proxy-edit-{{ proxy.id }}'); f.hidden = !f.hidden;">Editar</button>
+                {% endif %}
+              </div>
+
+              {% if can_edit_proxies %}
+                <div class="proxy-card-actions-right">
+                  <form method="post" action="/settings/proxies/{{ proxy.id }}/delete" class="js-loading-form" data-confirm="¿Seguro que deseas eliminar el perfil '{{ proxy.name }}'?" style="margin:0;">
+                    <button type="submit" class="secondary compact-button danger" data-loading-text="Eliminando...">Eliminar</button>
+                  </form>
+                </div>
+              {% endif %}
+            </div>
+
+            <p class="settings-status-note proxy-test-status" data-proxy-test-status role="status" aria-live="polite" hidden></p>
 
           {% if can_edit_proxies %}
             <div id="proxy-edit-{{ proxy.id }}" class="proxy-edit-container" hidden>
@@ -1341,7 +1308,8 @@
           {% endif %}
         </article>
       {% endfor %}
-    </div>
+       </div>
+    </section>
 
     {# 5. New Profile Modal Dialog (Initially Hidden) #}
     {% if can_edit_proxies %}

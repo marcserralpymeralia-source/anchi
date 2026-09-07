@@ -21,15 +21,19 @@ from app.workers.jobs_worker import run_worker_cycle
 router = APIRouter(prefix="/cron", tags=["cron"])
 
 
+def _cron_token(request: Request) -> str:
+    authorization = (request.headers.get("authorization") or "").strip()
+    if authorization.lower().startswith("bearer "):
+        return authorization[7:].strip()
+    return authorization
+
+
 def _cron_authorized(request: Request) -> None:
     settings = get_settings()
     expected = (settings.cron_secret or "").strip()
-    if (request.headers.get("x-vercel-cron") or "").strip().lower() in {"1", "true", "yes"}:
-        return
     provided = (
         request.headers.get("x-cron-secret")
-        or request.query_params.get("secret")
-        or request.headers.get("authorization")
+        or _cron_token(request)
         or ""
     ).strip()
     if expected and provided == expected:

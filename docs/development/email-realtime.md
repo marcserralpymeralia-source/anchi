@@ -31,20 +31,15 @@ El listener:
 
 En Vercel no se inicia este listener. Vercel puede servir la UI y rutas manuales, pero no debe considerarse un runtime persistente de correo.
 
-### Demo desplegada en Vercel Hobby
+### Demo desplegada en Vercel Pro
 
-El plan Hobby de Vercel solo admite cron diarios, por lo que `vercel.json` mantiene su programación diaria y no puede representar una frecuencia IMAP configurable. Para la demo, `.github/workflows/email-sync-cron.yml` actúa como un dispatcher de comprobación cada cinco minutos desde GitHub Actions; no fija la frecuencia de ningún tenant.
+`vercel.json` despierta `/cron/email-sync` cada cinco minutos mediante Vercel Cron. Este intervalo es la resolución mínima de la interfaz actual; no fija la frecuencia de ningún tenant. El endpoint consulta `email_sync_state.next_run_at` y solo procesa las cuentas que ya están vencidas, por lo que cada cuenta mantiene su propia frecuencia configurada.
 
 El endpoint solo procesa estados cuyo `next_run_at` ya ha vencido. Tras cada lectura, calcula la siguiente ejecución con `frequency_seconds`, que se sincroniza desde `polling_frequency_minutes` en Configuración. Por ejemplo, una frecuencia de 15 minutos programa 900 segundos; los despertares intermedios no vuelven a consultar IMAP.
 
-Configura estos secretos del repositorio antes de activar el flujo:
+Cada proyecto Vercel debe tener `CRON_SECRET` configurado en producción. Vercel lo envía como `Authorization: Bearer <CRON_SECRET>` y el endpoint rechaza las peticiones sin ese token. No se acepta como autorización el encabezado informativo `x-vercel-cron`, porque cualquiera podría falsificarlo.
 
-- `CRON_SECRET_GEMAVI`: el mismo valor configurado como `CRON_SECRET` en el proyecto Vercel `anchi-gemavi`.
-- `CRON_SECRET_TAN`: el mismo valor configurado como `CRON_SECRET` en el proyecto Vercel `anchi` (`anchi-tan.vercel.app`).
-
-Las URLs de ambos despliegues están definidas en el workflow y no necesitan ser secretos.
-
-El flujo despierta ambos endpoints en paralelo, solo se ejecuta desde la rama por defecto y no imprime la respuesta del endpoint. GitHub Actions puede sufrir retrasos puntuales y su intervalo es solo la resolución máxima de esta alternativa para la demo; para producción real se recomienda el worker persistente descrito arriba, que respeta directamente cualquier frecuencia configurada.
+El dispatcher anterior de GitHub Actions ya no es necesario y se ha retirado. Vercel Cron despierta ambos despliegues según su propia configuración de proyecto; el código sigue siendo idempotente y usa el bloqueo de `email_sync_state` para evitar ejecuciones concurrentes.
 
 ## Sincronizacion manual
 

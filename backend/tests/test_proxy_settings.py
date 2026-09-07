@@ -133,7 +133,7 @@ class ProxySettingsTests(unittest.TestCase):
             self.assertEqual(view1.status_code, 200)
             self.assertIn("Proxy activo", view1.text)
             self.assertIn("Proxy Alpha", view1.text)
-            self.assertIn("Activar (único)", view1.text)  # Button on Beta
+            self.assertIn("Activar", view1.text)  # Button on Beta
 
             # Toggle Beta ON
             toggle_beta = client.post(f"/settings/proxies/{p2_id}/toggle", follow_redirects=False)

@@ -17,7 +17,7 @@ os.environ.setdefault("ENABLE_DEMO_BOOTSTRAP", "false")
 
 from app.core import lifespan as lifespan_module  # noqa: E402
 from app.core.app_factory import create_app  # noqa: E402
-from app.db.models import ChannelSetting, InboundMessage, InputChannel, utcnow  # noqa: E402
+from app.db.models import ChannelSetting, InboundMessage, InputChannel, MessageAttachment, utcnow  # noqa: E402
 from app.messages.service import upsert_inbound_message  # noqa: E402
 from app.whatsapp.service import send_whatsapp_media  # noqa: E402
 from scripts.performance_data import build_performance_fixture, temporary_performance_environment  # noqa: E402
@@ -211,6 +211,182 @@ class WhatsAppInboxTests(unittest.TestCase):
         fixture.cleanup()
         self.assertEqual(result["provider_message_id"], "wamid.document-1")
 
+    def test_delivery_ticks_and_authentic_chat_rendering(self):
+        fixture = build_performance_fixture("small")
+        conversation_id = self._seed_whatsapp(fixture)
+        engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        with session() as db:
+            # Seed 3 outbound messages with different statuses
+            m_sent, _ = upsert_inbound_message(
+                db,
+                company_id=1,
+                channel_key="whatsapp",
+                provider="meta",
+                external_id="wamid.sent-test",
+                sender="Anchi",
+                recipients=["+34600000000"],
+                subject="Mensaje enviado",
+                text_content="Mensaje de prueba enviado.",
+                external_thread_id="+34600000000",
+                received_at=utcnow() - timedelta(minutes=1),
+                content_type="text",
+                direction="outbound",
+            )
+            m_sent.status = "sent"
+
+            m_deliv, _ = upsert_inbound_message(
+                db,
+                company_id=1,
+                channel_key="whatsapp",
+                provider="meta",
+                external_id="wamid.deliv-test",
+                sender="Anchi",
+                recipients=["+34600000000"],
+                subject="Mensaje entregado",
+                text_content="Mensaje de prueba entregado.",
+                external_thread_id="+34600000000",
+                received_at=utcnow() - timedelta(seconds=40),
+                content_type="text",
+                direction="outbound",
+            )
+            m_deliv.status = "delivered"
+
+            m_read, _ = upsert_inbound_message(
+                db,
+                company_id=1,
+                channel_key="whatsapp",
+                provider="meta",
+                external_id="wamid.read-test",
+                sender="Anchi",
+                recipients=["+34600000000"],
+                subject="Mensaje leído",
+                text_content="Mensaje de prueba leído.",
+                external_thread_id="+34600000000",
+                received_at=utcnow() - timedelta(seconds=10),
+                content_type="text",
+                direction="outbound",
+            )
+            m_read.status = "read"
+            db.commit()
+        engine.dispose()
+
+        client, cleanup = self._client_for(fixture)
+        try:
+            self._login(client, fixture)
+            response = client.get(f"/whatsapp/inbox?conversation_id={conversation_id}")
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+        self.assertEqual(response.status_code, 200)
+        # Check single tick for sent
+        self.assertIn("wa-tick-sent", response.text)
+        # Check double tick for delivered
+        self.assertIn("wa-tick-delivered", response.text)
+        # Check double blue tick for read
+        self.assertIn("wa-tick-read", response.text)
+        # Check preview tick in contact list
+        self.assertIn("preview-tick", response.text)
+        # Check date separator
+        self.assertIn("channel-chat-date-separator", response.text)
+
+    def test_rich_media_rendering_images_pdf_audio_and_lightbox(self):
+        fixture = build_performance_fixture("small")
+        conversation_id = self._seed_whatsapp(fixture)
+        engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        with session() as db:
+            msg, _ = upsert_inbound_message(
+                db,
+                company_id=1,
+                channel_key="whatsapp",
+                provider="meta",
+                external_id="wamid.media-rich-test",
+                sender="+34618741297",
+                recipients=["+34910000000"],
+                subject="Archivos multimedia",
+                text_content="Aquí tienes la foto, el PDF y la nota de voz.",
+                external_thread_id="+34600000000",
+                received_at=utcnow(),
+                content_type="media",
+                direction="inbound",
+            )
+            msg.conversation_id = conversation_id
+            msg.status = "received"
+            db.flush()
+
+            att_img = MessageAttachment(
+                company_id=1,
+                inbound_message_id=msg.id,
+                filename="foto-pedido.jpg",
+                content_type="image/jpeg",
+                size_bytes=102400,
+                storage_path="mock/path/foto-pedido.jpg",
+                extraction_status="extracted",
+                is_image=True,
+            )
+            att_pdf = MessageAttachment(
+                company_id=1,
+                inbound_message_id=msg.id,
+                filename="albaran.pdf",
+                content_type="application/pdf",
+                size_bytes=55296,
+                storage_path="mock/path/albaran.pdf",
+                extraction_status="extracted",
+                is_pdf=True,
+            )
+            att_audio = MessageAttachment(
+                company_id=1,
+                inbound_message_id=msg.id,
+                filename="nota-voz.ogg",
+                content_type="audio/ogg",
+                size_bytes=40960,
+                storage_path="mock/path/nota-voz.ogg",
+                extraction_status="extracted",
+                is_audio=True,
+            )
+            att_pending = MessageAttachment(
+                company_id=1,
+                inbound_message_id=msg.id,
+                filename="pendiente.png",
+                content_type="image/png",
+                size_bytes=0,
+                storage_path=None,
+                extraction_status="pending",
+                is_image=True,
+            )
+            db.add_all([att_img, att_pdf, att_audio, att_pending])
+            db.commit()
+            pending_att_id = att_pending.id
+        engine.dispose()
+
+        client, cleanup = self._client_for(fixture)
+        try:
+            self._login(client, fixture)
+            response = client.get(f"/whatsapp/inbox?conversation_id={conversation_id}")
+            self.assertEqual(response.status_code, 200)
+            # Image card rendering and lightbox
+            self.assertIn("wa-bubble-media-image", response.text)
+            self.assertIn("wa-image-lightbox", response.text)
+            self.assertIn("openMediaLightbox", response.text)
+            # PDF preview card and action buttons
+            self.assertIn("wa-bubble-doc-card", response.text)
+            self.assertIn("wa-doc-iframe", response.text)
+            self.assertIn("Guardar como…", response.text)
+            # Audio player card
+            self.assertIn("wa-bubble-audio-card", response.text)
+            self.assertIn("wa-audio-control", response.text)
+            # Pending media card
+            self.assertIn("wa-bubble-pending-card", response.text)
+
+            # Test sync media endpoint
+            sync_resp = client.get(f"/whatsapp/inbox/{conversation_id}/sync-media/{pending_att_id}", follow_redirects=False)
+            self.assertEqual(sync_resp.status_code, 303)
+            self.assertIn(f"/whatsapp/inbox?conversation_id={conversation_id}", sync_resp.headers["location"])
+        finally:
+            cleanup()
+            fixture.cleanup()
 
 if __name__ == "__main__":
     unittest.main()

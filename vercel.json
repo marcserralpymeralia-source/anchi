@@ -8,7 +8,7 @@
   "crons": [
     {
       "path": "/cron/email-sync",
-      "schedule": "0 0 * * *"
+      "schedule": "*/5 * * * *"
     },
     {
       "path": "/cron/jobs",
