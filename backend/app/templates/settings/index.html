@@ -1366,16 +1366,6 @@
     <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
   </div>
   <div class="drawer-body stack external-databases-drawer">
-    <section class="drawer-card external-database-overview-card">
-      <div class="external-database-banner is-safe">
-        <span class="external-database-pill-badge is-safe">{{ icon_shield(13) }} Lectura segura</span>
-        <div class="external-database-banner-info">
-          <strong>Modo estrictamente lectura y aislamiento por tenant</strong>
-          <span class="muted">Anchi no ejecuta SQL arbitrario, no modifica la base externa y limita las previsualizaciones y sincronizaciones hacia maestros locales.</span>
-        </div>
-      </div>
-    </section>
-
     <section class="drawer-card">
       <div class="section-title-row">
         <div>
@@ -2125,8 +2115,8 @@
         const parsed = new DOMParser().parseFromString(html, "text/html");
         const loadedDialog = parsed.getElementById(`settings-${id}`);
         if (!loadedDialog) throw new Error("El bloque de configuración no está disponible");
-        const auxiliaryDialogs = Array.from(parsed.body.children).filter((element) => (
-          element.tagName === "DIALOG" && element.id && element.id !== loadedDialog.id
+        const auxiliaryDialogs = Array.from(parsed.querySelectorAll("dialog")).filter((element) => (
+          element !== loadedDialog && element.id && !loadedDialog.contains(element)
         ));
         loadedDialog.dataset.settingsLoaded = "true";
         dialog.replaceWith(loadedDialog);

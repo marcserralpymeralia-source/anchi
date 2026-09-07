@@ -12663,61 +12663,6 @@ table.logs-table tr:hover td {
   max-width: 1180px;
 }
 
-.external-database-overview-card {
-  border-bottom: 1px solid #e2e8f0;
-  padding-bottom: 14px;
-}
-
-.external-database-banner {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 14px;
-  border-radius: 8px;
-  transition: all 0.15s ease;
-}
-
-.external-database-banner.is-safe {
-  background: #f0fdfa;
-  border: 1px solid #99f6e4;
-  color: #0f766e;
-}
-
-.external-database-pill-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 9999px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.external-database-pill-badge.is-safe {
-  background: #0d9488;
-  color: #ffffff;
-}
-
-.external-database-banner-info {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.external-database-banner-info strong {
-  color: #0f766e;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.external-database-banner-info .muted {
-  color: #115e59;
-  font-size: 12px;
-}
-
 .external-database-empty {
   text-align: center;
   padding: 28px 16px;
