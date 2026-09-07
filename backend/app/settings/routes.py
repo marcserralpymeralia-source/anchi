@@ -12,6 +12,7 @@ import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import case, func, select, update
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.core.templating import templates
@@ -23,7 +24,7 @@ from app.master.database import get_master_db
 from app.master.service import TenantUser
 from app.master.models import EmailSyncState
 from app.core.encryption import decrypt_secret, encrypt_secret, mask_secret
-from app.db.models import AuditLog, BrandingSettings, Company, Customer, DecisionSettings, Email, EmailSettings, EmailTemplate, ExportSettings, FTPSettings, InputChannel, InboundMessage, LLMSettings, Order, Product, PromptExecution, PromptExecutionDetail, PromptTemplate, PromptVersion, ProxyConnection, ScoringSettings
+from app.db.models import AuditLog, BrandingSettings, Company, Customer, DecisionSettings, Email, EmailSettings, EmailTemplate, ExportSettings, ExternalDatabaseConnection, ExternalDatabaseMapping, FTPSettings, InputChannel, InboundMessage, LLMSettings, Order, Product, PromptExecution, PromptExecutionDetail, PromptTemplate, PromptVersion, ProxyConnection, ScoringSettings
 from app.db.models import BackgroundJob
 from app.logs.service import log_action
 from app.settings.agent_config import agent_metrics, agent_status, apply_safety_level, improvement_suggestions
@@ -32,6 +33,7 @@ from app.settings.branding import branding_to_dict, delete_brand_asset, get_or_c
 from app.settings.email_config import TEMPLATE_VARIABLES, email_config_status, email_templates, ensure_default_email_templates, serialize_email_settings
 from app.settings.integrations import AGENT_FLOW_DEMO_SAMPLE, AGENT_FLOW_DEMO_VALIDATION_CONTEXT, classify_sample, extract_sample, preview_initial_imap_sync, run_initial_imap_sync, send_test_email, test_imap_connection, test_smtp_connection, validate_sample
 from app.settings.application import run_connection_test, update_settings_section_async
+from app.external_databases.service import ExternalDatabaseError, _safe_error_message, connection_summary, database_type_options, entity_field_options, normalize_connection_values, preview_mapping, scan_schema, sync_mapping, test_connection, validate_mapping_payload
 from app.settings.service import get_or_create_settings, resolve_updated_by_id, update_with_form
 from app.dashboard.service import recent_processed_emails_overview
 from app.jobs.service import enqueue_job, execute_job_inline, job_payload
@@ -42,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
-SETTINGS_MODULE_KEYS = {"general", "identity", "email", "ai", "scoring", "decision", "export", "ftp", "proxies", "advanced"}
+SETTINGS_MODULE_KEYS = {"general", "identity", "email", "ai", "scoring", "decision", "export", "ftp", "proxies", "data-sources", "advanced"}
 
 SETTINGS_SEARCH_CATALOG = [
     {"module_key": "general", "module_label": "General", "title": "Datos de empresa", "detail": "Nombre, contacto, país, idioma y moneda", "search_text": "empresa nombre razón social CIF NIF email teléfono web dirección país idioma zona horaria moneda notificaciones"},
@@ -55,6 +57,7 @@ SETTINGS_SEARCH_CATALOG = [
     {"module_key": "export", "module_label": "Exportación", "title": "Formato de exportación", "detail": "CSV, JSON, separadores y plantilla", "search_text": "exportación CSV JSON encoding fecha separador plantilla cabecera líneas"},
     {"module_key": "ftp", "module_label": "FTP/SFTP", "title": "Destino de exportación", "detail": "FTP, FTPS, host, credenciales y reintentos", "search_text": "FTP FTPS SFTP host puerto usuario contraseña clave privada destino reintentos timeout"},
     {"module_key": "proxies", "module_label": "Proxies", "title": "Acceso al gateway", "detail": "Perfiles de acceso para el futuro gateway de red", "search_text": "proxy proxies gateway conexión externa IP host puerto protocolo usuario contraseña TLS HTTP HTTPS SOCKS5"},
+    {"module_key": "data-sources", "module_label": "Fuentes de datos", "title": "Base de datos externa", "detail": "Conexión de solo lectura, escaneo de tablas y mapeo de clientes y productos", "search_text": "base de datos externa conexión PostgreSQL MySQL MariaDB SQLite host puerto esquema usuario contraseña tablas columnas clientes productos campos mapeo sincronizar proxy solo lectura"},
     {"module_key": "advanced", "module_label": "Avanzado", "title": "Prompts y versiones", "detail": "Configuración técnica y logs", "search_text": "avanzado prompts versiones logs técnicos"},
 ]
 
@@ -401,6 +404,25 @@ def _settings_module_context(request: Request, db: Session, user: TenantUser, mo
             can_edit_proxies=can_edit_proxies(user),
             mask_secret=mask_secret,
         )
+    elif module_key == "data-sources":
+        external_connections = db.scalars(
+            select(ExternalDatabaseConnection)
+            .where(ExternalDatabaseConnection.company_id == user.company_id)
+            .order_by(ExternalDatabaseConnection.name.asc(), ExternalDatabaseConnection.id.asc())
+        ).all()
+        proxies = db.scalars(
+            select(ProxyConnection)
+            .where(ProxyConnection.company_id == user.company_id)
+            .order_by(ProxyConnection.name.asc(), ProxyConnection.id.asc())
+        ).all()
+        context.update(
+            external_database_connections=external_connections,
+            proxy_connections=proxies,
+            can_edit_external_databases=can_edit_external_databases(user),
+            database_type_options=database_type_options(),
+            entity_field_options=entity_field_options(),
+            mask_secret=mask_secret,
+        )
     elif module_key == "advanced":
         prompts, prompt_versions = _prompt_versions_by_template(db, user.company_id)
         context.update(
@@ -429,6 +451,9 @@ def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: 
     proxy_connection_count = db.scalar(
         select(func.count(ProxyConnection.id)).where(ProxyConnection.company_id == user.company_id)
     ) or 0
+    external_database_count = db.scalar(
+        select(func.count(ExternalDatabaseConnection.id)).where(ExternalDatabaseConnection.company_id == user.company_id)
+    ) or 0
     export_settings = get_or_create_settings(db, ExportSettings, user.company_id)
     branding_settings = get_or_create_branding(db, user.company_id)
     dashboard = build_settings_dashboard(
@@ -442,6 +467,7 @@ def settings_page(request: Request, db: Session = Depends(get_tenant_db), user: 
         email=email_settings,
         ftp=ftp_settings,
         proxy_connection_count=proxy_connection_count,
+        external_database_count=external_database_count,
         export=export_settings,
         decision=decision_settings,
         prompt_templates=[],
@@ -553,6 +579,7 @@ def build_settings_dashboard(
     email: EmailSettings | None = None,
     ftp: FTPSettings | None = None,
     proxy_connection_count: int | None = None,
+    external_database_count: int | None = None,
     export: ExportSettings | None = None,
     decision: DecisionSettings | None = None,
     prompt_templates: list[PromptTemplate] | None = None,
@@ -566,6 +593,10 @@ def build_settings_dashboard(
     if proxy_connection_count is None:
         proxy_connection_count = db.scalar(
             select(func.count(ProxyConnection.id)).where(ProxyConnection.company_id == user.company_id)
+        ) or 0
+    if external_database_count is None:
+        external_database_count = db.scalar(
+            select(func.count(ExternalDatabaseConnection.id)).where(ExternalDatabaseConnection.company_id == user.company_id)
         ) or 0
     export = export if export is not None else get_or_create_settings(db, ExportSettings, user.company_id)
     decision = decision if decision is not None else get_or_create_settings(db, DecisionSettings, user.company_id)
@@ -605,6 +636,7 @@ def build_settings_dashboard(
         state("export", "Exportación", "ready" if export.file_type and export.filename_template else "pending", f"{export.file_type.upper() if export.file_type else 'Sin formato'} · {export.filename_template or 'sin plantilla'}", "Configurar"),
         state("ftp", "FTP/SFTP", "ready" if ftp.host and ftp.username else "pending", f"{ftp.connection_type.upper()} · {ftp.host or 'host pendiente'}", "Configurar"),
         state("proxies", "Proxies", "ready", f"{proxy_connection_count} perfiles · tráfico del gateway inactivo", "Configurar"),
+        state("data-sources", "Fuentes de datos", "ready" if external_database_count else "pending", f"{external_database_count} conexiones · lectura segura", "Configurar"),
         state("alerts", "Alertas", "ready", f"{metrics['llm_errors']} errores · {metrics['doubtful_emails']} dudosos", "Ver"),
         state("users", "Usuarios y permisos", "ready", "Roles y accesos activos", "Abrir"),
         state("advanced", "Avanzado", "optional" if user.role.name == "Superadmin" else "locked", f"{prompt_count} prompts · logs técnicos", "Abrir"),
@@ -642,6 +674,7 @@ def build_settings_dashboard(
         "llm": llm,
         "ftp": ftp,
         "proxy_connection_count": proxy_connection_count,
+        "external_database_count": external_database_count,
         "export": export,
         "decision": decision,
         "branding": branding,
@@ -768,6 +801,10 @@ def can_test_email_settings(user: TenantUser) -> bool:
 
 
 def can_edit_proxies(user: TenantUser) -> bool:
+    return user.role.name in {"Administrador", "Superadmin"}
+
+
+def can_edit_external_databases(user: TenantUser) -> bool:
     return user.role.name in {"Administrador", "Superadmin"}
 
 
@@ -2092,3 +2129,216 @@ def save_prompt(template_id: int, content: str = Form(...), db: Session = Depend
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="agent.prompt_updated", entity_type="prompt", entity_id=template.id, message=f"Prompt actualizado: {template.purpose}")
     return RedirectResponse("/settings#agent-prompts", status_code=303)
+
+
+def _external_database_for_user(db: Session, user: TenantUser, connection_id: int) -> ExternalDatabaseConnection | None:
+    return db.scalar(
+        select(ExternalDatabaseConnection).where(
+            ExternalDatabaseConnection.id == connection_id,
+            ExternalDatabaseConnection.company_id == user.company_id,
+        )
+    )
+
+
+def _external_database_response(request: Request, payload: dict, anchor: str = "data-sources"):
+    if "application/json" in (request.headers.get("accept") or "") or "application/json" in (request.headers.get("content-type") or ""):
+        return JSONResponse(payload, status_code=payload.pop("_status_code", 200))
+    return RedirectResponse(f"/settings#{anchor}", status_code=303)
+
+
+@router.api_route("/data-sources", methods=["POST", "PUT"])
+async def save_external_database(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if not can_edit_external_databases(user):
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede configurar fuentes de datos."}, status_code=403)
+    data = await request_data(request)
+    raw_id = str(data.get("id") or "").strip()
+    existing = None
+    if raw_id:
+        try:
+            existing = _external_database_for_user(db, user, int(raw_id))
+        except ValueError:
+            existing = None
+        if existing is None:
+            return JSONResponse({"ok": False, "message": "No se encontró la conexión indicada."}, status_code=404)
+    try:
+        values = normalize_connection_values(data, existing)
+        password = str(data.get("password") or "").strip()
+        if values["database_type"] != "sqlite" and not password and not (existing and existing.password_encrypted):
+            raise ExternalDatabaseError("La contraseña es obligatoria para esta conexión.")
+        if values["proxy_connection_id"] is not None:
+            proxy = db.scalar(
+                select(ProxyConnection).where(
+                    ProxyConnection.id == values["proxy_connection_id"],
+                    ProxyConnection.company_id == user.company_id,
+                )
+            )
+            if proxy is None:
+                raise ExternalDatabaseError("El proxy seleccionado no pertenece a esta compañía.")
+    except ExternalDatabaseError as exc:
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=422)
+
+    connection = existing or ExternalDatabaseConnection(company_id=user.company_id)
+    db.add(connection)
+    for key, value in values.items():
+        setattr(connection, key, value)
+    if password and password not in {"********", "••••••••"}:
+        from app.core.encryption import encrypt_secret
+
+        connection.password_encrypted = encrypt_secret(password)
+    connection.read_only = True
+    connection.updated_by = resolve_updated_by_id(db, user)
+    connection.updated_at = datetime.now(timezone.utc)
+    if values["enabled"]:
+        db.flush()
+        db.execute(
+            update(ExternalDatabaseConnection)
+            .where(
+                ExternalDatabaseConnection.company_id == user.company_id,
+                ExternalDatabaseConnection.id != connection.id,
+            )
+            .values(enabled=False, updated_at=datetime.now(timezone.utc))
+        )
+    try:
+        db.commit()
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        if "UNIQUE" in str(exc).upper() or "DUPLICATE" in str(exc).upper():
+            return JSONResponse({"ok": False, "message": "Ya existe una conexión con ese nombre."}, status_code=409)
+        raise
+    log_action(db, company_id=user.company_id, user=user, action="settings.external_database.save", entity_type="external_database", entity_id=connection.id, message=f"Conexión externa guardada: {connection.name}")
+    return _external_database_response(request, {"ok": True, "id": connection.id, "message": "Conexión guardada correctamente."})
+
+
+@router.post("/data-sources/{connection_id}/test")
+def test_external_database(connection_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if not can_edit_external_databases(user):
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede probar fuentes de datos."}, status_code=403)
+    connection = _external_database_for_user(db, user, connection_id)
+    if connection is None:
+        return JSONResponse({"ok": False, "message": "No se encontró la conexión indicada."}, status_code=404)
+    ok, message = test_connection(connection)
+    now = datetime.now(timezone.utc)
+    connection.last_test_at = now
+    connection.last_test_ok = ok
+    connection.last_test_message = message
+    connection.status = "connected" if ok else "error"
+    db.commit()
+    log_action(
+        db,
+        company_id=user.company_id,
+        user=user,
+        action="settings.external_database.test",
+        entity_type="external_database",
+        entity_id=connection.id,
+        message=message,
+        metadata={"database_type": connection.database_type, "host": connection.host, "proxy_connection_id": connection.proxy_connection_id, "read_only": True, "ok": ok},
+    )
+    payload = {"ok": ok, "message": message, "status": connection.status, "checked_at": now.isoformat()}
+    return JSONResponse(payload, status_code=200 if ok else 502) if "application/json" in (request.headers.get("accept") or "") else RedirectResponse("/settings#data-sources", status_code=303)
+
+
+@router.post("/data-sources/{connection_id}/scan")
+def scan_external_database(connection_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if not can_edit_external_databases(user):
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede escanear fuentes de datos."}, status_code=403)
+    connection = _external_database_for_user(db, user, connection_id)
+    if connection is None:
+        return JSONResponse({"ok": False, "message": "No se encontró la conexión indicada."}, status_code=404)
+    now = datetime.now(timezone.utc)
+    try:
+        schema = scan_schema(connection)
+        connection.last_scan_ok = True
+        connection.last_scan_message = f"Esquema leído: {len(schema['tables'])} tablas disponibles."
+        connection.last_scan_at = now
+        connection.status = "scanned"
+        db.commit()
+        log_action(db, company_id=user.company_id, user=user, action="settings.external_database.scan", entity_type="external_database", entity_id=connection.id, message=connection.last_scan_message, metadata={"table_count": len(schema["tables"]), "read_only": True})
+        return JSONResponse({"ok": True, "schema": schema, "message": connection.last_scan_message, "scanned_at": now.isoformat()})
+    except ExternalDatabaseError as exc:
+        connection.last_scan_ok = False
+        connection.last_scan_message = str(exc)
+        connection.last_scan_at = now
+        connection.status = "error"
+        db.commit()
+        log_action(db, company_id=user.company_id, user=user, action="settings.external_database.scan", entity_type="external_database", entity_id=connection.id, message=str(exc), metadata={"read_only": True, "ok": False})
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=502)
+
+
+@router.post("/data-sources/{connection_id}/mapping")
+async def save_external_database_mapping(connection_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if not can_edit_external_databases(user):
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede guardar mapeos."}, status_code=403)
+    connection = _external_database_for_user(db, user, connection_id)
+    if connection is None:
+        return JSONResponse({"ok": False, "message": "No se encontró la conexión indicada."}, status_code=404)
+    data = await request_data(request)
+    entity_type = str(data.get("entity_type") or "").strip().lower()
+    table_name = str(data.get("table_name") or "").strip()
+    table_schema = str(data.get("table_schema") or connection.schema_name or "public").strip()
+    try:
+        raw_map = data.get("field_map") or data.get("field_map_json") or "{}"
+        field_map = json.loads(raw_map) if isinstance(raw_map, str) else raw_map
+        if not isinstance(field_map, dict):
+            raise ExternalDatabaseError("El mapeo de campos no es válido.")
+        schema = scan_schema(connection)
+        table = next((item for item in schema["tables"] if item["name"] == table_name and item["schema"] == ("main" if connection.database_type == "sqlite" else table_schema)), None)
+        if table is None:
+            raise ExternalDatabaseError("La tabla seleccionada no pertenece al esquema escaneado.")
+        normalized_map = validate_mapping_payload(entity_type, field_map, {"tables": [table]})
+        sync_limit = max(min(int(data.get("sync_limit") or 500), MAX_SYNC_ROWS), 1)
+    except (ExternalDatabaseError, TypeError, ValueError) as exc:
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=422)
+    mapping = db.scalar(select(ExternalDatabaseMapping).where(ExternalDatabaseMapping.connection_id == connection.id, ExternalDatabaseMapping.company_id == user.company_id, ExternalDatabaseMapping.entity_type == entity_type))
+    if mapping is None:
+        mapping = ExternalDatabaseMapping(company_id=user.company_id, connection_id=connection.id, entity_type=entity_type)
+        db.add(mapping)
+    mapping.table_schema = table_schema
+    mapping.table_name = table_name
+    mapping.field_map_json = json.dumps(normalized_map, ensure_ascii=False, sort_keys=True)
+    mapping.sync_enabled = str(data.get("sync_enabled") or "").lower() in {"on", "true", "1"}
+    mapping.sync_limit = sync_limit
+    mapping.updated_at = datetime.now(timezone.utc)
+    db.commit()
+    log_action(db, company_id=user.company_id, user=user, action="settings.external_database.mapping.save", entity_type="external_database_mapping", entity_id=mapping.id, message=f"Mapeo de {entity_type} guardado: {table_schema}.{table_name}", metadata={"entity_type": entity_type, "table_name": table_name, "field_count": len(normalized_map), "read_only": True})
+    return JSONResponse({"ok": True, "mapping": {"id": mapping.id, "entity_type": entity_type, "table_schema": table_schema, "table_name": table_name, "field_map": normalized_map, "sync_enabled": mapping.sync_enabled, "sync_limit": mapping.sync_limit}})
+
+
+@router.post("/data-sources/{connection_id}/mapping/{entity_type}/preview")
+def preview_external_database_mapping(connection_id: int, entity_type: str, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if not can_edit_external_databases(user):
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede consultar una fuente de datos."}, status_code=403)
+    connection = _external_database_for_user(db, user, connection_id)
+    mapping = db.scalar(select(ExternalDatabaseMapping).where(ExternalDatabaseMapping.connection_id == connection_id, ExternalDatabaseMapping.company_id == user.company_id, ExternalDatabaseMapping.entity_type == entity_type))
+    if connection is None or mapping is None:
+        return JSONResponse({"ok": False, "message": "No existe un mapeo guardado para esta entidad."}, status_code=404)
+    try:
+        return JSONResponse({"ok": True, **preview_mapping(connection, mapping)})
+    except ExternalDatabaseError as exc:
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=502)
+
+
+@router.post("/data-sources/{connection_id}/mapping/{entity_type}/sync")
+def sync_external_database_mapping(connection_id: int, entity_type: str, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if not can_edit_external_databases(user):
+        return JSONResponse({"ok": False, "message": "Solo Administrador puede sincronizar fuentes de datos."}, status_code=403)
+    connection = _external_database_for_user(db, user, connection_id)
+    mapping = db.scalar(select(ExternalDatabaseMapping).where(ExternalDatabaseMapping.connection_id == connection_id, ExternalDatabaseMapping.company_id == user.company_id, ExternalDatabaseMapping.entity_type == entity_type))
+    if connection is None or mapping is None:
+        return JSONResponse({"ok": False, "message": "No existe un mapeo guardado para esta entidad."}, status_code=404)
+    if not mapping.sync_enabled:
+        return JSONResponse({"ok": False, "message": "Activa la sincronización del mapeo antes de ejecutarla."}, status_code=422)
+    try:
+        result = sync_mapping(db, connection, mapping, user.company_id, user.id)
+        mapping.last_sync_at = datetime.now(timezone.utc)
+        mapping.last_sync_ok = True
+        mapping.last_sync_message = f"Sincronización completada: {result['rows_read']} filas leídas."
+        db.commit()
+        log_action(db, company_id=user.company_id, user=user, action="settings.external_database.mapping.sync", entity_type="external_database_mapping", entity_id=mapping.id, message=mapping.last_sync_message, metadata={"entity_type": entity_type, "rows_read": result["rows_read"], "read_only_source": True})
+        return JSONResponse({"ok": True, "message": mapping.last_sync_message, "result": result})
+    except (ExternalDatabaseError, SQLAlchemyError, ValueError) as exc:
+        db.rollback()
+        mapping.last_sync_at = datetime.now(timezone.utc)
+        mapping.last_sync_ok = False
+        mapping.last_sync_message = _safe_error_message(exc)
+        db.commit()
+        return JSONResponse({"ok": False, "message": mapping.last_sync_message}, status_code=502)

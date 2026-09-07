@@ -892,6 +892,23 @@ def _apply_tenant_proxy_connection_scope(engine, dry_run: bool) -> list[str]:  #
     return statements
 
 
+def _apply_tenant_external_database_connections(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Create the tenant-owned, read-only external database configuration."""
+
+    from app.db.models import ExternalDatabaseConnection, ExternalDatabaseMapping
+
+    actions: list[str] = []
+    with engine.connect() as conn:
+        table_names = set(inspect(conn).get_table_names())
+    for model in (ExternalDatabaseConnection, ExternalDatabaseMapping):
+        if model.__tablename__ in table_names:
+            continue
+        actions.append(f"CREATE TABLE {model.__tablename__} (...)")
+        if not dry_run:
+            model.__table__.create(bind=engine, checkfirst=True)
+    return actions
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -970,6 +987,12 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant proxy configuration scope",
         checksum=checksum_text("tenant", "proxy_configuration_scope", "proxy_host", "proxy_port", "proxy_protocol"),
         upgrade=_apply_tenant_proxy_connection_scope,
+    ),
+    MigrationSpec(
+        version="2026.09.07.1",
+        name="tenant external database connections",
+        checksum=checksum_text("tenant", "external_database_connections", "external_database_mappings", "read_only", "field_map_json"),
+        upgrade=_apply_tenant_external_database_connections,
     ),
 ]
 

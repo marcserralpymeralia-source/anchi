@@ -46,7 +46,9 @@ def _cron_authorized(request: Request) -> None:
 @router.api_route("/jobs", methods=["GET", "POST"])
 def jobs_cron(request: Request):
     _cron_authorized(request)
-    result = run_worker_cycle(max_jobs=1)
+    settings = get_settings()
+    batch_size = max(1, min(int(getattr(settings, "cron_job_batch_size", 5) or 5), 20))
+    result = run_worker_cycle(max_jobs=batch_size)
     return JSONResponse({"ok": True, **result})
 
 

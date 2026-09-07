@@ -5,6 +5,7 @@ import re
 import unittest
 from collections import Counter
 from html import unescape
+from urllib.parse import parse_qs, urlparse
 
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("ENABLE_DEMO_BOOTSTRAP", "false")
@@ -47,6 +48,14 @@ class OrdersListOptimizationTests(unittest.TestCase):
 
             self.assertEqual(card_ids, list_ids)
             self.assertEqual(filtered_card_ids, filtered_list_ids)
+            for status_label in ("Dudoso", "No importable", "Confirmado", "Exportado", "Pendiente de revisión"):
+                self.assertIn(status_label, cards_response.text)
+                self.assertIn(status_label, list_response.text)
+
+            self.assertRegex(
+                unescape(cards_response.text),
+                r'href="/orders\?view=cards&[^\"]*status=dudoso[^\"]*"',
+            )
         finally:
             fixture.cleanup()
 
@@ -58,14 +67,11 @@ class OrdersListOptimizationTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             response_html = unescape(response.text)
-            reported_counts = {
-                status: int(count)
-                for status, count in re.findall(
-                    r'href="/orders\?view=list&status=([^\"]+)"[^>]*>.*?<strong>(\d+)</strong>',
-                    response_html,
-                    re.S,
-                )
-            }
+            reported_counts = {}
+            for href, count in re.findall(r'href="(/orders\?[^\"]+)"[^>]*>.*?<strong>(\d+)</strong>', response_html, re.S):
+                query = parse_qs(urlparse(href).query)
+                status = query.get("status", [""])[0]
+                reported_counts[status] = int(count)
             row_labels = [
                 re.sub(r"<[^>]+>", "", value).strip()
                 for value in re.findall(r'<td data-column="status"><span[^>]*>(.*?)</span></td>', response_html, re.S)

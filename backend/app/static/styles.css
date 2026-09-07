@@ -6587,6 +6587,7 @@ button.webmail-favorite-button.is-favorite .ui-icon {
 .attachment-kind.text { color: #176855; background: #e3f5ee; }
 .attachment-open { flex: 0 0 auto; color: var(--accent-dark); font-size: 10px; font-weight: 800; }
 .channel-chat-attachment.is-pending { color: var(--muted); }
+.wa-pending-error { display: block; max-width: 330px; overflow: hidden; color: #a33b32; font-size: 10px; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
 .channel-chat-compose { display: grid; gap: 8px; padding: 11px 15px 9px; border-top: 1px solid var(--line); background: #fff; }
 .channel-chat-compose textarea { width: 100%; min-height: 70px; resize: vertical; box-sizing: border-box; padding: 9px 10px; border: 1px solid #ccd9d7; border-radius: 7px; outline: 0; background: #fff; color: var(--text); font: inherit; font-size: 12px; line-height: 1.4; }
 .channel-chat-compose textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(15, 118, 110, .1); }

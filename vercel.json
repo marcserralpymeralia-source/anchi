@@ -12,7 +12,7 @@
     },
     {
       "path": "/cron/jobs",
-      "schedule": "5 0 * * *"
+      "schedule": "*/5 * * * *"
     }
   ]
 }

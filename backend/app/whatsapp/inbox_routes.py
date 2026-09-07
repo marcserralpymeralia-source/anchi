@@ -69,6 +69,19 @@ def _format_bytes(size: int | None) -> str:
     return f"{value / (1024 * 1024):.1f} MB"
 
 
+def _attachment_status_label(status: str | None) -> str:
+    labels = {
+        "pending": "Esperando descarga desde Meta",
+        "downloaded": "Descargado; pendiente de procesar",
+        "transcription_pending": "Guardado; pendiente de transcribir",
+        "extraction_error": "No se pudo descargar o procesar",
+        "storage_error": "No se pudo guardar",
+        "unsupported": "Tipo no compatible",
+    }
+    normalized = str(status or "pending").strip().lower()
+    return labels.get(normalized, "Procesando archivo")
+
+
 def _message_date(message: InboundMessage):
     return getattr(message, "sent_at", None) or message.received_at or message.created_at
 
@@ -89,6 +102,8 @@ def _message_payload(message: InboundMessage) -> dict:
                 "href": f"/channels/inbound/{message.id}/attachments/{attachment.id}/preview" if available else "",
                 "download_href": f"/channels/inbound/{message.id}/attachments/{attachment.id}" if available else "",
                 "status": attachment.extraction_status or "pending",
+                "status_label": _attachment_status_label(attachment.extraction_status),
+                "error": (attachment.extraction_error or "")[:240],
             }
         )
     return {

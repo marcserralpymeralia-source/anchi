@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_search, icon_close, icon_plus, icon_trash, icon_check, icon_edit %}
+{% from "components/icons.html" import icon_search, icon_close, icon_plus, icon_trash, icon_check, icon_edit, icon_building, icon_refresh, icon_eye %}
 {% set title = "Configuración" %}
 {% block head_extra %}<script src="{{ asset_url('js/settings-email-backfill.js') }}" defer></script>{% endblock %}
 {% macro state_label(state) -%}
@@ -150,7 +150,7 @@
             <h3>{{ module.label }}</h3>
             <span class="module-state {{ module.state }}">{{ state_label(module.state) }}</span>
           </div>
-          {% if module.key in ["general", "identity", "ai", "scoring", "decision", "export", "ftp", "proxies"] or (module.key == "advanced" and user.role.name == "Superadmin") %}
+          {% if module.key in ["general", "identity", "ai", "scoring", "decision", "export", "ftp", "proxies", "data-sources"] or (module.key == "advanced" and user.role.name == "Superadmin") %}
             <button type="button" class="secondary compact-button" data-open-settings="{{ module.key }}">Configurar</button>
           {% elif module.key == "advanced" %}
             <span class="muted">Solo Superadmin</span>
@@ -167,6 +167,8 @@
             <a class="button secondary compact-button" href="/users">Abrir</a>
           {% elif module.key == "alerts" %}
             <a class="button secondary compact-button" href="/alerts">Ver</a>
+          {% elif module.key == "data-sources" %}
+            <span class="muted">Clientes y productos externos en modo lectura</span>
           {% elif module.key == "advanced" and user.role.name != "Superadmin" %}
             <span class="muted">Disponible para Superadmin</span>
           {% endif %}
@@ -1354,6 +1356,134 @@
 </dialog>
 {% endif %}
 
+{% if settings_fragment == "data-sources" %}
+<dialog id="settings-data-sources" class="settings-drawer settings-drawer-wide">
+  <div class="drawer-head">
+    <div>
+      <h3>Fuentes de datos</h3>
+      <p class="muted">Conecta una base de datos externa en modo estrictamente lectura y decide qué tablas alimentan clientes y productos.</p>
+    </div>
+    <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
+  </div>
+  <div class="drawer-body stack external-databases-drawer">
+    <section class="drawer-card external-database-safety-note">
+      <strong>{{ icon_building(15) }} Lectura segura por defecto</strong>
+      <span class="muted">Anchi no ejecuta SQL escrito por el usuario, no modifica la base externa y limita las previsualizaciones y sincronizaciones.</span>
+    </section>
+
+    <section class="drawer-card">
+      <div class="section-title-row">
+        <div>
+          <h4>Conexiones configuradas ({{ external_database_connections|length }})</h4>
+          <p class="muted">Las credenciales se cifran y nunca se muestran ni se escriben en los logs.</p>
+        </div>
+        {% if can_edit_external_databases %}
+          <button type="button" class="secondary compact-button" onclick="document.getElementById('external-database-create-dialog').showModal();">{{ icon_plus(13) }} Añadir conexión</button>
+        {% endif %}
+      </div>
+
+      {% if not external_database_connections %}
+        <div class="external-database-empty">
+          <strong>Aún no hay una fuente conectada</strong>
+          <span class="muted">Añade los datos que te facilite la empresa y prueba la conexión antes de escanearla.</span>
+          {% if can_edit_external_databases %}<button type="button" class="secondary compact-button" onclick="document.getElementById('external-database-create-dialog').showModal();">Crear primera conexión</button>{% endif %}
+        </div>
+      {% endif %}
+
+      <div class="external-database-list">
+        {% for connection in external_database_connections %}
+          <article class="external-database-card" data-external-database-card data-connection-id="{{ connection.id }}">
+            <div class="external-database-card-head">
+              <div>
+                <strong>{{ connection.name }}</strong>
+                <span class="badge {% if connection.status in ['connected', 'scanned'] %}status-confirmed{% elif connection.status == 'error' %}status-doubtful{% endif %}">{{ {'not_tested': 'Sin probar', 'connected': 'Conectada', 'scanned': 'Esquema leído', 'error': 'Con avisos'}.get(connection.status, connection.status) }}</span>
+                {% if connection.enabled %}<span class="badge status-confirmed">Activa</span>{% endif %}
+              </div>
+              <span class="muted">{{ connection.database_type|upper }} · {{ connection.host }}{% if connection.port %}:{{ connection.port }}{% endif %}</span>
+            </div>
+            <div class="external-database-meta">
+              <span>Base: <strong>{{ connection.database_name }}</strong></span>
+              <span>Esquema: <strong>{{ connection.schema_name }}</strong></span>
+              <span>Usuario: <strong>{{ connection.username or '—' }}</strong></span>
+              <span>SSL: <strong>{{ connection.ssl_mode }}</strong></span>
+              {% if connection.proxy_connection_id %}<span>Proxy: <strong>Configurado</strong></span>{% endif %}
+            </div>
+            {% if connection.last_test_message %}<p class="settings-status-note external-database-last-status {% if connection.last_test_ok %}is-success{% else %}is-error{% endif %}">{{ connection.last_test_message }}</p>{% endif %}
+            <div class="external-database-actions">
+              {% if can_edit_external_databases %}
+                <button type="button" class="secondary compact-button" data-external-test>{{ icon_refresh(14) }} Probar conexión</button>
+                <button type="button" class="secondary compact-button" data-external-scan disabled>{{ icon_search(14) }} Escanear esquema</button>
+                <form method="post" action="/settings/data-sources/{{ connection.id }}/toggle" class="js-loading-form"><button type="submit" class="secondary compact-button">{{ 'Desactivar' if connection.enabled else 'Activar' }}</button></form>
+                <button type="button" class="secondary compact-button" data-external-edit-toggle>Editar</button>
+              {% endif %}
+            </div>
+            <p class="settings-status-note external-database-action-status" data-external-status role="status" aria-live="polite" hidden></p>
+            {% if can_edit_external_databases %}
+              <form class="external-database-edit-form stack" data-external-edit-form method="post" action="/settings/data-sources" hidden>
+                <input type="hidden" name="id" value="{{ connection.id }}">
+                <div class="form-grid">
+                  <label>Nombre<input name="name" value="{{ connection.name }}" required></label>
+                  <label>Motor<select name="database_type" data-database-type>{% for option in database_type_options %}<option value="{{ option.value }}" data-default-port="{{ option.default_port }}" {% if connection.database_type == option.value %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
+                  <label>Host o IP<input name="host" value="{{ connection.host }}" required></label>
+                  <label>Puerto<input name="port" type="number" min="1" max="65535" value="{{ connection.port }}"></label>
+                  <label>Base de datos<input name="database_name" value="{{ connection.database_name }}" required></label>
+                  <label>Esquema<input name="schema_name" value="{{ connection.schema_name }}"></label>
+                  <label>Usuario<input name="username" value="{{ connection.username }}"></label>
+                  <label>Contraseña<input name="password" type="password" autocomplete="new-password" placeholder="{{ mask_secret(connection.password_encrypted) or 'Introduce una contraseña' }}"></label>
+                  <label>SSL<select name="ssl_mode"><option value="require" {% if connection.ssl_mode == 'require' %}selected{% endif %}>Cifrado requerido</option><option value="verify-full" {% if connection.ssl_mode == 'verify-full' %}selected{% endif %}>Verificar certificado</option><option value="disable" {% if connection.ssl_mode == 'disable' %}selected{% endif %}>Desactivado</option></select></label>
+                  <label>Proxy de salida<select name="proxy_connection_id"><option value="">Sin proxy</option>{% for proxy in proxy_connections %}<option value="{{ proxy.id }}" {% if connection.proxy_connection_id == proxy.id %}selected{% endif %}>{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>{% endfor %}</select></label>
+                  <label class="checkbox-card span-2">Activar esta fuente (desactiva otras fuentes al guardar)<input name="enabled" type="checkbox" {% if connection.enabled %}checked{% endif %}></label>
+                </div>
+                <div class="drawer-actions"><button type="submit" class="primary" data-loading-text="Guardando...">Guardar conexión</button><button type="button" class="secondary" data-external-edit-cancel>Cancelar</button></div>
+              </form>
+            {% endif %}
+
+            <div class="external-schema-panel" data-external-schema hidden>
+              <div class="external-schema-head"><div><strong>Esquema disponible</strong><span class="muted" data-external-schema-summary></span></div><button type="button" class="secondary compact-button" data-external-schema-close>Cerrar esquema</button></div>
+              <div class="external-mapping-grid">
+                {% for entity_type, fields in entity_field_options.items() %}
+                  <section class="external-mapping-panel" data-external-mapping data-entity-type="{{ entity_type }}">
+                    <div class="section-title-row"><div><h5>{{ 'Clientes' if entity_type == 'customers' else 'Productos' }}</h5><p class="muted">Elige tabla y vincula los campos mínimos.</p></div><span class="badge">Solo lectura</span></div>
+                    <label>Tabla origen<select data-mapping-table disabled><option>Escanea el esquema para empezar</option></select></label>
+                    <div class="external-field-mapping-list" data-mapping-fields></div>
+                    <div class="external-mapping-actions"><button type="button" class="primary compact-button" data-save-mapping disabled>Guardar mapeo</button><button type="button" class="secondary compact-button" data-preview-mapping disabled>Previsualizar</button><button type="button" class="secondary compact-button" data-sync-mapping disabled>Sincronizar ahora</button></div>
+                    <p class="settings-status-note" data-mapping-status hidden role="status" aria-live="polite"></p>
+                    <div class="external-preview-table-wrap" data-mapping-preview hidden><table class="data-table"><thead data-preview-head></thead><tbody data-preview-body></tbody></table></div>
+                  </section>
+                {% endfor %}
+              </div>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    </section>
+  </div>
+</dialog>
+
+{% if can_edit_external_databases %}
+<dialog id="external-database-create-dialog" class="edit-dialog" onclick="if (event.target === this) this.close();">
+  <form class="stack" method="post" action="/settings/data-sources" data-external-create-form>
+    <div class="dialog-header"><h2>Nueva fuente de datos</h2><button type="button" class="secondary compact-button modal-close-btn" onclick="this.closest('dialog').close()">{{ icon_close(14) }}</button></div>
+    <p class="muted">La conexión se guardará cifrada. Anchi solo consultará el esquema y los registros que mapees.</p>
+    <div class="form-grid">
+      <label>Nombre de la conexión<input name="name" placeholder="ERP de la empresa" required></label>
+      <label>Motor<select name="database_type" data-database-type>{% for option in database_type_options %}<option value="{{ option.value }}" data-default-port="{{ option.default_port }}" {% if option.value == 'postgresql' %}selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></label>
+      <label>Host o IP<input name="host" placeholder="db.empresa.com" required></label>
+      <label>Puerto<input name="port" type="number" value="5432" min="1" max="65535"></label>
+      <label>Base de datos<input name="database_name" placeholder="erp_produccion" required></label>
+      <label>Esquema<input name="schema_name" value="public"></label>
+      <label>Usuario<input name="username" required></label>
+      <label>Contraseña<input name="password" type="password" autocomplete="new-password" required></label>
+      <label>SSL<select name="ssl_mode"><option value="require" selected>Cifrado requerido</option><option value="verify-full">Verificar certificado</option><option value="disable">Desactivado</option></select></label>
+      <label>Proxy de salida<select name="proxy_connection_id"><option value="">Sin proxy</option>{% for proxy in proxy_connections %}<option value="{{ proxy.id }}">{{ proxy.name }} · {{ proxy.proxy_host }}:{{ proxy.proxy_port }}</option>{% endfor %}</select></label>
+      <label class="checkbox-card span-2">Activar tras guardar<input name="enabled" type="checkbox"></label>
+    </div>
+    <div class="actions"><button type="button" class="secondary" onclick="this.closest('dialog').close()">Cancelar</button><button type="submit" class="primary">Guardar fuente</button></div>
+  </form>
+</dialog>
+{% endif %}
+{% endif %}
+
 {% if settings_fragment == "advanced" %}
 <dialog id="settings-advanced" class="settings-drawer settings-drawer-wide">
   <div class="drawer-head">
@@ -2008,6 +2138,161 @@
     } finally {
       button.textContent = originalText;
       button.disabled = false;
+    }
+  });
+  function externalStatus(card, message, kind = "pending") {
+    const status = card?.querySelector("[data-external-status]");
+    if (!status) return;
+    status.hidden = false;
+    status.className = `settings-status-note external-database-action-status is-${kind}`;
+    status.textContent = message;
+  }
+  function externalJson(response) {
+    return response.json().catch(() => ({ok: false, message: `La respuesta no es válida (HTTP ${response.status}).`}));
+  }
+  function externalTableForPanel(panel) {
+    const card = panel?.closest("[data-external-database-card]");
+    const tableSelect = panel?.querySelector("[data-mapping-table]");
+    return (card?._externalSchema?.tables || []).find((table) => table.name === tableSelect?.value) || null;
+  }
+  function renderExternalMappingFields(panel) {
+    const wrapper = panel?.querySelector("[data-mapping-fields]");
+    if (!wrapper) return;
+    const table = externalTableForPanel(panel);
+    const columns = table?.columns || [];
+    const sourceOptions = columns.map((column) => `<option value="${escapeHtml(String(column.name))}">${escapeHtml(String(column.name))} · ${escapeHtml(String(column.type || ""))}</option>`).join("");
+    const fields = panel.dataset.entityType === "customers"
+      ? [["code", "Código", true], ["fiscal_name", "Razón social", true], ["commercial_name", "Nombre comercial", false], ["primary_email", "Email", false], ["phone", "Teléfono", false], ["tax_id", "CIF / NIF", false], ["address", "Dirección", false], ["city", "Ciudad", false], ["province", "Provincia", false], ["country", "País", false], ["category", "Categoría", false], ["status", "Estado", false]]
+      : [["reference", "Referencia", true], ["name", "Nombre", true], ["alternative_code", "Código alternativo", false], ["description", "Descripción", false], ["brand", "Marca", false], ["usual_supplier", "Proveedor habitual", false], ["family", "Familia", false], ["subfamily", "Subfamilia", false], ["format", "Formato", false], ["sale_unit", "Unidad de venta", false], ["ean", "EAN", false], ["sale_price", "Precio", false], ["discount_percent", "Descuento %", false], ["status", "Estado", false]];
+    wrapper.replaceChildren();
+    fields.forEach(([key, label, required]) => {
+      const field = document.createElement("label");
+      field.className = "external-field-mapping";
+      field.innerHTML = `<span>${label}${required ? " *" : ""}</span><select data-map-field="${key}" ${table ? "" : "disabled"}><option value="">No importar</option>${sourceOptions}</select>`;
+      wrapper.append(field);
+    });
+    const enabled = Boolean(table);
+    panel.querySelectorAll("[data-save-mapping], [data-preview-mapping], [data-sync-mapping]").forEach((button) => { button.disabled = !enabled; });
+  }
+  function renderExternalSchema(card, schema) {
+    card._externalSchema = schema;
+    const panel = card.querySelector("[data-external-schema]");
+    if (!panel) return;
+    panel.hidden = false;
+    const summary = card.querySelector("[data-external-schema-summary]");
+    if (summary) summary.textContent = `${schema.tables.length} tablas disponibles${schema.truncated ? " (resultado limitado)" : ""}`;
+    card.querySelectorAll("[data-external-mapping]").forEach((mappingPanel) => {
+      const select = mappingPanel.querySelector("[data-mapping-table]");
+      select.replaceChildren(new Option("Selecciona una tabla…", ""));
+      schema.tables.forEach((table) => select.add(new Option(`${table.name} · ${table.columns.length} columnas`, table.name)));
+      select.disabled = false;
+      renderExternalMappingFields(mappingPanel);
+    });
+  }
+  function renderExternalPreview(panel, payload) {
+    const wrapper = panel.querySelector("[data-mapping-preview]");
+    const head = panel.querySelector("[data-preview-head]");
+    const body = panel.querySelector("[data-preview-body]");
+    if (!wrapper || !head || !body) return;
+    head.replaceChildren();
+    body.replaceChildren();
+    const rows = payload.rows || [];
+    const keys = rows.length ? Object.keys(rows[0]) : Array.from(panel.querySelectorAll("[data-map-field]")).filter((field) => field.value).map((field) => field.dataset.mapField);
+    const headRow = document.createElement("tr");
+    keys.forEach((key) => { const cell = document.createElement("th"); cell.textContent = key; headRow.append(cell); });
+    head.append(headRow);
+    rows.forEach((row) => { const tr = document.createElement("tr"); keys.forEach((key) => { const td = document.createElement("td"); td.textContent = row[key] == null ? "" : String(row[key]); tr.append(td); }); body.append(tr); });
+    wrapper.hidden = false;
+  }
+  document.addEventListener("change", (event) => {
+    const databaseType = event.target.closest("[data-database-type]");
+    if (databaseType) {
+      const port = databaseType.closest("form")?.querySelector("[name='port']");
+      const selected = databaseType.selectedOptions[0];
+      if (port && selected?.dataset.defaultPort && (!port.value || port.value === "5432" || port.value === "3306")) port.value = selected.dataset.defaultPort;
+    }
+    const tableSelect = event.target.closest("[data-mapping-table]");
+    if (tableSelect) renderExternalMappingFields(tableSelect.closest("[data-external-mapping]"));
+  });
+  document.addEventListener("click", async (event) => {
+    const testButton = event.target.closest("[data-external-test]");
+    const scanButton = event.target.closest("[data-external-scan]");
+    const saveMapping = event.target.closest("[data-save-mapping]");
+    const previewButton = event.target.closest("[data-preview-mapping]");
+    const syncButton = event.target.closest("[data-sync-mapping]");
+    const editToggle = event.target.closest("[data-external-edit-toggle]");
+    const editCancel = event.target.closest("[data-external-edit-cancel]");
+    const schemaClose = event.target.closest("[data-external-schema-close]");
+    if (editToggle || editCancel) {
+      const form = (editToggle || editCancel).closest("[data-external-database-card]")?.querySelector("[data-external-edit-form]");
+      if (form) form.hidden = editToggle ? !form.hidden : true;
+      return;
+    }
+    if (schemaClose) { schemaClose.closest("[data-external-schema]").hidden = true; return; }
+    if (!testButton && !scanButton && !saveMapping && !previewButton && !syncButton) return;
+    event.preventDefault();
+    const button = testButton || scanButton || saveMapping || previewButton || syncButton;
+    if (button.disabled) return;
+    const card = button.closest("[data-external-database-card]");
+    const connectionId = card?.dataset.connectionId;
+    if (!card || !connectionId) return;
+    button.disabled = true;
+    if (testButton) {
+      externalStatus(card, "Probando conexión de solo lectura…");
+      try {
+        const response = await fetch(`/settings/data-sources/${connectionId}/test`, {method: "POST", credentials: "same-origin", headers: {"Accept": "application/json", "X-Requested-With": "fetch"}});
+        const payload = await externalJson(response);
+        externalStatus(card, payload.message || "Prueba finalizada.", payload.ok ? "success" : "error");
+        const scan = card.querySelector("[data-external-scan]");
+        if (scan) scan.disabled = !payload.ok;
+      } catch (_error) { externalStatus(card, "No se pudo completar la prueba. Revisa la configuración.", "error"); }
+      finally { button.disabled = false; }
+      return;
+    }
+    if (scanButton) {
+      externalStatus(card, "Leyendo tablas y columnas sin modificar la fuente…");
+      try {
+        const response = await fetch(`/settings/data-sources/${connectionId}/scan`, {method: "POST", credentials: "same-origin", headers: {"Accept": "application/json", "X-Requested-With": "fetch"}});
+        const payload = await externalJson(response);
+        if (!response.ok || !payload.ok) throw new Error(payload.message || "No se pudo leer el esquema.");
+        renderExternalSchema(card, payload.schema);
+        externalStatus(card, payload.message, "success");
+      } catch (error) { externalStatus(card, error.message || "No se pudo leer el esquema.", "error"); }
+      finally { button.disabled = false; }
+      return;
+    }
+    const mappingPanel = button.closest("[data-external-mapping]");
+    const entityType = mappingPanel?.dataset.entityType;
+    const tableSelect = mappingPanel?.querySelector("[data-mapping-table]");
+    const selectedTable = tableSelect?.value;
+    if (!mappingPanel || !entityType || !selectedTable) { externalStatus(card, "Selecciona una tabla y completa el mapeo mínimo.", "error"); button.disabled = false; return; }
+    if (saveMapping) {
+      const fieldMap = {};
+      mappingPanel.querySelectorAll("[data-map-field]").forEach((field) => { if (field.value) fieldMap[field.dataset.mapField] = field.value; });
+      const status = mappingPanel.querySelector("[data-mapping-status]");
+      if (status) { status.hidden = false; status.className = "settings-status-note is-pending"; status.textContent = "Validando y guardando el mapeo…"; }
+      try {
+        const response = await fetch(`/settings/data-sources/${connectionId}/mapping`, {method: "POST", credentials: "same-origin", headers: {"Accept": "application/json", "Content-Type": "application/json", "X-Requested-With": "fetch"}, body: JSON.stringify({entity_type: entityType, table_name: selectedTable, table_schema: card._externalSchema.schema, field_map: fieldMap, sync_enabled: true, sync_limit: 500})});
+        const payload = await externalJson(response);
+        if (!response.ok || !payload.ok) throw new Error(payload.message || "No se pudo guardar el mapeo.");
+        if (status) { status.className = "settings-status-note is-success"; status.textContent = "Mapeo guardado. Puedes previsualizarlo o sincronizarlo."; }
+        mappingPanel.querySelectorAll("[data-preview-mapping], [data-sync-mapping]").forEach((action) => { action.disabled = false; });
+      } catch (error) { if (status) { status.className = "settings-status-note is-error"; status.textContent = error.message; } }
+      finally { button.disabled = false; }
+      return;
+    }
+    if (previewButton || syncButton) {
+      const status = mappingPanel.querySelector("[data-mapping-status]");
+      if (status) { status.hidden = false; status.className = "settings-status-note is-pending"; status.textContent = previewButton ? "Cargando una muestra…" : "Sincronizando registros…"; }
+      const action = previewButton ? "preview" : "sync";
+      try {
+        const response = await fetch(`/settings/data-sources/${connectionId}/mapping/${entityType}/${action}`, {method: "POST", credentials: "same-origin", headers: {"Accept": "application/json", "X-Requested-With": "fetch"}});
+        const payload = await externalJson(response);
+        if (!response.ok || !payload.ok) throw new Error(payload.message || "La operación no se pudo completar.");
+        if (previewButton) renderExternalPreview(mappingPanel, payload);
+        if (status) { status.className = "settings-status-note is-success"; status.textContent = payload.message || `${payload.count || payload.result?.rows_read || 0} registros procesados.`; }
+      } catch (error) { if (status) { status.className = "settings-status-note is-error"; status.textContent = error.message; } }
+      finally { button.disabled = false; }
     }
   });
   function renderAgentFlowTestResult(form, payload) {

@@ -120,6 +120,7 @@ class Settings(BaseSettings):
     job_retry_base_seconds: int = Field(default=15, validation_alias="JOB_RETRY_BASE_SECONDS")
     job_retry_max_seconds: int = Field(default=300, validation_alias="JOB_RETRY_MAX_SECONDS")
     job_stale_after_seconds: int = Field(default=900, validation_alias="JOB_STALE_AFTER_SECONDS")
+    cron_job_batch_size: int = Field(default=5, validation_alias="CRON_JOB_BATCH_SIZE")
     app_url: str = "http://127.0.0.1:8000"
     meta_app_id: str = Field(default="", validation_alias=AliasChoices("META_APP_ID", "FB_APP_ID"))
     meta_app_secret: str = Field(default="", validation_alias=AliasChoices("META_APP_SECRET", "FB_APP_SECRET"))
