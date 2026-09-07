@@ -393,19 +393,22 @@ async def whatsapp_inbox_updates(
     if not channel:
         return PlainTextResponse("El canal WhatsApp no está activo para este tenant.", status_code=404)
 
+    normalized_search = search.strip()
+    conditions = _inbox_conditions(company_id=user.company_id, channel_id=channel.id, search=normalized_search)
+    revision = _inbox_live_revision(db, conditions)
+    headers = {"Cache-Control": "no-store", "ETag": f'"{revision}"'}
+    if since and since == revision:
+        return Response(status_code=304, headers=headers)
+
     data = _load_inbox_data(
         db,
         company_id=user.company_id,
         channel_id=channel.id,
         conversation_id=conversation_id,
-        search=search.strip(),
+        search=normalized_search,
         page=page,
         page_size=page_size,
     )
-    revision = _inbox_live_revision(db, data["conditions"])
-    headers = {"Cache-Control": "no-store", "ETag": f'"{revision}"'}
-    if since and since == revision:
-        return Response(status_code=304, headers=headers)
 
     context = _inbox_partial_context(request, user, channel, data, revision)
     response = templates.TemplateResponse("whatsapp/_inbox_live.html", context)
