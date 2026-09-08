@@ -20,7 +20,7 @@ from app.db.models import Company, Customer, Email, InputChannel, LLMSettings, O
 from app.settings.branding import get_or_create_branding
 from app.settings.service import get_or_create_settings
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
-from app.tenancy.database import get_tenant_engine  # noqa: E402
+from app.tenancy.database import get_tenant_engine
 from scripts.performance_data import build_performance_fixture, temporary_performance_environment  # noqa: E402
 
 
@@ -168,7 +168,7 @@ class PendingOrdersAccessTests(unittest.TestCase):
             app_engine = get_tenant_engine(fixture.tenant_database_url)
             statements = []
 
-            def capture_sql(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+            def capture_sql(conn, cursor, statement, parameters, context, executemany):
                 statements.append(statement.lower())
 
             event.listen(app_engine, "before_cursor_execute", capture_sql)
