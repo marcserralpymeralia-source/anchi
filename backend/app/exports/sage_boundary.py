@@ -12,6 +12,8 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, Protocol
 
 SAGE_SCHEMA_VERSION = "anchi.external-order.v1"
+SAGE_JOB_TYPE = "export_order_sage"
+SAGE_DEFAULT_MAX_RETRIES = 3
 CONFIRMED_ORDER_STATUSES = frozenset({"pedido_confirmado", "pedido_validado"})
 SAGE_RESULT_STATUSES = Literal["success", "retryable_error", "permanent_error"]
 
@@ -38,6 +40,51 @@ class SageContractError(ValueError):
         super().__init__("; ".join(self.errors) or "Contrato Sage no valido.")
 
 
+@dataclass(frozen=True, slots=True)
+class SageJobSpec:
+    """Minimal, persistible specification for a future Sage export job."""
+
+    job_type: str
+    company_id: int
+    order_id: int
+    external_id: str
+    schema_version: str
+    dedupe_key: str
+    max_retries: int
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "external_id": self.external_id,
+            "company_id": self.company_id,
+            "order_id": self.order_id,
+        }
+
+    def enqueue_kwargs(self) -> dict[str, Any]:
+        """Return keyword arguments accepted by app.jobs.service.enqueue_job."""
+
+        return {
+            "company_id": self.company_id,
+            "job_type": self.job_type,
+            "payload": self.payload,
+            "dedupe_key": self.dedupe_key,
+            "max_retries": self.max_retries,
+        }
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "job_type": self.job_type,
+            "company_id": self.company_id,
+            "order_id": self.order_id,
+            "external_id": self.external_id,
+            "schema_version": self.schema_version,
+            "dedupe_key": self.dedupe_key,
+            "max_retries": self.max_retries,
+            "payload": self.payload,
+        }
+
+
 def sage_external_id(company_id: int | None, order_id: int | None) -> str:
     """Return the stable identity shared by all retries of one tenant order."""
 
@@ -52,6 +99,23 @@ def sage_external_id_for_order(order: Any) -> str:
     return sage_external_id(
         getattr(order, "company_id", None),
         getattr(order, "id", None),
+    )
+
+
+def build_sage_job_spec(order: Any, *, max_retries: int = SAGE_DEFAULT_MAX_RETRIES) -> SageJobSpec:
+    """Build a tenant-scoped job spec without registering a Sage processor."""
+
+    company_id = getattr(order, "company_id", None)
+    order_id = getattr(order, "id", None)
+    external_id = sage_external_id(company_id, order_id)
+    return SageJobSpec(
+        job_type=SAGE_JOB_TYPE,
+        company_id=company_id,
+        order_id=order_id,
+        external_id=external_id,
+        schema_version=SAGE_SCHEMA_VERSION,
+        dedupe_key=external_id,
+        max_retries=max(0, int(max_retries)),
     )
 
 
@@ -147,6 +211,8 @@ def build_sage_contract(
     order: Any,
     *,
     confirmed_by_user_id: int | None = None,
+    correlation_id: str | None = None,
+    request_id: str | None = None,
 ) -> dict[str, Any]:
     """Build the deterministic v1 payload consumed by a future adapter."""
 
@@ -170,6 +236,17 @@ def build_sage_contract(
             }
         )
 
+    audit: dict[str, Any] = {
+        "confirmed_at": _iso(getattr(order, "confirmed_at", None)),
+        "source_order_id": order.id,
+    }
+    if confirmed_by_user_id is not None:
+        audit["confirmed_by_user_id"] = confirmed_by_user_id
+    if _text(correlation_id):
+        audit["correlation_id"] = _text(correlation_id)
+    if _text(request_id):
+        audit["request_id"] = _text(request_id)
+
     contract = {
         "schema_version": SAGE_SCHEMA_VERSION,
         "external_id": external_id,
@@ -187,12 +264,7 @@ def build_sage_contract(
             "requested_delivery_date": _iso(getattr(order, "requested_delivery_date", None)),
             "lines": lines,
         },
-        "audit": {
-            "confirmed_at": _iso(getattr(order, "confirmed_at", None)),
-            "confirmed_by_user_id": confirmed_by_user_id,
-            "source_order_id": order.id,
-            "correlation_id": f"{external_id}:correlation",
-        },
+        "audit": audit,
     }
     contract_validation = validate_sage_contract(contract)
     if not contract_validation.ready:
@@ -225,7 +297,15 @@ def validate_sage_contract(contract: Mapping[str, Any]) -> SageValidationResult:
         errors.append("customer.identifier.value es obligatorio.")
 
     order = contract.get("order") or {}
-    lines = order.get("lines") if isinstance(order, Mapping) else None
+    if not isinstance(order, Mapping):
+        errors.append("order es obligatorio.")
+        lines = None
+    else:
+        if not isinstance(order.get("order_id"), int) or order.get("order_id") <= 0:
+            errors.append("order.order_id es obligatorio.")
+        if not _text(order.get("order_date")):
+            errors.append("order.order_date es obligatorio.")
+        lines = order.get("lines")
     if not isinstance(lines, list) or not lines:
         errors.append("order.lines debe contener al menos una linea.")
     else:
@@ -240,8 +320,8 @@ def validate_sage_contract(contract: Mapping[str, Any]) -> SageValidationResult:
                 errors.append(f"La linea {index} no tiene una cantidad positiva.")
 
     audit = contract.get("audit") or {}
-    if not isinstance(audit, Mapping) or not _text(audit.get("correlation_id")):
-        errors.append("audit.correlation_id es obligatorio.")
+    if not isinstance(audit, Mapping):
+        errors.append("audit debe ser un objeto.")
     return SageValidationResult(tuple(dict.fromkeys(errors)))
 
 
