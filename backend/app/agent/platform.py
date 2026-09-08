@@ -364,11 +364,12 @@ class ProductMatchingService:
             product = db.scalar(
                 select(Product).where(
                     Product.company_id == company_id,
-                    Product.reference == reference,
+                    or_(Product.reference == reference, Product.alternative_code == reference),
                 )
             )
             if product and _product_name_is_compatible(detected_name, product):
-                return product, "referencia_exacta", 1.0
+                method = "referencia_exacta" if product.reference == reference else "alternative_code_exacta"
+                return product, method, 1.0
 
             normalized_reference = reference.strip()
             if len(normalized_reference) >= 6:
@@ -2373,7 +2374,7 @@ class UnifiedOrderPipelineService:
             customer_decision = {
                 "selected": None,
                 "alternatives": [],
-                "requires_review": customer is None or customer_score < 0.9,
+                "requires_review": customer is None or customer_score < 0.9 or method == "nombre_aproximado",
                 "evidence": [],
             }
         else:
@@ -2434,7 +2435,7 @@ class UnifiedOrderPipelineService:
             order.conversation_id = inbound_message.conversation_id
             order.email_id = email.id if email else order.email_id
             order.customer_id = customer.id if customer else None
-            order.validated_customer_id = customer.id if customer else None
+            order.validated_customer_id = customer.id if customer and not customer_decision["requires_review"] else None
             order.customer_detected_name = detected_name or None
             order.customer_identification_method = method
             order.customer_score = round(customer_score * 100, 2)
@@ -2449,7 +2450,7 @@ class UnifiedOrderPipelineService:
                 conversation_id=inbound_message.conversation_id,
                 email_id=email.id if email else None,
                 customer_id=customer.id if customer else None,
-                validated_customer_id=customer.id if customer else None,
+                validated_customer_id=customer.id if customer and not customer_decision["requires_review"] else None,
                 customer_detected_name=detected_name or None,
                 customer_identification_method=method,
                 customer_score=round(customer_score * 100, 2),
@@ -2474,6 +2475,10 @@ class UnifiedOrderPipelineService:
                     f"Cliente candidato por {customer_decision['selected'].source}: "
                     f"{customer_decision['selected'].reason}. Requiere validacion humana"
                 )
+        elif customer_decision["requires_review"]:
+            review_reasons.append(
+                f"Cliente propuesto por {method}; requiere validacion humana"
+            )
         elif customer_decision["selected"]:
             review_reasons.append(f"Cliente elegido por {customer_decision['selected'].source}: {customer_decision['selected'].reason}")
         elif customer_decision["evidence"]:
@@ -2513,6 +2518,7 @@ class UnifiedOrderPipelineService:
             if fast_path:
                 product_is_deterministic = product_method in {
                     "referencia_exacta",
+                    "alternative_code_exacta",
                     "referencia_parcial_unica",
                     "alias",
                     "alias_aprendido",
@@ -2538,6 +2544,7 @@ class UnifiedOrderPipelineService:
                 # reference).
                 product_is_deterministic = product_is_deterministic or product_method in {
                     "referencia_exacta",
+                    "alternative_code_exacta",
                     "referencia_parcial_unica",
                     "alias",
                     "alias_aprendido",
