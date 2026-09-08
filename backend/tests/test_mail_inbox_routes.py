@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -91,6 +92,55 @@ class MailInboxRoutesTests(unittest.TestCase):
         finally:
             fixture.cleanup()
 
+    def test_email_sync_cron_requires_auth_and_releases_due_state(self):
+        fixture = build_performance_fixture("small")
+        master_engine = create_engine(fixture.master_database_url, connect_args={"check_same_thread": False})
+        tenant_engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        MasterSession = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
+        TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
+        try:
+            with MasterSession() as master_db:
+                state = master_db.scalar(
+                    select(EmailSyncState).where(
+                        EmailSyncState.company_id == fixture.company_id,
+                        EmailSyncState.channel_key == "email",
+                    )
+                )
+                self.assertIsNotNone(state)
+                assert state is not None
+                state.enabled = True
+                state.next_run_at = datetime.now(timezone.utc) - timedelta(minutes=1)
+                master_db.commit()
+            with TenantSession() as tenant_db:
+                settings = tenant_db.scalar(select(EmailSettings).where(EmailSettings.company_id == fixture.company_id))
+                self.assertIsNotNone(settings)
+                assert settings is not None
+                settings.auto_sync_enabled = True
+                settings.polling_frequency_minutes = 5
+                tenant_db.commit()
+
+            with performance_test_client(fixture) as client, patch(
+                "app.cron.routes.get_settings", return_value=SimpleNamespace(cron_secret="test-cron-secret")
+            ), patch("app.cron.routes.is_channel_enabled", return_value=True), patch(
+                "app.cron.routes.read_latest_imap_emails",
+                return_value={"ok": True, "found": 1, "saved": 1, "duplicates": 0, "discarded": 0, "errors": 0},
+            ) as sync_mock:
+                unauthorized = client.get("/cron/email-sync")
+                first = client.get("/cron/email-sync", headers={"x-cron-secret": "test-cron-secret"})
+                second = client.get("/cron/email-sync", headers={"x-cron-secret": "test-cron-secret"})
+
+            self.assertEqual(unauthorized.status_code, 403)
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(first.json()["processed"], 1)
+            self.assertEqual(first.json()["saved"], 1)
+            self.assertEqual(second.status_code, 200)
+            self.assertEqual(second.json()["checked"], 0)
+            sync_mock.assert_called_once()
+        finally:
+            master_engine.dispose()
+            tenant_engine.dispose()
+            fixture.cleanup()
+
     def test_mail_inbox_page_and_detail_are_available(self):
         fixture = build_performance_fixture("small")
         SessionLocal = _tenant_session(fixture.tenant_path)
@@ -123,6 +173,78 @@ class MailInboxRoutesTests(unittest.TestCase):
             self.assertIn('class="workbench-shell', dashboard_fragment.text)
             self.assertNotIn("<!doctype html>", dashboard_fragment.text.lower())
         finally:
+            fixture.cleanup()
+
+    def test_mail_uses_active_imap_scope_and_ten_message_pages(self):
+        fixture = build_performance_fixture("small")
+        master_engine = create_engine(fixture.master_database_url, connect_args={"check_same_thread": False})
+        tenant_engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        MasterSession = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
+        TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
+        try:
+            with MasterSession() as master_db:
+                state = master_db.scalar(
+                    select(EmailSyncState).where(
+                        EmailSyncState.company_id == fixture.company_id,
+                        EmailSyncState.channel_key == "email",
+                    )
+                )
+                self.assertIsNotNone(state)
+                assert state is not None
+                state.mailbox = "INBOX"
+                state.uidvalidity = "active-1"
+                master_db.commit()
+
+            with TenantSession() as tenant_db:
+                base_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+                tenant_db.add_all(
+                    [
+                        Email(
+                            company_id=fixture.company_id,
+                            external_id=f"active-email-{index}",
+                            imap_mailbox="INBOX",
+                            imap_uidvalidity="active-1",
+                            imap_uid=str(index),
+                            sender="active@example.com",
+                            subject=f"Active inbox {index:02d}",
+                            body="Contenido de prueba",
+                            received_at=base_time + timedelta(days=index),
+                        )
+                        for index in range(1, 13)
+                    ]
+                )
+                tenant_db.add(
+                    Email(
+                        company_id=fixture.company_id,
+                        external_id="stale-email",
+                        imap_mailbox="ARCHIVE",
+                        imap_uidvalidity="old-1",
+                        imap_uid="999",
+                        sender="old@example.com",
+                        subject="Active inbox stale mailbox",
+                        body="No debe aparecer",
+                        received_at=base_time + timedelta(days=20),
+                    )
+                )
+                tenant_db.commit()
+
+            with performance_test_client(fixture) as client:
+                page_one = client.get("/mail?kind=emails&date_range=all&search=Active%20inbox&page=1")
+                page_two = client.get("/mail?kind=emails&date_range=all&search=Active%20inbox&page=2")
+
+            self.assertEqual(page_one.status_code, 200)
+            self.assertIn("Bandeja de mensajes (1-10 de 12)", page_one.text)
+            self.assertIn("Active inbox 12", page_one.text)
+            self.assertNotIn("Active inbox 01", page_one.text)
+            self.assertNotIn("stale mailbox", page_one.text)
+            self.assertEqual(page_two.status_code, 200)
+            self.assertIn("Bandeja de mensajes (11-12 de 12)", page_two.text)
+            self.assertIn("Active inbox 01", page_two.text)
+            self.assertIn("Active inbox 02", page_two.text)
+            self.assertNotIn("stale mailbox", page_two.text)
+        finally:
+            master_engine.dispose()
+            tenant_engine.dispose()
             fixture.cleanup()
 
     def test_mail_process_runs_job_inline_and_redirects_back(self):

@@ -15,6 +15,8 @@ from app.dashboard.service import orders_workbench_summary, workbench_summary
 from app.db.models import Customer, Email, EmailSettings, Order, OrderLine, ScoringSettings
 from app.dashboard.service import _customer_suggestion_maps, _load_order_line_metrics, email_workbench_item, load_order_view_data, order_workbench_item, suggest_customer_for_email
 from app.orders.state import ERROR_ORDER_STATUSES, PENDING_ORDER_STATUSES, REVIEW_ORDER_STATUSES, TERMINAL_ORDER_STATUSES
+from app.master.database import get_master_db
+from app.master.models import EmailSyncState
 from app.master.service import TenantUser
 from app.settings.email_config import email_config_status
 from app.settings.service import get_or_create_settings
@@ -194,6 +196,8 @@ def _history_order_rows_stmt(
     customer_id: str,
     search: str,
     state: str,
+    mailbox: str | None = None,
+    uidvalidity: str | None = None,
 ):
     metrics = _history_order_metrics_subquery(company_id)
     scoring_category = _history_scoring_category_expr(scoring_settings)
@@ -225,6 +229,10 @@ def _history_order_rows_stmt(
         .outerjoin(metrics, metrics.c.order_id == Order.id)
         .where(Order.company_id == company_id)
     )
+    if mailbox:
+        stmt = stmt.where(Email.imap_mailbox == mailbox)
+    if uidvalidity:
+        stmt = stmt.where(Email.imap_uidvalidity == uidvalidity)
     if start:
         stmt = stmt.where(Order.created_at >= start)
     if end:
@@ -263,6 +271,8 @@ def _history_email_rows_stmt(
     end: datetime | None,
     customer_id: str,
     search: str,
+    mailbox: str | None = None,
+    uidvalidity: str | None = None,
 ):
     stmt = (
         select(
@@ -287,6 +297,10 @@ def _history_email_rows_stmt(
         )
         .where(Email.company_id == company_id)
     )
+    if mailbox:
+        stmt = stmt.where(Email.imap_mailbox == mailbox)
+    if uidvalidity:
+        stmt = stmt.where(Email.imap_uidvalidity == uidvalidity)
     if start:
         stmt = stmt.where(Email.received_at >= start)
     if end:
@@ -492,11 +506,12 @@ def mail_page(
     customer_id: str = "",
     search: str = "",
     page: int = 1,
-    page_size: int = 50,
+    page_size: int | None = None,
     selected_id: int | None = None,
     selected_kind: str = "email",
     partial: str = "",
     db: Session = Depends(get_tenant_db),
+    master_db: Session = Depends(get_master_db),  # noqa: B008
     user: TenantUser = Depends(current_user),
 ):
     start, end = _history_bounds(date_range, date_from, date_to)
@@ -508,6 +523,17 @@ def mail_page(
     allowed_kind = kind if kind in {"all", "orders", "emails"} else "all"
     allowed_state = state if state in {"all", "current", "review", "ready", "confirmed", "sent", "blocked"} else "all"
     suggestion_maps = _customer_suggestion_maps(db, user.company_id)
+    active_mailbox = active_uidvalidity = None
+    if request.url.path == "/mail":
+        sync_state = master_db.scalar(
+            select(EmailSyncState).where(
+                EmailSyncState.company_id == user.company_id,
+                EmailSyncState.channel_key == "email",
+            )
+        )
+        if sync_state:
+            active_mailbox = sync_state.mailbox
+            active_uidvalidity = sync_state.uidvalidity
 
     order_base_stmt = _history_order_rows_stmt(
         user.company_id,
@@ -517,6 +543,8 @@ def mail_page(
         customer_id=customer_id,
         search=search,
         state="all",
+        mailbox=active_mailbox,
+        uidvalidity=active_uidvalidity,
     )
     email_base_stmt = _history_email_rows_stmt(
         user.company_id,
@@ -524,6 +552,8 @@ def mail_page(
         end=end,
         customer_id=customer_id,
         search=search,
+        mailbox=active_mailbox,
+        uidvalidity=active_uidvalidity,
     )
     if allowed_kind == "all":
         email_base_stmt = email_base_stmt.where(
@@ -543,6 +573,8 @@ def mail_page(
 
     base_union = union_all(*base_parts).subquery() if base_parts else None
 
+    if page_size is None:
+        page_size = 10 if request.url.path == "/mail" else 50
     page, page_size = normalize_page(page, page_size)
     start_index = (page - 1) * page_size
 
