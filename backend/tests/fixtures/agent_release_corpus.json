@@ -212,5 +212,33 @@
     "product_auto": true,
     "review_expected": false,
     "quantities_expected": [7]
+  },
+  {
+    "id": "P",
+    "source_type": "email",
+    "text": "Ref. alternativa ALT-500, pero necesitamos cebolla saco 10 kg.",
+    "sender": "compras@demo.test",
+    "customer_name": "Cliente Demo SL",
+    "lines": [{"raw_text": "ALT-500; 0 sacos de cebolla saco 10 kg", "description": "Cebolla saco 10 kg", "reference": "ALT-500", "quantity": 0, "unit": "sacos", "requires_review": true}],
+    "customer_expected": "demo",
+    "product_expected": "onion",
+    "customer_auto": true,
+    "product_auto": false,
+    "review_expected": true,
+    "quantities_expected": [null]
+  },
+  {
+    "id": "Q",
+    "source_type": "email",
+    "text": "Pedido de Cliente Demo: 1 caja de tomate rama 5 kg.",
+    "sender": "pedido@desconocido.test",
+    "customer_name": "Cliente Demo",
+    "lines": [{"raw_text": "1 caja de tomate rama 5 kg", "description": "Tomate rama caja 5 kg", "reference": null, "quantity": 1, "unit": "caja", "requires_review": false}],
+    "customer_expected": "demo",
+    "product_expected": "tomato5",
+    "customer_auto": false,
+    "product_auto": true,
+    "review_expected": true,
+    "quantities_expected": [1]
   }
 ]
