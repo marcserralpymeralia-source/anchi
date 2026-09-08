@@ -118,6 +118,7 @@ class MailInboxRoutesTests(unittest.TestCase):
             self.assertNotIn("Buzón de correo 2", inbox.text)
             self.assertEqual(detail.status_code, 200)
             self.assertIn("Detalle de correo", detail.text)
+            self.assertIn('href="/mail">Volver a bandeja</a>', detail.text)
             self.assertNotIn("Internal Server Error", detail.text)
             self.assertEqual(dashboard_fragment.status_code, 200)
             self.assertIn('class="workbench-shell', dashboard_fragment.text)
