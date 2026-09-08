@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response
-from sqlalchemy import or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.agent.extraction.diagnostics import extraction_diagnostics_from_messages, extraction_diagnostics_from_payload
@@ -28,7 +28,7 @@ from app.orders.service import _customer_label, _sync_customer_product_knowledge
 from app.settings.service import get_or_create_settings
 from app.tenancy.database import get_tenant_db
 from app.agent.platform import LearningService
-from app.db.models import Customer, Product, OrderLine
+from app.db.models import OrderLine
 from app.dashboard.service import email_workbench_item, order_workbench_item
 from app.workers.jobs_worker import is_job_worker_started
 
@@ -234,13 +234,12 @@ def workbench_item_detail(kind: str, item_id: int, request: Request, db: Session
         if not order:
             return PlainTextResponse("No encontrado", status_code=404)
         conversation_preview = _conversation_preview(order)
-        customers = db.scalars(select(Customer).where(Customer.company_id == user.company_id).order_by(Customer.fiscal_name)).all()
-        products = db.scalars(select(Product).where(Product.company_id == user.company_id).order_by(Product.reference)).all()
+        selected_customer = order.validated_customer or order.customer
         item = order_workbench_item(order, get_or_create_settings(db, ScoringSettings, user.company_id))
         extraction_diagnostics = extraction_diagnostics_from_messages(order.conversation.messages if order.conversation else [])
         return templates.TemplateResponse(
             "workbench/detail.html",
-            {"request": request, "user": user, "kind": "order", "order": order, "item": item, "conversation_preview": conversation_preview, "customers": customers, "products": products, "extraction_diagnostics": extraction_diagnostics},
+            {"request": request, "user": user, "kind": "order", "order": order, "item": item, "conversation_preview": conversation_preview, "selected_customer": selected_customer, "extraction_diagnostics": extraction_diagnostics},
         )
     if kind == "email":
         email = db.scalar(
@@ -281,8 +280,6 @@ def workbench_item_detail(kind: str, item_id: int, request: Request, db: Session
             )
         preview = _conversation_preview(inbound.conversation.messages if inbound.conversation else [inbound])
         item = _inbound_item(inbound, order=order)
-        customers = db.scalars(select(Customer).where(Customer.company_id == user.company_id).order_by(Customer.fiscal_name)).all()
-        products = db.scalars(select(Product).where(Product.company_id == user.company_id).order_by(Product.reference)).all()
         extraction_diagnostics = extraction_diagnostics_from_payload(inbound.extraction_json)
         return templates.TemplateResponse(
             "workbench/detail.html",
@@ -294,8 +291,6 @@ def workbench_item_detail(kind: str, item_id: int, request: Request, db: Session
                 "order": order,
                 "conversation_preview": preview,
                 "item": item,
-                "customers": customers,
-                "products": products,
                 "extraction_diagnostics": extraction_diagnostics,
             },
         )

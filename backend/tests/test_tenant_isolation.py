@@ -12,7 +12,7 @@ os.environ.setdefault("APP_ENV", "development")
 import sys
 
 from fastapi import HTTPException
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.auth.dependencies import require_master_admin  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import Company, Customer, ScoringSettings  # noqa: E402
+from app.db.models import Company, Customer, Email, EmailSettings, KnowledgeEntry, LLMSettings, Order, Product, ScoringSettings  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.master.service import TenantRole, TenantUser, load_tenant_context  # noqa: E402
@@ -192,6 +192,42 @@ class TenantIsolationTests(unittest.TestCase):
             tenant_a_db.close()
             tenant_b_db.close()
             db.close()
+
+    def test_operational_entities_are_isolated_across_two_tenants(self):
+        def seed(session_factory, company_id: int, marker: str):
+            db = session_factory()
+            customer = Customer(id=1, company_id=company_id, code=f"{marker}-C", fiscal_name=f"Cliente {marker}", commercial_name=f"Cliente {marker}")
+            product = Product(id=1, company_id=company_id, reference=f"{marker}-P", name=f"Producto {marker}")
+            email = Email(id=1, company_id=company_id, sender=f"{marker.lower()}@example.com", subject=f"Pedido {marker}", body=marker)
+            order = Order(id=1, company_id=company_id, customer_id=customer.id, email_id=email.id, customer_detected_name=f"Cliente {marker}")
+            knowledge = KnowledgeEntry(id=1, company_id=company_id, source_type="test", source_id=f"{marker}-knowledge", content=f"Conocimiento {marker}", customer_id=customer.id, product_id=product.id)
+            db.add_all([Company(id=company_id, name=f"Company {marker}"), customer, product, email, order, knowledge, LLMSettings(id=1, company_id=company_id, provider=f"openai-{marker}"), EmailSettings(id=1, company_id=company_id, provider=f"imap-{marker}")])
+            db.commit()
+            db.close()
+
+        seed(self.TenantASession, 1, "A")
+        seed(self.TenantBSession, 2, "B")
+
+        entities = (
+            (Email, "sender"),
+            (Customer, "fiscal_name"),
+            (Product, "name"),
+            (Order, "customer_detected_name"),
+            (KnowledgeEntry, "content"),
+            (LLMSettings, "provider"),
+            (EmailSettings, "provider"),
+        )
+        with self.TenantASession() as tenant_a, self.TenantBSession() as tenant_b:
+            for model, marker_field in entities:
+                row_a = tenant_a.scalar(select(model).where(model.company_id == 1))
+                row_b = tenant_b.scalar(select(model).where(model.company_id == 2))
+                self.assertIsNotNone(row_a)
+                self.assertIsNotNone(row_b)
+                self.assertEqual(row_a.company_id, 1)
+                self.assertEqual(row_b.company_id, 2)
+                self.assertNotEqual(getattr(row_a, marker_field), getattr(row_b, marker_field))
+                self.assertEqual(tenant_a.scalar(select(func.count()).select_from(model).where(model.company_id == 2)), 0)
+                self.assertEqual(tenant_b.scalar(select(func.count()).select_from(model).where(model.company_id == 1)), 0)
 
     def test_get_tenant_db_reports_error_when_authenticated_tenant_db_is_missing(self):
         db = self.MasterSession()

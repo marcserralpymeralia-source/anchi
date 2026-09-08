@@ -267,6 +267,97 @@ function bindSourceTabs(root) {
   });
 }
 
+function bindCustomerAutocompletes(root) {
+  root.querySelectorAll("[data-customer-autocomplete]").forEach((container) => {
+    if (container.dataset.bound === "true") return;
+    container.dataset.bound = "true";
+
+    const input = container.querySelector("[data-customer-input]");
+    const customerId = container.querySelector("[data-customer-id]");
+    const results = container.querySelector("[data-customer-results]");
+    if (!input || !customerId || !results) return;
+
+    let timer;
+
+    function closeResults() {
+      results.hidden = true;
+      results.replaceChildren();
+    }
+
+    input.addEventListener("input", () => {
+      customerId.value = "0";
+      clearTimeout(timer);
+      const query = input.value.trim();
+      if (query.length < 2) {
+        closeResults();
+        return;
+      }
+
+      timer = setTimeout(async () => {
+        try {
+          const response = await fetch(`/orders/customer-search?q=${encodeURIComponent(query)}`, {credentials: "same-origin"});
+          if (!response.ok) return;
+          const customers = await response.json();
+          results.replaceChildren();
+          customers.forEach((customer) => {
+            const button = document.createElement("button");
+            button.type = "button";
+            button.className = "customer-autocomplete-option";
+
+            const titleRow = document.createElement("div");
+            titleRow.className = "autocomplete-option-head";
+            const title = document.createElement("strong");
+            title.textContent = customer.name;
+            titleRow.appendChild(title);
+            const badge = document.createElement("span");
+            badge.className = "autocomplete-option-badge";
+            badge.textContent = customer.code;
+            titleRow.appendChild(badge);
+            button.appendChild(titleRow);
+
+            const meta = [customer.tax_id, customer.email].filter(Boolean).join(" · ");
+            if (meta) {
+              const metaNode = document.createElement("span");
+              metaNode.className = "autocomplete-option-meta";
+              metaNode.textContent = meta;
+              button.appendChild(metaNode);
+            }
+
+            button.addEventListener("click", () => {
+              input.value = `${customer.code} - ${customer.name}`;
+              customerId.value = String(customer.id);
+              closeResults();
+            });
+            results.appendChild(button);
+          });
+          results.hidden = customers.length === 0;
+        } catch (error) {
+          console.warn("No se pudo buscar un cliente para el workbench", error);
+        }
+      }, 180);
+    });
+
+    input.addEventListener("focus", () => {
+      if (results.childElementCount > 0) results.hidden = false;
+    });
+  });
+
+  if (!document.body.dataset.customerAutocompleteCloseBound) {
+    document.body.dataset.customerAutocompleteCloseBound = "true";
+    document.addEventListener("click", (event) => {
+      document.querySelectorAll("[data-customer-autocomplete]").forEach((container) => {
+        if (!container.contains(event.target)) {
+          const results = container.querySelector("[data-customer-results]");
+          if (results) {
+            results.hidden = true;
+            results.replaceChildren();
+          }
+        }
+      });
+    });
+  }
+}
+
 function bindAttachmentSelects(root) {
   root.querySelectorAll("[data-attachment-select]").forEach((control) => {
     if (control.tagName === "SELECT") {
@@ -282,6 +373,7 @@ function bindWorkbenchDetailContent(root, dialog) {
   bindSourceTabs(root);
   bindAttachmentSelects(root);
   bindLineProductAutocompletes(root);
+  bindCustomerAutocompletes(root);
   root.querySelectorAll("input, textarea, select").forEach((field) => {
     field.addEventListener("change", () => {
       if (dialog) dialog.dataset.dirty = "true";

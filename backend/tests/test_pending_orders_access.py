@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 
 os.environ.setdefault("APP_ENV", "test")
@@ -20,6 +20,7 @@ from app.db.models import Company, Customer, Email, InputChannel, LLMSettings, O
 from app.settings.branding import get_or_create_branding
 from app.settings.service import get_or_create_settings
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
+from app.tenancy.database import get_tenant_engine  # noqa: E402
 from scripts.performance_data import build_performance_fixture, temporary_performance_environment  # noqa: E402
 
 
@@ -164,9 +165,22 @@ class PendingOrdersAccessTests(unittest.TestCase):
                 db.commit()
                 order_id = order.id
 
-            response = client.get(f"/workbench/item/order/{order_id}/detail")
+            app_engine = get_tenant_engine(fixture.tenant_database_url)
+            statements = []
+
+            def capture_sql(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+                statements.append(statement.lower())
+
+            event.listen(app_engine, "before_cursor_execute", capture_sql)
+            try:
+                response = client.get(f"/workbench/item/order/{order_id}/detail")
+            finally:
+                event.remove(app_engine, "before_cursor_execute", capture_sql)
 
             self.assertEqual(response.status_code, 200)
+            self.assertIn('data-customer-autocomplete', response.text)
+            self.assertIn('data-customer-input', response.text)
+            self.assertNotIn('<select name="validated_customer_id"', response.text)
             self.assertIn('data-line-product-autocomplete', response.text)
             self.assertIn('data-line-product-input', response.text)
             self.assertIn('data-line-product-results', response.text)
@@ -176,6 +190,8 @@ class PendingOrdersAccessTests(unittest.TestCase):
             self.assertNotIn('<option value="0">Sin referencia</option>', response.text)
             self.assertIn('Ref. interna', response.text)
             self.assertIn('Detectado:', response.text)
+            self.assertFalse(any("order by customers.fiscal_name" in statement for statement in statements))
+            self.assertFalse(any("order by products.reference" in statement for statement in statements))
         finally:
             cleanup()
             if tenant_engine is not None:
