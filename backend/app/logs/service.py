@@ -35,6 +35,7 @@ def log_action(
     entity_type: str | None = None,
     entity_id: int | None = None,
     metadata: dict | None = None,
+    commit: bool = True,
 ) -> None:
     db.add(
         AuditLog(
@@ -46,7 +47,8 @@ def log_action(
             message=encode_structured_message(message, metadata=metadata),
         )
     )
-    db.commit()
+    if commit:
+        db.commit()
 
 
 def log_flow_event(
@@ -62,6 +64,7 @@ def log_flow_event(
     entity_id: int | None = None,
     status: str = "info",
     metadata: dict[str, Any] | None = None,
+    commit: bool = True,
 ) -> None:
     """Persist one safe, correlated event in the tenant audit stream.
 
@@ -89,6 +92,7 @@ def log_flow_event(
         entity_id=entity_id,
         message=message,
         metadata=details,
+        commit=commit,
     )
 
 

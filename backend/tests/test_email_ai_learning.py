@@ -804,15 +804,15 @@ class EmailAiLearningTests(unittest.TestCase):
         }
         client = FakeImapClient(messages, search_result=b"2 3")
 
-        original_extract_body = integrations._extract_body
+        original_save_attachments = integrations._save_attachments
 
-        def fake_extract_body(msg):  # noqa: ANN001
-            subject = msg.get("Subject", "")
-            if "malo" in subject:
-                raise ValueError("bad body")
-            return original_extract_body(msg)
+        def fake_save_attachments(*args, **kwargs):
+            email = args[2]
+            if "malo" in email.subject:
+                raise ValueError("bad attachment persistence")
+            return original_save_attachments(*args, **kwargs)
 
-        with patch("app.settings.integrations._imap_client", return_value=client), patch("app.settings.integrations._extract_body", side_effect=fake_extract_body):
+        with patch("app.settings.integrations._imap_client", return_value=client), patch("app.settings.integrations._save_attachments", side_effect=fake_save_attachments):
             result = read_latest_imap_emails(tenant_db, settings, 1, auto_process=False, unread_only=False, sync_state=state, sync_session=master_db)
 
         master_db.refresh(state)

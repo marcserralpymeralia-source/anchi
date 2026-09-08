@@ -943,12 +943,14 @@ def _fetch_imap_emails(
             batch = ids[offset : offset + batch_size]
             batch_count = len(batch)
             for msg_id in batch:
+                message_transaction = None
                 try:
                     status, msg_data = client.uid("fetch", msg_id, "(UID INTERNALDATE RFC822)")
                     if status != "OK" or not msg_data or not msg_data[0]:
                         errors += 1
                         continue
                     downloaded += 1
+                    message_transaction = db.begin_nested()
                     raw = msg_data[0][1]
                     fetch_meta = msg_data[0][0].decode(errors="ignore") if isinstance(msg_data[0], tuple) else ""
                     uid = _imap_uid(fetch_meta, msg_id.decode(errors="ignore"))
@@ -990,7 +992,7 @@ def _fetch_imap_emails(
                         last_processed_uid = uid
                         if sync_state:
                             sync_state.backfill_last_uid = uid
-                        log_action(db, company_id=company_id, user=None, action="email.duplicate_ignored", entity_type="email", entity_id=exists.id, message=f"Duplicado ignorado: {message_id or dedupe_external_id}")
+                        log_action(db, company_id=company_id, user=None, action="email.duplicate_ignored", entity_type="email", entity_id=exists.id, message=f"Duplicado ignorado: {message_id or dedupe_external_id}", commit=False)
                         log_flow_event(
                             db,
                             company_id=company_id,
@@ -1001,7 +1003,9 @@ def _fetch_imap_emails(
                             entity_id=exists.id,
                             status="deduplicated",
                             metadata={"mailbox": mailbox, "uid": uid, "uidvalidity": uidvalidity},
+                            commit=False,
                         )
+                        message_transaction.commit()
                         continue
                     subject = _decode_mime_header(msg.get("Subject", ""))
                     sender = _decode_mime_header(msg.get("From", ""))
@@ -1056,7 +1060,7 @@ def _fetch_imap_emails(
                     last_processed_uid = uid
                     if sync_state:
                         sync_state.backfill_last_uid = uid
-                    log_action(db, company_id=company_id, user=None, action="email.saved", entity_type="email", entity_id=email.id, message=f"Correo guardado: {subject[:120]}")
+                    log_action(db, company_id=company_id, user=None, action="email.saved", entity_type="email", entity_id=email.id, message=f"Correo guardado: {subject[:120]}", commit=False)
                     log_flow_event(
                         db,
                         company_id=company_id,
@@ -1077,12 +1081,15 @@ def _fetch_imap_emails(
                             "attachment_count": attachment_count,
                             "has_pdf": email.has_pdf,
                         },
+                        commit=False,
                     )
                     if settings.mark_as_read_after_import:
                         client.uid("store", msg_id, "+FLAGS", "\\Seen")
+                    message_transaction.commit()
                 except Exception as exc:  # noqa: BLE001
                     errors += 1
-                    db.rollback()
+                    if message_transaction is not None:
+                        message_transaction.rollback()
                     logger.warning(
                         "email.sync.message_error",
                         extra={
@@ -1536,6 +1543,7 @@ def _create_inbound_message(
         has_attachments=False,
         has_pdf=False,
         has_audio=False,
+        commit_logs=False,
     )
 
     email.conversation_id = conversation.id
@@ -1574,6 +1582,7 @@ def _save_attachments(
                 action="email.attachment_skipped",
                 entity_type="email_attachment",
                 message=f"Adjunto omitido por tamano: {part.get_filename() or 'adjunto'}",
+                commit=False,
             )
             continue
         filename = _safe_filename(part.get_filename() or f"adjunto-{count + 1}")
@@ -1613,7 +1622,7 @@ def _save_attachments(
             )
             db.add(message_attachment)
             db.flush()
-        log_action(db, company_id=company_id, user=None, action="email.attachment_saved", entity_type="email_attachment", entity_id=attachment.id, message=f"Adjunto guardado: {filename}")
+        log_action(db, company_id=company_id, user=None, action="email.attachment_saved", entity_type="email_attachment", entity_id=attachment.id, message=f"Adjunto guardado: {filename}", commit=False)
         if is_pdf:
             _extract_pdf_text(db, attachment)
             if inbound_message:
@@ -1631,15 +1640,15 @@ def _extract_pdf_text(db: Session, attachment: EmailAttachment) -> None:
         if text.strip():
             attachment.extracted_text = text.strip()
             attachment.extraction_status = "extracted"
-            log_action(db, company_id=attachment.company_id, user=None, action="email.pdf_text_extracted", entity_type="email_attachment", entity_id=attachment.id, message=f"Texto PDF extraido: {attachment.filename}")
+            log_action(db, company_id=attachment.company_id, user=None, action="email.pdf_text_extracted", entity_type="email_attachment", entity_id=attachment.id, message=f"Texto PDF extraido: {attachment.filename}", commit=False)
         else:
             attachment.extraction_status = "no_text_found"
             attachment.extraction_error = "El PDF no contiene texto legible. Puede requerir OCR."
-            log_action(db, company_id=attachment.company_id, user=None, action="email.pdf_text_error", entity_type="email_attachment", entity_id=attachment.id, message=attachment.extraction_error)
+            log_action(db, company_id=attachment.company_id, user=None, action="email.pdf_text_error", entity_type="email_attachment", entity_id=attachment.id, message=attachment.extraction_error, commit=False)
     except Exception as exc:
         attachment.extraction_status = "extraction_error"
         attachment.extraction_error = f"No se pudo extraer texto del PDF: {exc}"
-        log_action(db, company_id=attachment.company_id, user=None, action="email.pdf_text_error", entity_type="email_attachment", entity_id=attachment.id, message=attachment.extraction_error)
+        log_action(db, company_id=attachment.company_id, user=None, action="email.pdf_text_error", entity_type="email_attachment", entity_id=attachment.id, message=attachment.extraction_error, commit=False)
 
 
 def _extract_text_from_pdf_bytes(data: bytes) -> str:

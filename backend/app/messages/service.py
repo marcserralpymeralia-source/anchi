@@ -39,6 +39,7 @@ def persist_normalized_message(
     has_attachments: bool = False,
     has_pdf: bool = False,
     has_audio: bool = False,
+    commit_logs: bool = True,
 ) -> tuple[InboundMessage, Conversation]:
     return upsert_inbound_message(
         db,
@@ -60,6 +61,7 @@ def persist_normalized_message(
         has_attachments=has_attachments,
         has_pdf=has_pdf,
         has_audio=has_audio,
+        commit_logs=commit_logs,
     )
 
 def normalize_provider(value: str | None) -> str:
@@ -209,6 +211,7 @@ def upsert_inbound_message(
     has_attachments: bool = False,
     has_pdf: bool = False,
     has_audio: bool = False,
+    commit_logs: bool = True,
 ) -> tuple[InboundMessage, Conversation]:
     channel = ensure_input_channel(db, company_id, key=normalize_channel(channel_key), name=channel_key.title(), provider=provider)
     conversation = get_or_create_conversation(
@@ -254,6 +257,7 @@ def upsert_inbound_message(
                 "provider": normalize_provider(provider),
                 "external_id": external_id,
             },
+            commit=commit_logs,
         )
         return existing, conversation
     message = InboundMessage(
@@ -299,6 +303,7 @@ def upsert_inbound_message(
             "text_length": len(text_content or ""),
             "external_id": external_id,
         },
+        commit=commit_logs,
     )
     return message, conversation
 
