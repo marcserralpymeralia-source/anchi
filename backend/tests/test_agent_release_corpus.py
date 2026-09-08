@@ -152,7 +152,7 @@ class AgentReleaseCorpusTests(unittest.TestCase):
                 order_lines = list(order.lines)
                 product_cases += len(expected_products)
                 for line, expected_key in zip(order_lines, expected_products):
-                    expected_id = {"tomato5": 1, "env500": 4, "bag3040": 5, None: None}[expected_key]
+                    expected_id = {"tomato5": 1, "onion": 2, "env500": 4, "bag3040": 5, None: None}[expected_key]
                     if (line.product_id or None) == expected_id:
                         metrics["product_correct"] += 1
                     if not case["product_auto"] and line.validated_product_id is not None:
