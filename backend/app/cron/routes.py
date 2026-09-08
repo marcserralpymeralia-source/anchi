@@ -101,7 +101,7 @@ def email_sync_cron(request: Request, master_db: Session = Depends(get_master_db
             if not is_channel_enabled(db, tenant.company_id, "email"):
                 state.enabled = False
                 master_db.commit()
-                _release_lock(master_db, state, success=True)
+                _release_lock(master_db, state, owner="cron-email-sync", success=True)
                 result["skipped"] += 1
                 continue
 
@@ -110,7 +110,7 @@ def email_sync_cron(request: Request, master_db: Session = Depends(get_master_db
             if not settings.auto_sync_enabled:
                 state.enabled = False
                 master_db.commit()
-                _release_lock(master_db, state, success=True)
+                _release_lock(master_db, state, owner="cron-email-sync", success=True)
                 result["skipped"] += 1
                 continue
             sync_result = read_latest_imap_emails(
@@ -140,9 +140,15 @@ def email_sync_cron(request: Request, master_db: Session = Depends(get_master_db
             result["discarded"] += tenant_result["discarded"]
             result["errors"] += tenant_result["errors"]
             result["tenants"].append(tenant_result)
-            _release_lock(master_db, state, success=bool(sync_result.get("ok")), error=None if sync_result.get("ok") else str(sync_result.get("message") or "error"))
+            _release_lock(
+                master_db,
+                state,
+                owner="cron-email-sync",
+                success=bool(sync_result.get("ok")),
+                error=None if sync_result.get("ok") else str(sync_result.get("message") or "error"),
+            )
         except Exception as exc:  # noqa: BLE001
-            _release_lock(master_db, state, success=False, error=str(exc))
+            _release_lock(master_db, state, owner="cron-email-sync", success=False, error=str(exc))
             result["errors"] += 1
             result["tenants"].append({"company_id": tenant.company_id, "ok": False, "message": str(exc)})
         finally:

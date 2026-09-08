@@ -27,14 +27,15 @@ from app.core.observability import decode_structured_message, observability_scop
 from app.core.security import hash_password  # noqa: E402
 from app.db.database import Base  # noqa: E402
 from app.db.models import AuditLog, BackgroundJob, Company, PromptExecution  # noqa: E402
-from app.health.routes import health_live, health_ready  # noqa: E402
+from app.health.routes import health_live, health_ready, tenant_health  # noqa: E402
 from app.jobs.service import enqueue_job, job_payload, job_trace  # noqa: E402
 from app.logs.service import audit_log_text, log_action, log_flow_event  # noqa: E402
 from app.logs.routes import _company_timezone_name, _serialize_audit_log, delete_logs, logs_download  # noqa: E402
 from app.agent.prompt_runtime import run_prompt_execution  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
-from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
+from app.master.models import CompanyMembership, EmailSyncState, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.tenancy.database import get_tenant_engine  # noqa: E402
+from app.workers.email_worker import _acquire_lock, _release_lock
 
 
 class FakeRequest:
@@ -259,16 +260,113 @@ class ObservabilityTests(unittest.TestCase):
         tenant_request.state.request_id = "req-3"
         tenant_request.state.correlation_id = "corr-3"
 
-        ready = health_ready(tenant_request, db)
+        current_report = {"status": "current", "is_current": True}
+        with patch("app.health.routes.master_migration_report", return_value=current_report), patch(
+            "app.health.routes.tenant_migration_report", return_value=current_report
+        ):
+            ready = health_ready(tenant_request, db)
         live = health_live(tenant_request)
         diagnostics = company_diagnostics(db, 1)
 
         self.assertTrue(ready["ok"])
+        self.assertTrue(ready["platform_ready"])
+        self.assertTrue(ready["tenant_evaluated"])
+        self.assertTrue(ready["tenant_ready"])
         self.assertTrue(ready["tenant_ping"])
         self.assertEqual(live["correlation_id"], "corr-3")
         self.assertIn("metrics", live)
         self.assertIn("observability", diagnostics)
         self.assertIn("requests_total", diagnostics["observability"])
+        db.close()
+
+    def test_health_ready_requires_current_master_schema(self):
+        db = self.MasterSession()
+        request = FakeRequest()
+        reports = {
+            "current": {"status": "current", "is_current": True},
+            "missing": {"status": "missing", "is_current": False},
+            "incomplete": {"status": "incomplete", "is_current": False},
+            "error": {"status": "error", "is_current": False},
+            "failed": {"status": "failed", "is_current": False},
+        }
+        for status, report in reports.items():
+            with self.subTest(status=status), patch("app.health.routes.master_migration_report", return_value=report):
+                result = health_ready(request, db)
+            self.assertEqual(result["platform_ready"], status == "current")
+            self.assertEqual(result["master_schema_ok"], status == "current")
+            self.assertEqual(result["ok"], status == "current")
+        db.close()
+
+    def test_health_ready_marks_tenant_as_not_evaluated_without_context(self):
+        db = self.MasterSession()
+        current_report = {"status": "current", "is_current": True}
+        with patch("app.health.routes.master_migration_report", return_value=current_report):
+            result = health_ready(FakeRequest(), db)
+        self.assertTrue(result["platform_ready"])
+        self.assertFalse(result["tenant_evaluated"])
+        self.assertIsNone(result["tenant_ready"])
+        self.assertIsNone(result["tenant_schema_ok"])
+        self.assertTrue(result["ok"])
+        db.close()
+
+    def test_health_ready_requires_current_tenant_schema(self):
+        self._seed_master()
+        db = self.MasterSession()
+        request = FakeRequest()
+        request.state.tenant = SimpleNamespace(
+            company=SimpleNamespace(id=1, slug="demo", database_url=f"sqlite:///{self.tenant_path.as_posix()}")
+        )
+        current_report = {"status": "current", "is_current": True}
+        for status in ("current", "missing", "incomplete", "error", "failed"):
+            report = {"status": status, "is_current": status == "current"}
+            with self.subTest(status=status), patch(
+                "app.health.routes.master_migration_report", return_value=current_report
+            ), patch("app.health.routes.tenant_migration_report", return_value=report):
+                result = health_ready(request, db)
+            self.assertTrue(result["tenant_evaluated"])
+            self.assertEqual(result["tenant_schema_ok"], status == "current")
+            self.assertEqual(result["tenant_ready"], status == "current")
+            self.assertEqual(result["ok"], status == "current")
+        db.close()
+
+    def test_tenant_health_requires_current_schema(self):
+        db = self.TenantSession()
+        user = SimpleNamespace(company_id=1)
+        for status in ("current", "missing", "incomplete", "error", "failed"):
+            report = {"status": status, "is_current": status == "current"}
+            with self.subTest(status=status), patch("app.health.routes.tenant_migration_report", return_value=report):
+                result = tenant_health(db, user)
+            self.assertEqual(result["tenant_schema_ok"], status == "current")
+            self.assertEqual(result["ok"], status == "current")
+        db.close()
+
+    def test_email_lock_is_atomic_and_owner_safe(self):
+        db = self.MasterSession()
+        state = EmailSyncState(company_id=1, channel_key="email", enabled=True, frequency_seconds=60)
+        db.add(state)
+        db.commit()
+
+        self.assertTrue(_acquire_lock(db, state, "worker-a"))
+        self.assertFalse(_acquire_lock(db, state, "worker-b"))
+        state = db.get(EmailSyncState, state.id)
+        self.assertIsNotNone(state)
+        assert state is not None
+        self.assertEqual(state.lock_owner, "worker-a")
+
+        state.lock_until = datetime.now(timezone.utc).replace(microsecond=0)
+        db.commit()
+        self.assertTrue(_acquire_lock(db, state, "worker-b"))
+        self.assertFalse(_release_lock(db, state, owner="worker-a", success=True))
+        db.refresh(state)
+        self.assertEqual(state.lock_owner, "worker-b")
+        self.assertEqual(state.status, "running")
+
+        self.assertTrue(_release_lock(db, state, owner="worker-b", success=False, error="timeout"))
+        db.refresh(state)
+        self.assertIsNone(state.lock_owner)
+        self.assertEqual(state.status, "error")
+        self.assertEqual(state.last_error_message, "timeout")
+        self.assertIsNotNone(state.next_run_at)
         db.close()
 
 

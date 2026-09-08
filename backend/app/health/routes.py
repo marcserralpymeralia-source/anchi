@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Request
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import current_tenant_user, require_master_admin
@@ -25,6 +26,14 @@ def _ping_db(db: Session) -> bool:
     return True
 
 
+def _schema_is_current(report: dict | None) -> bool:
+    return bool(report and report.get("status") == "current" and report.get("is_current") is True)
+
+
+def _schema_error_report(error: SQLAlchemyError) -> dict:
+    return {"status": "error", "is_current": False, "error_type": type(error).__name__}
+
+
 @router.get("/health")
 def health(request: Request, master_db: Session = Depends(get_master_db)):
     return health_ready(request, master_db)
@@ -44,13 +53,26 @@ def health_live(request: Request):
 @router.get("/health/ready")
 def health_ready(request: Request, master_db: Session = Depends(get_master_db)):
     tenant = getattr(request.state, "tenant", None)
-    master_schema = master_migration_report(master_db, persist=False)
+    try:
+        master_ping = _ping_db(master_db)
+    except SQLAlchemyError as exc:
+        master_ping = False
+        master_error = type(exc).__name__
+    else:
+        master_error = None
+    try:
+        master_schema = master_migration_report(master_db, persist=False)
+    except SQLAlchemyError as exc:
+        master_schema = _schema_error_report(exc)
     payload = {
         "ok": True,
         "timestamp": datetime.now(timezone.utc),
-        "master": _ping_db(master_db),
+        "master": master_ping,
         "master_schema_report": master_schema,
         "tenant": bool(tenant),
+        "tenant_evaluated": bool(tenant),
+        "tenant_ready": None,
+        "tenant_schema_ok": None,
         "tenant_company_id": tenant.company.id if tenant else None,
         "tenant_slug": tenant.company.slug if tenant else None,
         "tenant_database_configured": bool(tenant and getattr(tenant.company, "database_url", None)),
@@ -60,23 +82,35 @@ def health_ready(request: Request, master_db: Session = Depends(get_master_db)):
         "storage_ready": True,
         "workers_ready": {"email_sync": is_email_sync_worker_started(), "jobs": is_job_worker_started()},
     }
+    if master_error:
+        payload["master_error"] = master_error
     if tenant and tenant.company.database_url:
         session_factory = tenant_db_session(tenant.company.database_url)
         tenant_db = session_factory()
         try:
-            payload["tenant_ping"] = _ping_db(tenant_db)
-            payload["tenant_schema_report"] = tenant_migration_report(tenant_db, tenant.company.id, persist=False)
+            try:
+                payload["tenant_ping"] = _ping_db(tenant_db)
+            except SQLAlchemyError as exc:
+                payload["tenant_ping"] = False
+                payload["tenant_error"] = type(exc).__name__
+            try:
+                payload["tenant_schema_report"] = tenant_migration_report(tenant_db, tenant.company.id, persist=False)
+            except SQLAlchemyError as exc:
+                payload["tenant_schema_report"] = _schema_error_report(exc)
         finally:
             tenant_db.close()
-    master_schema_status = payload["master_schema_report"].get("status")
-    master_schema_ok = master_schema_status in {None, "missing", "incomplete", "current"}
+    master_schema_ok = _schema_is_current(payload["master_schema_report"])
     payload["master_schema_ok"] = master_schema_ok
-    payload["ok"] = bool(payload["master"] and (not tenant or payload.get("tenant_ping", True)) and master_schema_ok)
+    payload["platform_ready"] = bool(payload["master"] and master_schema_ok)
+    payload["ok"] = payload["platform_ready"]
     if tenant and tenant.company.database_url:
-        tenant_schema_status = payload["tenant_schema_report"].get("status")
-        tenant_schema_ok = tenant_schema_status in {None, "missing", "incomplete", "current"}
+        tenant_schema_ok = _schema_is_current(payload["tenant_schema_report"])
         payload["tenant_schema_ok"] = tenant_schema_ok
-        payload["ok"] = payload["ok"] and tenant_schema_ok
+        payload["tenant_ready"] = bool(payload.get("tenant_ping") and tenant_schema_ok)
+        payload["ok"] = payload["ok"] and payload["tenant_ready"]
+    elif tenant:
+        payload["tenant_ready"] = False
+        payload["tenant_schema_ok"] = False
     return payload
 
 
@@ -88,14 +122,27 @@ def master_health(master_db: Session = Depends(get_master_db), _: object = Depen
 @router.get("/health/tenant")
 def tenant_health(db: Session = Depends(get_tenant_db), user=Depends(current_tenant_user)):
     schema_report = tenant_migration_report(db, user.company_id)
-    return {
-        "ok": True,
+    try:
+        tenant_ping = _ping_db(db)
+    except SQLAlchemyError as exc:
+        tenant_ping = False
+        tenant_error = type(exc).__name__
+    else:
+        tenant_error = None
+    schema_ok = _schema_is_current(schema_report)
+    payload = {
+        "ok": bool(tenant_ping and schema_ok),
         "timestamp": datetime.now(timezone.utc),
         "company_id": user.company_id,
-        "tenant": _ping_db(db),
+        "tenant_evaluated": True,
+        "tenant": tenant_ping,
+        "tenant_schema_ok": schema_ok,
         "schema_report": schema_report,
         "metrics": snapshot_metrics(),
     }
+    if tenant_error:
+        payload["tenant_error"] = tenant_error
+    return payload
 
 
 @router.get("/admin/tenants/{company_id}/health")

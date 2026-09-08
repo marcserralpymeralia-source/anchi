@@ -91,6 +91,25 @@ class MailInboxRoutesTests(unittest.TestCase):
         finally:
             fixture.cleanup()
 
+    def test_email_sync_and_jobs_cron_require_configured_secret(self):
+        fixture = build_performance_fixture("small")
+        try:
+            with performance_test_client(fixture) as client, patch(
+                "app.cron.routes.get_settings", return_value=SimpleNamespace(cron_secret="test-cron-secret")
+            ), patch("app.cron.routes.run_worker_cycle", return_value={"processed": 0}):
+                for endpoint in ("/cron/email-sync", "/cron/jobs"):
+                    self.assertEqual(client.get(endpoint).status_code, 403)
+                    self.assertEqual(
+                        client.get(endpoint, headers={"Authorization": "Bearer wrong-secret"}).status_code,
+                        403,
+                    )
+                    self.assertNotEqual(
+                        client.get(endpoint, headers={"Authorization": "Bearer test-cron-secret"}).status_code,
+                        403,
+                    )
+        finally:
+            fixture.cleanup()
+
     def test_mail_inbox_page_and_detail_are_available(self):
         fixture = build_performance_fixture("small")
         SessionLocal = _tenant_session(fixture.tenant_path)
