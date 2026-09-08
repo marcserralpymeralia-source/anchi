@@ -166,7 +166,7 @@ class OperationalNavigationTests(unittest.TestCase):
                 response = client.get("/settings")
 
             self.assertEqual(response.status_code, 200)
-            self.assertIn("1 de 8 requisitos requieren atención", response.text)
+            self.assertIn("2 de 8 requisitos requieren atención", response.text)
             self.assertIn("FTP/SFTP configurado", response.text)
             self.assertIn('data-step-state="pending"', response.text)
             self.assertIn('data-open-settings="ftp"', response.text)

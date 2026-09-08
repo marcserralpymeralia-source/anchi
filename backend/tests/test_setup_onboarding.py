@@ -495,7 +495,7 @@ class SetupOnboardingTests(unittest.TestCase):
             fragment = client.get("/settings/module/proxies")
             self.assertEqual(fragment.status_code, 200)
             self.assertIn("Proxy de pruebas", fragment.text)
-            self.assertIn("Sin tráfico", fragment.text)
+            self.assertIn("Perfiles configurados (1)", fragment.text)
             self.assertIn("Probar conexión", fragment.text)
             self.assertIn(f'data-proxy-test-url="/settings/proxies/{profile_id}/test"', fragment.text)
 
