@@ -1,19 +1,20 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Generator
 from functools import lru_cache
 from threading import RLock
 
 from fastapi import Depends, HTTPException, Request, status
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.auth.redirects import login_location_for_request
+from app.db.database import Base
 from app.master.database import get_master_db
 from app.master.service import load_tenant_context
-from app.db.database import Base
 from app.tenancy.migrations import upgrade_tenant_schema
 
 
@@ -21,7 +22,8 @@ def _connect_args(database_url: str) -> dict[str, object]:
     return {"check_same_thread": False} if database_url.startswith("sqlite") else {}
 
 
-_tenant_engine_cache: dict[str, Engine] = {}
+TENANT_ENGINE_CACHE_LIMIT = 32
+_tenant_engine_cache: OrderedDict[str, Engine] = OrderedDict()
 _tenant_engine_cache_lock = RLock()
 
 
@@ -33,12 +35,17 @@ def get_tenant_engine(database_url: str) -> Engine:
     files.  The old ``cache_clear`` attribute is kept as a compatibility
     alias for scripts and existing integrations.
     """
+    evicted_engine = None
     with _tenant_engine_cache_lock:
-        engine = _tenant_engine_cache.get(database_url)
+        engine = _tenant_engine_cache.pop(database_url, None)
         if engine is None:
             engine = create_engine(database_url, connect_args=_connect_args(database_url), pool_pre_ping=True)
-            _tenant_engine_cache[database_url] = engine
-        return engine
+        _tenant_engine_cache[database_url] = engine
+        if len(_tenant_engine_cache) > TENANT_ENGINE_CACHE_LIMIT:
+            _, evicted_engine = _tenant_engine_cache.popitem(last=False)
+    if evicted_engine is not None:
+        evicted_engine.dispose()
+    return engine
 
 
 def clear_tenant_engine_cache() -> None:

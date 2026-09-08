@@ -214,12 +214,23 @@
           <summary>Cambiar cliente</summary>
           <div class="review-customer-inline">
             <label>Cliente
-              <select name="validated_customer_id">
-                <option value="0">Sin cliente</option>
-                {% for customer in customers %}
-                  <option value="{{ customer.id }}" {% if order.validated_customer_id == customer.id %}selected{% endif %}>{{ customer.code }} - {{ customer.fiscal_name }}</option>
-                {% endfor %}
-              </select>
+              <div class="customer-autocomplete" data-customer-autocomplete>
+                <input
+                  type="search"
+                  class="compact-input"
+                  data-customer-input
+                  value="{% if selected_customer %}{{ selected_customer.code }} - {{ selected_customer.fiscal_name }}{% endif %}"
+                  placeholder="Buscar por código, nombre o NIF..."
+                  autocomplete="off"
+                >
+                <input
+                  type="hidden"
+                  name="validated_customer_id"
+                  data-customer-id
+                  value="{{ order.validated_customer_id or order.customer_id or 0 }}"
+                >
+                <div class="customer-autocomplete-results" data-customer-results hidden></div>
+              </div>
             </label>
             <button class="secondary compact-button" data-loading-text="Guardando...">Guardar cliente</button>
           </div>
