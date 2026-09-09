@@ -25,7 +25,11 @@ class EmailAutoconfigTests(unittest.TestCase):
         def probe_incoming(endpoint, username, password):
             return endpoint.protocol == "imap" and endpoint.host == "imap.gmail.com" and username == "demo.user@gmail.com" and password == "app-password"
 
-        with patch("app.settings.autoconfig._probe_incoming", side_effect=probe_incoming), patch("app.settings.autoconfig._probe_smtp", return_value=False):
+        with (
+            patch("app.settings.autoconfig._host_is_public", return_value=True),
+            patch("app.settings.autoconfig._probe_incoming", side_effect=probe_incoming),
+            patch("app.settings.autoconfig._probe_smtp", return_value=False),
+        ):
             result = detect_email_configuration(" Demo.User@Gmail.com ", "app-password")
 
         self.assertTrue(result["detected"])
@@ -37,7 +41,11 @@ class EmailAutoconfigTests(unittest.TestCase):
         self.assertNotIn("password", result)
 
     def test_pop3_only_is_reported_but_not_marked_usable_by_anchi(self):
-        with patch("app.settings.autoconfig._probe_incoming", side_effect=lambda endpoint, _username, _password: endpoint.protocol == "pop3"), patch("app.settings.autoconfig._probe_smtp", return_value=False):
+        with (
+            patch("app.settings.autoconfig._host_is_public", return_value=True),
+            patch("app.settings.autoconfig._probe_incoming", side_effect=lambda endpoint, _username, _password: endpoint.protocol == "pop3"),
+            patch("app.settings.autoconfig._probe_smtp", return_value=False),
+        ):
             result = detect_email_configuration("demo.user@gmail.com", "app-password")
 
         self.assertTrue(result["detected"])
@@ -122,7 +130,8 @@ class EmailAutoconfigTests(unittest.TestCase):
         self.assertEqual(fingerprints, exchanges)
 
     def test_common_fallback_does_not_treat_bare_domain_as_mail_server(self):
-        incoming, _outgoing = _common_candidates("person@pymeralia.com", "pymeralia.com")
+        with patch("app.settings.autoconfig._host_is_public", return_value=True):
+            incoming, _outgoing = _common_candidates("person@pymeralia.com", "pymeralia.com")
         self.assertTrue(any(item.host == "mail.pymeralia.com" and item.protocol == "pop3" for item in incoming))
         self.assertFalse(any(item.host == "pymeralia.com" for item in incoming))
 
