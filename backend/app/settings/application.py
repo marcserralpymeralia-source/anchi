@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 from time import perf_counter
 from urllib.parse import urlsplit, urlunsplit
 
-from fastapi import Request, UploadFile
+from fastapi import HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, DEFAULT_REASONING_EFFORT, LEGACY_OPENAI_MODEL_FALLBACK, REASONING_EFFORT_VALUES, resolve_openai_model_choice, resolve_openai_runtime_model
 from app.core.config import get_settings
 from app.core.encryption import mask_secret
-from app.db.models import AuditLog, BackgroundJob, BrandingSettings, Company, Customer, DecisionSettings, Email, EmailSettings, ExportSettings, FTPSettings, InputChannel, InboundMessage, LLMSettings, Order, Product, PromptTemplate, PromptVersion, ScoringSettings
+from app.db.models import AuditLog, BackgroundJob, BrandingSettings, Company, Customer, DecisionSettings, Email, EmailSettings, ExportSettings, FTPConnection, FTPSettings, InputChannel, InboundMessage, LLMSettings, Order, Product, PromptTemplate, PromptVersion, ScoringSettings
 from app.dashboard.service import agent_status_label, recent_processed_emails_overview
 from app.exports.service import FTPService
 from app.logs.service import log_action
@@ -280,7 +280,26 @@ async def update_settings_section_async(section: str, request: Request, db: Sess
     elif section == "export":
         instance = get_or_create_settings(db, ExportSettings, user.company_id)
         form.setdefault("include_header", "off")
+        has_ftp_connection_selection = "ftp_connection_id" in form
+        selected_ftp_connection_id = None
+        if has_ftp_connection_selection:
+            raw_ftp_connection_id = str(form.pop("ftp_connection_id") or "").strip()
+            if raw_ftp_connection_id:
+                try:
+                    selected_ftp_connection_id = int(raw_ftp_connection_id)
+                except ValueError as exc:
+                    raise HTTPException(status_code=422, detail="La conexión FTP seleccionada no es válida.") from exc
+                selected_ftp_connection = db.scalar(
+                    select(FTPConnection).where(
+                        FTPConnection.id == selected_ftp_connection_id,
+                        FTPConnection.company_id == user.company_id,
+                    )
+                )
+                if selected_ftp_connection is None:
+                    raise HTTPException(status_code=422, detail="La conexión FTP seleccionada no pertenece a esta compañía.")
         update_with_form(instance, form)
+        if has_ftp_connection_selection:
+            instance.ftp_connection_id = selected_ftp_connection_id
         anchor = "export"
     elif section == "scoring":
         instance = get_or_create_settings(db, ScoringSettings, user.company_id)

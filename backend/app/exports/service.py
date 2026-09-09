@@ -7,11 +7,47 @@ import posixpath
 import socket
 import ssl
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.encryption import decrypt_secret
 from app.db.models import ExportFile, ExportSettings, FTPConnection, FTPSettings, Order
 from app.settings.service import get_or_create_settings
+
+
+def resolve_ftp_destination(db: Session, company_id: int, export_settings: ExportSettings) -> FTPSettings | FTPConnection:
+    """Resolve the FTP destination selected by the tenant.
+
+    New tenants use named FTP profiles.  The legacy singleton remains a
+    compatibility fallback only when no profiles exist, so adding a profile
+    cannot silently leave exports pointed at the old destination.
+    """
+
+    profiles = db.scalars(
+        select(FTPConnection)
+        .where(FTPConnection.company_id == company_id)
+        .order_by(FTPConnection.name.asc(), FTPConnection.id.asc())
+    ).all()
+    selected_id = export_settings.ftp_connection_id
+    if selected_id is not None:
+        selected = db.scalar(
+            select(FTPConnection).where(
+                FTPConnection.id == selected_id,
+                FTPConnection.company_id == company_id,
+            )
+        )
+        if selected is None:
+            raise ValueError("La conexión FTP seleccionada ya no existe. Revisa Configuración > Exportación.")
+        return selected
+
+    if len(profiles) == 1:
+        return profiles[0]
+    if len(profiles) > 1:
+        raise ValueError("Hay varias conexiones FTP configuradas. Selecciona una en Configuración > Exportación.")
+
+    # Keep existing installations working until their first profile is
+    # created and explicitly selected.
+    return get_or_create_settings(db, FTPSettings, company_id)
 
 
 class ExportService:

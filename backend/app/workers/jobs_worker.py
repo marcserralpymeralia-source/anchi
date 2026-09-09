@@ -22,8 +22,8 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import record_job
 from app.core.observability import observability_scope
-from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, ExportSettings, FTPSettings, ImportJob, InboundMessage, Order, ScoringSettings
-from app.exports.service import ExportService, FTPService
+from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, ExportSettings, ImportJob, InboundMessage, Order, ScoringSettings
+from app.exports.service import ExportService, FTPService, resolve_ftp_destination
 from app.logs.service import log_action, log_flow_event
 from app.orders.state import ORDER_STATE
 import app.master.database as master_database
@@ -513,7 +513,6 @@ def _process_export_job(db, job: BackgroundJob, payload: dict) -> dict:
     export = db.scalar(select(ExportFile).where(ExportFile.order_id == order.id, ExportFile.company_id == job.company_id).order_by(ExportFile.created_at.desc()))
     if not export:
         export = ExportService().generate(db, order)
-    ftp_settings = get_or_create_settings(db, FTPSettings, job.company_id)
     send_via_ftp = job.job_type == "export_order_ftp"
 
     if not send_via_ftp:
@@ -543,14 +542,14 @@ def _process_export_job(db, job: BackgroundJob, payload: dict) -> dict:
     if validation_errors:
         raise RuntimeError("No se puede exportar el pedido: " + " | ".join(validation_errors))
 
-    if not ftp_settings.host:
-        raise RuntimeError("La conexion de exportacion no esta configurada.")
-
     export_settings = get_or_create_settings(
         db,
         ExportSettings,
         job.company_id,
     )
+    ftp_settings = resolve_ftp_destination(db, job.company_id, export_settings)
+    if not ftp_settings.host:
+        raise RuntimeError("La conexion de exportacion no esta configurada.")
     ok = FTPService().send(
         export,
         ftp_settings,
@@ -695,12 +694,6 @@ def _process_bulk_action(db, job: BackgroundJob, payload: dict) -> dict:
                     update_job_progress(db, job, int(((processed + skipped) / total) * 100))
                     continue
 
-                ftp_settings = get_or_create_settings(db, FTPSettings, job.company_id)
-                if not ftp_settings.host:
-                    skipped += 1
-                    update_job_progress(db, job, int(((processed + skipped) / total) * 100))
-                    continue
-
                 if not export:
                     export = ExportService().generate(db, order)
 
@@ -709,6 +702,11 @@ def _process_bulk_action(db, job: BackgroundJob, payload: dict) -> dict:
                     ExportSettings,
                     job.company_id,
                 )
+                ftp_settings = resolve_ftp_destination(db, job.company_id, export_settings)
+                if not ftp_settings.host:
+                    skipped += 1
+                    update_job_progress(db, job, int(((processed + skipped) / total) * 100))
+                    continue
                 ok = FTPService().send(
                     export,
                     ftp_settings,

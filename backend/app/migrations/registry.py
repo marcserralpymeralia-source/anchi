@@ -969,6 +969,17 @@ def _apply_tenant_ftp_connections(engine, dry_run: bool) -> list[str]:  # noqa: 
     return actions
 
 
+def _apply_tenant_ftp_export_selection(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Store the tenant's selected FTP destination for order exports."""
+
+    return ensure_columns(
+        engine,
+        "export_settings",
+        {"ftp_connection_id": "INTEGER"},
+        dry_run=dry_run,
+    )
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -1065,6 +1076,12 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant FTP connection profiles",
         checksum=checksum_text("tenant", "ftp_connection_profiles", "ftp_connections", "ftp_settings"),
         upgrade=_apply_tenant_ftp_connections,
+    ),
+    MigrationSpec(
+        version="2026.09.09.1",
+        name="tenant FTP export destination selection",
+        checksum=checksum_text("tenant", "ftp_export_destination_selection", "export_settings", "ftp_connection_id"),
+        upgrade=_apply_tenant_ftp_export_selection,
     ),
 ]
 
