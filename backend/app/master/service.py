@@ -90,7 +90,7 @@ def _membership_to_user(membership: CompanyMembership, tenant_db: MasterTenantDa
 
 
 def _is_demo_admin_password(password: str, settings) -> bool:
-    return password == settings.default_admin_password or password in DEMO_ADMIN_PASSWORD_FALLBACKS
+    return settings.environment == "demo" and (password == settings.default_admin_password or password in DEMO_ADMIN_PASSWORD_FALLBACKS)
 
 
 def _repair_demo_master_access(master_db: Session, email: str, password: str, settings) -> bool:
@@ -145,7 +145,7 @@ def _repair_demo_master_access(master_db: Session, email: str, password: str, se
 
 def authenticate_master_user(master_db: Session, email: str, password: str) -> TenantUser | None:
     settings = get_settings()
-    demo_runtime = settings.environment == "demo" or os.getenv("VERCEL") == "1" or bool(os.getenv("VERCEL_ENV"))
+    demo_runtime = settings.environment == "demo"
     memberships = master_db.scalars(
         select(CompanyMembership)
         .join(CompanyMembership.user)

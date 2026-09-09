@@ -198,6 +198,104 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.assertEqual(resolved.company_slug, "demo")
         db.close()
 
+    def test_production_vercel_rejects_demo_password_without_repairing_access(self):
+        db = self.MasterSession()
+        db.add_all(
+            [
+                MasterCompany(id=1, name="Demo", slug="demo", active=True),
+                MasterTenantDatabase(company_id=1, database_key="demo", database_url=f"sqlite:///{self.tenant_path.as_posix()}", is_active=True, health_status="ok"),
+            ]
+        )
+        db.commit()
+
+        production_env = {
+            "APP_ENV": "production",
+            "ENVIRONMENT": "production",
+            "VERCEL": "1",
+            "SECRET_KEY": "a-very-strong-secret-key-for-production-123456",
+            "ENCRYPTION_KEY": "CKHCB4gFGn7kJVxowWH2pEdPucfPaZugSsMgoJU6eNE=",
+            "ENABLE_DEMO_BOOTSTRAP": "false",
+            "DEBUG": "false",
+            "SESSION_COOKIE_SECURE": "true",
+            "ALLOWED_HOSTS": "app.example.com",
+            "CORS_ALLOWED_ORIGINS": "https://app.example.com",
+            "DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/tenant",
+            "MASTER_DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/master",
+            "DEFAULT_ADMIN_EMAIL": "ops@example.com",
+            "DEFAULT_ADMIN_PASSWORD": "StrongPassw0rd!2026",
+        }
+
+        for vercel_env in (None, "preview", "production"):
+            env = dict(production_env)
+            if vercel_env is None:
+                env["VERCEL_ENV"] = ""
+            else:
+                env["VERCEL"] = ""
+                env["VERCEL_ENV"] = vercel_env
+            with self.subTest(vercel=env.get("VERCEL"), vercel_env=vercel_env), patch.dict(os.environ, env, clear=True):
+                get_settings.cache_clear()
+                self.assertIsNone(authenticate_master_user(db, "admin@demo.local", "AnchiDemo2026!"))
+                self.assertEqual(db.scalar(select(func.count(MasterUser.id))), 0)
+                self.assertEqual(db.scalar(select(func.count(CompanyMembership.id))), 0)
+        get_settings.cache_clear()
+        db.close()
+
+    def test_production_authenticates_existing_user_with_real_password(self):
+        self.seed_master()
+        db = self.MasterSession()
+        env = {
+            "APP_ENV": "production",
+            "ENVIRONMENT": "production",
+            "VERCEL": "1",
+            "SECRET_KEY": "a-very-strong-secret-key-for-production-123456",
+            "ENCRYPTION_KEY": "CKHCB4gFGn7kJVxowWH2pEdPucfPaZugSsMgoJU6eNE=",
+            "ENABLE_DEMO_BOOTSTRAP": "false",
+            "DEBUG": "false",
+            "SESSION_COOKIE_SECURE": "true",
+            "ALLOWED_HOSTS": "app.example.com",
+            "CORS_ALLOWED_ORIGINS": "https://app.example.com",
+            "DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/tenant",
+            "MASTER_DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/master",
+            "DEFAULT_ADMIN_EMAIL": "ops@example.com",
+            "DEFAULT_ADMIN_PASSWORD": "StrongPassw0rd!2026",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            get_settings.cache_clear()
+            resolved = authenticate_master_user(db, "admin@anchi.local", "admin123")
+        get_settings.cache_clear()
+        self.assertIsNotNone(resolved)
+        db.close()
+
+    def test_production_default_admin_password_does_not_repair_unknown_user(self):
+        db = self.MasterSession()
+        db.add(
+            MasterCompany(id=1, name="Demo", slug="demo", active=True)
+        )
+        db.commit()
+        env = {
+            "APP_ENV": "production",
+            "ENVIRONMENT": "production",
+            "VERCEL_ENV": "production",
+            "SECRET_KEY": "a-very-strong-secret-key-for-production-123456",
+            "ENCRYPTION_KEY": "CKHCB4gFGn7kJVxowWH2pEdPucfPaZugSsMgoJU6eNE=",
+            "ENABLE_DEMO_BOOTSTRAP": "false",
+            "DEBUG": "false",
+            "SESSION_COOKIE_SECURE": "true",
+            "ALLOWED_HOSTS": "app.example.com",
+            "CORS_ALLOWED_ORIGINS": "https://app.example.com",
+            "DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/tenant",
+            "MASTER_DATABASE_URL": "postgresql+psycopg://user:password@db.example.com:5432/master",
+            "DEFAULT_ADMIN_EMAIL": "ops@example.com",
+            "DEFAULT_ADMIN_PASSWORD": "StrongPassw0rd!2026",
+        }
+        with patch.dict(os.environ, env, clear=True):
+            get_settings.cache_clear()
+            self.assertIsNone(authenticate_master_user(db, "admin@demo.local", "StrongPassw0rd!2026"))
+        get_settings.cache_clear()
+        self.assertEqual(db.scalar(select(func.count(MasterUser.id))), 0)
+        self.assertEqual(db.scalar(select(func.count(CompanyMembership.id))), 0)
+        db.close()
+
     def test_load_tenant_context_and_missing_tenant_db(self):
         self.seed_master(with_tenant_db=False)
         db = self.MasterSession()
