@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_send, icon_check, icon_check_check, icon_clock, icon_alert_triangle, icon_user, icon_download, icon_eye, icon_image, icon_file_text, icon_play, icon_refresh %}
+{% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_send, icon_check, icon_check_check, icon_clock, icon_alert_triangle, icon_user, icon_download, icon_eye, icon_image, icon_file_text, icon_play, icon_pause, icon_mic, icon_refresh %}
 {% set title = "Buzón de WhatsApp" %}
 {% block content %}
 <div class="channel-inbox-shell whatsapp-inbox-shell" data-whatsapp-live data-live-revision="{{ live_revision }}">
@@ -126,6 +126,9 @@
 
         currentContacts.replaceWith(nextContacts);
         currentChat.replaceWith(nextChat);
+        if (typeof window.initWhatsAppAudioPlayers === "function") {
+          window.initWhatsAppAudioPlayers(nextChat);
+        }
         revision = nextRevisionRoot.dataset.liveRevision || revision;
         liveRoot.dataset.liveRevision = revision;
 
@@ -281,6 +284,135 @@
       closeMediaLightbox();
     }
   });
+
+  window.initWhatsAppAudioPlayers = function(container = document) {
+    const players = container.querySelectorAll("[data-wa-audio-player]");
+    players.forEach((player) => {
+      if (player._waAudioInitialized) return;
+      player._waAudioInitialized = true;
+
+      const audio = player.querySelector("[data-wa-audio-element]");
+      const playBtn = player.querySelector("[data-wa-audio-play-btn]");
+      const playIcon = player.querySelector(".wa-audio-play-icon");
+      const pauseIcon = player.querySelector(".wa-audio-pause-icon");
+      const progressFill = player.querySelector("[data-wa-audio-progress]");
+      const thumb = player.querySelector("[data-wa-audio-thumb]");
+      const rangeInput = player.querySelector("[data-wa-audio-range]");
+      const timer = player.querySelector("[data-wa-audio-timer]");
+      const speedBtn = player.querySelector("[data-wa-audio-speed]");
+
+      if (!audio || !playBtn) return;
+
+      const formatTime = (secs) => {
+        if (!isFinite(secs) || isNaN(secs) || secs < 0) return "0:00";
+        const m = Math.floor(secs / 60);
+        const s = Math.floor(secs % 60);
+        return `${m}:${s < 10 ? "0" : ""}${s}`;
+      };
+
+      const updateProgress = (curr, dur) => {
+        if (!dur || dur <= 0) return;
+        const pct = Math.min(Math.max((curr / dur) * 100, 0), 100);
+        if (progressFill) progressFill.style.width = `${pct}%`;
+        if (thumb) thumb.style.left = `${pct}%`;
+        if (rangeInput && !rangeInput._isDragging) rangeInput.value = pct;
+      };
+
+      if (audio.readyState >= 1 && audio.duration) {
+        if (timer) timer.textContent = formatTime(audio.duration);
+      } else {
+        audio.addEventListener("loadedmetadata", () => {
+          if (timer && audio.currentTime === 0) {
+            timer.textContent = formatTime(audio.duration);
+          }
+        });
+      }
+
+      playBtn.addEventListener("click", () => {
+        if (audio.paused) {
+          document.querySelectorAll("[data-wa-audio-element]").forEach((other) => {
+            if (other !== audio && !other.paused) {
+              other.pause();
+            }
+          });
+          audio.play().catch(() => {});
+        } else {
+          audio.pause();
+        }
+      });
+
+      audio.addEventListener("play", () => {
+        playBtn.classList.add("is-playing");
+        if (playIcon) playIcon.hidden = true;
+        if (pauseIcon) pauseIcon.hidden = false;
+        playBtn.setAttribute("aria-label", "Pausar");
+        playBtn.setAttribute("title", "Pausar");
+      });
+
+      audio.addEventListener("pause", () => {
+        playBtn.classList.remove("is-playing");
+        if (playIcon) playIcon.hidden = false;
+        if (pauseIcon) pauseIcon.hidden = true;
+        playBtn.setAttribute("aria-label", "Reproducir");
+        playBtn.setAttribute("title", "Reproducir");
+      });
+
+      audio.addEventListener("timeupdate", () => {
+        if (timer) timer.textContent = formatTime(audio.currentTime);
+        updateProgress(audio.currentTime, audio.duration);
+      });
+
+      audio.addEventListener("ended", () => {
+        playBtn.classList.remove("is-playing");
+        if (playIcon) playIcon.hidden = false;
+        if (pauseIcon) pauseIcon.hidden = true;
+        audio.currentTime = 0;
+        updateProgress(0, audio.duration);
+        if (timer) timer.textContent = formatTime(audio.duration);
+      });
+
+      if (rangeInput) {
+        rangeInput.addEventListener("mousedown", () => { rangeInput._isDragging = true; });
+        rangeInput.addEventListener("touchstart", () => { rangeInput._isDragging = true; }, { passive: true });
+
+        rangeInput.addEventListener("input", () => {
+          const val = parseFloat(rangeInput.value);
+          if (progressFill) progressFill.style.width = `${val}%`;
+          if (thumb) thumb.style.left = `${val}%`;
+          if (audio.duration) {
+            const seekTime = (val / 100) * audio.duration;
+            if (timer) timer.textContent = formatTime(seekTime);
+          }
+        });
+
+        const finishDrag = () => {
+          if (!rangeInput._isDragging) return;
+          rangeInput._isDragging = false;
+          if (audio.duration) {
+            audio.currentTime = (parseFloat(rangeInput.value) / 100) * audio.duration;
+          }
+        };
+
+        rangeInput.addEventListener("mouseup", finishDrag);
+        rangeInput.addEventListener("touchend", finishDrag);
+        rangeInput.addEventListener("change", finishDrag);
+      }
+
+      if (speedBtn) {
+        const speeds = [1, 1.5, 2];
+        let speedIdx = 0;
+        speedBtn.addEventListener("click", () => {
+          speedIdx = (speedIdx + 1) % speeds.length;
+          const rate = speeds[speedIdx];
+          audio.playbackRate = rate;
+          speedBtn.textContent = `${rate}x`;
+          speedBtn.setAttribute("title", `Velocidad: ${rate}x`);
+        });
+      }
+    });
+  };
+
+  initWhatsAppAudioPlayers();
 </script>
 
 <div id="wa-image-lightbox" class="wa-lightbox-overlay" onclick="handleLightboxBackdrop(event)">

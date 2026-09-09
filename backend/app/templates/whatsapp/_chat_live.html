@@ -1,4 +1,4 @@
-{% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_check, icon_check_check, icon_clock, icon_alert_triangle, icon_user, icon_download, icon_eye, icon_image, icon_file_text, icon_play, icon_refresh %}
+{% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_check, icon_check_check, icon_clock, icon_alert_triangle, icon_user, icon_download, icon_eye, icon_image, icon_file_text, icon_play, icon_pause, icon_mic, icon_refresh %}
 
 {% macro message_meta_time(msg) %}
   <time datetime="{{ msg.date.isoformat() if msg.date else '' }}">{{ msg.date|local_dt(tenant_timezone, "%H:%M", "--") }}</time>
@@ -50,7 +50,8 @@
         {% set ns.prev_date = current_date %}
       {% endif %}
       {% set is_doc_card = message.attachments and not message.text and message.attachments|length == 1 and message.attachments[0].available and message.attachments[0].kind in ["pdf", "doc", "sheet", "text", "file"] %}
-      <article class="channel-chat-message {{ message.direction }}{% if is_doc_card %} wa-msg-doc-card{% endif %}">
+      {% set is_audio_card = message.attachments and not message.text and message.attachments|length == 1 and message.attachments[0].available and message.attachments[0].kind == "audio" %}
+      <article class="channel-chat-message {{ message.direction }}{% if is_doc_card %} wa-msg-doc-card{% elif is_audio_card %} wa-msg-audio-card{% endif %}">
         {% if message.text %}
           <div class="channel-chat-message-text">{{ message.text }}</div>
         {% endif %}
@@ -91,15 +92,58 @@
                     </div>
                   </div>
                 {% elif attachment.kind == "audio" %}
-                  <div class="wa-bubble-audio-card">
-                    <audio controls preload="metadata" class="wa-audio-control">
+                  <div class="wa-bubble-audio-card" data-wa-audio-player>
+                    <audio preload="metadata" class="wa-audio-control" data-wa-audio-element>
                       <source src="{{ attachment.href }}" type="{{ attachment.content_type }}">
                       Tu navegador no soporta reproducción de audio.
                     </audio>
-                    <div class="wa-audio-foot">
-                      <span class="wa-audio-name" title="{{ attachment.filename }}">{{ attachment.filename }}</span>
-                      <span class="wa-audio-size">{{ attachment.size }}</span>
+
+                    <div class="wa-audio-player-layout">
+                      <button type="button" class="wa-audio-play-btn" data-wa-audio-play-btn title="Reproducir" aria-label="Reproducir">
+                        <span class="wa-audio-play-icon">{{ icon_play(18) }}</span>
+                        <span class="wa-audio-pause-icon" hidden>{{ icon_pause(18) }}</span>
+                      </button>
+
+                      <div class="wa-audio-body">
+                        <div class="wa-audio-waveform-container" data-wa-audio-scrubber>
+                          <div class="wa-audio-waveform-bars wa-waveform-bg" aria-hidden="true">
+                            {% for h in [4, 8, 14, 18, 12, 6, 16, 22, 18, 10, 14, 20, 16, 8, 12, 18, 14, 6, 10, 16, 20, 14, 8, 14, 18, 12, 6, 12, 16, 8] %}
+                              <span class="wa-audio-bar" style="height: {{ h }}px;"></span>
+                            {% endfor %}
+                          </div>
+                          <div class="wa-audio-waveform-progress" data-wa-audio-progress style="width: 0%;">
+                            <div class="wa-audio-waveform-bars wa-waveform-fg" aria-hidden="true">
+                              {% for h in [4, 8, 14, 18, 12, 6, 16, 22, 18, 10, 14, 20, 16, 8, 12, 18, 14, 6, 10, 16, 20, 14, 8, 14, 18, 12, 6, 12, 16, 8] %}
+                                <span class="wa-audio-bar" style="height: {{ h }}px;"></span>
+                              {% endfor %}
+                            </div>
+                          </div>
+                          <span class="wa-audio-thumb" data-wa-audio-thumb style="left: 0%;"></span>
+                          <input type="range" class="wa-audio-range-slider" data-wa-audio-range min="0" max="100" value="0" step="0.1" aria-label="Control de reproducción">
+                        </div>
+                        <div class="wa-audio-details">
+                          <span class="wa-audio-timer" data-wa-audio-timer>0:00</span>
+                          <div class="wa-audio-meta-actions">
+                            <button type="button" class="wa-audio-speed-btn" data-wa-audio-speed title="Velocidad: 1x">1x</button>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div class="wa-audio-avatar-badge" title="Mensaje de voz">
+                        <div class="wa-audio-avatar-circle">
+                          {{ icon_user(18) }}
+                        </div>
+                        <span class="wa-audio-mic-dot">
+                          {{ icon_mic(9) }}
+                        </span>
+                      </div>
                     </div>
+
+                    {% if is_audio_card %}
+                      <div class="wa-audio-meta-time">
+                        {{ message_meta_time(message) }}
+                      </div>
+                    {% endif %}
                   </div>
                 {% else %}
                   <div class="wa-bubble-doc-card">
@@ -154,7 +198,7 @@
             {% endfor %}
           </div>
         {% endif %}
-        {% if not is_doc_card %}
+        {% if not is_doc_card and not is_audio_card %}
           <div class="channel-chat-message-meta-inline">
             {{ message_meta_time(message) }}
           </div>
