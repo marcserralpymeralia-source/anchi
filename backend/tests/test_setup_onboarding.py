@@ -302,7 +302,15 @@ class SetupOnboardingTests(unittest.TestCase):
             self.assertEqual(customer_import.headers["location"].split("?")[0], "/setup/customer-knowledge")
             skip = client.post("/setup/customer-knowledge/skip", follow_redirects=False)
             self.assertEqual(skip.headers["location"], "/setup/openai")
-            openai = client.post("/setup/openai", data={"api_key": "sk-test-onboarding-key"}, follow_redirects=False)
+            with patch(
+                "app.setup.routes.classify_sample",
+                return_value={"ok": True, "message": "Conexion OpenAI correcta."},
+            ):
+                openai = client.post(
+                    "/setup/openai",
+                    data={"api_key": "sk-test-onboarding-key"},
+                    follow_redirects=False,
+                )
             self.assertEqual(openai.headers["location"], "/setup/complete")
             complete = client.get("/setup/complete")
             self.assertEqual(complete.status_code, 200)
@@ -313,6 +321,178 @@ class SetupOnboardingTests(unittest.TestCase):
                 llm = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 1))
                 self.assertNotEqual(llm.api_key_encrypted, "sk-test-onboarding-key")
                 self.assertEqual(decrypt_secret(llm.api_key_encrypted), "sk-test-onboarding-key")
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+    def test_openai_onboarding_does_not_persist_a_key_before_a_successful_probe(self):
+        fixture = SetupFixture()
+        client, cleanup = fixture.client()
+        try:
+            self._login(client)
+            with patch(
+                "app.setup.routes.classify_sample",
+                return_value={"ok": False, "error_type": "authentication_failed"},
+            ) as probe:
+                response = client.post(
+                    "/setup/openai",
+                    data={"api_key": "sk-invalid-onboarding-key"},
+                    follow_redirects=False,
+                )
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(
+                response.headers["location"].split("?")[0], "/setup/openai"
+            )
+            probe.assert_called_once()
+            with fixture.TenantSession() as db:
+                llm = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 1))
+                self.assertIsNotNone(llm)
+                self.assertIsNone(llm.api_key_encrypted)
+                self.assertFalse(llm.last_test_ok)
+                self.assertIn("rechazado", llm.last_test_message)
+                self.assertNotIn("sk-invalid-onboarding-key", llm.last_test_message)
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+    def test_openai_onboarding_rejects_invalid_format_without_external_call(self):
+        fixture = SetupFixture()
+        client, cleanup = fixture.client()
+        try:
+            self._login(client)
+            with patch("app.setup.routes.classify_sample") as probe:
+                response = client.post(
+                    "/setup/openai",
+                    data={"api_key": "not-an-openai-key"},
+                    follow_redirects=False,
+                )
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(
+                response.headers["location"].split("?")[0], "/setup/openai"
+            )
+            probe.assert_not_called()
+            with fixture.TenantSession() as db:
+                llm = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 1))
+                self.assertIsNotNone(llm)
+                self.assertIsNone(llm.api_key_encrypted)
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+    def test_openai_onboarding_maps_provider_failures_without_persisting_new_key(self):
+        fixture = SetupFixture()
+        client, cleanup = fixture.client()
+        try:
+            self._login(client)
+            results = [
+                {"ok": False, "error_type": "timeout"},
+                {"ok": False, "error_type": "rate_limited"},
+            ]
+            with patch(
+                "app.setup.routes.classify_sample", side_effect=results
+            ) as probe:
+                for key in ["sk-timeout-onboarding-key", "sk-rate-onboarding-key"]:
+                    response = client.post(
+                        "/setup/openai", data={"api_key": key}, follow_redirects=False
+                    )
+                    self.assertEqual(response.status_code, 303)
+                    self.assertEqual(
+                        response.headers["location"].split("?")[0], "/setup/openai"
+                    )
+            self.assertEqual(probe.call_count, 2)
+            with fixture.TenantSession() as db:
+                llm = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 1))
+                self.assertIsNone(llm.api_key_encrypted)
+                self.assertFalse(llm.last_test_ok)
+                self.assertEqual(llm.last_error, "rate_limited")
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+    def test_openai_onboarding_preserves_existing_key_when_new_probe_fails(self):
+        fixture = SetupFixture()
+        client, cleanup = fixture.client()
+        try:
+            self._login(client)
+            with fixture.TenantSession() as db:
+                llm = get_or_create_settings(db, LLMSettings, 1)
+                llm.provider = "openai"
+                llm.api_key_encrypted = encrypt_secret("existing-valid-key")
+                db.commit()
+            with patch(
+                "app.setup.routes.classify_sample",
+                return_value={"ok": False, "error_type": "authentication_failed"},
+            ):
+                response = client.post(
+                    "/setup/openai",
+                    data={"api_key": "sk-new-invalid-key"},
+                    follow_redirects=False,
+                )
+            self.assertEqual(response.status_code, 303)
+            with fixture.TenantSession() as db:
+                llm = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 1))
+                self.assertEqual(
+                    decrypt_secret(llm.api_key_encrypted), "existing-valid-key"
+                )
+                self.assertFalse(llm.last_test_ok)
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+    def test_openai_onboarding_persists_only_after_a_successful_probe(self):
+        fixture = SetupFixture()
+        client, cleanup = fixture.client()
+        try:
+            self._login(client)
+            with patch(
+                "app.setup.routes.classify_sample",
+                return_value={"ok": True, "message": "Conexion OpenAI correcta."},
+            ) as probe:
+                response = client.post(
+                    "/setup/openai",
+                    data={"api_key": "sk-success-onboarding-key"},
+                    follow_redirects=False,
+                )
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(response.headers["location"], "/setup/complete")
+            probe.assert_called_once()
+            with fixture.TenantSession() as db:
+                llm = db.scalar(select(LLMSettings).where(LLMSettings.company_id == 1))
+                self.assertEqual(llm.provider, "openai")
+                self.assertEqual(
+                    decrypt_secret(llm.api_key_encrypted), "sk-success-onboarding-key"
+                )
+                self.assertEqual(llm.classification_model, DEFAULT_OPENAI_MODEL)
+                self.assertEqual(llm.extraction_model, DEFAULT_OPENAI_MODEL)
+                self.assertEqual(llm.validation_model, DEFAULT_OPENAI_MODEL)
+                self.assertTrue(llm.last_test_ok)
+                self.assertIsNotNone(llm.last_test_at)
+                self.assertIsNone(llm.last_error)
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+    def test_openai_onboarding_copy_distinguishes_demo_and_production(self):
+        fixture = SetupFixture()
+        client, cleanup = fixture.client()
+        try:
+            self._login(client)
+            with patch(
+                "app.setup.routes.get_settings",
+                return_value=SimpleNamespace(environment="production"),
+            ):
+                production = client.get("/setup/openai")
+            self.assertIn(
+                "Conecta OpenAI para interpretar y procesar los pedidos.",
+                production.text,
+            )
+            self.assertNotIn("En la demo puedes omitir este paso.", production.text)
+            with patch(
+                "app.setup.routes.get_settings",
+                return_value=SimpleNamespace(environment="demo"),
+            ):
+                demo = client.get("/setup/openai")
+            self.assertIn("En la demo puedes omitir este paso.", demo.text)
         finally:
             cleanup()
             fixture.cleanup()

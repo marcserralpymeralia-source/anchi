@@ -15,7 +15,7 @@
   "products": "Sube tu catálogo para que Anchi pueda reconocer las líneas de los pedidos.",
   "customers": "Esto permitirá identificar automáticamente quién envía cada pedido.",
   "customer_knowledge": "Puedes añadir históricos, referencias, equivalencias o instrucciones. Este paso es opcional.",
-  "openai": "Anchi utiliza OpenAI para interpretar los pedidos que recibe. En la demo puedes omitir este paso.",
+  "openai": "Anchi utiliza OpenAI para interpretar los pedidos que recibe.",
   "complete": "La configuración básica está completa. Ya puedes empezar a recibir y procesar pedidos."
 } %}
 {% macro step_url(key) -%}/setup/{{ key|replace('_', '-') }}{%- endmacro %}
@@ -65,7 +65,7 @@
     <div class="setup-copy">
       <p class="setup-kicker">Paso {{ step_number }} de {{ step_total }}</p>
       <h2>{{ step_titles.get(step, "Configuración inicial") }}</h2>
-      <p>{{ step_descriptions.get(step, "") }}</p>
+      <p>{{ step_descriptions.get(step, "") }}{% if step == "openai" %} {% if openai_optional %}En la demo puedes omitir este paso.{% else %}Conecta OpenAI para interpretar y procesar los pedidos.{% endif %}{% endif %}</p>
     </div>
 
     {% if step == "company" %}
@@ -225,10 +225,10 @@
         {% if setup_status.openai_connected %}
           <div class="setup-result-card"><strong>{{ icon_check(16) }} OpenAI conectado</strong><span>Puedes guardar una nueva API key si necesitas cambiarla.</span></div>
         {% endif %}
-        <label>API Key<input type="password" name="api_key" placeholder="{% if llm.api_key_encrypted %}••••••••{% endif %}" required></label>
+        <label>API Key<input type="password" name="api_key" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="{% if llm.api_key_encrypted %}••••••••{% endif %}" required></label>
         <div class="setup-actions">
           <a class="button secondary" href="/setup/customer-knowledge">{{ icon_arrow_left(14) }} <span>Atrás</span></a>
-          <button class="primary" data-loading-text="Comprobando conexión...">Probar conexión</button>
+          <button class="primary" data-loading-text="Comprobando conexión...">Probar y conectar</button>
         </div>
       </form>
     {% elif step == "complete" %}

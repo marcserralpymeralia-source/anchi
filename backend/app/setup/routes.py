@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-import secrets
 import json
+import logging
+import secrets
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import urlencode
@@ -11,10 +13,11 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.agent.model_catalog import DEFAULT_OPENAI_MODEL
 from app.auth.dependencies import current_user
 from app.channels.service import get_or_create_channel
+from app.core.config import get_settings
 from app.core.encryption import encrypt_secret
-from app.agent.model_catalog import DEFAULT_OPENAI_MODEL
 from app.core.middleware import invalidate_branding_cache
 from app.core.templating import templates
 from app.db.models import Company, Customer, EmailSettings, InputChannel, LLMSettings, Setting
@@ -25,7 +28,7 @@ from app.master.database import get_master_db
 from app.master.models import EmailSyncState
 from app.master.service import TenantUser
 from app.settings.branding import get_or_create_branding, store_brand_asset
-from app.settings.integrations import test_imap_connection
+from app.settings.integrations import classify_sample, test_imap_connection
 from app.settings.service import get_or_create_settings, resolve_updated_by_id, update_with_form
 from app.setup.service import get_setup_status, next_setup_url
 from app.tenancy.database import get_tenant_db
@@ -33,6 +36,8 @@ from app.whatsapp.service import embedded_signup_public_config, redact_whatsapp_
 
 
 router = APIRouter(prefix="/setup", tags=["setup"])
+
+logger = logging.getLogger(__name__)
 
 SETUP_STEP_ORDER = ("company", "channels", "products", "customers", "customer_knowledge", "openai", "complete")
 ALLOWED_LOGO_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
@@ -76,6 +81,8 @@ def _setup_context(request: Request, db: Session, user: TenantUser, step: str, *
         "branding": branding,
         "email": email,
         "llm": llm,
+        "openai_optional": get_settings().environment
+        in {"development", "demo", "test"},
         "whatsapp": redact_whatsapp_config(whatsapp),
         "whatsapp_embedded_signup": embedded_signup_public_config(),
         "whatsapp_signup_state": whatsapp_signup_state,
@@ -347,6 +354,43 @@ def setup_openai(request: Request, db: Session = Depends(get_tenant_db), user: T
     return templates.TemplateResponse("setup/wizard.html", _setup_context(request, db, user, "openai"))
 
 
+OPENAI_CONNECTION_TEST_TEXT = (
+    "Prueba técnica de conexión de Anchi. No es un pedido real."
+)
+OPENAI_ERROR_MESSAGES = {
+    "authentication_failed": (
+        "OpenAI ha rechazado la API key. Comprueba que es válida."
+    ),
+    "permission_denied": "La API key de OpenAI no tiene permisos suficientes.",
+    "rate_limited": (
+        "OpenAI ha limitado temporalmente la solicitud. Inténtalo más tarde."
+    ),
+    "timeout": "OpenAI no respondió a tiempo.",
+    "connection_failed": "No se ha podido conectar con OpenAI.",
+    "invalid_configuration": "La configuración de OpenAI no es válida.",
+}
+
+
+def _openai_probe_settings(company_id: int, api_key: str) -> LLMSettings:
+    return LLMSettings(
+        company_id=company_id,
+        provider="openai",
+        api_key_encrypted=encrypt_secret(api_key),
+        classification_model=DEFAULT_OPENAI_MODEL,
+        extraction_model=DEFAULT_OPENAI_MODEL,
+        validation_model=DEFAULT_OPENAI_MODEL,
+        retries=0,
+    )
+
+
+def _openai_probe_error(result: dict) -> tuple[str, str]:
+    error_type = str(result.get("error_type") or "unexpected_error")
+    message = OPENAI_ERROR_MESSAGES.get(
+        error_type, "No se pudo verificar la conexión con OpenAI."
+    )
+    return error_type, message
+
+
 @router.post("/openai")
 def setup_openai_save(api_key: str = Form(""), db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     value = api_key.strip()
@@ -354,14 +398,56 @@ def setup_openai_save(api_key: str = Form(""), db: Session = Depends(get_tenant_
         return _redirect_step("openai", error="Introduce una API Key de OpenAI.")
     if not (value.startswith("sk-") or value.startswith("sk-proj-") or value.startswith("test-")) or len(value) < 10:
         return _redirect_step("openai", error="La API Key no parece válida.")
-    llm = get_or_create_settings(db, LLMSettings, user.company_id)
+
+    existing = db.scalar(
+        select(LLMSettings).where(LLMSettings.company_id == user.company_id)
+    )
+    try:
+        probe = classify_sample(
+            db,
+            _openai_probe_settings(user.company_id, value),
+            user.company_id,
+            OPENAI_CONNECTION_TEST_TEXT,
+        )
+    except Exception:
+        db.rollback()
+        logger.warning(
+            "OpenAI onboarding probe failed",
+            extra={"company_id": user.company_id, "error_type": "unexpected_error"},
+        )
+        probe = {"ok": False, "error_type": "unexpected_error"}
+
+    if not probe.get("ok"):
+        error_type, message = _openai_probe_error(probe)
+        logger.warning(
+            "OpenAI onboarding probe rejected",
+            extra={"company_id": user.company_id, "error_type": error_type},
+        )
+        if existing:
+            existing.last_test_at = datetime.now(timezone.utc)
+            existing.last_test_ok = False
+            existing.last_test_message = message
+            existing.last_error = error_type
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.warning(
+                    "OpenAI onboarding failure status could not be saved",
+                    extra={"company_id": user.company_id},
+                )
+        return _redirect_step("openai", error=message)
+
+    llm = existing or get_or_create_settings(db, LLMSettings, user.company_id)
     llm.provider = "openai"
     llm.api_key_encrypted = encrypt_secret(value)
     llm.classification_model = DEFAULT_OPENAI_MODEL
     llm.extraction_model = DEFAULT_OPENAI_MODEL
     llm.validation_model = DEFAULT_OPENAI_MODEL
+    llm.last_test_at = datetime.now(timezone.utc)
     llm.last_test_ok = True
     llm.last_test_message = "OpenAI conectado correctamente"
+    llm.last_error = None
     db.commit()
     return RedirectResponse("/setup/complete", status_code=303)
 
