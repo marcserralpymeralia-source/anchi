@@ -21,8 +21,15 @@ def _use_vercel_blob() -> bool:
     )
 
 
+def _normalize_store_id(value: str) -> str:
+    normalized = value.strip()
+    if normalized.lower().startswith("store_"):
+        normalized = normalized[6:]
+    return normalized
+
+
 def _uat_store_id() -> str | None:
-    value = os.getenv("UAT_STORE_ID", "").strip()
+    value = _normalize_store_id(os.getenv("UAT_STORE_ID", ""))
     return value or None
 
 
@@ -92,6 +99,31 @@ def _read_oidc_blob(storage_ref: str) -> bytes:
     )
     with urllib.request.urlopen(request, timeout=30) as response:
         return response.read()
+
+
+def _delete_oidc_blob(storage_ref: str) -> None:
+    store_id = _uat_store_id()
+    parsed = urllib.parse.urlparse(storage_ref)
+    if not store_id or parsed.scheme != "https" or parsed.hostname != _uat_blob_hostname(store_id):
+        raise RuntimeError("Attachment URL is outside the configured UAT Blob store.")
+
+    payload = json.dumps({"urls": [storage_ref]}).encode("utf-8")
+    token = _get_oidc_token()
+    request = urllib.request.Request(
+        "https://vercel.com/api/blob/delete",
+        data=payload,
+        method="POST",
+        headers={
+            "authorization": f"Bearer {token}",
+            "content-type": "application/json",
+            "x-vercel-blob-store-id": store_id,
+            "x-api-version": "12",
+            "x-api-blob-request-id": uuid4().hex,
+            "x-api-blob-request-attempt": "0",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30):
+        return None
 
 
 def save_attachment(

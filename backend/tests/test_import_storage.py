@@ -12,6 +12,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 class ImportStorageTests(unittest.TestCase):
+    def test_normalize_store_id_removes_prefix_and_preserves_case(self):
+        from app.core.attachment_storage import _normalize_store_id
+
+        self.assertEqual(_normalize_store_id("store_tIbkSOAi0UQaYnW3"), "tIbkSOAi0UQaYnW3")
+        self.assertEqual(_normalize_store_id("tIbkSOAi0UQaYnW3"), "tIbkSOAi0UQaYnW3")
+
     def test_resolve_temp_storage_dir_prefers_configured_and_vercel_roots(self):
         from app.core.storage import resolve_temp_storage_dir
 
@@ -97,7 +103,7 @@ class ImportStorageTests(unittest.TestCase):
                 return None
 
             def read(self):
-                return b'{"url":"https://store_tibksoai0uqaynw3.private.blob.vercel-storage.com/test.txt"}'
+                return b'{"url":"https://tibksoai0uqaynw3.private.blob.vercel-storage.com/test.txt"}'
 
         with patch.dict(
             os.environ,
@@ -118,9 +124,9 @@ class ImportStorageTests(unittest.TestCase):
         self.assertIn("pathname=attachments%2F", request.full_url)
         self.assertEqual(request.method, "PUT")
         self.assertEqual(request.headers["Authorization"], "Bearer oidc-token")
-        self.assertEqual(request.headers["X-vercel-blob-store-id"], "store_tIbkSOAi0UQaYnW3")
+        self.assertEqual(request.headers["X-vercel-blob-store-id"], "tIbkSOAi0UQaYnW3")
         self.assertEqual(request.headers["X-vercel-blob-access"], "private")
-        self.assertEqual(result, "https://store_tibksoai0uqaynw3.private.blob.vercel-storage.com/test.txt")
+        self.assertEqual(result, "https://tibksoai0uqaynw3.private.blob.vercel-storage.com/test.txt")
 
     def test_uat_store_reads_private_blob_with_oidc(self):
         from app.core.attachment_storage import read_attachment
@@ -147,7 +153,7 @@ class ImportStorageTests(unittest.TestCase):
             "app.core.attachment_storage.urllib.request.urlopen",
             return_value=FakeResponse(),
         ) as urlopen:
-            result = read_attachment("https://store_tibksoai0uqaynw3.private.blob.vercel-storage.com/test.txt")
+            result = read_attachment("https://tibksoai0uqaynw3.private.blob.vercel-storage.com/test.txt")
 
         request = urlopen.call_args.args[0]
         self.assertEqual(request.method, "GET")
