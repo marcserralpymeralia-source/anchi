@@ -62,7 +62,11 @@ class ImportStorageTests(unittest.TestCase):
         blob_module.BlobClient = FakeBlobClient
         vercel_module.blob = blob_module
 
-        with patch.dict(sys.modules, {"vercel": vercel_module, "vercel.blob": blob_module}):
+        with patch.dict(
+            os.environ,
+            {"VERCEL": "", "VERCEL_ENV": "", "UAT_STORE_ID": ""},
+            clear=False,
+        ), patch.dict(sys.modules, {"vercel": vercel_module, "vercel.blob": blob_module}):
             content = read_attachment("https://blob.example.com/attachments/pedido.pdf")
 
         self.assertEqual(content, b"blob-bytes")
@@ -76,11 +80,151 @@ class ImportStorageTests(unittest.TestCase):
 
         with patch.dict(
             os.environ,
-            {"VERCEL": "1", "BLOB_READ_WRITE_TOKEN": "", "BLOB_STORE_ID": ""},
+            {"VERCEL": "1", "BLOB_READ_WRITE_TOKEN": "", "BLOB_STORE_ID": "", "UAT_STORE_ID": ""},
             clear=False,
         ):
             with self.assertRaisesRegex(RuntimeError, "Persistent attachment storage"):
                 save_attachment(filename="pedido.txt", payload=b"pedido", content_type="text/plain")
+
+    def test_uat_store_uses_oidc_blob_without_rw_token(self):
+        from app.core.attachment_storage import save_attachment
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):  # noqa: ANN002
+                return None
+
+            def read(self):
+                return b'{"url":"https://store_tibksoai0uqaynw3.private.blob.vercel-storage.com/test.txt"}'
+
+        with patch.dict(
+            os.environ,
+            {
+                "VERCEL": "1",
+                "VERCEL_ENV": "preview",
+                "UAT_STORE_ID": "store_tIbkSOAi0UQaYnW3",
+                "BLOB_READ_WRITE_TOKEN": "",
+            },
+            clear=False,
+        ), patch("app.core.attachment_storage._get_oidc_token", return_value="oidc-token"), patch(
+            "app.core.attachment_storage.urllib.request.urlopen",
+            return_value=FakeResponse(),
+        ) as urlopen:
+            result = save_attachment(filename="test.txt", payload=b"test", content_type="text/plain")
+
+        request = urlopen.call_args.args[0]
+        self.assertIn("pathname=attachments%2F", request.full_url)
+        self.assertEqual(request.method, "PUT")
+        self.assertEqual(request.headers["Authorization"], "Bearer oidc-token")
+        self.assertEqual(request.headers["X-vercel-blob-store-id"], "store_tIbkSOAi0UQaYnW3")
+        self.assertEqual(request.headers["X-vercel-blob-access"], "private")
+        self.assertEqual(result, "https://store_tibksoai0uqaynw3.private.blob.vercel-storage.com/test.txt")
+
+    def test_uat_store_reads_private_blob_with_oidc(self):
+        from app.core.attachment_storage import read_attachment
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):  # noqa: ANN002
+                return None
+
+            def read(self):
+                return b"private-content"
+
+        with patch.dict(
+            os.environ,
+            {
+                "VERCEL": "1",
+                "VERCEL_ENV": "preview",
+                "UAT_STORE_ID": "store_tIbkSOAi0UQaYnW3",
+            },
+            clear=False,
+        ), patch("app.core.attachment_storage._get_oidc_token", return_value="oidc-token"), patch(
+            "app.core.attachment_storage.urllib.request.urlopen",
+            return_value=FakeResponse(),
+        ) as urlopen:
+            result = read_attachment("https://store_tibksoai0uqaynw3.private.blob.vercel-storage.com/test.txt")
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.method, "GET")
+        self.assertEqual(request.headers["Authorization"], "Bearer oidc-token")
+        self.assertEqual(result, b"private-content")
+
+    def test_uat_store_rejects_private_blob_url_from_another_store(self):
+        from app.core.attachment_storage import read_attachment
+
+        with patch.dict(
+            os.environ,
+            {
+                "VERCEL": "1",
+                "VERCEL_ENV": "preview",
+                "UAT_STORE_ID": "store_tIbkSOAi0UQaYnW3",
+            },
+            clear=False,
+        ), patch("app.core.attachment_storage._get_oidc_token") as get_token:
+            with self.assertRaisesRegex(RuntimeError, "outside the configured UAT Blob store"):
+                read_attachment("https://other-store.private.blob.vercel-storage.com/test.txt")
+
+        get_token.assert_not_called()
+
+    def test_uat_store_fails_closed_without_oidc_token(self):
+        from app.core.attachment_storage import save_attachment
+
+        with patch.dict(
+            os.environ,
+            {
+                "VERCEL": "1",
+                "VERCEL_ENV": "preview",
+                "UAT_STORE_ID": "store_tIbkSOAi0UQaYnW3",
+                "BLOB_READ_WRITE_TOKEN": "",
+            },
+            clear=False,
+        ), patch("app.core.attachment_storage._get_oidc_token", return_value=""):
+            with self.assertRaisesRegex(RuntimeError, "OIDC token"):
+                save_attachment(filename="test.txt", payload=b"test")
+
+    def test_production_keeps_legacy_blob_client(self):
+        from app.core.attachment_storage import save_attachment
+
+        calls: dict[str, object] = {}
+
+        class FakeBlobClient:
+            def __init__(self) -> None:
+                calls["init"] = True
+
+            def put(self, *args, **kwargs):  # noqa: ANN002, ANN003
+                calls["args"] = args
+                calls["kwargs"] = kwargs
+                return SimpleNamespace(url="https://legacy.blob.example/attachment")
+
+            def close(self) -> None:
+                calls["closed"] = True
+
+        vercel_module = ModuleType("vercel")
+        blob_module = ModuleType("vercel.blob")
+        blob_module.BlobClient = FakeBlobClient
+        vercel_module.blob = blob_module
+
+        with patch.dict(
+            os.environ,
+            {
+                "APP_ENV": "production",
+                "VERCEL": "1",
+                "VERCEL_ENV": "production",
+                "UAT_STORE_ID": "",
+                "BLOB_READ_WRITE_TOKEN": "legacy-token",
+            },
+            clear=False,
+        ), patch.dict(sys.modules, {"vercel": vercel_module, "vercel.blob": blob_module}):
+            result = save_attachment(filename="test.txt", payload=b"test", content_type="text/plain")
+
+        self.assertEqual(result, "https://legacy.blob.example/attachment")
+        self.assertTrue(calls["init"])
+        self.assertTrue(calls["closed"])
 
 
 if __name__ == "__main__":

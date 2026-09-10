@@ -62,7 +62,17 @@ def invalidate_branding_cache(company_id: int) -> None:
     _BRANDING_CACHE.pop(company_id, None)
 
 
+def _register_vercel_oidc_headers(request: Request) -> None:
+    """Expose Vercel's per-request OIDC header to the official OIDC helper."""
+    try:
+        from vercel.headers import set_headers
+    except ImportError:
+        return
+    set_headers(request.headers)
+
+
 async def branding_middleware(request: Request, call_next: Callable[[Request], Awaitable]):
+    _register_vercel_oidc_headers(request)
     request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
     correlation_id = request.headers.get("x-correlation-id") or request_id
     request.state.request_id = request_id
