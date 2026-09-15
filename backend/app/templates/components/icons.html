@@ -397,8 +397,8 @@
 {%- endmacro %}
 
 {% macro icon_play(size=16, class="") -%}
-<svg class="ui-icon {{ class }}" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
-  <polygon points="6 3 20 12 6 21 6 3"></polygon>
+<svg class="ui-icon {{ class }}" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">
+  <polygon points="6 4 19 12 6 20 6 4"></polygon>
 </svg>
 {%- endmacro %}
 
@@ -419,8 +419,8 @@
 
 {% macro icon_pause(size=16, class="") -%}
 <svg class="ui-icon {{ class }}" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
-  <rect x="6" y="4" width="4" height="16" rx="1"></rect>
-  <rect x="14" y="4" width="4" height="16" rx="1"></rect>
+  <rect x="6" y="5" width="4" height="14" rx="2"></rect>
+  <rect x="14" y="5" width="4" height="14" rx="2"></rect>
 </svg>
 {%- endmacro %}
 

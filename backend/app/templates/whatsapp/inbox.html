@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_send, icon_check, icon_check_check, icon_clock, icon_alert_triangle, icon_user, icon_download, icon_eye, icon_image, icon_file_text, icon_play, icon_pause, icon_mic, icon_badge_check, icon_refresh %}
+{% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_send, icon_check, icon_check_check, icon_clock, icon_alert_triangle, icon_user, icon_download, icon_eye, icon_image, icon_file_text, icon_play, icon_pause, icon_badge_check, icon_refresh %}
 {% set title = "Buzón de WhatsApp" %}
 {% block content %}
 <div class="channel-inbox-shell whatsapp-inbox-shell" data-whatsapp-live data-live-revision="{{ live_revision }}">
@@ -54,7 +54,7 @@
             </div>
 
             <button class="channel-chat-send-btn" type="submit" title="Enviar mensaje" {% if not ready_to_send %}disabled{% endif %}>
-              {{ icon_send(17) }}
+              {{ icon_send(18) }}
             </button>
           </div>
         </form>
@@ -293,13 +293,10 @@
 
       const audio = player.querySelector("[data-wa-audio-element]");
       const playBtn = player.querySelector("[data-wa-audio-play-btn]");
-      const playIcon = player.querySelector(".wa-audio-play-icon");
-      const pauseIcon = player.querySelector(".wa-audio-pause-icon");
       const progressFill = player.querySelector("[data-wa-audio-progress]");
       const thumb = player.querySelector("[data-wa-audio-thumb]");
       const rangeInput = player.querySelector("[data-wa-audio-range]");
       const timer = player.querySelector("[data-wa-audio-timer]");
-      const speedBtn = player.querySelector("[data-wa-audio-speed]");
 
       if (!audio || !playBtn) return;
 
@@ -313,7 +310,10 @@
       const updateProgress = (curr, dur) => {
         if (!dur || dur <= 0) return;
         const pct = Math.min(Math.max((curr / dur) * 100, 0), 100);
-        if (progressFill) progressFill.style.width = `${pct}%`;
+        if (progressFill) {
+          progressFill.style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
+          progressFill.style.webkitClipPath = `inset(0 ${100 - pct}% 0 0)`;
+        }
         if (thumb) thumb.style.left = `${pct}%`;
         if (rangeInput && !rangeInput._isDragging) rangeInput.value = pct;
       };
@@ -343,16 +343,12 @@
 
       audio.addEventListener("play", () => {
         playBtn.classList.add("is-playing");
-        if (playIcon) playIcon.hidden = true;
-        if (pauseIcon) pauseIcon.hidden = false;
         playBtn.setAttribute("aria-label", "Pausar");
         playBtn.setAttribute("title", "Pausar");
       });
 
       audio.addEventListener("pause", () => {
         playBtn.classList.remove("is-playing");
-        if (playIcon) playIcon.hidden = false;
-        if (pauseIcon) pauseIcon.hidden = true;
         playBtn.setAttribute("aria-label", "Reproducir");
         playBtn.setAttribute("title", "Reproducir");
       });
@@ -364,11 +360,11 @@
 
       audio.addEventListener("ended", () => {
         playBtn.classList.remove("is-playing");
-        if (playIcon) playIcon.hidden = false;
-        if (pauseIcon) pauseIcon.hidden = true;
         audio.currentTime = 0;
         updateProgress(0, audio.duration);
         if (timer) timer.textContent = formatTime(audio.duration);
+        playBtn.setAttribute("aria-label", "Reproducir");
+        playBtn.setAttribute("title", "Reproducir");
       });
 
       if (rangeInput) {
@@ -377,7 +373,10 @@
 
         rangeInput.addEventListener("input", () => {
           const val = parseFloat(rangeInput.value);
-          if (progressFill) progressFill.style.width = `${val}%`;
+          if (progressFill) {
+            progressFill.style.clipPath = `inset(0 ${100 - val}% 0 0)`;
+            progressFill.style.webkitClipPath = `inset(0 ${100 - val}% 0 0)`;
+          }
           if (thumb) thumb.style.left = `${val}%`;
           if (audio.duration) {
             const seekTime = (val / 100) * audio.duration;
@@ -396,18 +395,6 @@
         rangeInput.addEventListener("mouseup", finishDrag);
         rangeInput.addEventListener("touchend", finishDrag);
         rangeInput.addEventListener("change", finishDrag);
-      }
-
-      if (speedBtn) {
-        const speeds = [1, 1.5, 2];
-        let speedIdx = 0;
-        speedBtn.addEventListener("click", () => {
-          speedIdx = (speedIdx + 1) % speeds.length;
-          const rate = speeds[speedIdx];
-          audio.playbackRate = rate;
-          speedBtn.textContent = `${rate}x`;
-          speedBtn.setAttribute("title", `Velocidad: ${rate}x`);
-        });
       }
     });
   };
