@@ -18,7 +18,7 @@ os.environ.setdefault("ENABLE_DEMO_BOOTSTRAP", "false")
 
 from app.core import lifespan as lifespan_module  # noqa: E402
 from app.core.app_factory import create_app  # noqa: E402
-from app.db.models import ChannelSetting, InboundMessage, InputChannel, MessageAttachment, utcnow  # noqa: E402
+from app.db.models import ChannelSetting, Conversation, Customer, InboundMessage, InputChannel, MessageAttachment, utcnow  # noqa: E402
 from app.messages.service import upsert_inbound_message  # noqa: E402
 from app.whatsapp.service import send_whatsapp_media  # noqa: E402
 from scripts.performance_data import build_performance_fixture, temporary_performance_environment  # noqa: E402
@@ -142,6 +142,44 @@ class WhatsAppInboxTests(unittest.TestCase):
         self.assertIn('name="files"', response.text)
         self.assertEqual(response.text.count('href="/mail"'), 1)
         self.assertEqual(response.text.count('class="nav-label">WhatsApp</span>'), 1)
+
+    def test_whatsapp_matches_customer_by_phone_and_renders_verification_badge(self):
+        fixture = build_performance_fixture("small")
+        engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        with session() as db:
+            customer = Customer(
+                company_id=1,
+                code="C-WA-001",
+                fiscal_name="Cliente WhatsApp Verificado SL",
+                commercial_name="Cliente WhatsApp Verificado",
+                phone="+34 600 000 000",
+            )
+            db.add(customer)
+            db.commit()
+            customer_id = customer.id
+        engine.dispose()
+
+        conversation_id = self._seed_whatsapp(fixture)
+        engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        with sessionmaker(bind=engine, autoflush=False, autocommit=False)() as db:
+            conversation = db.get(Conversation, conversation_id)
+            message = db.scalar(select(InboundMessage).where(InboundMessage.conversation_id == conversation_id))
+            self.assertEqual(conversation.customer_id, customer_id)
+            self.assertEqual(message.customer_id, customer_id)
+        engine.dispose()
+
+        client, cleanup = self._client_for(fixture)
+        try:
+            self._login(client, fixture)
+            response = client.get(f"/whatsapp/inbox?conversation_id={conversation_id}")
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Cliente WhatsApp Verificado", response.text)
+        self.assertIn('class="whatsapp-verified-badge"', response.text)
 
     def test_inactive_channel_is_not_available(self):
         fixture = build_performance_fixture("small")

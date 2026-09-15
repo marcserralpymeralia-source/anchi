@@ -93,6 +93,13 @@
 </svg>
 {%- endmacro %}
 
+{% macro icon_badge_check(size=16, class="") -%}
+<svg class="ui-icon {{ class }}" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+  <path d="M3.85 8.62a4 4 0 0 1 4.77-4.77 4 4 0 0 1 6.76 0 4 4 0 0 1 4.77 4.77 4 4 0 0 1 0 6.76 4 4 0 0 1-4.77 4.77 4 4 0 0 1-6.76 0 4 4 0 0 1-4.77-4.77 4 4 0 0 1 0-6.76Z" fill="currentColor"></path>
+  <path d="m9 12 2 2 4-4" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+</svg>
+{%- endmacro %}
+
 {% macro icon_user(size=16, class="") -%}
 <svg class="ui-icon {{ class }}" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
   <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"></path>
@@ -409,4 +416,20 @@
   <path d="M3 12A9 3 0 0 0 21 12"></path>
 </svg>
 {%- endmacro %}
+
+{% macro icon_pause(size=16, class="") -%}
+<svg class="ui-icon {{ class }}" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="currentColor" stroke="none" aria-hidden="true">
+  <rect x="6" y="4" width="4" height="16" rx="1"></rect>
+  <rect x="14" y="4" width="4" height="16" rx="1"></rect>
+</svg>
+{%- endmacro %}
+
+{% macro icon_mic(size=16, class="") -%}
+<svg class="ui-icon {{ class }}" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+  <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+  <line x1="12" y1="19" x2="12" y2="22"></line>
+</svg>
+{%- endmacro %}
+
 

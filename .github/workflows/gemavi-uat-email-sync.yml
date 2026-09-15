@@ -1,0 +1,26 @@
+name: GEMAVI UAT email sync
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  email-sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Trigger UAT email sync
+        env:
+          CRON_SECRET: ${{ secrets.GEMAVI_UAT_CRON_SECRET }}
+        run: >-
+          curl --fail-with-body --silent --show-error
+          --request GET
+          --header "Authorization: Bearer ${CRON_SECRET}"
+          --header "User-Agent: anchi-gemavi-uat-email-sync"
+          --output /tmp/email-sync-response.json
+          --write-out "HTTP_STATUS=%{http_code}\n"
+          "https://anchi-gemavi-git-re-156618-marcserralpymeralia-sources-projects.vercel.app/cron/email-sync"

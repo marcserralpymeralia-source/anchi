@@ -426,6 +426,7 @@ class ExportSettings(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), unique=True)
+    ftp_connection_id: Mapped[int | None] = mapped_column(ForeignKey("ftp_connections.id"), index=True)
     file_type: Mapped[str] = mapped_column(String(30), default="csv")
     csv_separator: Mapped[str] = mapped_column(String(10), default=";")
     encoding: Mapped[str] = mapped_column(String(50), default="utf-8")

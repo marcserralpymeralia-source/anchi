@@ -1084,6 +1084,15 @@
       <label>Encoding<input name="encoding" value="{{ export.encoding }}"></label>
       <label>Fecha<input name="date_format" value="{{ export.date_format }}"></label>
       <label>Separador decimal<input name="decimal_separator" value="{{ export.decimal_separator }}"></label>
+      <label class="span-2">Destino FTP
+        <select name="ftp_connection_id">
+          <option value="">{% if ftp_connections %}Selecciona una conexión FTP{% else %}Usar configuración FTP antigua (compatibilidad){% endif %}</option>
+          {% for connection in ftp_connections %}
+            <option value="{{ connection.id }}" {% if export.ftp_connection_id == connection.id or (not export.ftp_connection_id and ftp_connections|length == 1) %}selected{% endif %}>{{ connection.name }} · {{ connection.host }}:{{ connection.port }}</option>
+          {% endfor %}
+        </select>
+        <small class="muted">La conexión seleccionada se utilizará al exportar pedidos por FTP/SFTP.</small>
+      </label>
       <label>Incluir cabecera<input name="include_header" type="checkbox" {% if export.include_header %}checked{% endif %}></label>
       <label>Plantilla nombre<input name="filename_template" value="{{ export.filename_template }}"></label>
       <label class="span-2">Campos cabecera<textarea name="header_fields" rows="2">{{ export.header_fields }}</textarea></label>

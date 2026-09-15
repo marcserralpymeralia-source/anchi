@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.customers.matching import resolve_customer_id_by_phone
 from app.db.models import Conversation, InboundMessage, InputChannel
 from app.logs.service import log_flow_event
 
@@ -210,7 +211,19 @@ def upsert_inbound_message(
     has_pdf: bool = False,
     has_audio: bool = False,
 ) -> tuple[InboundMessage, Conversation]:
-    channel = ensure_input_channel(db, company_id, key=normalize_channel(channel_key), name=channel_key.title(), provider=provider)
+    normalized_channel = normalize_channel(channel_key)
+    normalized_direction = normalize_direction(direction)
+    recipient_values = normalize_recipients(recipients)
+    matched_customer_id = None
+    if normalized_channel == "whatsapp":
+        phone_candidate = (
+            recipient_values[0]
+            if normalized_direction == "outbound" and recipient_values
+            else sender or external_thread_id
+        )
+        matched_customer_id = resolve_customer_id_by_phone(db, company_id, phone_candidate)
+
+    channel = ensure_input_channel(db, company_id, key=normalized_channel, name=channel_key.title(), provider=provider)
     conversation = get_or_create_conversation(
         db,
         company_id=company_id,
@@ -218,17 +231,19 @@ def upsert_inbound_message(
         provider=provider,
         external_thread_id=external_thread_id or external_id,
         subject=subject,
+        customer_id=matched_customer_id,
         last_activity_at=received_at or sent_at or datetime.now(timezone.utc),
     )
     existing = find_inbound_message(db, company_id=company_id, channel_id=channel.id, provider=provider, external_id=external_id)
     if existing:
         existing.conversation_id = conversation.id
+        if matched_customer_id and not existing.customer_id:
+            existing.customer_id = matched_customer_id
         existing.provider = normalize_provider(provider)
-        existing.direction = normalize_direction(direction)
+        existing.direction = normalized_direction
         existing.sender = sender or existing.sender
-        recipient_value = normalize_recipients(recipients)
-        if recipient_value:
-            existing.recipient = ", ".join(recipient_value)
+        if recipient_values:
+            existing.recipient = ", ".join(recipient_values)
         existing.subject = subject or existing.subject
         existing.original_content = text_content or existing.original_content
         existing.raw_payload_json = existing.raw_payload_json or (json.dumps(metadata, ensure_ascii=False) if metadata is not None else None)
@@ -250,7 +265,7 @@ def upsert_inbound_message(
             entity_id=existing.id,
             status="deduplicated",
             metadata={
-                "channel": normalize_channel(channel_key),
+                "channel": normalized_channel,
                 "provider": normalize_provider(provider),
                 "external_id": external_id,
             },
@@ -263,13 +278,14 @@ def upsert_inbound_message(
         conversation_id=conversation.id,
         source_external_id=external_id,
         source_thread_id=external_thread_id,
-        direction=normalize_direction(direction),
+        direction=normalized_direction,
         sender=sender,
-        recipient=", ".join(normalize_recipients(recipients)) if recipients else None,
+        recipient=", ".join(recipient_values) if recipient_values else None,
         subject=subject,
         original_content=text_content,
         raw_payload_json=json.dumps(metadata or {}, ensure_ascii=False),
         content_type=content_type,
+        customer_id=matched_customer_id,
         received_at=received_at or datetime.now(timezone.utc),
         status="received",
         processing_step="received",
@@ -289,9 +305,9 @@ def upsert_inbound_message(
         entity_id=message.id,
         status="persisted",
         metadata={
-            "channel": normalize_channel(channel_key),
+            "channel": normalized_channel,
             "provider": normalize_provider(provider),
-            "direction": normalize_direction(direction),
+            "direction": normalized_direction,
             "content_type": content_type,
             "has_attachments": has_attachments,
             "has_pdf": has_pdf,

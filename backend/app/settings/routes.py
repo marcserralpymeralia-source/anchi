@@ -388,7 +388,14 @@ def _settings_module_context(request: Request, db: Session, user: TenantUser, mo
     elif module_key == "decision":
         context["decision"] = get_or_create_settings(db, DecisionSettings, user.company_id)
     elif module_key == "export":
-        context["export"] = get_or_create_settings(db, ExportSettings, user.company_id)
+        context.update(
+            export=get_or_create_settings(db, ExportSettings, user.company_id),
+            ftp_connections=db.scalars(
+                select(FTPConnection)
+                .where(FTPConnection.company_id == user.company_id)
+                .order_by(FTPConnection.name.asc(), FTPConnection.id.asc())
+            ).all(),
+        )
     elif module_key == "ftp":
         ftp_connections = db.scalars(
             select(FTPConnection)
@@ -1264,6 +1271,14 @@ def delete_ftp_connection(connection_id: int, request: Request, db: Session = De
     if connection is None:
         return JSONResponse({"ok": False, "message": "No se encontró la conexión FTP indicada."}, status_code=404)
     name = connection.name
+    export_settings = db.scalar(
+        select(ExportSettings).where(
+            ExportSettings.company_id == user.company_id,
+            ExportSettings.ftp_connection_id == connection_id,
+        )
+    )
+    if export_settings:
+        export_settings.ftp_connection_id = None
     db.delete(connection)
     db.commit()
     log_action(db, company_id=user.company_id, user=user, action="settings.ftp.delete", entity_type="ftp_connection", entity_id=connection_id, message=f"Conexión FTP eliminada: {name}")
