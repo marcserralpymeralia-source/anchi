@@ -59,9 +59,9 @@ class WhatsAppWebhookObservabilityTests(unittest.TestCase):
     def test_webhook_routes_accept_both_callback_slash_variants_without_redirect(self):
         routes = {
             (route.path, tuple(sorted(route.methods or [])))
-            for included_router in create_app().routes
-            for route in getattr(getattr(included_router, "original_router", included_router), "routes", [])
+            for route in create_app().routes
             if hasattr(route, "path") and hasattr(route, "methods")
+            and route.path.startswith("/webhooks/whatsapp")
         }
 
         for path in (

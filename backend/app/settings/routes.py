@@ -688,11 +688,6 @@ def build_settings_dashboard(
         state("users", "Usuarios y permisos", "ready", "Roles y accesos activos", "Abrir"),
         state("advanced", "Avanzado", "optional" if user.role.name == "Superadmin" else "locked", f"{prompt_count} prompts · logs técnicos", "Abrir"),
     ]
-    visible_modules = [module for module in modules if module["state"] != "locked"]
-    configured = len([module for module in visible_modules if module["state"] in {"ready", "warning"}])
-    pending = len([module for module in visible_modules if module["state"] == "pending"])
-    errors = len([module for module in visible_modules if module["state"] == "error"])
-    progress = round((configured * 100) / len(visible_modules)) if visible_modules else 0
     module_map = {module["key"]: module for module in modules}
     checklist = [
         {"key": "general", "label": "Empresa e identidad básica", "state": "done" if module_map.get("general", {}).get("state") == "ready" and module_map.get("identity", {}).get("state") in ("ready", "warning") else "pending", "open_settings": "general"},
@@ -704,6 +699,13 @@ def build_settings_dashboard(
         {"key": "export", "label": "Exportación configurada", "state": "done" if module_map.get("export", {}).get("state") == "ready" else "pending", "open_settings": "export"},
         {"key": "ftp", "label": "FTP/SFTP configurado", "state": "done" if module_map.get("ftp", {}).get("state") == "ready" else "pending", "open_settings": "ftp"},
     ]
+    # Only the onboarding checklist represents mandatory setup requirements.
+    # Optional modules such as BBDD must remain visible without making a fresh
+    # tenant appear incomplete before it has chosen to use them.
+    configured = sum(step["state"] == "done" for step in checklist)
+    pending = sum(step["state"] == "pending" for step in checklist)
+    errors = sum(module["state"] == "error" for module in modules)
+    progress = round((configured * 100) / len(checklist)) if checklist else 0
     return {
         "progress": progress,
         "configured": configured,

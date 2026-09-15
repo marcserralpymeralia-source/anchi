@@ -1276,7 +1276,10 @@
       <h3>Proxies</h3>
       <p class="muted">Perfiles de acceso para el futuro gateway de red.</p>
     </div>
-    <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
+    <div class="drawer-actions">
+      <span class="badge status-doubtful">Sin tráfico</span>
+      <button type="button" class="secondary compact-button modal-close-btn" data-close-settings title="Cerrar" aria-label="Cerrar">{{ icon_close(14) }}</button>
+    </div>
   </div>
   <div class="drawer-body stack">
     {# Proxy profiles are selected per BBDD connection, never globally. #}
