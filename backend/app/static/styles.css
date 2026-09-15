@@ -12001,6 +12001,14 @@ table.logs-table tr:hover td {
   gap: 8px !important;
 }
 
+.whatsapp-inbox-shell .channel-contact-name-line {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 4px !important;
+  min-width: 0 !important;
+  overflow: hidden !important;
+}
+
 .whatsapp-inbox-shell .channel-contact-name {
   font-size: 14px !important;
   font-weight: 600 !important;
@@ -12008,6 +12016,21 @@ table.logs-table tr:hover td {
   overflow: hidden !important;
   text-overflow: ellipsis !important;
   white-space: nowrap !important;
+}
+
+.whatsapp-inbox-shell .whatsapp-verified-badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex: 0 0 auto !important;
+  width: 16px !important;
+  height: 16px !important;
+  color: #1877f2 !important;
+  line-height: 1 !important;
+}
+
+.whatsapp-inbox-shell .whatsapp-verified-badge .ui-icon {
+  display: block !important;
 }
 
 .whatsapp-inbox-shell .channel-contact.is-unread .channel-contact-name {
@@ -12098,6 +12121,17 @@ table.logs-table tr:hover td {
   font-weight: 700 !important;
   color: #0f172a !important;
   line-height: 1.25 !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  min-width: 0 !important;
+}
+
+.whatsapp-inbox-shell .channel-chat-header-info h3 > span:first-child {
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
 }
 
 .whatsapp-inbox-shell .channel-chat-header-info .muted {

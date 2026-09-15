@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.auth.dependencies import current_user
 from app.core.pagination import normalize_page
 from app.core.templating import templates
+from app.customers.matching import build_customer_phone_index, customer_id_from_phone
 from app.db.models import Conversation, Customer, InboundMessage, InputChannel, MessageAttachment
 from app.master.service import TenantUser
 from app.tenancy.database import get_tenant_db
@@ -89,6 +90,16 @@ def _message_date(message: InboundMessage):
     return getattr(message, "sent_at", None) or message.received_at or message.created_at
 
 
+def _conversation_remote_phone(conversation: Conversation, messages: list[InboundMessage]) -> str | None:
+    latest_inbound = next((message for message in reversed(messages) if message.direction == "inbound"), None)
+    if latest_inbound and latest_inbound.sender:
+        return latest_inbound.sender
+    latest_outbound = next((message for message in reversed(messages) if message.direction == "outbound"), None)
+    if latest_outbound and latest_outbound.recipient:
+        return latest_outbound.recipient.split(",", 1)[0].strip()
+    return conversation.external_thread_id
+
+
 def _message_payload(message: InboundMessage) -> dict:
     outbound = message.direction == "outbound"
     attachments = []
@@ -120,14 +131,21 @@ def _message_payload(message: InboundMessage) -> dict:
     }
 
 
-def _conversation_card(conversation: Conversation, customers: dict[int, Customer]) -> dict:
+def _conversation_card(
+    conversation: Conversation,
+    customers: dict[int, Customer],
+    phone_index: dict[str, int | None] | None = None,
+) -> dict:
     messages = sorted(
         conversation.messages or [],
         key=_message_date,
     )
     latest = messages[-1] if messages else None
     latest_inbound = next((message for message in reversed(messages) if message.direction == "inbound"), None)
-    customer = customers.get(conversation.customer_id or 0)
+    customer_id = conversation.customer_id
+    if not customer_id and phone_index is not None:
+        customer_id = customer_id_from_phone(_conversation_remote_phone(conversation, messages), phone_index)
+    customer = customers.get(customer_id or 0)
     contact_name = (
         customer.commercial_name or customer.fiscal_name
         if customer
@@ -154,6 +172,8 @@ def _conversation_card(conversation: Conversation, customers: dict[int, Customer
         "unread": unread,
         "latest_outbound": latest_outbound,
         "latest_status": latest_status,
+        "customer_id": customer.id if customer else None,
+        "customer_verified": bool(customer),
         "messages": [_message_payload(message) for message in messages],
     }
 
@@ -207,7 +227,15 @@ def _load_inbox_data(
         .options(selectinload(Conversation.messages).selectinload(InboundMessage.attachments))
         .order_by(Conversation.last_activity_at.desc(), Conversation.id.desc())
     ).unique().all()
+    phone_index = build_customer_phone_index(db, company_id) if conversations else {}
     customer_ids = {conversation.customer_id for conversation in conversations if conversation.customer_id}
+    customer_ids.update(
+        matched_id
+        for conversation in conversations
+        if not conversation.customer_id
+        for matched_id in [customer_id_from_phone(_conversation_remote_phone(conversation, conversation.messages or []), phone_index)]
+        if matched_id
+    )
     customers = {}
     if customer_ids:
         customers = {
@@ -216,7 +244,7 @@ def _load_inbox_data(
                 select(Customer).where(Customer.company_id == company_id, Customer.id.in_(customer_ids))
             ).all()
         }
-    cards = [_conversation_card(conversation, customers) for conversation in conversations]
+    cards = [_conversation_card(conversation, customers, phone_index) for conversation in conversations]
     page, page_size = normalize_page(page, page_size)
     total_items = len(cards)
     total_pages = (total_items + page_size - 1) // page_size if total_items else 0
@@ -234,6 +262,7 @@ def _load_inbox_data(
         "page_cards": page_cards,
         "selected": selected,
         "customers": customers,
+        "phone_index": phone_index,
         "page": page,
         "page_size": page_size,
         "total_items": total_items,
@@ -340,7 +369,7 @@ async def whatsapp_inbox(
                     .options(selectinload(Conversation.messages).selectinload(InboundMessage.attachments))
                 )
                 if refreshed_conv:
-                    selected = _conversation_card(refreshed_conv, customers)
+                    selected = _conversation_card(refreshed_conv, customers, data.get("phone_index", {}))
                     page_cards = [selected if c["id"] == selected["id"] else c for c in page_cards]
 
     ready_to_send = whatsapp_outbound_is_ready(db, user.company_id, config=config)

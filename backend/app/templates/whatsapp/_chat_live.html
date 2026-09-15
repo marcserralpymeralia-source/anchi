@@ -1,4 +1,4 @@
-{% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_check, icon_check_check, icon_clock, icon_alert_triangle, icon_user, icon_download, icon_eye, icon_image, icon_file_text, icon_play, icon_pause, icon_mic, icon_refresh %}
+{% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_check, icon_check_check, icon_clock, icon_alert_triangle, icon_user, icon_download, icon_eye, icon_image, icon_file_text, icon_play, icon_pause, icon_mic, icon_badge_check, icon_refresh %}
 
 {% macro message_meta_time(msg) %}
   <time datetime="{{ msg.date.isoformat() if msg.date else '' }}">{{ msg.date|local_dt(tenant_timezone, "%H:%M", "--") }}</time>
@@ -28,7 +28,12 @@
         {% endif %}
       </div>
       <div class="channel-chat-header-info">
-        <h3>{{ selected.name }}</h3>
+        <h3>
+          <span>{{ selected.name }}</span>
+          {% if selected.customer_verified %}
+            <span class="whatsapp-verified-badge" title="Cliente verificado en Anchi" aria-label="Cliente verificado en Anchi">{{ icon_badge_check(16) }}</span>
+          {% endif %}
+        </h3>
         <span class="muted">
           {% if selected.detail and selected.detail.strip() != selected.name.strip() %}
             {{ selected.detail }} ·
