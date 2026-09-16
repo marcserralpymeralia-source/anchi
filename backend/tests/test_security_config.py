@@ -409,6 +409,7 @@ class SecurityConfigurationTests(unittest.TestCase):
         source = login_template.read_text(encoding="utf-8")
         self.assertNotIn("default_admin_password", source)
         self.assertNotIn("default_admin_email", source)
+        self.assertIn('name="_csrf_token"', source)
 
     def test_create_app_uses_security_middlewares(self):
         with patch.dict(
