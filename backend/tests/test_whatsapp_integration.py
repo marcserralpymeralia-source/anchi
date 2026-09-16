@@ -27,7 +27,7 @@ from app.db.database import Base
 from app.db.models import BackgroundJob, ChannelSetting, Conversation, Customer, CustomerContactPoint, InboundMessage, InputChannel, LLMSettings, MessageAttachment, Order, Product, ProductAlias, ScoringSettings
 from app.jobs.service import enqueue_job
 from app.master.database import MasterBase
-from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser
+from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser, MasterWhatsAppEndpoint
 from app.master.service import TenantRole, TenantUser
 from app.messages.service import upsert_inbound_message
 from app.tenancy.database import get_tenant_engine
@@ -87,7 +87,8 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         user = MasterUser(id=1, email="admin@anchi.local", full_name="Admin", password_hash="hash", is_active=True)
         membership = CompanyMembership(id=1, user_id=1, company_id=1, role_key="Administrador", is_active=True, is_owner=True)
         tenant = MasterTenantDatabase(company_id=1, database_key="whatsapp-demo", database_url=f"sqlite:///{self.tenant_path.as_posix()}", is_active=True, health_status="ok")
-        db.add_all([company, user, membership, tenant])
+        endpoint = MasterWhatsAppEndpoint(company_id=1, phone_number_id="pn-123", business_account_id="ba-123", active=True)
+        db.add_all([company, user, membership, tenant, endpoint])
         db.commit()
         db.close()
 

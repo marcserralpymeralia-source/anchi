@@ -26,8 +26,8 @@ def configured_platform_admin_email() -> str:
 def is_configured_platform_owner(user: MasterUser | None) -> bool:
     return bool(
         user
-        and user.platform_role_key == "superadmin"
-        and user.email.strip().lower() == configured_platform_admin_email()
+        and getattr(user, "platform_role_key", None) == "superadmin"
+        and getattr(user, "email", "").strip().lower() == configured_platform_admin_email()
     )
 
 

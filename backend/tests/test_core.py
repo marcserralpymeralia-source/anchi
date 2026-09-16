@@ -1015,7 +1015,7 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
 
     def test_login_redirects_to_dashboard_after_success(self):
         request = FakeRequest(session={})
-        fake_user = SimpleNamespace(id=7, company_id=1, membership_id=9, company_slug="demo", email="admin@anchi.local")
+        fake_user = SimpleNamespace(id=7, company_id=1, membership_id=9, company_slug="demo", email="admin@anchi.local", platform_role_key=None)
         fake_db = SimpleNamespace(get=lambda _model, _id: SimpleNamespace(name="Demo"))
         with patch("app.auth.routes.authenticate_user", return_value=fake_user), patch(
             "app.auth.routes.create_server_session", return_value="test-session"

@@ -14,7 +14,7 @@ CSRF_COOKIE = "anchi_csrf"
 def get_or_create_token(request: Request) -> str:
     """Return a double-submit token without adding data to the auth cookie."""
 
-    token = request.cookies.get(CSRF_COOKIE)
+    token = getattr(request, "cookies", {}).get(CSRF_COOKIE)
     if not isinstance(token, str) or len(token) < 32:
         token = secrets.token_urlsafe(32)
         request.state.csrf_token_needs_cookie = True

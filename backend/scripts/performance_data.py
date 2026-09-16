@@ -49,6 +49,8 @@ from app.master.service import slugify
 from app.migrations.helpers import ensure_columns
 from app.tenancy.database import ensure_tenant_schema, get_tenant_engine
 
+PERFORMANCE_ENCRYPTION_KEY = "CKHCB4gFGn7kJVxowWH2pEdPucfPaZugSsMgoJU6eNE="
+
 
 @dataclass(slots=True)
 class ScenarioPlan:
@@ -371,6 +373,9 @@ def build_performance_fixture(scenario: str, base_dir: Path | None = None) -> Pe
     tenant_path = root / "tenant.sqlite"
     master_database_url = f"sqlite:///{master_path.as_posix()}"
     tenant_database_url = f"sqlite:///{tenant_path.as_posix()}"
+    previous_encryption_key = os.environ.get("ENCRYPTION_KEY")
+    os.environ["ENCRYPTION_KEY"] = PERFORMANCE_ENCRYPTION_KEY
+    get_settings.cache_clear()
 
     master_engine = create_engine(master_database_url, connect_args=_connect_args(master_database_url))
     tenant_engine = create_engine(tenant_database_url, connect_args=_connect_args(tenant_database_url))
@@ -399,7 +404,7 @@ def build_performance_fixture(scenario: str, base_dir: Path | None = None) -> Pe
 
         with patch.dict(
             os.environ,
-            {"ENCRYPTION_KEY": "CKHCB4gFGn7kJVxowWH2pEdPucfPaZugSsMgoJU6eNE="},
+            {"ENCRYPTION_KEY": PERFORMANCE_ENCRYPTION_KEY},
         ):
             get_settings.cache_clear()
             llm.api_key_encrypted = encrypt_secret("performance-test-key")
@@ -433,6 +438,11 @@ def build_performance_fixture(scenario: str, base_dir: Path | None = None) -> Pe
         if schema_engine is not None:
             schema_engine.dispose()
         get_tenant_engine.cache_clear()
+        if previous_encryption_key is None:
+            os.environ.pop("ENCRYPTION_KEY", None)
+        else:
+            os.environ["ENCRYPTION_KEY"] = previous_encryption_key
+        get_settings.cache_clear()
 
     return PerformanceFixture(
         scenario=plan.name,

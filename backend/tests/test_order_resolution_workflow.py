@@ -75,7 +75,7 @@ class FakeRequest:
 
 
 def _demo_user() -> SimpleNamespace:
-    return SimpleNamespace(id=1, company_id=1, name="Administrador demo", role=SimpleNamespace(name="Administrador"))
+    return SimpleNamespace(id=1, actor_id=1, company_id=1, name="Administrador demo", role=SimpleNamespace(name="Administrador"))
 
 
 class OrderResolutionWorkflowTests(unittest.TestCase):
@@ -203,12 +203,12 @@ class OrderResolutionWorkflowTests(unittest.TestCase):
         db.add(email)
         db.commit()
 
-        email_process_response = process_channel_entry("email", email.id, FakeRequest(), db=db, user=SimpleNamespace(id=1, company_id=1))
+        email_process_response = process_channel_entry("email", email.id, FakeRequest(), db=db, user=SimpleNamespace(id=1, actor_id=1, company_id=1))
         self.assertEqual(email_process_response.status_code, 303)
         self.assertEqual(email_process_response.headers["location"], f"/workbench/item/email/{email.id}/detail")
         self.assertEqual(db.scalar(select(func.count()).select_from(BackgroundJob)) or 0, 1)
 
-        email_resolve_response = resolve_channel_entry("email", email.id, FakeRequest(), db=db, user=SimpleNamespace(id=1, company_id=1))
+        email_resolve_response = resolve_channel_entry("email", email.id, FakeRequest(), db=db, user=SimpleNamespace(id=1, actor_id=1, company_id=1))
         self.assertEqual(email_resolve_response.status_code, 303)
         self.assertEqual(email_resolve_response.headers["location"], f"/workbench/item/email/{email.id}/detail")
         self.assertEqual(db.scalar(select(func.count()).select_from(BackgroundJob)) or 0, 1)
@@ -231,12 +231,12 @@ class OrderResolutionWorkflowTests(unittest.TestCase):
         )
         db.commit()
 
-        inbound_process_response = process_channel_entry("inbound", inbound_message.id, FakeRequest(), db=db, user=SimpleNamespace(id=1, company_id=1))
+        inbound_process_response = process_channel_entry("inbound", inbound_message.id, FakeRequest(), db=db, user=SimpleNamespace(id=1, actor_id=1, company_id=1))
         self.assertEqual(inbound_process_response.status_code, 303)
         self.assertEqual(inbound_process_response.headers["location"], f"/?focus=inbound-{inbound_message.id}")
         self.assertEqual(db.scalar(select(func.count()).select_from(BackgroundJob)) or 0, 2)
 
-        inbound_response = resolve_channel_entry("inbound", inbound_message.id, FakeRequest(), db=db, user=SimpleNamespace(id=1, company_id=1))
+        inbound_response = resolve_channel_entry("inbound", inbound_message.id, FakeRequest(), db=db, user=SimpleNamespace(id=1, actor_id=1, company_id=1))
         self.assertEqual(inbound_response.status_code, 303)
         self.assertEqual(inbound_response.headers["location"], f"/?focus=inbound-{inbound_message.id}")
         self.assertEqual(db.scalar(select(func.count()).select_from(BackgroundJob)) or 0, 2)
@@ -247,7 +247,7 @@ class OrderResolutionWorkflowTests(unittest.TestCase):
         inbound_message.order_id = order.id
         db.commit()
 
-        processed_response = resolve_channel_entry("inbound", inbound_message.id, FakeRequest(), db=db, user=SimpleNamespace(id=1, company_id=1))
+        processed_response = resolve_channel_entry("inbound", inbound_message.id, FakeRequest(), db=db, user=SimpleNamespace(id=1, actor_id=1, company_id=1))
         self.assertEqual(processed_response.status_code, 303)
         self.assertEqual(processed_response.headers["location"], f"/orders/{order.id}")
         self.assertEqual(db.scalar(select(func.count()).select_from(BackgroundJob)) or 0, 2)

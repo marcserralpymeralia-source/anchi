@@ -43,6 +43,7 @@ class FakeRequest:
     def __init__(self, session: dict | None = None, headers: dict | None = None, host: str = "localhost"):
         self.scope = {"session": session or {}}
         self.headers = {"host": host, **(headers or {})}
+        self.cookies = {}
         self.state = SimpleNamespace()
         self.url = SimpleNamespace(path="/demo")
         self.method = "GET"
