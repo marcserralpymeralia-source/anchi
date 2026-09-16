@@ -1,4 +1,4 @@
-{% from "components/icons.html" import icon_menu, icon_chevron_left, icon_dashboard, icon_entries, icon_mail, icon_whatsapp, icon_customers, icon_products, icon_settings, icon_book_open, icon_bell, icon_plus, icon_logout, icon_paperclip, icon_search, icon_close, icon_check, icon_refresh, icon_trash, icon_copy, icon_folder %}
+{% from "components/icons.html" import icon_menu, icon_chevron_left, icon_dashboard, icon_entries, icon_mail, icon_whatsapp, icon_customers, icon_products, icon_settings, icon_book_open, icon_bell, icon_plus, icon_logout, icon_paperclip, icon_search, icon_close, icon_check, icon_refresh, icon_trash, icon_copy, icon_folder, icon_shield %}
 {% set safe_branding = branding if branding is defined and branding else (safe_branding if (request.state is defined and request.state and safe_branding is defined and safe_branding) else {}) %}
 {% set safe_alert_center = alert_center if alert_center is defined and alert_center else (safe_alert_center if (request.state is defined and request.state and safe_alert_center is defined and safe_alert_center) else {'total': 0, 'critical': 0, 'high': 0, 'medium': 0, 'low': 0, 'has_critical': False, 'recent': []}) %}
 <!doctype html>
@@ -57,9 +57,6 @@
       {% set href_settings = '/settings' %}
       {% set href_import_manual = '/imports/manual' %}
       <nav class="nav">
-        {% if user and user.platform_role_key == "superadmin" %}
-          <a href="/superadmin" title="Superadmin" class="{% if request.url.path.startswith('/superadmin') %}active{% endif %}"><span class="nav-icon">◆</span><span class="nav-label">Superadmin</span></a>
-        {% endif %}
         <a href="{{ href_orders }}" title="Pedidos" class="{% if request.url.path in ['/', '/inicio', '/workbench'] or (request.url.path.startswith('/orders') and request.query_params.get('archived') != 'true') %}active{% endif %}"><span class="nav-icon">{{ icon_entries(20) }}</span><span class="nav-label">Pedidos</span></a>
         <a href="{{ href_archived_orders }}" title="Archivos" class="{% if request.url.path.startswith('/orders') and request.query_params.get('archived') == 'true' %}active{% endif %}"><span class="nav-icon">{{ icon_folder(20) }}</span><span class="nav-label">Archivos</span></a>
         {% if "email" in enabled_channels %}
@@ -72,6 +69,13 @@
         <a href="{{ href_products }}" title="Productos" class="{% if request.url.path.startswith('/products') %}active{% endif %}"><span class="nav-icon">{{ icon_products(20) }}</span><span class="nav-label">Productos</span></a>
         {% if (user.role in ["admin", "superadmin"] or (user.role and (user.role.name if user.role.name is defined else "") in ["Administrador", "Superadmin"])) %}
           <a href="{{ href_settings }}" title="Configuración" class="{% if request.url.path.startswith('/settings') or request.url.path.startswith('/setup') %}active{% endif %}"><span class="nav-icon">{{ icon_settings(20) }}</span><span class="nav-label">Configuración</span></a>
+        {% endif %}
+        {% if user and user.platform_role_key == "superadmin" %}
+          <div class="nav-separator" aria-hidden="true"></div>
+          <a href="/superadmin" title="Superadmin" class="superadmin-app-link {% if request.url.path.startswith('/superadmin') %}active{% endif %}">
+            <span class="nav-icon">{{ icon_shield(20) }}</span>
+            <span class="nav-label">Superadmin</span>
+          </a>
         {% endif %}
       </nav>
     </aside>

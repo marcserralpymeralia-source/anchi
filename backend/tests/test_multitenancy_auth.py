@@ -174,6 +174,37 @@ class MultiTenancyAuthenticationTests(unittest.TestCase):
         finally:
             client.close()
 
+    def test_configured_platform_owner_logs_into_superadmin_without_tenant_context(self):
+        with self.MasterSession() as db:
+            db.add(
+                MasterUser(
+                    id=2,
+                    email="admin@anchi.local",
+                    full_name="Anchi Owner",
+                    password_hash=hash_password("platform-password"),
+                    is_active=True,
+                    platform_role_key="superadmin",
+                )
+            )
+            db.commit()
+
+        app, client = self._client()
+        try:
+            with patch.object(middleware_module, "MasterSessionLocal", self.MasterSession), patch.object(
+                tenancy_database_module, "ensure_tenant_schema_once", return_value={}
+            ):
+                response = client.post(
+                    "/login",
+                    data={"email": "admin@anchi.local", "password": "platform-password"},
+                    follow_redirects=False,
+                )
+                self.assertEqual(response.status_code, 303)
+                self.assertEqual(response.headers["location"], "/superadmin")
+                self.assertEqual(client.get("/superadmin", follow_redirects=False).status_code, 200)
+                self.assertNotEqual(client.get("/orders", follow_redirects=False).status_code, 200)
+        finally:
+            client.close()
+
     def test_selecting_membership_uses_the_selected_tenant_database(self):
         app, client = self._client()
         try:
@@ -190,10 +221,13 @@ class MultiTenancyAuthenticationTests(unittest.TestCase):
                 self.assertEqual(selected.headers["location"], "/dashboard/summary")
 
                 summary = client.get("/dashboard/summary", follow_redirects=False)
+                superadmin = client.get("/superadmin", follow_redirects=False)
 
             self.assertEqual(summary.status_code, 200)
+            self.assertNotIn('class="superadmin-app-link', summary.text)
             subjects = [item["subject"] for item in summary.json()["latest_items"]]
             self.assertEqual(subjects, ["Mensaje exclusivo de Beta"])
+            self.assertEqual(superadmin.status_code, 403)
         finally:
             client.close()
 

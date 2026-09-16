@@ -39,12 +39,10 @@ class AccountLifecycleTests(unittest.TestCase):
                 db,
                 name="Lifecycle Co",
                 slug="lifecycle-co",
-                admin_email="owner@lifecycle.test",
-                admin_name="Owner",
-                admin_password="OwnerPassword123!",
                 database_url=self.tenant_url,
                 actor_user_id=1,
             )
+            self.assertEqual(db.scalar(select(CompanyMembership).where(CompanyMembership.company_id == company.id)), None)
             invitation, raw_token = create_invitation(
                 db,
                 company_id=company.id,
@@ -57,6 +55,17 @@ class AccountLifecycleTests(unittest.TestCase):
             self.assertIsNotNone(invitation.accepted_at)
             membership = db.scalar(select(CompanyMembership).where(CompanyMembership.user_id == accepted.id, CompanyMembership.company_id == company.id))
             self.assertEqual(membership.role_key, "Operador")
+
+            platform_invitation, platform_token = create_invitation(
+                db,
+                company_id=company.id,
+                email="root@example.test",
+                role_key="Administrador",
+                invited_by_user_id=1,
+            )
+            with self.assertRaisesRegex(ValueError, "identidad global"):
+                accept_invitation(db, raw_token=platform_token, full_name="Root", password="RootPassword123!")
+            self.assertIsNone(platform_invitation.accepted_at)
 
             old_version = accepted.session_version
             reset_token = create_password_reset_token(db, email=accepted.email)

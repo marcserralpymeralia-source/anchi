@@ -16,6 +16,21 @@ from app.master.models import CompanyMembership, MasterCompany, MasterTenantData
 DEMO_ADMIN_PASSWORD_FALLBACKS = {"AnchiDemo2026!"}
 
 
+def configured_platform_admin_email() -> str:
+    """Return the only identity allowed to act as Anchi's platform owner."""
+
+    settings = get_settings()
+    return (os.getenv("PLATFORM_ADMIN_EMAIL") or settings.default_admin_email or "").strip().lower()
+
+
+def is_configured_platform_owner(user: MasterUser | None) -> bool:
+    return bool(
+        user
+        and user.platform_role_key == "superadmin"
+        and user.email.strip().lower() == configured_platform_admin_email()
+    )
+
+
 @dataclass(slots=True)
 class TenantRole:
     name: str
@@ -109,7 +124,11 @@ def _membership_to_user(
         role=TenantRole(name=role_name, permissions=DEFAULT_ROLE_PERMISSIONS.get(role_name, "")),
         membership_id=membership.id,
         database_url=tenant_db.database_url if tenant_db else None,
-        platform_role_key=membership.user.platform_role_key,
+        platform_role_key=(
+            membership.user.platform_role_key
+            if is_configured_platform_owner(membership.user)
+            else None
+        ),
         session_version=int(membership.user.session_version or 1),
         master_user_id=membership.user_id,
         tenant_actor_id=tenant_actor_id,
@@ -207,7 +226,7 @@ def authenticate_master_user(master_db: Session, email: str, password: str) -> T
             MasterUser.platform_role_key == "superadmin",
         )
     )
-    if platform_user:
+    if is_configured_platform_owner(platform_user):
         now = utcnow()
         if platform_user.locked_until and platform_user.locked_until > now:
             return None

@@ -53,42 +53,50 @@
     <table class="superadmin-table">
       <thead>
         <tr>
-          <th>Empresa</th>
-          <th>Estado</th>
-          <th>Base de datos</th>
-          <th>Usuarios</th>
-          <th style="text-align: right;">Acciones</th>
+          <th class="col-main">Empresa</th>
+          <th class="col-status">Estado</th>
+          <th class="col-health">Base de datos</th>
+          <th class="col-memberships" style="text-align: center;">Usuarios</th>
+          <th class="col-actions" style="text-align: right;">Acciones</th>
         </tr>
       </thead>
       <tbody>
         {% for item in companies %}
           <tr>
-            <td>
-              <strong>{{ item.company.name }}</strong>
-              <small class="muted">{{ item.company.slug }}</small>
+            <td class="col-main">
+              <div class="entity-cell">
+                <strong class="entity-title">{{ item.company.name }}</strong>
+                <span class="entity-subtitle">{{ item.company.slug }}</span>
+              </div>
             </td>
-            <td>
+            <td class="col-status">
               <span class="status-pill {{ 'is-ok' if item.company.active else 'is-muted' }}">
+                <span class="status-dot"></span>
                 {{ 'Activa' if item.company.active else 'Suspendida' }}
               </span>
             </td>
-            <td>
-              <span class="status-pill {{ 'is-ok' if item.health and item.health.status == 'ok' else 'is-warning' }}">
-                {{ item.health.status if item.health else (item.tenant_db.health_status if item.tenant_db else 'Sin datos') }}
-              </span>
-              {% if item.health %}
-                <small class="muted" style="display: block; margin-top: 3px;">{{ item.health.latency_ms }} ms · {{ item.health.checked_at | local_dt(default_timezone, "%d/%m %H:%M", "") }}</small>
-              {% endif %}
+            <td class="col-health">
+              <div class="health-meta-cell">
+                <span class="status-pill {{ 'is-ok' if item.health and item.health.status == 'ok' else 'is-warning' }}">
+                  <span class="status-dot"></span>
+                  {{ item.health.status if item.health else (item.tenant_db.health_status if item.tenant_db else 'Sin datos') }}
+                </span>
+                {% if item.health %}
+                  <small class="muted">{{ item.health.latency_ms }} ms · {{ item.health.checked_at | local_dt(default_timezone, "%d/%m %H:%M", "") }}</small>
+                {% endif %}
+              </div>
             </td>
-            <td>
-              <span class="count-badge">{{ item.memberships }}</span>
+            <td class="col-memberships" style="text-align: center;">
+              <span class="count-badge" title="{{ item.memberships }} usuarios asignados">{{ item.memberships }}</span>
             </td>
-            <td class="superadmin-actions" style="text-align: right; justify-content: flex-end;">
-              <form method="post" action="/superadmin/companies/{{ item.company.id }}/enter" style="margin: 0;">
-                <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
-                <button class="button secondary compact-button" type="submit">Entrar</button>
-              </form>
-              <a class="button secondary compact-button" href="/superadmin/users">Ver usuarios</a>
+            <td class="col-actions" style="text-align: right;">
+              <div class="superadmin-actions">
+                <form method="post" action="/superadmin/companies/{{ item.company.id }}/enter" style="margin: 0;">
+                  <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
+                  <button class="button secondary compact-button" type="submit">Entrar</button>
+                </form>
+                <a class="button secondary compact-button" href="/superadmin/users">Ver usuarios</a>
+              </div>
             </td>
           </tr>
         {% else %}

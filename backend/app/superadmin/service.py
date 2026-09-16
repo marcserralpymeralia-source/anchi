@@ -26,7 +26,7 @@ from app.master.models import (
     TenantUsageDaily,
 )
 from app.master.provisioning import tenant_database_path
-from app.master.service import slugify
+from app.master.service import configured_platform_admin_email, slugify
 from app.tenancy.migrations import ensure_tenant_schema
 
 
@@ -132,6 +132,8 @@ def _ensure_master_user(
     else:
         user.full_name = (full_name or user.full_name).strip()[:200]
         user.is_active = True
+        if user.platform_role_key != "superadmin":
+            user.platform_role_key = "tenant_user"
     return user, created
 
 
@@ -212,19 +214,20 @@ def create_company(
     *,
     name: str,
     slug: str | None,
-    admin_email: str,
-    admin_name: str,
-    admin_password: str,
     database_url: str | None,
     actor_user_id: int,
     provision_async: bool = False,
 ) -> MasterCompany:
+    """Create a tenant workspace without creating an identity.
+
+    Companies are control-plane resources. Login credentials and memberships
+    are created explicitly later through :func:`create_company_user`.
+    """
+
     name = (name or "").strip()[:200]
     company_slug = slugify(slug or name)
     if not name:
         raise ValueError("El nombre de la empresa es obligatorio")
-    if not admin_password or len(admin_password) < 12:
-        raise ValueError("La contraseña debe tener al menos 12 caracteres")
     if master_db.scalar(select(MasterCompany).where((MasterCompany.name == name) | (MasterCompany.slug == company_slug))):
         raise ValueError("Ya existe una empresa con ese nombre o slug")
 
@@ -251,15 +254,6 @@ def create_company(
     try:
         resolved_url = _database_url_for_company(company, database_url)
         tenant_row = _ensure_tenant_database(master_db, company, resolved_url)
-        admin, _ = _ensure_master_user(master_db, email=admin_email, full_name=admin_name or f"Administrador {name}", password=admin_password)
-        membership = master_db.scalar(select(CompanyMembership).where(CompanyMembership.user_id == admin.id, CompanyMembership.company_id == company.id))
-        if membership is None:
-            membership = CompanyMembership(user_id=admin.id, company_id=company.id, role_key="Administrador", is_active=True, is_owner=True)
-            master_db.add(membership)
-        else:
-            membership.role_key = "Administrador"
-            membership.is_active = True
-            membership.is_owner = True
         master_db.flush()
         if provision_async:
             record_platform_audit(
@@ -274,16 +268,6 @@ def create_company(
             master_db.commit()
             return company
         _provision_tenant_schema(company, resolved_url, display_name=name)
-        tenant_engine = _engine_for(resolved_url)
-        try:
-            tenant_session = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)()
-            try:
-                _ensure_local_actor(tenant_session, company.id, admin, role_key="Administrador", password=admin_password)
-                tenant_session.commit()
-            finally:
-                tenant_session.close()
-        finally:
-            tenant_engine.dispose()
         tenant_row.health_status = "ok"
         tenant_row.provisioned_at = tenant_row.provisioned_at or _utcnow()
         company.active = True
@@ -330,16 +314,39 @@ def create_company_user(
     role_key: str,
     actor_user_id: int,
 ) -> CompanyMembership:
+    """Create or assign a tenant login; never elevate it to platform access."""
+
     company = master_db.get(MasterCompany, company_id)
     tenant_row = master_db.scalar(select(MasterTenantDatabase).where(MasterTenantDatabase.company_id == company_id, MasterTenantDatabase.is_active.is_(True)))
     if not company or not company.active or not tenant_row or not tenant_row.database_url:
         raise ValueError("La empresa no está disponible para crear usuarios")
     if role_key not in TENANT_ROLES:
         raise ValueError("Rol no válido")
+    normalized_email = normalize_email(email)
+    reserved_platform_email = configured_platform_admin_email()
+    if normalized_email == reserved_platform_email:
+        raise ValueError("El email reservado para el Superadmin de plataforma no puede asignarse a una empresa")
     user, created = _ensure_master_user(master_db, email=email, full_name=full_name, password=password)
+    if user.platform_role_key == "superadmin":
+        raise ValueError("La identidad global de Anchi no puede convertirse en un usuario de empresa")
     membership = master_db.scalar(select(CompanyMembership).where(CompanyMembership.user_id == user.id, CompanyMembership.company_id == company_id))
     if membership is None:
-        membership = CompanyMembership(user_id=user.id, company_id=company_id, role_key=role_key, is_active=True, is_owner=False)
+        has_active_owner = bool(
+            master_db.scalar(
+                select(func.count(CompanyMembership.id)).where(
+                    CompanyMembership.company_id == company_id,
+                    CompanyMembership.is_owner.is_(True),
+                    CompanyMembership.is_active.is_(True),
+                )
+            )
+        )
+        membership = CompanyMembership(
+            user_id=user.id,
+            company_id=company_id,
+            role_key=role_key,
+            is_active=True,
+            is_owner=role_key == "Administrador" and not has_active_owner,
+        )
         master_db.add(membership)
     else:
         membership.role_key = role_key

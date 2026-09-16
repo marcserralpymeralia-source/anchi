@@ -1,21 +1,10 @@
 {% extends "superadmin/layout.html" %}
 {% block content %}
-<div class="superadmin-page-header">
-  <div>
-    <span class="page-kicker">Acceso de usuarios</span>
-    <h1 class="page-title">Usuarios globales</h1>
-    <p class="muted">Administración centralizada de cuentas de usuario y asignación de membresías a empresas.</p>
-  </div>
-  <div>
-    <span class="count-badge count-badge-large">{{ user_total }} usuarios</span>
-  </div>
-</div>
-
 <section class="panel superadmin-panel superadmin-form-panel">
   <div class="section-title-row">
     <div>
       <h2 class="panel-title">Añadir usuario</h2>
-      <p class="muted">Asigna una cuenta existente o crea un nuevo acceso para la empresa seleccionada.</p>
+      <p class="muted">Cada cuenta creada aquí podrá iniciar sesión únicamente en la empresa seleccionada.</p>
     </div>
   </div>
 
@@ -67,32 +56,38 @@
       <h2 class="panel-title">Directorio de usuarios</h2>
       <p class="muted">Lista de todos los usuarios registrados y sus permisos por empresa</p>
     </div>
+    <div>
+      <span class="count-badge">{{ user_total }} usuarios</span>
+    </div>
   </div>
 
   <div class="superadmin-table-wrap">
     <table class="superadmin-table">
       <thead>
         <tr>
-          <th>Usuario</th>
-          <th>Estado</th>
-          <th>Empresas y rol</th>
-          <th>Último acceso</th>
-          <th style="text-align: right;">Acciones</th>
+          <th class="col-main">Usuario</th>
+          <th class="col-status">Estado</th>
+          <th class="col-memberships-list">Empresas y rol</th>
+          <th class="col-date">Último acceso</th>
+          <th class="col-actions" style="text-align: right;">Acciones</th>
         </tr>
       </thead>
       <tbody>
         {% for row in rows %}
           <tr>
-            <td>
-              <strong>{{ row.user.full_name }}</strong>
-              <small class="muted">{{ row.user.email }}</small>
+            <td class="col-main">
+              <div class="entity-cell">
+                <strong class="entity-title">{{ row.user.full_name }}</strong>
+                <span class="entity-subtitle">{{ row.user.email }}</span>
+              </div>
             </td>
-            <td>
+            <td class="col-status">
               <span class="status-pill {{ 'is-ok' if row.user.is_active else 'is-muted' }}">
+                <span class="status-dot"></span>
                 {{ 'Activo' if row.user.is_active else 'Suspendido' }}
               </span>
             </td>
-            <td>
+            <td class="col-memberships-list">
               <div class="membership-chips-wrap">
                 {% for membership in row.memberships %}
                   <span class="membership-chip">
@@ -104,16 +99,18 @@
                 {% endfor %}
               </div>
             </td>
-            <td>
-              <span class="muted">{{ row.user.last_login_at | local_dt(default_timezone, "%d/%m/%Y %H:%M", "Nunca") }}</span>
+            <td class="col-date">
+              <span class="date-text muted">{{ row.user.last_login_at | local_dt(default_timezone, "%d/%m/%Y %H:%M", "Nunca") }}</span>
             </td>
-            <td class="superadmin-actions" style="text-align: right; justify-content: flex-end;">
-              <form method="post" action="/superadmin/users/{{ row.user.id }}/toggle" style="margin: 0;">
-                <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
-                <button class="button secondary compact-button" type="submit"{% if row.user.id == user.id %} disabled title="No puedes suspender tu propia cuenta"{% endif %}>
-                  {{ 'Suspender' if row.user.is_active else 'Reactivar' }}
-                </button>
-              </form>
+            <td class="col-actions" style="text-align: right;">
+              <div class="superadmin-actions">
+                <form method="post" action="/superadmin/users/{{ row.user.id }}/toggle" style="margin: 0;">
+                  <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
+                  <button class="button secondary compact-button" type="submit"{% if row.user.id == user.id %} disabled title="No puedes suspender tu propia cuenta"{% endif %}>
+                    {{ 'Suspender' if row.user.is_active else 'Reactivar' }}
+                  </button>
+                </form>
+              </div>
             </td>
           </tr>
         {% else %}

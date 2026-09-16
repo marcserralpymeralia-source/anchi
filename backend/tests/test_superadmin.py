@@ -55,9 +55,6 @@ class SuperadminProvisioningTests(unittest.TestCase):
             self.db,
             name="Acme Test",
             slug="acme-test",
-            admin_email="admin@acme.test",
-            admin_name="Acme Admin",
-            admin_password="AcmePassword123!",
             database_url=tenant_url,
             actor_user_id=1,
         )
@@ -89,8 +86,71 @@ class SuperadminProvisioningTests(unittest.TestCase):
         stats = platform_stats(self.db)
         self.assertEqual(stats["companies_total"], 1)
         self.assertEqual(stats["provisioned_companies"], 1)
-        self.assertEqual(stats["memberships_total"], 2)
+        self.assertEqual(stats["memberships_total"], 1)
         self.assertGreaterEqual(stats["audit_events_total"], 2)
+
+    def test_company_creation_does_not_create_a_login_or_membership(self):
+        tenant_url = f"sqlite:///{Path(self.temp_dir.name, 'company-only.db').as_posix()}"
+        company = create_company(
+            self.db,
+            name="Company Without Login",
+            slug="company-without-login",
+            database_url=tenant_url,
+            actor_user_id=1,
+        )
+
+        self.assertIsNone(
+            self.db.scalar(
+                select(CompanyMembership).where(CompanyMembership.company_id == company.id)
+            )
+        )
+        self.assertIsNone(
+            self.db.scalar(
+                select(MasterUser).where(MasterUser.email == "admin@company-without-login.test")
+            )
+        )
+
+    def test_platform_owner_cannot_be_assigned_as_a_company_user(self):
+        tenant_url = f"sqlite:///{Path(self.temp_dir.name, 'platform-owner.db').as_posix()}"
+        company = create_company(
+            self.db,
+            name="Tenant Without Platform Owner",
+            slug="tenant-without-platform-owner",
+            database_url=tenant_url,
+            actor_user_id=1,
+        )
+
+        with self.assertRaisesRegex(ValueError, "identidad global"):
+            create_company_user(
+                self.db,
+                company_id=company.id,
+                full_name="Platform Root",
+                email="root@example.com",
+                password=None,
+                role_key="Administrador",
+                actor_user_id=1,
+            )
+
+    def test_global_superadmin_role_cannot_be_assigned_to_a_company_user(self):
+        tenant_url = f"sqlite:///{Path(self.temp_dir.name, 'tenant-role-guard.db').as_posix()}"
+        company = create_company(
+            self.db,
+            name="Tenant Role Guard",
+            slug="tenant-role-guard",
+            database_url=tenant_url,
+            actor_user_id=1,
+        )
+
+        with self.assertRaisesRegex(ValueError, "Rol no válido"):
+            create_company_user(
+                self.db,
+                company_id=company.id,
+                full_name="Tenant Superadmin",
+                email="tenant-superadmin@example.test",
+                password="TenantPassword123!",
+                role_key="Superadmin",
+                actor_user_id=1,
+            )
 
     def test_suspending_user_revokes_active_session_version(self):
         user = MasterUser(
@@ -115,10 +175,16 @@ class SuperadminProvisioningTests(unittest.TestCase):
             self.db,
             name="Owner Guard",
             slug="owner-guard",
-            admin_email="owner@owner-guard.test",
-            admin_name="Owner",
-            admin_password="OwnerPassword123!",
             database_url=tenant_url,
+            actor_user_id=1,
+        )
+        create_company_user(
+            self.db,
+            company_id=company.id,
+            full_name="Owner",
+            email="owner@owner-guard.test",
+            password="OwnerPassword123!",
+            role_key="Administrador",
             actor_user_id=1,
         )
         owner = self.db.scalar(select(MasterUser).where(MasterUser.email == "owner@owner-guard.test"))
@@ -152,9 +218,6 @@ class SuperadminProvisioningTests(unittest.TestCase):
             self.db,
             name="WhatsApp Tenant",
             slug="whatsapp-tenant",
-            admin_email="wa-admin@example.test",
-            admin_name="WhatsApp Admin",
-            admin_password="WhatsAppPassword123!",
             database_url=tenant_url,
             actor_user_id=1,
         )

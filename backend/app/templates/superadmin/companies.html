@@ -1,21 +1,10 @@
 {% extends "superadmin/layout.html" %}
 {% block content %}
-<div class="superadmin-page-header">
-  <div>
-    <span class="page-kicker">Directorio de Tenants</span>
-    <h1 class="page-title">Gestión de empresas</h1>
-    <p class="muted">Crea y administra los espacios de trabajo de cada empresa y sus bases de datos operativas.</p>
-  </div>
-  <div>
-    <span class="count-badge count-badge-large">{{ company_total }} empresas</span>
-  </div>
-</div>
-
 <section class="panel superadmin-panel superadmin-form-panel">
   <div class="section-title-row">
     <div>
       <h2 class="panel-title">Alta de nueva empresa</h2>
-      <p class="muted">Se provisionará su base de datos operativa y se dará de alta al administrador principal.</p>
+      <p class="muted">Se provisionará su base de datos operativa. Los accesos se crean después desde Usuarios.</p>
     </div>
   </div>
 
@@ -29,21 +18,6 @@
     <div class="form-field">
       <label for="company_slug">Slug / Identificador <small class="muted">(opcional)</small></label>
       <input id="company_slug" name="slug" maxlength="120" placeholder="frutas-gomez">
-    </div>
-
-    <div class="form-field">
-      <label for="admin_name">Nombre del administrador</label>
-      <input id="admin_name" name="admin_name" maxlength="200" placeholder="Nombre y apellidos">
-    </div>
-
-    <div class="form-field">
-      <label for="admin_email">Email del administrador <span class="required-star">*</span></label>
-      <input id="admin_email" name="admin_email" type="email" required placeholder="admin@empresa.com">
-    </div>
-
-    <div class="form-field">
-      <label for="admin_password">Contraseña inicial <span class="required-star">*</span></label>
-      <input id="admin_password" name="admin_password" type="password" required minlength="12" placeholder="Mínimo 12 caracteres">
     </div>
 
     <div class="form-field">
@@ -63,34 +37,41 @@
       <h2 class="panel-title">Empresas configuradas</h2>
       <p class="muted">Lista de todos los tenants registrados en la plataforma</p>
     </div>
+    <div>
+      <span class="count-badge">{{ company_total }} empresas</span>
+    </div>
   </div>
 
   <div class="superadmin-table-wrap">
     <table class="superadmin-table">
       <thead>
         <tr>
-          <th>Empresa</th>
-          <th>Estado</th>
-          <th>Aprovisionamiento y Salud</th>
-          <th>Accesos</th>
-          <th style="text-align: right;">Acciones</th>
+          <th class="col-main">Empresa</th>
+          <th class="col-status">Estado</th>
+          <th class="col-health">Aprovisionamiento y Salud</th>
+          <th class="col-memberships" style="text-align: center;">Accesos</th>
+          <th class="col-actions" style="text-align: right;">Acciones</th>
         </tr>
       </thead>
       <tbody>
         {% for item in companies %}
           <tr>
-            <td>
-              <strong>{{ item.company.name }}</strong>
-              <small class="muted">{{ item.company.slug }} · ID {{ item.company.id }}</small>
+            <td class="col-main">
+              <div class="entity-cell">
+                <strong class="entity-title">{{ item.company.name }}</strong>
+                <span class="entity-subtitle">{{ item.company.slug }} · ID {{ item.company.id }}</span>
+              </div>
             </td>
-            <td>
+            <td class="col-status">
               <span class="status-pill {{ 'is-ok' if item.company.active else 'is-muted' }}">
+                <span class="status-dot"></span>
                 {{ 'Activa' if item.company.active else 'Suspendida' }}
               </span>
             </td>
-            <td>
-              <div style="display: flex; flex-direction: column; gap: 3px;">
-                <span class="status-pill {{ 'is-ok' if item.health and item.health.status == 'ok' else 'is-warning' }}" style="width: fit-content;">
+            <td class="col-health">
+              <div class="health-meta-cell">
+                <span class="status-pill {{ 'is-ok' if item.health and item.health.status == 'ok' else 'is-warning' }}">
+                  <span class="status-dot"></span>
                   {{ item.company.provisioning_status }} · {{ item.health.status if item.health else (item.tenant_db.health_status if item.tenant_db else 'sin datos') }}
                 </span>
                 {% if item.health %}
@@ -98,24 +79,26 @@
                 {% endif %}
               </div>
             </td>
-            <td>
-              <span class="count-badge">{{ item.memberships }}</span>
+            <td class="col-memberships" style="text-align: center;">
+              <span class="count-badge" title="{{ item.memberships }} accesos asignados">{{ item.memberships }}</span>
             </td>
-            <td class="superadmin-actions" style="text-align: right; justify-content: flex-end;">
-              <form method="post" action="/superadmin/companies/{{ item.company.id }}/enter" style="margin: 0;">
-                <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
-                <button class="button secondary compact-button" type="submit">Entrar</button>
-              </form>
-              <form method="post" action="/superadmin/companies/{{ item.company.id }}/toggle" style="margin: 0;">
-                <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
-                <button class="button secondary compact-button" type="submit">{{ 'Suspender' if item.company.active else 'Reactivar' }}</button>
-              </form>
-              {% if item.company.provisioning_status in ['failed', 'provisioning'] %}
-                <form method="post" action="/superadmin/companies/{{ item.company.id }}/retry-provisioning" style="margin: 0;">
+            <td class="col-actions" style="text-align: right;">
+              <div class="superadmin-actions">
+                <form method="post" action="/superadmin/companies/{{ item.company.id }}/enter" style="margin: 0;">
                   <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
-                  <button class="button secondary compact-button" type="submit">Reintentar</button>
+                  <button class="button secondary compact-button" type="submit">Entrar</button>
                 </form>
-              {% endif %}
+                <form method="post" action="/superadmin/companies/{{ item.company.id }}/toggle" style="margin: 0;">
+                  <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
+                  <button class="button secondary compact-button" type="submit">{{ 'Suspender' if item.company.active else 'Reactivar' }}</button>
+                </form>
+                {% if item.company.provisioning_status in ['failed', 'provisioning'] %}
+                  <form method="post" action="/superadmin/companies/{{ item.company.id }}/retry-provisioning" style="margin: 0;">
+                    <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
+                    <button class="button secondary compact-button" type="submit">Reintentar</button>
+                  </form>
+                {% endif %}
+              </div>
             </td>
           </tr>
         {% else %}

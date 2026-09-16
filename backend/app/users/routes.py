@@ -10,7 +10,7 @@ from app.auth.rate_limit import consume_public_action
 from app.master.database import get_master_db
 from app.master.models import CompanyMembership, MasterUser, UserInvitation
 from app.master.service import TenantUser
-from app.superadmin.service import create_company_user
+from app.superadmin.service import TENANT_ROLES, create_company_user
 from app.db.models import Role, User
 from app.logs.service import log_action
 from app.tenancy.database import get_tenant_db
@@ -18,7 +18,9 @@ from app.tenancy.database import get_tenant_db
 router = APIRouter(prefix="/users", tags=["users"])
 
 
-MANAGE_USER_ROLES = ("Administrador", "Superadmin")
+# Tenant administrators manage company users. The platform Superadmin is a
+# separate global identity and must never be assignable from this screen.
+MANAGE_USER_ROLES = ("Administrador",)
 
 
 def _local_actor(db: Session, user: TenantUser) -> User | None:
@@ -39,7 +41,11 @@ def _error_redirect(message: str) -> RedirectResponse:
 @router.get("")
 def list_users(request: Request, db: Session = Depends(get_tenant_db), master_db: Session = Depends(get_master_db), user: TenantUser = Depends(require_tenant_role(*MANAGE_USER_ROLES))):
     users = db.scalars(select(User).where(User.company_id == user.company_id).order_by(User.name)).all()
-    roles = db.scalars(select(Role).where(Role.company_id == user.company_id).order_by(Role.name)).all()
+    roles = db.scalars(
+        select(Role)
+        .where(Role.company_id == user.company_id, Role.name.in_(TENANT_ROLES))
+        .order_by(Role.name)
+    ).all()
     invitations = master_db.scalars(
         select(UserInvitation)
         .where(UserInvitation.company_id == user.company_id, UserInvitation.accepted_at.is_(None), UserInvitation.revoked_at.is_(None))
@@ -60,8 +66,8 @@ def create_user(
     user: TenantUser = Depends(require_tenant_role(*MANAGE_USER_ROLES)),
 ):
     role = db.scalar(select(Role).where(Role.id == role_id, Role.company_id == user.company_id))
-    if role is None:
-        return _error_redirect("El rol seleccionado no pertenece a esta empresa")
+    if role is None or role.name not in TENANT_ROLES:
+        return _error_redirect("El rol seleccionado no está disponible para usuarios de empresa")
     try:
         membership = create_company_user(
             master_db,
@@ -124,8 +130,8 @@ def update_user(
     target = db.get(User, user_id)
     if target and target.company_id == user.company_id:
         role = db.scalar(select(Role).where(Role.id == role_id, Role.company_id == user.company_id))
-        if role is None:
-            return _error_redirect("El rol seleccionado no pertenece a esta empresa")
+        if role is None or role.name not in TENANT_ROLES:
+            return _error_redirect("El rol seleccionado no está disponible para usuarios de empresa")
         membership = None
         master_user = master_db.get(MasterUser, target.master_user_id) if target.master_user_id else None
         if master_user:

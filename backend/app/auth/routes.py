@@ -16,6 +16,7 @@ from app.master.models import CompanyMembership, MasterCompany, MasterTenantData
 from app.core.config import get_settings
 from app.master.database import get_master_db
 from app.master.provisioning import find_tenant_actor_id
+from app.master.service import is_configured_platform_owner
 from app.setup.service import get_setup_status
 from app.tenancy.database import tenant_db_session
 from app.settings.branding import branding_to_dict, default_branding_payload
@@ -97,7 +98,7 @@ def login(
     server_session_id = create_server_session(master_db, request, master_user)
     request.session[SESSION_KEY] = server_session_id
     request.session["user_id"] = user.id
-    if getattr(user, "platform_role_key", None) == "superadmin" and user.membership_id is None:
+    if is_configured_platform_owner(master_user):
         request.session["platform_user_id"] = user.id
         request.session["platform_session_version"] = getattr(user, "session_version", 1)
         next_url = "/superadmin"
@@ -143,12 +144,6 @@ def login(
                     },
                     status_code=503,
                 )
-        if getattr(user, "platform_role_key", None) == "superadmin":
-            request.session["platform_user_id"] = user.id
-            request.session["platform_session_version"] = getattr(user, "session_version", 1)
-            if next_url == DEFAULT_LOGIN_DESTINATION:
-                next_url = "/superadmin"
-
     bind_server_session_context(
         master_db,
         request,

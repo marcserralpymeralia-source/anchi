@@ -11,6 +11,8 @@ Preparar Anchi para operar como aplicación multiempresa y multiusuario, separan
 - Migraciones idempotentes para la base master y para cada base tenant, aplicadas durante arranque/provisioning y no durante la navegación normal.
 - Provisión de compañías, usuarios, membresías y bases tenant.
 - Panel Superadmin para compañías, usuarios, estadísticas y auditoría.
+- Las empresas son espacios de trabajo sin credenciales; los accesos se crean después como usuarios tenant.
+- El Superadmin global queda reservado a la identidad de plataforma configurada y separado de las membresías tenant.
 - Selector de empresa para usuarios con varias membresías.
 - Invitaciones y recuperación de contraseña con tokens de un solo uso.
 - Invalidación de sesiones al cambiar contraseña, membresía o estado de usuario.
@@ -58,6 +60,8 @@ También existía riesgo operacional en instalaciones antiguas: una URL tenant n
 - Añadido el servicio de provisión y sincronización de actores master hacia la tabla operativa tenant.
 - Añadida la resolución de usuarios y contexto tenant desde la sesión y la membresía activa.
 - Añadido el panel `/superadmin` con gestión de compañías, usuarios, estadísticas, auditoría y entrada controlada a una compañía.
+- Separada el alta de empresas de la creación de usuarios: provisionar una empresa ya no solicita ni crea credenciales.
+- Reforzada la frontera entre identidad global y usuarios tenant: el email de plataforma queda reservado y un usuario tenant recibe `403` en `/superadmin`.
 - Añadidas invitaciones y recuperación de contraseña; los tokens se almacenan hasheados, expiran y no se reutilizan.
 - Añadido bloqueo temporal tras intentos fallidos, rate limiting distribuido y versionado de sesiones.
 - Centralizados permisos por ruta y método HTTP.

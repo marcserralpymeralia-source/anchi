@@ -60,7 +60,7 @@ def _companies(master_db: Session, *, offset: int = 0, limit: int | None = None)
 @router.get("")
 def dashboard(request: Request, master_db: Session = Depends(get_master_db), user: TenantUser = Depends(require_superadmin)):
     recent_audit = master_db.scalars(select(PlatformAuditLog).order_by(PlatformAuditLog.created_at.desc()).limit(8)).all()
-    return templates.TemplateResponse("superadmin/dashboard.html", _base_context(request, user, title="Superadmin", stats=platform_stats(master_db), companies=_companies(master_db)[:6], recent_audit=recent_audit))
+    return templates.TemplateResponse("superadmin/dashboard.html", _base_context(request, user, title="Resumen", stats=platform_stats(master_db), companies=_companies(master_db)[:6], recent_audit=recent_audit))
 
 
 @router.get("/companies")
@@ -77,18 +77,12 @@ def companies_create(
     request: Request,
     name: str = Form(...),
     slug: str = Form(""),
-    admin_name: str = Form(""),
-    admin_email: str = Form(...),
-    admin_password: str = Form(...),
     database_url: str = Form(""),
     master_db: Session = Depends(get_master_db),
     user: TenantUser = Depends(require_superadmin),
 ):
     try:
-        company = create_company(master_db, name=name, slug=slug, admin_email=admin_email, admin_name=admin_name, admin_password=admin_password, database_url=database_url, actor_user_id=user.id, provision_async=True)
-        if master_db.scalar(select(CompanyMembership).where(CompanyMembership.user_id == user.id, CompanyMembership.company_id == company.id)) is None:
-            master_db.add(CompanyMembership(user_id=user.id, company_id=company.id, role_key="Solo lectura", is_active=True, is_owner=False))
-            master_db.commit()
+        create_company(master_db, name=name, slug=slug, database_url=database_url, actor_user_id=user.id, provision_async=True)
     except ValueError as exc:
         return _redirect("/superadmin/companies", str(exc))
     return _redirect("/superadmin/companies")
@@ -171,7 +165,11 @@ def enter_company(
 
 @router.get("/users")
 def users_page(request: Request, master_db: Session = Depends(get_master_db), user: TenantUser = Depends(require_superadmin)):
-    companies = master_db.scalars(select(MasterCompany).order_by(MasterCompany.name)).all()
+    companies = master_db.scalars(
+        select(MasterCompany)
+        .where(MasterCompany.active.is_(True), MasterCompany.status == "active")
+        .order_by(MasterCompany.name)
+    ).all()
     page, page_size = _page_params(request)
     user_total = int(master_db.scalar(select(func.count(MasterUser.id))) or 0)
     total_pages = (user_total + page_size - 1) // page_size if user_total else 1

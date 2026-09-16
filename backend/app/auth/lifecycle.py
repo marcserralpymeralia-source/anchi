@@ -93,6 +93,8 @@ def accept_invitation(
         raise ValueError("La empresa ya no está disponible")
 
     existing = master_db.scalar(select(MasterUser).where(MasterUser.email == invitation.email))
+    if existing is not None and existing.platform_role_key == "superadmin":
+        raise ValueError("La identidad global de Anchi no puede aceptar una invitación de empresa")
     if existing is None:
         password_value = _validate_password(password)
         full_name_value = (full_name or invitation.email.split("@", 1)[0]).strip()[:200]

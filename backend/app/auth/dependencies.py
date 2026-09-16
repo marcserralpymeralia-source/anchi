@@ -9,7 +9,7 @@ from app.auth.sessions import validate_server_session
 from app.core.permissions import has_permission, permission_for_request
 from app.master.database import get_master_db
 from app.master.models import MasterUser
-from app.master.service import TenantUser, _platform_user_to_context, load_tenant_context
+from app.master.service import TenantUser, _platform_user_to_context, is_configured_platform_owner, load_tenant_context
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ def current_master_user(request: Request, master_db: Session = Depends(get_maste
         if (
             platform_user
             and platform_user.is_active
-            and platform_user.platform_role_key == "superadmin"
+            and is_configured_platform_owner(platform_user)
             and session_version_matches
             and validate_server_session(request, master_db, platform_user)
         ):
@@ -124,7 +124,7 @@ def require_master_role(*roles: str):
 
 
 def require_master_admin(user: TenantUser = Depends(current_master_user)) -> TenantUser:
-    if user.platform_role_key != "superadmin":
+    if user.platform_role_key != "superadmin" or user.company_id is not None or user.membership_id is not None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No autorizado")
     return user
 
@@ -132,7 +132,7 @@ def require_master_admin(user: TenantUser = Depends(current_master_user)) -> Ten
 def require_superadmin(user: TenantUser = Depends(current_master_user)) -> TenantUser:
     """Require a platform identity for the isolated Superadmin console."""
 
-    if user.platform_role_key != "superadmin":
+    if user.platform_role_key != "superadmin" or user.company_id is not None or user.membership_id is not None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo el Superadmin de plataforma puede acceder aquí")
     return user
 

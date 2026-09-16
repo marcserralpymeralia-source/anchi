@@ -377,8 +377,6 @@ def provision_external_tenant(
     tenant_database_url: str,
     company_name: str,
     company_slug: str,
-    admin_email: str,
-    admin_password: str,
 ) -> dict[str, str]:
     database_url = (tenant_database_url or "").strip()
     if not database_url:
@@ -387,8 +385,6 @@ def provision_external_tenant(
         raise ValueError("TENANT_DATABASE_URL cannot use sqlite in external tenant provisioning")
 
     company = _ensure_master_company(master_db, company_name, company_slug)
-    user = _ensure_master_user(master_db, admin_email, f"Administrador {company_name}", admin_password)
-    membership = _ensure_membership(master_db, user, company)
     tenant = _ensure_tenant_database_row(master_db, company, database_url)
 
     engine, tenant_session_factory = _session_factory(database_url)
@@ -433,8 +429,6 @@ def provision_external_tenant(
         "company_id": str(company.id),
         "company_slug": company.slug,
         "tenant_database": tenant.database_url,
-        "admin_email": admin_email,
-        "membership_id": str(membership.id),
         "health_status": tenant.health_status,
     }
 
@@ -445,18 +439,11 @@ def provision_demo_external_tenant(
     tenant_database_url: str,
     company_name: str = "Anchi Demo",
     company_slug: str = "anchi-demo",
-    admin_email: str = "admin@anchi.local",
-    admin_password: str = "AnchiDemo2026!",
 ) -> dict[str, str]:
     result = provision_external_tenant(
         master_db,
         tenant_database_url=tenant_database_url,
         company_name=company_name,
         company_slug=company_slug,
-        admin_email=admin_email,
-        admin_password=admin_password,
     )
-    return {
-        **result,
-        "admin_password": admin_password,
-    }
+    return result
