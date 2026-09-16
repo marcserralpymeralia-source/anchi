@@ -188,8 +188,13 @@ def synchronize_tenant_actors(master_db: Session, tenant: MasterTenantDatabase) 
         engine.dispose()
 
 
-def find_tenant_actor_id(database_url: str, *, company_id: int, master_user_id: int) -> int | None:
-    """Resolve the local actor projection without authenticating against it."""
+def find_tenant_actor_id(database_url: str, *, company_id: int, master_user_id: int, email: str | None = None) -> int | None:
+    """Resolve the local actor projection without authenticating against it.
+
+    Email is a compatibility fallback for tenant databases created before the
+    master-user bridge existed. The startup/provisioning synchronizer will
+    attach that legacy actor to the master identity on the next pass.
+    """
 
     if not isinstance(database_url, str) or not database_url.strip():
         return None
@@ -204,6 +209,14 @@ def find_tenant_actor_id(database_url: str, *, company_id: int, master_user_id: 
                     operational_models.User.actor_type == "human",
                 )
             )
+            if actor is None and email:
+                actor = tenant_db.scalar(
+                    select(operational_models.User).where(
+                        operational_models.User.company_id == company_id,
+                        operational_models.User.email == email,
+                        operational_models.User.actor_type == "human",
+                    )
+                )
             return actor.id if actor is not None else None
         finally:
             tenant_db.close()

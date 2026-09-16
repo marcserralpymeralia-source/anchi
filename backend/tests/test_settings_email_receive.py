@@ -81,7 +81,10 @@ class SettingsEmailReceiveHttpTests(unittest.TestCase):
                     self.assertEqual(saved.initial_history_limit, 20)
                     self.assertFalse(saved.auto_sync_enabled)
                     self.assertFalse(saved.auto_process_on_fetch)
-                    self.assertIsNone(saved.updated_by)
+                    # The application reconciles the tenant actor projection
+                    # during startup, so settings changes remain attributable
+                    # after a legacy local-user row has been removed.
+                    self.assertIsNotNone(saved.updated_by)
                     encrypted_password = saved.imap_password_encrypted
 
                 self.assertIsNotNone(encrypted_password)

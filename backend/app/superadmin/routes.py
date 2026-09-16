@@ -12,7 +12,7 @@ from app.auth.sessions import rotate_server_session
 from app.core.templating import templates
 from app.master.database import get_master_db
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser, PlatformAuditLog
-from app.master.provisioning import find_tenant_actor_id
+from app.master.provisioning import find_tenant_actor_id, synchronize_tenant_actors
 from app.master.service import TenantUser
 from app.superadmin.metrics import latest_health_snapshots
 from app.superadmin.service import TENANT_ROLES, create_company, create_company_user, platform_stats, retry_company_provisioning, toggle_company, toggle_user
@@ -146,7 +146,24 @@ def enter_company(
     request.session["company_slug"] = company.slug
     request.session["tenant_session_version"] = user.session_version
     request.session.pop("tenant_actor_id", None)
-    actor_id = find_tenant_actor_id(tenant_db.database_url, company_id=company.id, master_user_id=user.id)
+    actor_id = find_tenant_actor_id(
+        tenant_db.database_url,
+        company_id=company.id,
+        master_user_id=user.id,
+        email=user.email,
+    )
+    if actor_id is None:
+        try:
+            synchronize_tenant_actors(master_db, tenant_db)
+        except Exception:  # noqa: BLE001
+            actor_id = None
+        else:
+            actor_id = find_tenant_actor_id(
+                tenant_db.database_url,
+                company_id=company.id,
+                master_user_id=user.id,
+                email=user.email,
+            )
     if actor_id is not None:
         request.session["tenant_actor_id"] = actor_id
     else:

@@ -15,7 +15,7 @@ from app.core.templating import templates
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser
 from app.core.config import get_settings
 from app.master.database import get_master_db
-from app.master.provisioning import find_tenant_actor_id
+from app.master.provisioning import find_tenant_actor_id, synchronize_tenant_actors
 from app.master.service import is_configured_platform_owner
 from app.setup.service import get_setup_status
 from app.tenancy.database import tenant_db_session
@@ -23,6 +23,51 @@ from app.settings.branding import branding_to_dict, default_branding_payload
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _resolve_tenant_actor_id(
+    master_db: Session,
+    *,
+    database_url: str,
+    company_id: int,
+    master_user_id: int,
+    email: str,
+) -> int | None:
+    """Resolve an actor and repair legacy/missing projections once if needed."""
+
+    actor_id = find_tenant_actor_id(
+        database_url,
+        company_id=company_id,
+        master_user_id=master_user_id,
+        email=email,
+    )
+    if actor_id is not None:
+        return actor_id
+
+    tenant_row = master_db.scalar(
+        select(MasterTenantDatabase).where(
+            MasterTenantDatabase.company_id == company_id,
+            MasterTenantDatabase.is_active.is_(True),
+        )
+    )
+    if tenant_row is None or tenant_row.database_url != database_url:
+        return None
+    try:
+        synchronize_tenant_actors(master_db, tenant_row)
+    except Exception:  # noqa: BLE001
+        logger.warning(
+            "No se pudo reparar la identidad local company_id=%s master_user_id=%s",
+            company_id,
+            master_user_id,
+            exc_info=True,
+        )
+        return None
+    return find_tenant_actor_id(
+        database_url,
+        company_id=company_id,
+        master_user_id=master_user_id,
+        email=email,
+    )
 
 
 @router.get("/login")
@@ -128,7 +173,13 @@ def login(
         request.session["tenant_session_version"] = getattr(user, "session_version", 1)
         request.session.pop("tenant_actor_id", None)
         if user.company_id and getattr(user, "database_url", None):
-            actor_id = find_tenant_actor_id(user.database_url, company_id=user.company_id, master_user_id=user.id)
+            actor_id = _resolve_tenant_actor_id(
+                master_db,
+                database_url=user.database_url,
+                company_id=user.company_id,
+                master_user_id=user.id,
+                email=user.email,
+            )
             if actor_id is not None:
                 request.session["tenant_actor_id"] = actor_id
             else:
@@ -324,7 +375,13 @@ def select_company(
         )
     )
     if tenant_row and tenant_row.database_url:
-        actor_id = find_tenant_actor_id(tenant_row.database_url, company_id=membership.company_id, master_user_id=user.id)
+        actor_id = _resolve_tenant_actor_id(
+            master_db,
+            database_url=tenant_row.database_url,
+            company_id=membership.company_id,
+            master_user_id=user.id,
+            email=user.email,
+        )
         if actor_id is not None:
             request.session["tenant_actor_id"] = actor_id
         else:

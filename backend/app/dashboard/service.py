@@ -894,8 +894,11 @@ def operational_summary(db: Session, company_id: int, filters: dict) -> dict:
     today = datetime.now(timezone.utc).date()
     orders_stmt = select(Order).where(Order.company_id == company_id).options(
         joinedload(Order.email),
-        selectinload(Order.customer),
-        selectinload(Order.validated_customer),
+        # Both relationships point to the same customer table. Joined eager
+        # loading keeps SQLAlchemy from issuing two equivalent IN queries
+        # when the detected and validated customer are the same row.
+        joinedload(Order.customer),
+        joinedload(Order.validated_customer),
     )
     if filters.get("has_pdf"):
         orders_stmt = orders_stmt.options(
@@ -1065,8 +1068,8 @@ def workbench_summary(db: Session, company_id: int, filters: dict, *, include_me
 
     order_load_options = [
         joinedload(Order.email),
-        selectinload(Order.customer),
-        selectinload(Order.validated_customer),
+        joinedload(Order.customer),
+        joinedload(Order.validated_customer),
     ]
     if mapped_filters.get("has_pdf"):
         order_load_options.extend(
@@ -1289,8 +1292,8 @@ def dashboard_summary(db: Session, company_id: int, filters: dict) -> dict:
     settings = get_or_create_settings(db, ScoringSettings, company_id)
     orders_stmt = select(Order).where(Order.company_id == company_id).options(
         joinedload(Order.email),
-        selectinload(Order.customer),
-        selectinload(Order.validated_customer),
+        joinedload(Order.customer),
+        joinedload(Order.validated_customer),
     )
     if filters.get("has_pdf"):
         orders_stmt = orders_stmt.options(
