@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 
@@ -17,6 +17,8 @@ from app.core.logging import configure_logging
 from app.core.performance import configure_performance
 from app.core.lifespan import app_lifespan
 from app.core.middleware import branding_middleware
+from app.core.csrf import validate_request_csrf
+from app.auth.session_middleware import ServerSideSessionMiddleware
 from app.core.router_registry import get_registered_routers
 from app.core.templating import templates
 from app.settings.branding import branding_css_vars
@@ -100,20 +102,22 @@ def create_app() -> FastAPI:
     configure_logging()
     configure_performance()
     settings = get_settings()
-    app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=app_lifespan)
+    app = FastAPI(title=settings.app_name, debug=settings.debug, lifespan=app_lifespan, dependencies=[Depends(validate_request_csrf)])
     # The branding middleware needs the decoded session to resolve the tenant.
     # Register it before SessionMiddleware so Starlette executes the session
     # middleware first on incoming requests.
     app.middleware("http")(branding_middleware)
-    app.add_middleware(
-        SessionMiddleware,
-        secret_key=settings.app_secret_key,
-        session_cookie=settings.session_cookie,
-        https_only=bool(settings.session_cookie_secure),
-        same_site=settings.session_cookie_samesite or "lax",
-        max_age=settings.session_max_age,
-        domain=settings.session_cookie_domain or None,
-    )
+    session_middleware = ServerSideSessionMiddleware if settings.environment != "test" else SessionMiddleware
+    session_kwargs = {
+        "session_cookie": settings.session_cookie,
+        "https_only": bool(settings.session_cookie_secure),
+        "same_site": settings.session_cookie_samesite or "lax",
+        "max_age": settings.session_max_age,
+        "domain": settings.session_cookie_domain or None,
+    }
+    if session_middleware is SessionMiddleware:
+        session_kwargs["secret_key"] = settings.app_secret_key
+    app.add_middleware(session_middleware, **session_kwargs)
     if settings.allowed_hosts:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_hosts)
     cors_origins = settings.cors_allowed_origins

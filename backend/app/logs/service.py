@@ -14,15 +14,29 @@ from app.core.timezones import DEFAULT_TIMEZONE, format_local_datetime, resolve_
 def _audit_user_id(db: Session, user: User | None) -> int | None:
     if not user:
         return None
-    user_id = getattr(user, "id", None)
-    if user_id is None:
-        return None
+    user_id = getattr(user, "tenant_actor_id", None)
+    master_user_id = getattr(user, "master_user_id", None) or getattr(user, "id", None)
     try:
-        if db.get(User, user_id) is None:
-            return None
+        if user_id is not None:
+            actor = db.get(User, user_id)
+            if actor is not None and actor.company_id == getattr(user, "company_id", actor.company_id):
+                return actor.id
+        if master_user_id is not None and getattr(user, "tenant_actor_id", None) is not None:
+            actor = (
+                db.query(User)
+                .filter(User.master_user_id == master_user_id, User.company_id == getattr(user, "company_id", None))
+                .first()
+            )
+            if actor is not None:
+                return actor.id
+        # Keep accepting a concrete tenant User object used by workers and
+        # legacy code; a TenantUser falls through to its master id above.
+        if user_id is None and master_user_id is not None and getattr(user, "master_user_id", None) is None:
+            actor = db.get(User, master_user_id)
+            return actor.id if actor is not None else None
     except Exception:
         return None
-    return user_id
+    return None
 
 
 def log_action(

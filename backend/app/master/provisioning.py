@@ -3,13 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from sqlalchemy import create_engine, func, select, text
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import Session, selectinload, sessionmaker
 
+from app.core.permissions import DEFAULT_ROLE_PERMISSIONS
 from app.core.security import hash_password
 from app.db.database import Base
 from app.db.models import Company as TenantCompany
 from app.db import models as operational_models  # noqa: F401
-from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser
+from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser, utcnow
 from app.master.service import slugify
 from app.tenancy.migrations import ensure_tenant_migration_record, ensure_tenant_schema
 
@@ -104,6 +105,114 @@ def _session_factory(database_url: str) -> tuple[object, sessionmaker[Session]]:
     return engine, sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
+def synchronize_tenant_actors(master_db: Session, tenant: MasterTenantDatabase) -> int:
+    """Project active master memberships into the tenant actor table.
+
+    Existing installations may predate the identity bridge, so this operation
+    links legacy actors by email when possible and never removes local rows.
+    It runs during startup/provisioning, not on every request.
+    """
+
+    database_url = tenant.database_url
+    if not isinstance(database_url, str) or not database_url.strip():
+        return 0
+    memberships = master_db.scalars(
+        select(CompanyMembership)
+        .options(selectinload(CompanyMembership.user), selectinload(CompanyMembership.company))
+        .where(CompanyMembership.company_id == tenant.company_id)
+    ).all()
+    if not memberships:
+        return 0
+
+    engine, session_factory = _session_factory(database_url)
+    Base.metadata.create_all(bind=engine)
+    tenant_db = session_factory()
+    updated = 0
+    try:
+        roles = {
+            role.name: role
+            for role in tenant_db.scalars(select(operational_models.Role).where(operational_models.Role.company_id == tenant.company_id)).all()
+        }
+        for membership in memberships:
+            role_key = membership.role_key or "Operador"
+            if role_key == "Superadmin":
+                role_key = "Administrador"
+            role = roles.get(role_key)
+            if role is None:
+                role = operational_models.Role(
+                    company_id=tenant.company_id,
+                    name=role_key,
+                    permissions=DEFAULT_ROLE_PERMISSIONS.get(role_key, ""),
+                )
+                tenant_db.add(role)
+                tenant_db.flush()
+                roles[role.name] = role
+            actor = tenant_db.scalar(
+                select(operational_models.User).where(
+                    operational_models.User.company_id == tenant.company_id,
+                    operational_models.User.master_user_id == membership.user_id,
+                )
+            )
+            if actor is None:
+                actor = tenant_db.scalar(
+                    select(operational_models.User).where(
+                        operational_models.User.company_id == tenant.company_id,
+                        operational_models.User.email == membership.user.email,
+                    )
+                )
+            if actor is None:
+                actor = operational_models.User(
+                    company_id=tenant.company_id,
+                    role_id=role.id,
+                    email=membership.user.email,
+                    name=membership.user.full_name,
+                    password_hash=membership.user.password_hash,
+                    is_active=membership.user.is_active and membership.is_active,
+                    master_user_id=membership.user_id,
+                    actor_type="human",
+                )
+                tenant_db.add(actor)
+            else:
+                actor.master_user_id = membership.user_id
+                actor.actor_type = "human"
+                actor.role_id = role.id
+                actor.email = membership.user.email
+                actor.name = membership.user.full_name
+                actor.password_hash = membership.user.password_hash
+                actor.is_active = membership.user.is_active and membership.is_active
+            updated += 1
+        tenant_db.commit()
+        return updated
+    finally:
+        tenant_db.close()
+        engine.dispose()
+
+
+def find_tenant_actor_id(database_url: str, *, company_id: int, master_user_id: int) -> int | None:
+    """Resolve the local actor projection without authenticating against it."""
+
+    if not isinstance(database_url, str) or not database_url.strip():
+        return None
+    engine, session_factory = _session_factory(database_url)
+    try:
+        tenant_db = session_factory()
+        try:
+            actor = tenant_db.scalar(
+                select(operational_models.User).where(
+                    operational_models.User.company_id == company_id,
+                    operational_models.User.master_user_id == master_user_id,
+                    operational_models.User.actor_type == "human",
+                )
+            )
+            return actor.id if actor is not None else None
+        finally:
+            tenant_db.close()
+    except Exception:  # noqa: BLE001
+        return None
+    finally:
+        engine.dispose()
+
+
 def _copy_company_rows(source_db: Session, target_db: Session, company_id: int) -> int:
     inserted = 0
     target_db.execute(text("PRAGMA foreign_keys=OFF"))
@@ -171,6 +280,95 @@ def provision_company_database(master_db: Session, legacy_db: Session, company: 
         engine.dispose()
     master_db.commit()
     return tenant_db, was_provisioned
+
+
+def provision_local_tenant(
+    master_db: Session,
+    *,
+    company: MasterCompany,
+    admin_user: MasterUser,
+    admin_role_key: str = "Administrador",
+) -> MasterTenantDatabase:
+    """Create an isolated local tenant and its first actor.
+
+    This is intentionally limited to local SQLite development/demo mode. A
+    production deployment must provide an explicit tenant database provisioner
+    for the selected external database provider rather than silently reusing a
+    shared connection.
+    """
+
+    database_url = tenant_database_url(company)
+    tenant_db = _ensure_tenant_database_row(master_db, company, database_url)
+    engine, session_factory = _session_factory(database_url)
+    Base.metadata.create_all(bind=engine)
+    tenant_session = session_factory()
+    try:
+        tenant_company = tenant_session.get(TenantCompany, company.id)
+        if tenant_company is None:
+            tenant_company = TenantCompany(
+                id=company.id,
+                name=company.name,
+                legal_name=company.legal_name or company.name,
+                active=True,
+            )
+            tenant_session.add(tenant_company)
+            tenant_session.flush()
+        role = tenant_session.scalar(
+            select(operational_models.Role).where(
+                operational_models.Role.company_id == company.id,
+                operational_models.Role.name == admin_role_key,
+            )
+        )
+        if role is None:
+            role = operational_models.Role(
+                company_id=company.id,
+                name=admin_role_key,
+                permissions=DEFAULT_ROLE_PERMISSIONS.get(admin_role_key, DEFAULT_ROLE_PERMISSIONS["Administrador"]),
+            )
+            tenant_session.add(role)
+            tenant_session.flush()
+        local_user = tenant_session.scalar(
+            select(operational_models.User).where(
+                operational_models.User.company_id == company.id,
+                operational_models.User.email == admin_user.email,
+            )
+        )
+        if local_user is None:
+            local_user = operational_models.User(
+                company_id=company.id,
+                role_id=role.id,
+                email=admin_user.email,
+                name=admin_user.full_name,
+                password_hash=admin_user.password_hash,
+                is_active=admin_user.is_active,
+                master_user_id=admin_user.id,
+                actor_type="human",
+            )
+            tenant_session.add(local_user)
+        else:
+            local_user.role_id = role.id
+            local_user.name = admin_user.full_name
+            local_user.password_hash = admin_user.password_hash
+            local_user.is_active = admin_user.is_active
+            local_user.master_user_id = admin_user.id
+        tenant_session.commit()
+        ensure_tenant_schema(database_url, company_id=company.id)
+        tenant_db.health_status = "ok"
+        tenant_db.provisioned_at = tenant_db.provisioned_at or utcnow()
+        tenant_db.notes = "Provisioned by Superadmin"
+        company.provisioning_status = "ready"
+        company.status = "active"
+        master_db.commit()
+        return tenant_db
+    except Exception:
+        tenant_session.rollback()
+        tenant_db.health_status = "error"
+        company.provisioning_status = "error"
+        master_db.commit()
+        raise
+    finally:
+        tenant_session.close()
+        engine.dispose()
 
 
 def provision_external_tenant(

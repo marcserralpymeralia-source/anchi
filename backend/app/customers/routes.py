@@ -47,7 +47,7 @@ def _soft_delete_customer(db: Session, customer: Customer, user: TenantUser) -> 
     customer.status = "deleted"
     customer.company_inactive = True
     customer.deleted_at = datetime.now(timezone.utc)
-    customer.deleted_by = user.id
+    customer.deleted_by = getattr(user, "actor_id", getattr(user, "id", None))
     db.commit()
     log_action(db, company_id=user.company_id, user=user, action="customer.delete", entity_type="customer", entity_id=customer.id, message="Cliente eliminado")
 
@@ -379,7 +379,7 @@ def save_customer(
         company_id=user.company_id,
         data=customer_data,
         source="manual",
-        actor_id=user.id,
+        actor_id=user.actor_id,
         customer_id=id or None,
         conflict_policy="update_existing",
     ).entity
@@ -398,11 +398,11 @@ async def import_file(
     user: TenantUser = Depends(current_user),
 ):
     if file and file.filename:
-        preview = await create_preview(file, "customers", encoding=encoding)
+        preview = await create_preview(file, "customers", encoding=encoding, company_id=user.company_id)
     elif pasted_text.strip():
         filename = "clientes.csv"
         pasted_file = UploadFile(filename=filename, file=BytesIO(pasted_text.encode(encoding)))
-        preview = await create_preview(pasted_file, "customers", encoding=encoding)
+        preview = await create_preview(pasted_file, "customers", encoding=encoding, company_id=user.company_id)
     else:
         raise HTTPException(status_code=400, detail="Debes adjuntar un archivo o pegar una tabla para importar clientes.")
     templates_ = db.scalars(select(ImportMappingTemplate).where(ImportMappingTemplate.company_id == user.company_id, ImportMappingTemplate.entity_type == "customers").order_by(ImportMappingTemplate.name)).all()

@@ -585,7 +585,7 @@ class PendingOrdersAccessTests(unittest.TestCase):
         get_settings.cache_clear()
         with patch.dict(os.environ, {"APP_ENV": "development"}, clear=False):
             app = create_app()
-            session_middleware = next(middleware for middleware in app.user_middleware if middleware.cls.__name__ == "SessionMiddleware")
+            session_middleware = next(middleware for middleware in app.user_middleware if middleware.cls.__name__ in {"SessionMiddleware", "ServerSideSessionMiddleware"})
             self.assertEqual(session_middleware.kwargs["session_cookie"], get_settings().session_cookie)
             self.assertFalse(session_middleware.kwargs["https_only"])
             self.assertEqual(session_middleware.kwargs["same_site"], "lax")
@@ -610,7 +610,7 @@ class PendingOrdersAccessTests(unittest.TestCase):
             clear=False,
         ):
             app = create_app()
-            session_middleware = next(middleware for middleware in app.user_middleware if middleware.cls.__name__ == "SessionMiddleware")
+            session_middleware = next(middleware for middleware in app.user_middleware if middleware.cls.__name__ in {"SessionMiddleware", "ServerSideSessionMiddleware"})
             self.assertTrue(session_middleware.kwargs["https_only"])
         get_settings.cache_clear()
 

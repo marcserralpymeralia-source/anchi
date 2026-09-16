@@ -1,0 +1,142 @@
+{% extends "superadmin/layout.html" %}
+{% block content %}
+<div class="superadmin-page-header">
+  <div>
+    <span class="page-kicker">Acceso de usuarios</span>
+    <h1 class="page-title">Usuarios globales</h1>
+    <p class="muted">Administración centralizada de cuentas de usuario y asignación de membresías a empresas.</p>
+  </div>
+  <div>
+    <span class="count-badge count-badge-large">{{ user_total }} usuarios</span>
+  </div>
+</div>
+
+<section class="panel superadmin-panel superadmin-form-panel">
+  <div class="section-title-row">
+    <div>
+      <h2 class="panel-title">Añadir usuario</h2>
+      <p class="muted">Asigna una cuenta existente o crea un nuevo acceso para la empresa seleccionada.</p>
+    </div>
+  </div>
+
+  <form method="post" action="/superadmin/users" class="superadmin-form-grid js-loading-form">
+    <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
+
+    <div class="form-field">
+      <label for="user_company_id">Empresa asignada <span class="required-star">*</span></label>
+      <select id="user_company_id" name="company_id" required>
+        {% for company in companies %}
+          <option value="{{ company.id }}">{{ company.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="form-field">
+      <label for="user_full_name">Nombre completo <span class="required-star">*</span></label>
+      <input id="user_full_name" name="full_name" required maxlength="200" placeholder="Nombre y apellidos">
+    </div>
+
+    <div class="form-field">
+      <label for="user_email">Email corporativo <span class="required-star">*</span></label>
+      <input id="user_email" name="email" type="email" required placeholder="usuario@empresa.com">
+    </div>
+
+    <div class="form-field">
+      <label for="user_password">Contraseña inicial <small class="muted">(para nueva cuenta)</small></label>
+      <input id="user_password" name="password" type="password" minlength="12" placeholder="Mínimo 12 caracteres">
+    </div>
+
+    <div class="form-field">
+      <label for="user_role_key">Rol operativo <span class="required-star">*</span></label>
+      <select id="user_role_key" name="role_key">
+        {% for role in roles %}
+          <option value="{{ role }}">{{ role }}</option>
+        {% endfor %}
+      </select>
+    </div>
+
+    <div class="form-submit-row">
+      <button class="button" type="submit" data-loading-text="Creando acceso...">Crear acceso</button>
+    </div>
+  </form>
+</section>
+
+<section class="panel superadmin-panel">
+  <div class="section-title-row">
+    <div>
+      <h2 class="panel-title">Directorio de usuarios</h2>
+      <p class="muted">Lista de todos los usuarios registrados y sus permisos por empresa</p>
+    </div>
+  </div>
+
+  <div class="superadmin-table-wrap">
+    <table class="superadmin-table">
+      <thead>
+        <tr>
+          <th>Usuario</th>
+          <th>Estado</th>
+          <th>Empresas y rol</th>
+          <th>Último acceso</th>
+          <th style="text-align: right;">Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td>
+              <strong>{{ row.user.full_name }}</strong>
+              <small class="muted">{{ row.user.email }}</small>
+            </td>
+            <td>
+              <span class="status-pill {{ 'is-ok' if row.user.is_active else 'is-muted' }}">
+                {{ 'Activo' if row.user.is_active else 'Suspendido' }}
+              </span>
+            </td>
+            <td>
+              <div class="membership-chips-wrap">
+                {% for membership in row.memberships %}
+                  <span class="membership-chip">
+                    {{ membership.company.name if membership.company else ('Empresa #' ~ membership.company_id) }}
+                    <span class="membership-role-tag">{{ membership.role_key }}</span>
+                  </span>
+                {% else %}
+                  <span class="muted" style="font-size: 11px;">Sin empresas asignadas</span>
+                {% endfor %}
+              </div>
+            </td>
+            <td>
+              <span class="muted">{{ row.user.last_login_at | local_dt(default_timezone, "%d/%m/%Y %H:%M", "Nunca") }}</span>
+            </td>
+            <td class="superadmin-actions" style="text-align: right; justify-content: flex-end;">
+              <form method="post" action="/superadmin/users/{{ row.user.id }}/toggle" style="margin: 0;">
+                <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
+                <button class="button secondary compact-button" type="submit"{% if row.user.id == user.id %} disabled title="No puedes suspender tu propia cuenta"{% endif %}>
+                  {{ 'Suspender' if row.user.is_active else 'Reactivar' }}
+                </button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="5" class="superadmin-empty">No hay usuarios registrados.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  {% if total_pages > 1 %}
+    <nav class="superadmin-pagination" aria-label="Paginación de usuarios">
+      <span class="muted">Página <strong>{{ page }}</strong> de <strong>{{ total_pages }}</strong></span>
+      <div class="pagination-actions">
+        {% if page > 1 %}
+          <a class="button secondary compact-button" href="/superadmin/users?page={{ page - 1 }}">Anterior</a>
+        {% endif %}
+        {% if page < total_pages %}
+          <a class="button secondary compact-button" href="/superadmin/users?page={{ page + 1 }}">Siguiente</a>
+        {% endif %}
+      </div>
+    </nav>
+  {% endif %}
+</section>
+{% endblock %}

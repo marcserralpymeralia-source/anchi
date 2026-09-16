@@ -431,12 +431,12 @@ class SecurityConfigurationTests(unittest.TestCase):
             get_settings.cache_clear()
             app = create_app()
             middleware_names = {middleware.cls.__name__ for middleware in app.user_middleware}
-            self.assertIn("SessionMiddleware", middleware_names)
+            self.assertTrue({"SessionMiddleware", "ServerSideSessionMiddleware"} & middleware_names)
             self.assertIn("TrustedHostMiddleware", middleware_names)
             self.assertIn("CORSMiddleware", middleware_names)
             self.assertFalse(app.debug)
 
-            session_middleware = next(middleware for middleware in app.user_middleware if middleware.cls.__name__ == "SessionMiddleware")
+            session_middleware = next(middleware for middleware in app.user_middleware if middleware.cls.__name__ in {"SessionMiddleware", "ServerSideSessionMiddleware"})
             self.assertFalse(session_middleware.kwargs["https_only"])
             self.assertEqual(session_middleware.kwargs["same_site"], "lax")
 
@@ -464,11 +464,11 @@ class SecurityConfigurationTests(unittest.TestCase):
             get_settings.cache_clear()
             app = create_app()
             middleware_names = {middleware.cls.__name__ for middleware in app.user_middleware}
-            self.assertIn("SessionMiddleware", middleware_names)
+            self.assertTrue({"SessionMiddleware", "ServerSideSessionMiddleware"} & middleware_names)
             self.assertIn("TrustedHostMiddleware", middleware_names)
             self.assertIn("CORSMiddleware", middleware_names)
 
-            session_middleware = next(middleware for middleware in app.user_middleware if middleware.cls.__name__ == "SessionMiddleware")
+            session_middleware = next(middleware for middleware in app.user_middleware if middleware.cls.__name__ in {"SessionMiddleware", "ServerSideSessionMiddleware"})
             self.assertTrue(session_middleware.kwargs["https_only"])
             self.assertEqual(session_middleware.kwargs["same_site"], "lax")
             self.assertFalse(app.debug)

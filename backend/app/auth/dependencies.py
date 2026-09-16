@@ -5,8 +5,11 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.auth.redirects import login_location_for_request
+from app.auth.sessions import validate_server_session
+from app.core.permissions import has_permission, permission_for_request
 from app.master.database import get_master_db
-from app.master.service import TenantUser, load_tenant_context
+from app.master.models import MasterUser
+from app.master.service import TenantUser, _platform_user_to_context, load_tenant_context
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +25,9 @@ def _has_complete_session_identity(session: dict) -> bool:
 def current_tenant_user(request: Request, master_db: Session = Depends(get_master_db)) -> TenantUser:
     tenant = getattr(request.state, "tenant", None)
     if tenant and tenant.user and tenant.user.is_active:
+        required_permission = permission_for_request(request.method, request.url.path)
+        if required_permission and not has_permission(tenant.user, required_permission):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes permisos para esta acción")
         return tenant.user
     session = request.scope.get("session") or {}
 
@@ -41,8 +47,14 @@ def current_tenant_user(request: Request, master_db: Session = Depends(get_maste
         raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": login_location_for_request(request)}) from exc
     if tenant and tenant.user and tenant.user.is_active:
         request.state.tenant = tenant
+        required_permission = permission_for_request(request.method, request.url.path)
+        if required_permission and not has_permission(tenant.user, required_permission):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes permisos para esta acción")
         return tenant.user
 
+    if getattr(request.state, "auth_invalid", False):
+        request.session.clear()
+        raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": login_location_for_request(request)})
     if _has_complete_session_identity(session):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Membresia no disponible")
     if _has_any_session_identity(session):
@@ -55,6 +67,28 @@ def current_user(request: Request, master_db: Session = Depends(get_master_db)) 
 
 
 def current_master_user(request: Request, master_db: Session = Depends(get_master_db)) -> TenantUser:
+    platform_user_id = (request.scope.get("session") or {}).get("platform_user_id")
+    if platform_user_id:
+        platform_user = master_db.get(MasterUser, platform_user_id)
+        expected_version = (request.scope.get("session") or {}).get("platform_session_version")
+        try:
+            session_version_matches = (
+                platform_user is not None
+                and (expected_version is None or int(expected_version) == int(platform_user.session_version or 1))
+            )
+        except (TypeError, ValueError):
+            session_version_matches = False
+        if (
+            platform_user
+            and platform_user.is_active
+            and platform_user.platform_role_key == "superadmin"
+            and session_version_matches
+            and validate_server_session(request, master_db, platform_user)
+        ):
+            return _platform_user_to_context(platform_user)
+        if hasattr(request, "session"):
+            request.session.clear()
+        raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": login_location_for_request(request)})
     return current_tenant_user(request, master_db)
 
 
@@ -90,8 +124,16 @@ def require_master_role(*roles: str):
 
 
 def require_master_admin(user: TenantUser = Depends(current_master_user)) -> TenantUser:
-    if user.role.name != "Superadmin":
+    if user.platform_role_key != "superadmin":
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No autorizado")
+    return user
+
+
+def require_superadmin(user: TenantUser = Depends(current_master_user)) -> TenantUser:
+    """Require a platform identity for the isolated Superadmin console."""
+
+    if user.platform_role_key != "superadmin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo el Superadmin de plataforma puede acceder aquí")
     return user
 
 

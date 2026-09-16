@@ -508,7 +508,7 @@ async def whatsapp_inbox_reply(
             company_id=user.company_id,
             conversation_id=conversation_id,
             body=clean_body,
-            user_id=user.id,
+            user_id=user.actor_id,
             attachments=attachment_payloads,
             idempotency_key=header_idempotency_key or form_idempotency_key,
         )
@@ -524,7 +524,12 @@ async def sync_media_attachment(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
-    attachment = db.get(MessageAttachment, attachment_id)
+    attachment = db.scalar(
+        select(MessageAttachment).where(
+            MessageAttachment.id == attachment_id,
+            MessageAttachment.company_id == user.company_id,
+        )
+    )
     if attachment and attachment.inbound_message_id:
         try:
             await download_whatsapp_media(db, company_id=user.company_id, inbound_message_id=attachment.inbound_message_id)

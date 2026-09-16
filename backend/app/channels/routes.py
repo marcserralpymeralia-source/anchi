@@ -187,7 +187,7 @@ def _process_channel_entry_response(db: Session, user: TenantUser, source_kind: 
         order = db.scalar(select(Order).where(Order.company_id == user.company_id, Order.email_id == source.id))
         if order:
             return RedirectResponse(f"/orders/{order.id}", status_code=303)
-        job = enqueue_job(db, company_id=user.company_id, job_type="process_email", payload={"email_id": source.id}, created_by_user_id=user.id)
+        job = enqueue_job(db, company_id=user.company_id, job_type="process_email", payload={"email_id": source.id}, created_by_user_id=user.actor_id)
         result = execute_job_inline(db, job)
         log_action(
             db,
@@ -211,7 +211,7 @@ def _process_channel_entry_response(db: Session, user: TenantUser, source_kind: 
             company_id=user.company_id,
             job_type="process_inbound_message",
             payload={"inbound_message_id": source.id, "channel": source_kind, "source": source.provider or "manual_import"},
-            created_by_user_id=user.id,
+            created_by_user_id=user.actor_id,
         )
         log_action(db, company_id=user.company_id, user=user, action="channel.process.inbound", entity_type="job", entity_id=job.id, message=f"Procesamiento encolado para entrada {source.id}")
         db.commit()
@@ -287,7 +287,7 @@ def sync_entries(db: Session = Depends(get_tenant_db), user: TenantUser = Depend
         company_id=user.company_id,
         job_type="email_sync",
         payload={"auto_process": False, "unread_only": False, "limit": safe_limit},
-        created_by_user_id=user.id,
+        created_by_user_id=user.actor_id,
     )
     result = execute_job_inline(db, job)
     log_action(
@@ -363,6 +363,7 @@ def preview_attachment(
             not source
             or not attachment
             or source.company_id != user.company_id
+            or attachment.company_id != user.company_id
             or attachment.email_id != source.id
         ):
             return PlainTextResponse("No encontrado", status_code=404)
@@ -374,6 +375,7 @@ def preview_attachment(
             not source
             or not attachment
             or source.company_id != user.company_id
+            or attachment.company_id != user.company_id
             or attachment.inbound_message_id != source.id
         ):
             return PlainTextResponse("No encontrado", status_code=404)
@@ -483,6 +485,7 @@ def download_attachment(
             not source
             or not attachment
             or source.company_id != user.company_id
+            or attachment.company_id != user.company_id
             or attachment.email_id != source.id
         ):
             return PlainTextResponse("No encontrado", status_code=404)
@@ -493,6 +496,7 @@ def download_attachment(
             not source
             or not attachment
             or source.company_id != user.company_id
+            or attachment.company_id != user.company_id
             or attachment.inbound_message_id != source.id
         ):
             return PlainTextResponse("No encontrado", status_code=404)

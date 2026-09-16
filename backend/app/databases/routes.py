@@ -123,7 +123,7 @@ def save_customer(
             "status": "inactive" if company_inactive else status,
         },
         source="manual",
-        actor_id=user.id,
+        actor_id=user.actor_id,
         customer_id=id or None,
         conflict_policy="update_existing",
     ).entity
@@ -188,7 +188,7 @@ def save_product(
             "status": "inactive" if obsolete else status,
         },
         source="manual",
-        actor_id=user.id,
+        actor_id=user.actor_id,
         product_id=id or None,
         conflict_policy="update_existing",
     ).entity
@@ -199,13 +199,13 @@ def save_product(
 
 @router.post("/databases/import/customers")
 async def import_customers_file(file: UploadFile = File(...), db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
-    preview = await create_preview(file, "customers")
+    preview = await create_preview(file, "customers", company_id=user.company_id)
     job = enqueue_job(
         db,
         company_id=user.company_id,
         job_type="import_file",
         payload={"token": preview["token"], "filename": preview["filename"], "entity_type": "customers", "encoding": "utf-8"},
-        created_by_user_id=user.id,
+        created_by_user_id=user.actor_id,
     )
     log_action(db, company_id=user.company_id, user=user, action="database.customers.import", entity_type="job", entity_id=job.id, message="Importacion de clientes encolada")
     return RedirectResponse("/imports/history", status_code=303)
@@ -213,13 +213,13 @@ async def import_customers_file(file: UploadFile = File(...), db: Session = Depe
 
 @router.post("/databases/import/products")
 async def import_products_file(file: UploadFile = File(...), db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
-    preview = await create_preview(file, "products")
+    preview = await create_preview(file, "products", company_id=user.company_id)
     job = enqueue_job(
         db,
         company_id=user.company_id,
         job_type="import_file",
         payload={"token": preview["token"], "filename": preview["filename"], "entity_type": "products", "encoding": "utf-8"},
-        created_by_user_id=user.id,
+        created_by_user_id=user.actor_id,
     )
     log_action(db, company_id=user.company_id, user=user, action="database.products.import", entity_type="job", entity_id=job.id, message="Importacion de productos encolada")
     return RedirectResponse("/imports/history", status_code=303)

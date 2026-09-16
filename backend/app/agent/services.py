@@ -2,7 +2,6 @@ import json
 import re
 from datetime import date, datetime, timezone
 from difflib import SequenceMatcher
-from pathlib import Path
 
 from sqlalchemy.orm import Session
 
@@ -15,6 +14,7 @@ from app.db.models import Company, Customer, CustomerAlias, CustomerContactPoint
 from app.messages.service import NormalizedMessage, persist_normalized_message
 from app.orders.state import ORDER_STATE
 from app.logs.service import log_action
+from app.core.attachment_storage import save_attachment
 from app.settings.integrations import classify_sample, extract_sample
 from app.settings.service import get_or_create_settings
 
@@ -443,12 +443,7 @@ class MockAgentService:
         self.matching = MatchingService()
         self.scoring = ScoringService()
 
-    def _create_mock_pdf(self, order_key: str) -> Path:
-        storage_dir = Path(__file__).resolve().parents[2] / "storage" / "attachments"
-        storage_dir.mkdir(parents=True, exist_ok=True)
-        path = storage_dir / f"{order_key}.pdf"
-        if path.exists():
-            return path
+    def _create_mock_pdf(self, order_key: str, company_id: int) -> str:
         pdf = b"""%PDF-1.4
 1 0 obj
 << /Type /Catalog /Pages 2 0 R >>
@@ -493,8 +488,12 @@ startxref
 549
 %%EOF
 """
-        path.write_bytes(pdf)
-        return path
+        return save_attachment(
+            filename=f"{order_key}.pdf",
+            payload=pdf,
+            content_type="application/pdf",
+            company_id=company_id,
+        )
 
     def create_mock_order(self, db: Session, company_id: int) -> Order:
         company = db.scalar(select(Company).where(Company.id == company_id))
@@ -512,14 +511,14 @@ startxref
         )
         db.add(email)
         db.flush()
-        pdf_path = self._create_mock_pdf(order_key)
+        pdf_storage_ref = self._create_mock_pdf(order_key, company_id)
         db.add(
             EmailAttachment(
                 company_id=company_id,
                 email_id=email.id,
-                filename=pdf_path.name,
+                filename=f"{order_key}.pdf",
                 content_type="application/pdf",
-                storage_path=str(pdf_path),
+                storage_path=pdf_storage_ref,
                 extracted_text=email.extracted_text,
             )
         )

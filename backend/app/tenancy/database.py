@@ -14,7 +14,7 @@ from app.auth.redirects import login_location_for_request
 from app.master.database import get_master_db
 from app.master.service import load_tenant_context
 from app.db.database import Base
-from app.tenancy.migrations import upgrade_tenant_schema
+from app.tenancy.migrations import tenant_migration_report, upgrade_tenant_schema
 
 
 def _connect_args(database_url: str) -> dict[str, object]:
@@ -77,8 +77,10 @@ def _infer_company_id(engine) -> int | None:  # noqa: ANN001
         inspector = inspect(conn)
         if "companies" not in inspector.get_table_names():
             return None
-        value = conn.execute(text("SELECT id FROM companies ORDER BY id ASC LIMIT 1")).scalar()
-    return int(value) if value is not None else None
+        values = conn.execute(text("SELECT id FROM companies ORDER BY id ASC LIMIT 2")).scalars().all()
+    if len(values) > 1:
+        raise RuntimeError("company_id es obligatorio cuando una base contiene más de una empresa")
+    return int(values[0]) if values else None
 
 
 def ensure_tenant_schema(database_url: str, *, company_id: int | None = None, application_version: str | None = None, baseline: bool = False) -> dict:
@@ -118,7 +120,6 @@ def get_tenant_db(request: Request, master_db: Session = Depends(get_master_db))
         raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": login_location_for_request(request)})
 
     try:
-        ensure_tenant_schema_once(database_url, company_id=tenant.company.id)
         SessionFactory = tenant_db_session(database_url)
         db = SessionFactory()
     except SQLAlchemyError:
@@ -128,6 +129,13 @@ def get_tenant_db(request: Request, master_db: Session = Depends(get_master_db))
             session.clear()
         raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": login_location_for_request(request)})
     try:
+        # Schema changes are applied during startup/provisioning, never while
+        # serving a normal navigation.  A read-only report lets us fail fast
+        # with a retryable 503 instead of turning a partial migration into a
+        # generic SQLAlchemy 500 response.
+        report = tenant_migration_report(db, tenant.company.id)
+        if not report.get("is_current"):
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Tenant no disponible")
         yield db
     finally:
         db.close()

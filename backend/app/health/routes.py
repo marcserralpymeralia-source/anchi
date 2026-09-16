@@ -69,12 +69,12 @@ def health_ready(request: Request, master_db: Session = Depends(get_master_db)):
         finally:
             tenant_db.close()
     master_schema_status = payload["master_schema_report"].get("status")
-    master_schema_ok = master_schema_status in {None, "missing", "incomplete", "current"}
+    master_schema_ok = master_schema_status == "current"
     payload["master_schema_ok"] = master_schema_ok
     payload["ok"] = bool(payload["master"] and (not tenant or payload.get("tenant_ping", True)) and master_schema_ok)
     if tenant and tenant.company.database_url:
         tenant_schema_status = payload["tenant_schema_report"].get("status")
-        tenant_schema_ok = tenant_schema_status in {None, "missing", "incomplete", "current"}
+        tenant_schema_ok = tenant_schema_status == "current"
         payload["tenant_schema_ok"] = tenant_schema_ok
         payload["ok"] = payload["ok"] and tenant_schema_ok
     return payload

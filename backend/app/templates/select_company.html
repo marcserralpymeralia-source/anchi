@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Seleccionar empresa · {{ app_settings.app_name }}</title>
+  <meta name="csrf-token" content="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
+  <link rel="stylesheet" href="{{ asset_url('styles.css') }}">
+  <script src="{{ asset_url('js/security.js') }}" defer></script>
+</head>
+<body class="auth-page">
+  <main class="auth-card" aria-labelledby="company-selection-title">
+    <div class="auth-brand">{{ app_settings.app_name }}</div>
+    <span class="eyebrow">Acceso multiempresa</span>
+    <h1 id="company-selection-title">Elige tu espacio de trabajo</h1>
+    <p class="auth-muted">{{ user.full_name or user.email }}, tienes acceso a varias empresas.</p>
+    {% if error %}<div class="flash error" role="alert">{{ error }}</div>{% endif %}
+    <form method="post" action="/select-company" class="stack">
+      <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
+      <input type="hidden" name="next" value="{{ next_url }}">
+      <fieldset class="company-choice-list">
+        <legend class="sr-only">Empresas disponibles</legend>
+        {% for membership in memberships %}
+        <label class="company-choice">
+          <input type="radio" name="membership_id" value="{{ membership.id }}"{% if loop.first %} checked{% endif %}>
+          <span><strong>{{ membership.company.name }}</strong><small>{{ membership.company.slug }} · {{ membership.role_key }}</small></span>
+        </label>
+        {% endfor %}
+      </fieldset>
+      <button class="button" type="submit">Continuar</button>
+    </form>
+  </main>
+</body>
+</html>

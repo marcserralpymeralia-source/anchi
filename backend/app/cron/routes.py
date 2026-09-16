@@ -11,7 +11,8 @@ from app.channels.service import is_channel_enabled
 from app.core.config import get_settings
 from app.db.models import EmailSettings
 from app.master.database import get_master_db
-from app.master.models import EmailSyncState, MasterTenantDatabase
+from app.master.models import EmailSyncState, MasterCompany, MasterTenantDatabase
+from app.superadmin.metrics import collect_platform_snapshots
 from app.settings.integrations import read_latest_imap_emails
 from app.settings.service import get_or_create_settings
 from app.tenancy.database import tenant_db_session
@@ -48,8 +49,16 @@ def jobs_cron(request: Request):
     _cron_authorized(request)
     settings = get_settings()
     batch_size = max(1, min(int(getattr(settings, "cron_job_batch_size", 5) or 5), 20))
-    result = run_worker_cycle(max_jobs=batch_size)
+    result = run_worker_cycle(max_jobs=batch_size, include_provisioning=True)
     return JSONResponse({"ok": True, **result})
+
+
+@router.api_route("/platform-snapshots", methods=["GET", "POST"])
+def platform_snapshots_cron(request: Request, master_db: Session = Depends(get_master_db)):
+    """Refresh platform health/usage outside Superadmin page requests."""
+
+    _cron_authorized(request)
+    return JSONResponse({"ok": True, **collect_platform_snapshots(master_db)})
 
 
 @router.api_route("/email-sync", methods=["GET", "POST"])
@@ -59,9 +68,12 @@ def email_sync_cron(request: Request, master_db: Session = Depends(get_master_db
     due_states = master_db.scalars(
         select(EmailSyncState)
         .join(MasterTenantDatabase, MasterTenantDatabase.company_id == EmailSyncState.company_id)
+        .join(MasterCompany, MasterCompany.id == MasterTenantDatabase.company_id)
         .where(
             MasterTenantDatabase.is_active.is_(True),
             MasterTenantDatabase.database_url.is_not(None),
+            MasterCompany.active.is_(True),
+            MasterCompany.status == "active",
             EmailSyncState.enabled.is_(True),
             EmailSyncState.channel_key == "email",
             EmailSyncState.next_run_at.is_not(None),
@@ -101,7 +113,7 @@ def email_sync_cron(request: Request, master_db: Session = Depends(get_master_db
             if not is_channel_enabled(db, tenant.company_id, "email"):
                 state.enabled = False
                 master_db.commit()
-                _release_lock(master_db, state, success=True)
+                _release_lock(master_db, state, owner="cron-email-sync", success=True)
                 result["skipped"] += 1
                 continue
 
@@ -110,7 +122,7 @@ def email_sync_cron(request: Request, master_db: Session = Depends(get_master_db
             if not settings.auto_sync_enabled:
                 state.enabled = False
                 master_db.commit()
-                _release_lock(master_db, state, success=True)
+                _release_lock(master_db, state, owner="cron-email-sync", success=True)
                 result["skipped"] += 1
                 continue
             sync_result = read_latest_imap_emails(
@@ -140,9 +152,9 @@ def email_sync_cron(request: Request, master_db: Session = Depends(get_master_db
             result["discarded"] += tenant_result["discarded"]
             result["errors"] += tenant_result["errors"]
             result["tenants"].append(tenant_result)
-            _release_lock(master_db, state, success=bool(sync_result.get("ok")), error=None if sync_result.get("ok") else str(sync_result.get("message") or "error"))
+            _release_lock(master_db, state, owner="cron-email-sync", success=bool(sync_result.get("ok")), error=None if sync_result.get("ok") else str(sync_result.get("message") or "error"))
         except Exception as exc:  # noqa: BLE001
-            _release_lock(master_db, state, success=False, error=str(exc))
+            _release_lock(master_db, state, owner="cron-email-sync", success=False, error=str(exc))
             result["errors"] += 1
             result["tenants"].append({"company_id": tenant.company_id, "ok": False, "message": str(exc)})
         finally:

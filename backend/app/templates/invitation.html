@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="es">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="csrf-token" content="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}"><title>Aceptar invitación · {{ app_settings.app_name }}</title><link rel="stylesheet" href="{{ asset_url('styles.css') }}"><script src="{{ asset_url('js/security.js') }}" defer></script></head>
+<body class="auth-page">
+  <main class="auth-card" aria-labelledby="invitation-title">
+    <div class="auth-brand">{{ app_settings.app_name }}</div>
+    <span class="eyebrow">Invitación de equipo</span>
+    <h1 id="invitation-title">Activa tu cuenta</h1>
+    <p class="auth-muted">Completa tus datos para acceder al espacio de trabajo de tu empresa.</p>
+    {% if error %}<div class="flash error" role="alert">{{ error }}</div>{% endif %}
+    <form method="post" class="stack">
+      <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
+      <label>Nombre completo<input name="full_name" autocomplete="name" required></label>
+      <label>Contraseña<input name="password" type="password" minlength="12" autocomplete="new-password" required><small class="muted">Mínimo 12 caracteres.</small></label>
+      <button class="button" type="submit">Activar cuenta</button>
+    </form>
+    <p class="muted" style="margin: 14px 0 0; text-align:center"><a href="/login">Volver al acceso</a></p>
+  </main>
+</body>
+</html>

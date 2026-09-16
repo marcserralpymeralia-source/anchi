@@ -789,7 +789,7 @@ async def manual_response(
     if not company or not tenant_db or company.id != user.company_id:
         return JSONResponse({"ok": False, "message": "tenant not found"}, status_code=404)
     try:
-        message = await send_manual_response(db, company_id=company.id, conversation_id=conversation_id, body=body, user_id=user.id, idempotency_key=idempotency_key, template_name=template_name, template_language=template_language)
+        message = await send_manual_response(db, company_id=company.id, conversation_id=conversation_id, body=body, user_id=user.actor_id, idempotency_key=idempotency_key, template_name=template_name, template_language=template_language)
     except ValueError as exc:
         return JSONResponse({"ok": False, "message": str(exc)}, status_code=404)
     except Exception as exc:  # noqa: BLE001

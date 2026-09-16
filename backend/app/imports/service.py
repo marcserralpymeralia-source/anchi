@@ -1,5 +1,7 @@
 import json
+import os
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from io import BytesIO
@@ -18,6 +20,17 @@ except Exception:  # pragma: no cover - optional dependency fallback
 from app.core.storage import ensure_directory, resolve_temp_storage_dir
 
 PREVIEW_DIR = resolve_temp_storage_dir("import_previews")
+_PREVIEW_TOKEN_RE = re.compile(r"^[0-9a-f]{32}$")
+try:
+    PREVIEW_TTL_SECONDS = max(int(os.getenv("IMPORT_PREVIEW_TTL_SECONDS", "3600") or 3600), 60)
+except ValueError:
+    PREVIEW_TTL_SECONDS = 3600
+
+
+def _preview_directory(company_id: int | None = None) -> Path:
+    if company_id is None:
+        return PREVIEW_DIR
+    return PREVIEW_DIR / f"company-{int(company_id)}"
 
 CUSTOMER_FIELDS = {
     "code": "Codigo cliente",
@@ -273,14 +286,15 @@ async def create_preview(
     entity_type: str,
     encoding: str = "utf-8",
     *,
+    company_id: int | None = None,
     customer_id: int | None = None,
     import_kind: str = "",
 ) -> dict:
     content = await file.read()
     token = uuid.uuid4().hex
     suffix = Path(file.filename or "import.csv").suffix.lower() or ".csv"
-    ensure_directory(PREVIEW_DIR)
-    (PREVIEW_DIR / f"{token}{suffix}").write_bytes(content)
+    preview_dir = ensure_directory(_preview_directory(company_id))
+    (preview_dir / f"{token}{suffix}").write_bytes(content)
     df = read_table_from_bytes(content, file.filename or "import.csv", encoding=encoding)
     columns = [str(column) for column in df.columns]
     return {
@@ -297,11 +311,21 @@ async def create_preview(
     }
 
 
-def read_preview(token: str, filename: str, encoding: str = "utf-8") -> pd.DataFrame:
-    matches = list(PREVIEW_DIR.glob(f"{token}.*"))
+def read_preview(token: str, filename: str, encoding: str = "utf-8", *, company_id: int | None = None) -> pd.DataFrame:
+    return _read_preview(token, filename, encoding=encoding, company_id=company_id)
+
+
+def _read_preview(token: str, filename: str, *, encoding: str = "utf-8", company_id: int | None = None) -> pd.DataFrame:
+    if not _PREVIEW_TOKEN_RE.fullmatch(str(token or "")):
+        raise FileNotFoundError("No se encontro la previsualizacion de importacion.")
+    matches = list(_preview_directory(company_id).glob(f"{token}.*"))
     if not matches:
         raise FileNotFoundError("No se encontro la previsualizacion de importacion.")
-    return read_table_from_bytes(matches[0].read_bytes(), filename or matches[0].name, encoding=encoding)
+    preview_path = matches[0]
+    if time.time() - preview_path.stat().st_mtime > PREVIEW_TTL_SECONDS:
+        preview_path.unlink(missing_ok=True)
+        raise FileNotFoundError("La previsualizacion de importacion ha caducado.")
+    return read_table_from_bytes(preview_path.read_bytes(), filename or preview_path.name, encoding=encoding)
 
 
 def as_bool(value: str) -> bool:
@@ -603,7 +627,16 @@ def confirm_import(
     if entity_type == "customers" and not _customer_name_is_mapped(mapping):
         raise ValueError("Debes mapear 'Razon social' o 'Nombre comercial' antes de importar clientes.")
     knowledge_service = LearningService() if entity_type == "customer_knowledge_articles" else None
-    customer = db.get(Customer, customer_id) if customer_id else None
+    customer = (
+        db.scalar(
+            select(Customer).where(
+                Customer.id == customer_id,
+                Customer.company_id == company_id,
+            )
+        )
+        if customer_id
+        else None
+    )
     if entity_type == "customer_knowledge_articles" and not customer:
         raise ValueError("Debes seleccionar un cliente antes de importar el histórico de artículos.")
     for row_index, row in df.iterrows():
@@ -632,7 +665,7 @@ def confirm_import(
                     company_id=company_id,
                     data=data,
                     source="import",
-                    actor_id=user.id,
+                    actor_id=getattr(user, "actor_id", getattr(user, "id", None)),
                     customer_id=existing.id if existing else None,
                     conflict_policy=conflict_policy,
                 )
@@ -729,7 +762,7 @@ def confirm_import(
                     company_id=company_id,
                     data=data,
                     source="import",
-                    actor_id=user.id,
+                    actor_id=getattr(user, "actor_id", getattr(user, "id", None)),
                     product_id=existing.id if existing else None,
                     conflict_policy=conflict_policy,
                 )
@@ -755,7 +788,7 @@ def confirm_import(
             db.add(ImportMappingTemplate(company_id=company_id, entity_type=entity_type, name=template_name, mapping_json=json.dumps(mapping)))
     job = ImportJob(
         company_id=company_id,
-        user_id=user.id,
+        user_id=getattr(user, "actor_id", getattr(user, "id", None)),
         entity_type=entity_type,
         filename=filename,
         rows_total=len(df),

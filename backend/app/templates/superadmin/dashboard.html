@@ -1,0 +1,128 @@
+{% extends "superadmin/layout.html" %}
+{% block content %}
+<section class="superadmin-kpis" aria-label="Indicadores de plataforma">
+  <article class="compact-card">
+    <span>Empresas</span>
+    <strong>{{ stats.companies_total }}</strong>
+    <small class="kpi-pill-safe">{{ stats.active_companies }} activas</small>
+  </article>
+  <article class="compact-card">
+    <span>Usuarios</span>
+    <strong>{{ stats.users_total }}</strong>
+    <small class="kpi-pill-safe">{{ stats.active_users }} activos</small>
+  </article>
+  <article class="compact-card">
+    <span>Membresías</span>
+    <strong>{{ stats.memberships_total }}</strong>
+    <small class="kpi-pill-neutral">Accesos asignados</small>
+  </article>
+  <article class="compact-card">
+    <span>Bases listas</span>
+    <strong>{{ stats.provisioned_companies }}</strong>
+    <small class="kpi-pill-reviewable">Provisionadas</small>
+  </article>
+  <article class="compact-card">
+    <span>Auditoría</span>
+    <strong>{{ stats.audit_events_total }}</strong>
+    <small class="kpi-pill-neutral">Eventos</small>
+  </article>
+  <article class="compact-card">
+    <span>Pedidos hoy</span>
+    <strong>{{ stats.orders_today }}</strong>
+    <small class="kpi-pill-safe">Snapshots</small>
+  </article>
+  <article class="compact-card">
+    <span>Mensajes hoy</span>
+    <strong>{{ stats.messages_today }}</strong>
+    <small class="kpi-pill-safe">Snapshots</small>
+  </article>
+</section>
+
+<section class="panel superadmin-panel">
+  <div class="section-title-row">
+    <div>
+      <h2 class="panel-title">Empresas recientes</h2>
+      <p class="muted">Últimas empresas registradas y estado operativo de su base de datos</p>
+    </div>
+    <div class="actions">
+      <a class="button secondary compact-button" href="/superadmin/companies">Gestionar empresas</a>
+    </div>
+  </div>
+
+  <div class="superadmin-table-wrap">
+    <table class="superadmin-table">
+      <thead>
+        <tr>
+          <th>Empresa</th>
+          <th>Estado</th>
+          <th>Base de datos</th>
+          <th>Usuarios</th>
+          <th style="text-align: right;">Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in companies %}
+          <tr>
+            <td>
+              <strong>{{ item.company.name }}</strong>
+              <small class="muted">{{ item.company.slug }}</small>
+            </td>
+            <td>
+              <span class="status-pill {{ 'is-ok' if item.company.active else 'is-muted' }}">
+                {{ 'Activa' if item.company.active else 'Suspendida' }}
+              </span>
+            </td>
+            <td>
+              <span class="status-pill {{ 'is-ok' if item.health and item.health.status == 'ok' else 'is-warning' }}">
+                {{ item.health.status if item.health else (item.tenant_db.health_status if item.tenant_db else 'Sin datos') }}
+              </span>
+              {% if item.health %}
+                <small class="muted" style="display: block; margin-top: 3px;">{{ item.health.latency_ms }} ms · {{ item.health.checked_at | local_dt(default_timezone, "%d/%m %H:%M", "") }}</small>
+              {% endif %}
+            </td>
+            <td>
+              <span class="count-badge">{{ item.memberships }}</span>
+            </td>
+            <td class="superadmin-actions" style="text-align: right; justify-content: flex-end;">
+              <form method="post" action="/superadmin/companies/{{ item.company.id }}/enter" style="margin: 0;">
+                <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
+                <button class="button secondary compact-button" type="submit">Entrar</button>
+              </form>
+              <a class="button secondary compact-button" href="/superadmin/users">Ver usuarios</a>
+            </td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="5" class="superadmin-empty">Todavía no hay empresas registradas.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="panel superadmin-panel">
+  <div class="section-title-row">
+    <div>
+      <h2 class="panel-title">Actividad reciente</h2>
+      <p class="muted">Trazabilidad y operaciones registradas en la plataforma</p>
+    </div>
+    <div class="actions">
+      <a class="button secondary compact-button" href="/superadmin/audit">Ver auditoría completa</a>
+    </div>
+  </div>
+
+  <div class="superadmin-activity-list">
+    {% for event in recent_audit %}
+      <div class="superadmin-activity-item">
+        <span class="superadmin-activity-dot"></span>
+        <span class="superadmin-activity-action">{{ event.action }}</span>
+        <span class="superadmin-activity-target">{{ event.target_type }}{% if event.target_id %} #{{ event.target_id }}{% endif %}</span>
+        <time class="superadmin-activity-time muted">{{ event.created_at | local_dt(default_timezone, "%d/%m/%Y %H:%M", "") }}</time>
+      </div>
+    {% else %}
+      <p class="superadmin-empty">La actividad aparecerá cuando se gestione una empresa o un usuario.</p>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

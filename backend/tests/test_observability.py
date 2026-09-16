@@ -34,7 +34,9 @@ from app.logs.routes import _company_timezone_name, _serialize_audit_log, delete
 from app.agent.prompt_runtime import run_prompt_execution  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
+from app.master.migrations import upgrade_master_schema  # noqa: E402
 from app.tenancy.database import get_tenant_engine  # noqa: E402
+from app.tenancy.migrations import upgrade_tenant_schema  # noqa: E402
 
 
 class FakeRequest:
@@ -56,6 +58,8 @@ class ObservabilityTests(unittest.TestCase):
         self.tenant_engine = create_engine(f"sqlite:///{self.tenant_path.as_posix()}", connect_args={"check_same_thread": False})
         MasterBase.metadata.create_all(self.master_engine)
         Base.metadata.create_all(self.tenant_engine)
+        upgrade_master_schema(self.master_engine, application_version="test")
+        upgrade_tenant_schema(self.tenant_engine, company_id=1, application_version="test")
         self.MasterSession = sessionmaker(bind=self.master_engine, autoflush=False, autocommit=False)
         self.TenantSession = sessionmaker(bind=self.tenant_engine, autoflush=False, autocommit=False)
 

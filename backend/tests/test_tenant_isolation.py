@@ -181,6 +181,8 @@ class TenantIsolationTests(unittest.TestCase):
         request_a = FakeRequest(session={"membership_id": 1, "user_id": 1, "company_id": 1, "company_slug": "demo-a"})
         request_b = FakeRequest(session={"membership_id": 2, "user_id": 1, "company_id": 2, "company_slug": "demo-b"})
 
+        ensure_tenant_schema(f"sqlite:///{self.tenant_a_path.as_posix()}", company_id=1)
+        ensure_tenant_schema(f"sqlite:///{self.tenant_b_path.as_posix()}", company_id=2)
         tenant_a_db = next(get_tenant_db(request_a, db))
         tenant_b_db = next(get_tenant_db(request_b, db))
         try:
@@ -208,7 +210,7 @@ class TenantIsolationTests(unittest.TestCase):
         self.assertEqual(request.scope["session"]["membership_id"], 1)
         db.close()
 
-    def test_get_tenant_db_bootstraps_missing_schema_before_yielding(self):
+    def test_get_tenant_db_rejects_missing_schema_without_bootstrapping(self):
         db = self.MasterSession()
         company = MasterCompany(id=1, name="Demo", slug="demo", active=True)
         user = MasterUser(id=1, email="admin@example.com", full_name="Admin", password_hash=hash_password("admin123"), is_active=True)
@@ -218,13 +220,10 @@ class TenantIsolationTests(unittest.TestCase):
         db.commit()
 
         request = FakeRequest(session={"membership_id": 1, "user_id": 1, "company_id": 1, "company_slug": "demo"})
-        tenant_session = next(get_tenant_db(request, db))
-        try:
-            self.assertIsNotNone(tenant_session.get_bind())
-            self.assertTrue(tenant_session.query(ScoringSettings).filter(ScoringSettings.company_id == 1).count() >= 0)
-        finally:
-            tenant_session.close()
-            db.close()
+        with self.assertRaises(HTTPException) as ctx:
+            next(get_tenant_db(request, db))
+        self.assertEqual(ctx.exception.status_code, 503)
+        db.close()
 
     def test_get_tenant_db_bootstraps_schema_once_per_database(self):
         db = self.MasterSession()
@@ -236,12 +235,13 @@ class TenantIsolationTests(unittest.TestCase):
         db.commit()
 
         request = FakeRequest(session={"membership_id": 1, "user_id": 1, "company_id": 1, "company_slug": "demo"})
+        ensure_tenant_schema(f"sqlite:///{self.tenant_a_path.as_posix()}", company_id=1)
         with patch("app.tenancy.database.ensure_tenant_schema", wraps=ensure_tenant_schema) as mocked_ensure:
             tenant_session_1 = next(get_tenant_db(request, db))
             tenant_session_1.close()
             tenant_session_2 = next(get_tenant_db(request, db))
             tenant_session_2.close()
-        self.assertEqual(mocked_ensure.call_count, 1)
+        self.assertEqual(mocked_ensure.call_count, 0)
         db.close()
 
     def test_tenant_admin_is_not_master_admin(self):
@@ -271,7 +271,9 @@ class TenantIsolationTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             require_master_admin(tenant_admin)
         self.assertEqual(ctx.exception.status_code, 403)
-        self.assertEqual(require_master_admin(superadmin).role.name, "Superadmin")
+        with self.assertRaises(HTTPException) as ctx:
+            require_master_admin(superadmin)
+        self.assertEqual(ctx.exception.status_code, 403)
 
 
 if __name__ == "__main__":

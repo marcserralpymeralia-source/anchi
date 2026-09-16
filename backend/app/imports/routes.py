@@ -69,7 +69,7 @@ async def preview_import(
     if customer_id and import_kind_value in {"historico_pedidos", "historico_albaranes", "articulos_habituales"}:
         resolved_entity_type = "customer_knowledge_articles"
     try:
-        preview = await create_preview(file, resolved_entity_type, encoding=encoding, customer_id=customer_id or None, import_kind=import_kind_value)
+        preview = await create_preview(file, resolved_entity_type, encoding=encoding, company_id=user.company_id, customer_id=customer_id or None, import_kind=import_kind_value)
     except Exception as exc:
         log_action(db, company_id=user.company_id, user=user, action="import.preview.error", entity_type=resolved_entity_type, message=f"Error previsualizando importacion: {exc}")
         return templates.TemplateResponse("imports/error.html", {"request": request, "user": user, "error": f"No se pudo leer el archivo: {exc}"}, status_code=400)
@@ -449,7 +449,7 @@ def whatsapp_import_confirm(
         company_id=user.company_id,
         job_type="process_inbound_message",
         payload={"inbound_message_id": message.id, "channel": channel, "source": "manual_import"},
-        created_by_user_id=user.id,
+        created_by_user_id=user.actor_id,
     )
     db.commit()
     log_action(db, company_id=user.company_id, user=user, action="imports.manual.confirm", entity_type="inbound_message", entity_id=message.id, message=f"Importacion manual ({channel}) importada: {message.id}")
@@ -552,7 +552,7 @@ async def validate_preview(request: Request, db: Session = Depends(get_tenant_db
     import_kind = form.get("import_kind", "")
     mapping = {key.removeprefix("map__"): value for key, value in form.items() if key.startswith("map__") and value != "__skip__"}
     try:
-        df = read_preview(form["token"], filename, encoding=encoding)
+        df = read_preview(form["token"], filename, encoding=encoding, company_id=user.company_id)
         validation = validate_import(db, company_id=user.company_id, entity_type=entity_type, df=df, mapping=mapping, customer_id=customer_id or None, import_kind=import_kind)
     except Exception as exc:
         log_action(db, company_id=user.company_id, user=user, action="import.validate.error", entity_type=entity_type, message=f"Error validando importacion: {exc}")
@@ -584,7 +584,7 @@ async def confirm_preview(request: Request, db: Session = Depends(get_tenant_db)
     import_kind = form.get("import_kind", "")
     mapping = json.loads(unescape(form["mapping_json"]))
     try:
-        df = read_preview(form["token"], filename, encoding=form.get("encoding", "utf-8"))
+        df = read_preview(form["token"], filename, encoding=form.get("encoding", "utf-8"), company_id=user.company_id)
         job = confirm_import(
             db,
             company_id=user.company_id,

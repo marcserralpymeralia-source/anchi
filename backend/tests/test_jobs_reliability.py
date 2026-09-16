@@ -648,7 +648,7 @@ class JobsReliabilityTests(unittest.TestCase):
         db = self.TenantSession()
         csv_bytes = b"code,fiscal_name,email\nC001,Cliente Uno,uno@example.com\n"
         upload = UploadFile(filename="customers.csv", file=io.BytesIO(csv_bytes))
-        preview = asyncio.run(create_preview(upload, "customers"))
+        preview = asyncio.run(create_preview(upload, "customers", company_id=1))
         payload = {
             "token": preview["token"],
             "filename": preview["filename"],

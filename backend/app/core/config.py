@@ -115,6 +115,8 @@ class Settings(BaseSettings):
     branding_cache_ttl_seconds: int = 30
     email_worker_poll_seconds: int = 15
     job_worker_poll_seconds: int = 10
+    run_internal_email_worker: bool | None = Field(default=None, validation_alias=AliasChoices("RUN_INTERNAL_EMAIL_WORKER", "ENABLE_EMAIL_WORKER"))
+    run_internal_job_worker: bool | None = Field(default=None, validation_alias=AliasChoices("RUN_INTERNAL_JOB_WORKER", "ENABLE_JOB_WORKER"))
     job_poll_interval_seconds: int | None = Field(default=None, validation_alias="JOB_POLL_INTERVAL_SECONDS")
     job_max_attempts: int = Field(default=3, validation_alias="JOB_MAX_ATTEMPTS")
     job_retry_base_seconds: int = Field(default=15, validation_alias="JOB_RETRY_BASE_SECONDS")
@@ -145,6 +147,10 @@ class Settings(BaseSettings):
     session_cookie_samesite: str | None = Field(default=None, validation_alias="SESSION_COOKIE_SAMESITE")
     session_max_age: int | None = Field(default=None, validation_alias="SESSION_MAX_AGE")
     session_cookie_domain: str | None = Field(default=None, validation_alias="SESSION_COOKIE_DOMAIN")
+    csrf_protection_enabled: bool | None = Field(default=None, validation_alias="CSRF_PROTECTION_ENABLED")
+    auth_rate_limit_attempts: int = Field(default=10, validation_alias="AUTH_RATE_LIMIT_ATTEMPTS")
+    auth_rate_limit_window_seconds: int = Field(default=300, validation_alias="AUTH_RATE_LIMIT_WINDOW_SECONDS")
+    auth_rate_limit_block_seconds: int = Field(default=900, validation_alias="AUTH_RATE_LIMIT_BLOCK_SECONDS")
     cors_allowed_origins_raw: str | None = Field(default=None, validation_alias="CORS_ALLOWED_ORIGINS")
     allowed_hosts_raw: str | None = Field(default=None, validation_alias="ALLOWED_HOSTS")
     environment: str = Field(default="development", validation_alias=AliasChoices("APP_ENV", "ENVIRONMENT"))
@@ -184,6 +190,18 @@ class Settings(BaseSettings):
         running_on_vercel = os.getenv("VERCEL") == "1" or bool(os.getenv("VERCEL_ENV"))
         demo_runtime = self.environment == "demo" or running_on_vercel
 
+        # Keep long-lived loops out of serverless instances and avoid running
+        # a second jobs poller inside a production web process when a
+        # dedicated worker service is deployed. Email sync remains enabled in
+        # a traditional production web process unless explicitly disabled.
+        if self.run_internal_email_worker is None:
+            self.run_internal_email_worker = not running_on_vercel
+        if self.run_internal_job_worker is None:
+            self.run_internal_job_worker = self.environment != "production" and not running_on_vercel
+        if running_on_vercel:
+            self.run_internal_email_worker = False
+            self.run_internal_job_worker = False
+
         if self.debug is None:
             self.debug = False
         if self.seed_demo_data is None:
@@ -201,6 +219,14 @@ class Settings(BaseSettings):
             self.session_max_age = 60 * 60 * 24 * 7
         if self.session_max_age <= 0:
             raise ValueError("SESSION_MAX_AGE must be greater than zero")
+        if self.csrf_protection_enabled is None:
+            self.csrf_protection_enabled = self.environment in {"demo", "production"}
+        if self.auth_rate_limit_attempts <= 0:
+            raise ValueError("AUTH_RATE_LIMIT_ATTEMPTS must be greater than zero")
+        if self.auth_rate_limit_window_seconds <= 0:
+            raise ValueError("AUTH_RATE_LIMIT_WINDOW_SECONDS must be greater than zero")
+        if self.auth_rate_limit_block_seconds <= 0:
+            raise ValueError("AUTH_RATE_LIMIT_BLOCK_SECONDS must be greater than zero")
 
         if self.job_poll_interval_seconds is not None:
             self.job_worker_poll_seconds = int(self.job_poll_interval_seconds)
@@ -346,6 +372,7 @@ class Settings(BaseSettings):
             "session_cookie_secure": self.session_cookie_secure,
             "session_cookie_samesite": self.session_cookie_samesite,
             "session_max_age": self.session_max_age,
+            "csrf_protection_enabled": self.csrf_protection_enabled,
             "debug": self.debug,
             "seed_demo_data": self.seed_demo_data,
             "tenant_db_mode": self.tenant_db_mode,

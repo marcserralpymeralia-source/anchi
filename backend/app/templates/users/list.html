@@ -1,13 +1,30 @@
 {% extends "base.html" %}
 {% set title = "Usuarios" %}
 {% block content %}
+{% if request.query_params.get("error") %}
+<div class="flash error" role="alert">{{ request.query_params.get("error") }}</div>
+{% endif %}
+{% if invitation_link %}
+<div class="flash success" role="status"><strong>Invitación creada.</strong> Comparte este enlace con el usuario: <a href="{{ invitation_link }}">{{ invitation_link }}</a></div>
+{% endif %}
+<section class="panel stack" style="margin-bottom:16px">
+  <h2>Invitar usuario</h2>
+  <form class="form-grid" method="post" action="/users/invitations">
+    <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
+    <label>Email<input name="email" type="email" required></label>
+    <label>Rol<select name="role_key">{% for role in roles %}<option value="{{ role.name }}">{{ role.name }}</option>{% endfor %}</select></label>
+    <label>&nbsp;<button>Crear invitación</button></label>
+  </form>
+  {% if invitations %}<small class="muted">Invitaciones pendientes</small><ul>{% for invitation in invitations %}<li>{{ invitation.email }} · {{ invitation.role_key }} · caduca {{ invitation.expires_at }}</li>{% endfor %}</ul>{% endif %}
+</section>
 <section class="panel stack" style="margin-bottom:16px">
   <h2>Crear usuario</h2>
   <form class="form-grid" method="post" action="/users">
+    <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
     <label>Nombre<input name="name" required></label>
     <label>Email<input name="email" type="email" required></label>
     <label>Rol<select name="role_id">{% for role in roles %}<option value="{{ role.id }}">{{ role.name }}</option>{% endfor %}</select></label>
-    <label>Password<input name="password" type="password" required></label>
+    <label>Password<input name="password" type="password" minlength="12" required></label>
     <label>&nbsp;<button>Crear</button></label>
   </form>
 </section>
@@ -16,14 +33,12 @@
   <tbody>
   {% for item in users %}
     <tr>
-      <form method="post" action="/users/{{ item.id }}">
-        <td><input name="name" value="{{ item.name }}"></td>
+        <td><input form="user-form-{{ item.id }}" name="name" value="{{ item.name }}"></td>
         <td>{{ item.email }}</td>
-        <td><select name="role_id">{% for role in roles %}<option value="{{ role.id }}" {% if item.role_id == role.id %}selected{% endif %}>{{ role.name }}</option>{% endfor %}</select></td>
-        <td><input name="is_active" type="checkbox" {% if item.is_active %}checked{% endif %}></td>
-        <td><input name="password" type="password" placeholder="Mantener"></td>
-        <td><button class="secondary">Guardar</button></td>
-      </form>
+        <td><select form="user-form-{{ item.id }}" name="role_id">{% for role in roles %}<option value="{{ role.id }}" {% if item.role_id == role.id %}selected{% endif %}>{{ role.name }}</option>{% endfor %}</select></td>
+        <td><input form="user-form-{{ item.id }}" name="is_active" type="checkbox" {% if item.is_active %}checked{% endif %}></td>
+        <td><input form="user-form-{{ item.id }}" name="password" type="password" placeholder="Mantener"></td>
+        <td><form id="user-form-{{ item.id }}" method="post" action="/users/{{ item.id }}"><input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}"><button class="secondary">Guardar</button></form></td>
     </tr>
   {% endfor %}
   </tbody>

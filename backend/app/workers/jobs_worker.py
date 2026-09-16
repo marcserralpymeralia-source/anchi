@@ -28,7 +28,7 @@ from app.logs.service import log_action, log_flow_event
 from app.orders.state import ORDER_STATE
 import app.master.database as master_database
 from app.master.database import MasterSessionLocal
-from app.master.models import EmailSyncState, MasterTenantDatabase
+from app.master.models import EmailSyncState, MasterCompany, MasterTenantDatabase
 from app.imports.service import confirm_import, guess_mapping, read_preview
 from app.knowledge.service import index_knowledge_entries
 from app.orders.service import _customer_label, _sync_customer_product_knowledge, validate_confirmation
@@ -465,7 +465,7 @@ def _process_import_job(db, job: BackgroundJob, payload: dict) -> dict:
     mode = str(payload.get("mode") or "create_update")
     save_template = bool(payload.get("save_template"))
     template_name = str(payload.get("template_name") or "")
-    df = read_preview(token, filename, encoding=encoding)
+    df = read_preview(token, filename, encoding=encoding, company_id=job.company_id)
     if not mapping:
         mapping = guess_mapping(entity_type, [str(column) for column in df.columns])
     dummy_user = type("TenantLikeUser", (), {"id": job.created_by_user_id or 0, "company_id": job.company_id})()
@@ -803,12 +803,13 @@ def _handle_tenant_jobs(
                 schema_report.get("checksum"),
             )
             return {"recovered": 0, "attempted": 0, "processed": 0, "blocked": 1}
-        recovered = recover_stale_jobs(db, owner=owner, job_types=JOB_TYPES)
+        recovered = recover_stale_jobs(db, owner=owner, company_id=tenant.company_id, job_types=JOB_TYPES)
         recovered_jobs += len(recovered)
         while max_jobs is None or attempted_jobs < max_jobs:
             job = claim_next_job(
                 db,
                 owner=owner,
+                company_id=tenant.company_id,
                 job_types=JOB_TYPES,
             )
             if not job:
@@ -940,8 +941,12 @@ def _handle_tenant_jobs(
     }
 
 
-def run_worker_cycle(*, max_jobs: int | None = None) -> dict[str, int]:
+def run_worker_cycle(*, max_jobs: int | None = None, include_provisioning: bool = False) -> dict[str, int]:
     configure_logging()
+    if include_provisioning:
+        from app.workers.provisioning_worker import run_provisioning_cycle
+
+        run_provisioning_cycle(max_runs=1)
     summary = {
         "tenants": 0,
         "recovered": 0,
@@ -952,25 +957,41 @@ def run_worker_cycle(*, max_jobs: int | None = None) -> dict[str, int]:
     master_db = MasterSessionLocal()
     try:
         tenants = master_db.scalars(
-            select(MasterTenantDatabase).where(
+            select(MasterTenantDatabase)
+            .join(MasterCompany, MasterCompany.id == MasterTenantDatabase.company_id)
+            .where(
                 MasterTenantDatabase.is_active.is_(True),
                 MasterTenantDatabase.database_url.is_not(None),
+                MasterCompany.active.is_(True),
+                MasterCompany.status == "active",
             )
+            .order_by(MasterTenantDatabase.company_id)
         ).all()
         summary["tenants"] = len(tenants)
-        for tenant in tenants:
-            remaining = None if max_jobs is None else max(max_jobs - summary["attempted"], 0)
-            if remaining == 0:
+        pending = list(tenants)
+        while pending and (max_jobs is None or summary["attempted"] < max_jobs):
+            next_round = []
+            made_progress = False
+            for tenant in pending:
+                if max_jobs is not None and summary["attempted"] >= max_jobs:
+                    break
+                try:
+                    tenant_summary = _handle_tenant_jobs(tenant, owner=_identity(), max_jobs=1)
+                except Exception:  # noqa: BLE001
+                    logger.exception("Job worker tenant cycle failed company=%s", tenant.company_id)
+                    summary["blocked"] += 1
+                    continue
+                summary["recovered"] += tenant_summary["recovered"]
+                attempted = tenant_summary.get("attempted", 0)
+                summary["attempted"] += attempted
+                summary["processed"] += tenant_summary["processed"]
+                summary["blocked"] += tenant_summary.get("blocked", 0)
+                if attempted:
+                    made_progress = True
+                    next_round.append(tenant)
+            if not made_progress:
                 break
-            tenant_summary = _handle_tenant_jobs(
-                tenant,
-                owner=_identity(),
-                max_jobs=remaining,
-            )
-            summary["recovered"] += tenant_summary["recovered"]
-            summary["attempted"] += tenant_summary.get("attempted", 0)
-            summary["processed"] += tenant_summary["processed"]
-            summary["blocked"] += tenant_summary.get("blocked", 0)
+            pending = next_round
     finally:
         master_db.close()
     logger.info(
@@ -988,7 +1009,7 @@ def _worker_loop() -> None:
     poll_seconds = max(int(getattr(settings, "job_worker_poll_seconds", 10)), 5)
     while True:
         try:
-            run_worker_cycle()
+            run_worker_cycle(include_provisioning=True)
         except Exception as exc:  # noqa: BLE001
             logger.exception("Job worker error: %s", exc)
         time.sleep(poll_seconds)

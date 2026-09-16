@@ -46,7 +46,7 @@ def _soft_delete_product(db: Session, product: Product, user: TenantUser) -> Non
     product.status = "deleted"
     product.obsolete = True
     product.deleted_at = datetime.now(timezone.utc)
-    product.deleted_by = user.id
+    product.deleted_by = getattr(user, "actor_id", getattr(user, "id", None))
     db.commit()
     log_action(db, company_id=user.company_id, user=user, action="product.delete", entity_type="product", entity_id=product.id, message="Producto eliminado")
 
@@ -202,7 +202,7 @@ def save_product(
         company_id=user.company_id,
         data=product_data,
         source="manual",
-        actor_id=user.id,
+        actor_id=user.actor_id,
         product_id=id or None,
         conflict_policy="update_existing",
     ).entity

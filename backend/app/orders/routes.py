@@ -963,8 +963,11 @@ def generate_export(order_id: int, db: Session = Depends(get_tenant_db), user: T
     return export_order(order_id, db, user)
 
 
-@router.get("/{order_id}/export-preview")
+@router.post("/{order_id}/export-preview")
 def export_preview(order_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    order = db.scalar(select(Order).where(Order.id == order_id, Order.company_id == user.company_id))
+    if order is None:
+        return PlainTextResponse("No encontrado", status_code=404)
     export = db.scalar(select(ExportFile).where(ExportFile.order_id == order_id, ExportFile.company_id == user.company_id).order_by(ExportFile.created_at.desc()))
     if not export:
         job = enqueue_job(db, company_id=user.company_id, job_type="export_order", payload={"order_id": order_id}, created_by_user_id=resolve_updated_by_id(db, user))

@@ -452,13 +452,26 @@ class FTPService:
     ) -> bool:
         if not export_file.filename:
             raise ValueError("El archivo de exportacion no tiene nombre.")
+        company_id = getattr(export_file, "company_id", None)
+        if company_id is None:
+            raise ValueError("El archivo de exportacion no tiene empresa asignada.")
 
         destination = (settings.destination_path or "/").strip() or "/"
-        remote_path = posixpath.join(destination, export_file.filename)
+        safe_filename = posixpath.basename(str(export_file.filename).replace("\\", "/"))
+        if not safe_filename or safe_filename in {".", ".."}:
+            raise ValueError("El nombre del archivo de exportacion no es valido.")
+        tenant_destination = posixpath.join(destination, f"tenant-{int(company_id)}")
+        remote_path = posixpath.join(tenant_destination, safe_filename)
 
         client = self._client(settings)
         try:
             self._login(client, settings)
+            try:
+                client.mkd(tenant_destination)
+            except ftplib.error_perm as exc:
+                # A 550 normally means the tenant directory already exists.
+                if not str(exc).startswith("550"):
+                    raise
 
             if not settings.overwrite_files:
                 try:

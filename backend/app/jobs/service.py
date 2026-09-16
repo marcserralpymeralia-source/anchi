@@ -102,15 +102,36 @@ def _settings():
     return get_settings()
 
 
-def _safe_created_by_user_id(db: Session, created_by_user_id: int | None) -> int | None:
+def _safe_created_by_user_id(db: Session, created_by_user_id: int | None, company_id: int | None = None) -> int | None:
     if created_by_user_id is None:
         return None
     try:
-        if db.get(User, created_by_user_id) is None:
+        user = db.get(User, created_by_user_id)
+        if user is None or (company_id is not None and user.company_id != company_id):
             return None
     except Exception:
         return None
     return created_by_user_id
+
+
+def resolve_actor_id(db: Session, user, company_id: int | None = None) -> int | None:
+    """Resolve a MasterUser-backed principal to its local tenant actor."""
+
+    if user is None:
+        return None
+    actor_id = getattr(user, "tenant_actor_id", None)
+    if actor_id is not None:
+        actor = db.get(User, actor_id)
+        if actor is not None and (company_id is None or actor.company_id == company_id):
+            return actor.id
+    master_user_id = getattr(user, "master_user_id", None) or getattr(user, "id", None)
+    if master_user_id is not None and getattr(user, "tenant_actor_id", None) is not None:
+        actor = db.scalar(select(User).where(User.master_user_id == master_user_id, *( [User.company_id == company_id] if company_id is not None else [] )))
+        if actor is not None:
+            return actor.id
+    if getattr(user, "tenant_actor_id", None) is None and not hasattr(user, "master_user_id"):
+        return _safe_created_by_user_id(db, master_user_id, company_id)
+    return None
 
 
 def _retry_budget(job: BackgroundJob) -> int:
@@ -202,7 +223,7 @@ def enqueue_job(
     configured_max_retries = max(0, int((max_retries if max_retries is not None else DEFAULT_MAX_RETRIES.get(job_type, 3))))
     max_retries_final = min(configured_max_retries, max(0, settings.job_max_attempts - 1))
     stored_payload = encode_trace_payload(normalized_payload)
-    safe_created_by_user_id = _safe_created_by_user_id(db, created_by_user_id)
+    safe_created_by_user_id = _safe_created_by_user_id(db, created_by_user_id, company_id)
     job = BackgroundJob(
         company_id=company_id,
         job_type=job_type,
@@ -301,7 +322,7 @@ def cancel_job(db: Session, company_id: int, job_id: int) -> BackgroundJob | Non
     return job
 
 
-def claim_next_job(db: Session, *, owner: str, job_types: set[str] | None = None) -> BackgroundJob | None:
+def claim_next_job(db: Session, *, owner: str, company_id: int | None = None, job_types: set[str] | None = None) -> BackgroundJob | None:
     now = _now()
     settings = _settings()
     conditions = [
@@ -311,6 +332,8 @@ def claim_next_job(db: Session, *, owner: str, job_types: set[str] | None = None
     ]
     if job_types:
         conditions.append(BackgroundJob.job_type.in_(sorted(job_types)))
+    if company_id is not None:
+        conditions.append(BackgroundJob.company_id == company_id)
     candidate_id = db.scalar(
         select(BackgroundJob.id)
         .where(*conditions)
@@ -319,14 +342,17 @@ def claim_next_job(db: Session, *, owner: str, job_types: set[str] | None = None
     )
     if not candidate_id:
         return None
-    result = db.execute(
-        update(BackgroundJob)
-        .where(
+    update_conditions = [
             BackgroundJob.id == candidate_id,
             BackgroundJob.status.in_(("queued", "retrying")),
             or_(BackgroundJob.lock_until.is_(None), BackgroundJob.lock_until <= now),
             or_(BackgroundJob.next_retry_at.is_(None), BackgroundJob.next_retry_at <= now),
-        )
+        ]
+    if company_id is not None:
+        update_conditions.append(BackgroundJob.company_id == company_id)
+    result = db.execute(
+        update(BackgroundJob)
+        .where(*update_conditions)
         .values(
             status="running",
             started_at=now,
@@ -417,7 +443,7 @@ def recover_stale_job(db: Session, job: BackgroundJob, *, owner: str | None = No
     return job
 
 
-def recover_stale_jobs(db: Session, *, owner: str | None = None, job_types: set[str] | None = None) -> list[BackgroundJob]:
+def recover_stale_jobs(db: Session, *, owner: str | None = None, company_id: int | None = None, job_types: set[str] | None = None) -> list[BackgroundJob]:
     now = _now()
     settings = _settings()
     stale_before = now - timedelta(seconds=settings.job_stale_after_seconds)
@@ -431,6 +457,8 @@ def recover_stale_jobs(db: Session, *, owner: str | None = None, job_types: set[
     ]
     if job_types:
         conditions.append(BackgroundJob.job_type.in_(sorted(job_types)))
+    if company_id is not None:
+        conditions.append(BackgroundJob.company_id == company_id)
     jobs = db.scalars(select(BackgroundJob).where(*conditions)).all()
     recovered: list[BackgroundJob] = []
     for job in jobs:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from app.db.models import TenantSchemaMigration
 from app.master.models import MasterSchemaMigration
 from sqlalchemy import inspect, text
@@ -16,6 +18,10 @@ TENANT_MIGRATION_COLUMNS = {
 }
 
 TENANT_COMPAT_COLUMNS = {
+    "users": {
+        "master_user_id": "INTEGER",
+        "actor_type": "VARCHAR(30) DEFAULT 'human'",
+    },
     "customers": {
         "delegation": "VARCHAR(120)",
         "assigned_salesperson": "VARCHAR(180)",
@@ -471,6 +477,21 @@ MASTER_EMAIL_LISTENER_COLUMNS = {
     "listener_last_error_message": "TEXT",
 }
 
+MASTER_CONTROL_PLANE_COLUMNS = {
+    "companies": {
+        "status": "VARCHAR(30) DEFAULT 'active'",
+        "provisioning_status": "VARCHAR(30) DEFAULT 'pending'",
+        "suspended_reason": "TEXT",
+    },
+    "users": {
+        "platform_role_key": "VARCHAR(40)",
+        "email_verified": "BOOLEAN DEFAULT false",
+        "password_version": "INTEGER DEFAULT 1",
+        "locked_until": "TIMESTAMP WITH TIME ZONE",
+        "last_login_at": "TIMESTAMP WITH TIME ZONE",
+    },
+}
+
 
 def _apply_tenant_metadata(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     from app.db.models import TenantSchemaMigration
@@ -599,7 +620,11 @@ def _apply_tenant_messages(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
                         is_default=True,
                         supports_text=True,
                         supports_attachments=True,
+                        supports_audio=False,
                         supports_documents=True,
+                        supports_images=False,
+                        created_at=datetime.now(timezone.utc),
+                        updated_at=datetime.now(timezone.utc),
                     )
                 )
                 channel_id = result.lastrowid
@@ -721,6 +746,170 @@ def _apply_master_email_listener_state(engine, dry_run: bool) -> list[str]:  # n
 
 def _apply_master_email_sync_state_repair(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     return ensure_columns(engine, "email_sync_state", MASTER_EMAIL_SYNC_STATE_COLUMNS, dry_run=dry_run)
+
+
+def _apply_master_control_plane(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Add the platform identity and Superadmin reporting tables safely."""
+
+    from app.master.models import PasswordResetToken, PlatformAuditLog, TenantProvisioningRun, TenantUsageDaily, UserInvitation
+
+    actions: list[str] = []
+    for table_name, columns in MASTER_CONTROL_PLANE_COLUMNS.items():
+        actions.extend(ensure_columns(engine, table_name, columns, dry_run=dry_run))
+
+    with engine.connect() as conn:
+        inspector = inspect(conn)
+        table_names = set(inspector.get_table_names())
+        user_columns = {column["name"] for column in inspector.get_columns("users")} if "users" in table_names else set()
+    for model in (PlatformAuditLog, TenantProvisioningRun, TenantUsageDaily, UserInvitation, PasswordResetToken):
+        if model.__tablename__ in table_names:
+            continue
+        actions.append(f"CREATE TABLE {model.__tablename__} (...)")
+        if not dry_run:
+            model.__table__.create(bind=engine, checkfirst=True)
+    if not dry_run:
+        from app.core.config import get_settings
+
+        default_admin_email = get_settings().default_admin_email.strip().lower()
+        with engine.begin() as conn:
+            if "email_normalized" in user_columns:
+                conn.execute(text("UPDATE users SET email_normalized = lower(trim(email)) WHERE email_normalized IS NULL"))
+            if "platform_role_key" in user_columns:
+                conn.execute(
+                    text(
+                        "UPDATE users SET platform_role_key = 'superadmin' "
+                        "WHERE platform_role_key IS NULL AND lower(email) = :default_email"
+                    ),
+                    {"default_email": default_admin_email},
+                )
+            if "memberships" in table_names:
+                # A legacy tenant label must not survive as a platform
+                # privilege.  Preserve access as company administration while
+                # keeping platform elevation exclusively on users.platform_role_key.
+                conn.execute(text("UPDATE memberships SET role_key = 'Administrador' WHERE role_key = 'Superadmin'"))
+    return actions
+
+
+MASTER_IDENTITY_HARDENING_COLUMNS = {
+    "email_normalized": "VARCHAR(255)",
+    "session_version": "INTEGER DEFAULT 1",
+    "failed_login_count": "INTEGER DEFAULT 0",
+}
+
+
+def _apply_master_identity_hardening(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Add fields used to invalidate platform sessions without rewriting history."""
+
+    actions = ensure_columns(engine, "users", MASTER_IDENTITY_HARDENING_COLUMNS, dry_run=dry_run)
+    if not dry_run:
+        with engine.begin() as conn:
+            conn.execute(text("UPDATE users SET email_normalized = lower(trim(email)) WHERE email_normalized IS NULL"))
+    return actions
+
+
+def _apply_master_database_url_encryption(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Rotate legacy plaintext tenant URLs through the model's encrypted type."""
+
+    if dry_run:
+        return ["ROTATE tenant database URLs through encrypted storage"]
+    from sqlalchemy.orm import Session
+    from app.master.models import MasterTenantDatabase
+
+    db = Session(bind=engine, autoflush=False, autocommit=False)
+    try:
+        rows = db.query(MasterTenantDatabase).all()
+        changed = 0
+        for row in rows:
+            value = row.database_url
+            if value and not str(value).startswith("enc:"):
+                row.database_url = value
+                changed += 1
+        if changed:
+            db.commit()
+        return [f"ROTATE {changed} tenant database URLs"]
+    finally:
+        db.close()
+
+
+def _apply_master_whatsapp_endpoints(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Index WhatsApp phone identifiers in the control plane for O(1) routing."""
+
+    from app.master.models import MasterWhatsAppEndpoint
+
+    with engine.connect() as conn:
+        exists = MasterWhatsAppEndpoint.__tablename__ in set(inspect(conn).get_table_names())
+    if exists:
+        return []
+    if not dry_run:
+        MasterWhatsAppEndpoint.__table__.create(bind=engine, checkfirst=True)
+    return ["CREATE TABLE whatsapp_endpoints (...)"]
+
+
+def _apply_master_health_snapshots(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Create the control-plane health snapshot table used by the platform UI."""
+
+    from app.master.models import TenantHealthSnapshot
+
+    with engine.connect() as conn:
+        exists = TenantHealthSnapshot.__tablename__ in set(inspect(conn).get_table_names())
+    if exists:
+        return []
+    if not dry_run:
+        TenantHealthSnapshot.__table__.create(bind=engine, checkfirst=True)
+    return ["CREATE TABLE tenant_health_snapshots (...)"]
+
+
+def _apply_master_user_sessions(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Create server-side browser session revocation records."""
+
+    from app.master.models import MasterUserSession
+
+    with engine.connect() as conn:
+        exists = MasterUserSession.__tablename__ in set(inspect(conn).get_table_names())
+    if exists:
+        return []
+    if not dry_run:
+        MasterUserSession.__table__.create(bind=engine, checkfirst=True)
+    return ["CREATE TABLE user_sessions (...)"]
+
+
+def _apply_master_user_session_payload(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Store non-sensitive browser session context server-side."""
+
+    return ensure_columns(
+        engine,
+        "user_sessions",
+        {"session_data_json": "TEXT DEFAULT '{}'"},
+        dry_run=dry_run,
+    )
+
+
+def _apply_master_rate_limit_buckets(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Create shared throttling buckets for authentication endpoints."""
+
+    from app.master.models import MasterRateLimitBucket
+
+    with engine.connect() as conn:
+        exists = MasterRateLimitBucket.__tablename__ in set(inspect(conn).get_table_names())
+    if exists:
+        return []
+    if not dry_run:
+        MasterRateLimitBucket.__table__.create(bind=engine, checkfirst=True)
+    return ["CREATE TABLE rate_limit_buckets (...)"]
+
+
+def _apply_master_health_snapshot_metrics(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Add message breakdown fields to existing health snapshots."""
+
+    return ensure_columns(
+        engine,
+        "tenant_health_snapshots",
+        {
+            "email_messages_total": "INTEGER DEFAULT 0",
+            "whatsapp_messages_total": "INTEGER DEFAULT 0",
+        },
+        dry_run=dry_run,
+    )
 
 
 def _apply_tenant_ai_learning(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
@@ -980,6 +1169,12 @@ def _apply_tenant_ftp_export_selection(engine, dry_run: bool) -> list[str]:  # n
     )
 
 
+def _apply_tenant_actor_bridge(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Link local actors to the master identity without a cross-database FK."""
+
+    return ensure_columns(engine, "users", TENANT_COMPAT_COLUMNS["users"], dry_run=dry_run)
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -1083,6 +1278,12 @@ TENANT_SCHEMA_MIGRATIONS = [
         checksum=checksum_text("tenant", "ftp_export_destination_selection", "export_settings", "ftp_connection_id"),
         upgrade=_apply_tenant_ftp_export_selection,
     ),
+    MigrationSpec(
+        version="2026.09.15.2",
+        name="tenant actor identity bridge",
+        checksum=checksum_text("tenant", "actor_identity_bridge", "users", "master_user_id", "actor_type"),
+        upgrade=_apply_tenant_actor_bridge,
+    ),
 ]
 
 MASTER_SCHEMA_MIGRATIONS = [
@@ -1109,6 +1310,74 @@ MASTER_SCHEMA_MIGRATIONS = [
         name="master email sync state repair",
         checksum=checksum_text("master", "email_sync_state_repair", "email_sync_state", *MASTER_EMAIL_SYNC_STATE_COLUMNS.keys()),
         upgrade=_apply_master_email_sync_state_repair,
+    ),
+    MigrationSpec(
+        version="2026.09.15.1",
+        name="master control plane and platform identity",
+        # Immutable checksum from the first control-plane rollout.
+        checksum="de54ec09baa950c9e6797d35683838c21003b7d9106fcc5d7f9f8a281c87c4ec",
+        upgrade=_apply_master_control_plane,
+    ),
+    MigrationSpec(
+        version="2026.09.15.2",
+        name="master identity session hardening",
+        # Immutable checksum from the first session-hardening rollout.
+        checksum="03cf07bd4a2170f79470c05d58b411527de40b8284070754710d349b365f0965",
+        upgrade=_apply_master_identity_hardening,
+    ),
+    MigrationSpec(
+        version="2026.09.15.3",
+        name="master control plane finalization",
+        checksum=checksum_text("master", "control_plane_finalization", *MASTER_CONTROL_PLANE_COLUMNS["users"].keys(), "user_invitations"),
+        upgrade=_apply_master_control_plane,
+    ),
+    MigrationSpec(
+        version="2026.09.15.4",
+        name="master account lifecycle tokens",
+        checksum=checksum_text("master", "account_lifecycle_tokens", "password_reset_tokens"),
+        upgrade=_apply_master_control_plane,
+    ),
+    MigrationSpec(
+        version="2026.09.15.5",
+        name="encrypt tenant database URLs at rest",
+        checksum=checksum_text("master", "encrypt_tenant_database_urls", "tenant_databases.database_url"),
+        upgrade=_apply_master_database_url_encryption,
+    ),
+    MigrationSpec(
+        version="2026.09.15.6",
+        name="master WhatsApp endpoint routing index",
+        checksum=checksum_text("master", "whatsapp_endpoint_routing_index", "whatsapp_endpoints", "phone_number_id"),
+        upgrade=_apply_master_whatsapp_endpoints,
+    ),
+    MigrationSpec(
+        version="2026.09.15.7",
+        name="master tenant health snapshots",
+        checksum=checksum_text("master", "tenant_health_snapshots", "status", "latency_ms", "orders_total"),
+        upgrade=_apply_master_health_snapshots,
+    ),
+    MigrationSpec(
+        version="2026.09.15.8",
+        name="master server side user sessions",
+        checksum=checksum_text("master", "user_sessions", "session_token_hash", "session_version", "expires_at"),
+        upgrade=_apply_master_user_sessions,
+    ),
+    MigrationSpec(
+        version="2026.09.15.9",
+        name="master health snapshot message metrics",
+        checksum=checksum_text("master", "tenant_health_snapshots", "email_messages_total", "whatsapp_messages_total"),
+        upgrade=_apply_master_health_snapshot_metrics,
+    ),
+    MigrationSpec(
+        version="2026.09.15.10",
+        name="opaque server side session payload",
+        checksum=checksum_text("master", "opaque_server_side_session_payload", "user_sessions.session_data_json"),
+        upgrade=_apply_master_user_session_payload,
+    ),
+    MigrationSpec(
+        version="2026.09.15.11",
+        name="shared authentication rate limit buckets",
+        checksum=checksum_text("master", "shared_authentication_rate_limit_buckets", "rate_limit_buckets"),
+        upgrade=_apply_master_rate_limit_buckets,
     ),
 ]
 

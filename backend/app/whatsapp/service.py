@@ -30,7 +30,7 @@ from app.messages.service import (
     persist_normalized_message,
     upsert_inbound_message,
 )
-from app.master.models import MasterCompany, MasterTenantDatabase
+from app.master.models import MasterCompany, MasterTenantDatabase, MasterWhatsAppEndpoint
 
 
 WHATSAPP_CHANNEL_KEY = "whatsapp"
@@ -687,6 +687,7 @@ async def download_whatsapp_media(
                     filename=f"whatsapp-{company_id}-{message.id}-{filename}",
                     payload=content,
                     content_type=content_type,
+                    company_id=company_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 _persist_storage_failure(attachment, f"No se pudo guardar el adjunto de WhatsApp: {exc}")
@@ -1199,11 +1200,43 @@ async def complete_embedded_signup(
 
 
 def resolve_company_from_slug(master_db: Session, company_slug: str) -> tuple[MasterCompany | None, MasterTenantDatabase | None]:
-    company = master_db.scalar(select(MasterCompany).where(MasterCompany.slug == company_slug))
+    company = master_db.scalar(select(MasterCompany).where(MasterCompany.slug == company_slug, MasterCompany.active.is_(True), MasterCompany.status == "active"))
     if not company:
         return None, None
     tenant_db = master_db.scalar(select(MasterTenantDatabase).where(MasterTenantDatabase.company_id == company.id, MasterTenantDatabase.is_active.is_(True)))
     return company, tenant_db
+
+
+def upsert_master_whatsapp_endpoint(
+    master_db: Session,
+    *,
+    company_id: int,
+    business_account_id: str | None,
+    phone_number_id: str | None,
+    display_phone_number: str | None = None,
+    verified_name: str | None = None,
+    active: bool = True,
+) -> MasterWhatsAppEndpoint | None:
+    """Keep the webhook routing index in sync without persisting access tokens."""
+
+    phone = str(phone_number_id or "").strip()
+    if not phone:
+        return None
+    endpoint = master_db.scalar(
+        select(MasterWhatsAppEndpoint).where(MasterWhatsAppEndpoint.phone_number_id == phone)
+    )
+    if endpoint is not None and endpoint.company_id != company_id:
+        raise ValueError("El número de WhatsApp ya está vinculado a otra empresa")
+    if endpoint is None:
+        endpoint = MasterWhatsAppEndpoint(phone_number_id=phone, company_id=company_id)
+        master_db.add(endpoint)
+    endpoint.business_account_id = str(business_account_id or "").strip() or None
+    endpoint.display_phone_number = str(display_phone_number or "").strip() or None
+    endpoint.verified_name = str(verified_name or "").strip() or None
+    endpoint.active = bool(active)
+    endpoint.updated_at = datetime.now(timezone.utc)
+    master_db.flush()
+    return endpoint
 
 
 def resolve_company_from_whatsapp_identifiers(
@@ -1212,47 +1245,32 @@ def resolve_company_from_whatsapp_identifiers(
     business_account_id: str | None,
     phone_number_id: str | None,
 ) -> tuple[MasterCompany | None, MasterTenantDatabase | None]:
-    from app.tenancy.database import tenant_db_session
-
     wanted_waba = str(business_account_id or "").strip()
     wanted_phone = str(phone_number_id or "").strip()
     if not wanted_waba and not wanted_phone:
         return None, None
-    tenants = master_db.scalars(select(MasterTenantDatabase).where(MasterTenantDatabase.is_active.is_(True))).all()
-    matches: list[tuple[MasterCompany, MasterTenantDatabase]] = []
-    for tenant in tenants:
-        tenant_db = tenant_db_session(tenant.database_url)()
-        try:
-            channel = tenant_db.scalar(
-                select(InputChannel).where(
-                    InputChannel.company_id == tenant.company_id,
-                    InputChannel.key == WHATSAPP_CHANNEL_KEY,
-                )
+    indexed = None
+    if wanted_phone:
+        indexed = master_db.scalar(
+            select(MasterWhatsAppEndpoint).where(
+                MasterWhatsAppEndpoint.phone_number_id == wanted_phone,
+                MasterWhatsAppEndpoint.active.is_(True),
             )
-            if not channel:
-                continue
-            rows = tenant_db.scalars(
-                select(ChannelSetting).where(
-                    ChannelSetting.company_id == tenant.company_id,
-                    ChannelSetting.channel_id == channel.id,
-                    ChannelSetting.key.in_(("business_account_id", "phone_number_id")),
-                )
-            ).all()
-            values = {row.key: str(row.value or "").strip() for row in rows}
-            phone_matches = bool(wanted_phone and values.get("phone_number_id") == wanted_phone)
-            waba_matches = bool(wanted_waba and values.get("business_account_id") == wanted_waba)
-            identifiers_match = (
-                phone_matches and waba_matches
-                if wanted_phone and wanted_waba
-                else phone_matches or waba_matches
+        )
+    if indexed is not None and (not wanted_waba or indexed.business_account_id in {None, wanted_waba}):
+        company = master_db.scalar(select(MasterCompany).where(MasterCompany.id == indexed.company_id, MasterCompany.active.is_(True), MasterCompany.status == "active"))
+        tenant = master_db.scalar(
+            select(MasterTenantDatabase).where(
+                MasterTenantDatabase.company_id == indexed.company_id,
+                MasterTenantDatabase.is_active.is_(True),
             )
-            if identifiers_match:
-                company = master_db.get(MasterCompany, tenant.company_id)
-                if company:
-                    matches.append((company, tenant))
-        finally:
-            tenant_db.close()
-    return matches[0] if len(matches) == 1 else (None, None)
+        )
+        if company and tenant:
+            return company, tenant
+    # Webhook resolution is deliberately O(1). Older installations must run
+    # the endpoint-index backfill during deployment; a request must never fan
+    # out over every tenant database to discover its destination.
+    return None, None
 
 
 def verify_webhook_token(config: WhatsAppTenantConfig, verify_token: str | None) -> bool:
@@ -2232,6 +2250,7 @@ def record_manual_response(
                 filename=filename,
                 payload=bytes(item.get("content") or b""),
                 content_type=str(item.get("content_type") or "application/octet-stream"),
+                company_id=company_id,
             )
             extraction_status = "downloaded"
             extraction_error = None

@@ -250,7 +250,7 @@ def mail_process(email_id: int, request: Request, db: Session = Depends(get_tena
     email = db.get(Email, email_id)
     if not email or email.company_id != user.company_id or not _email_matches_active_scope(email, active_scope):
         return PlainTextResponse("No encontrado", status_code=404)
-    job = queue_email_processing(db, company_id=user.company_id, user_id=user.id, email_id=email_id)
+    job = queue_email_processing(db, company_id=user.company_id, user_id=user.actor_id, email_id=email_id)
     result = execute_job_inline(db, job)
     log_action(
         db,
@@ -270,7 +270,7 @@ def mail_reprocess(email_id: int, request: Request, db: Session = Depends(get_te
     email = db.get(Email, email_id)
     if not email or email.company_id != user.company_id or not _email_matches_active_scope(email, active_scope):
         return PlainTextResponse("No encontrado", status_code=404)
-    job = queue_email_processing(db, company_id=user.company_id, user_id=user.id, email_id=email_id, force=True)
+    job = queue_email_processing(db, company_id=user.company_id, user_id=user.actor_id, email_id=email_id, force=True)
     log_action(db, company_id=user.company_id, user=user, action="mail.reprocess", entity_type="job", entity_id=job.id, message=f"Correo reencolado: {email_id}")
     return _redirect_back(request)
 
@@ -348,7 +348,7 @@ def mail_mark_no_order(email_id: int, request: Request, db: Session = Depends(ge
     email = db.get(Email, email_id)
     if email and email.company_id == user.company_id and _email_matches_active_scope(email, active_scope):
         email.is_read = True
-        mark_email_no_order(db, company_id=user.company_id, user_id=user.id, email_id=email.id)
+        mark_email_no_order(db, company_id=user.company_id, user_id=user.actor_id, email_id=email.id)
         log_action(db, company_id=user.company_id, user=user, action="mail.mark_no_order", entity_type="email", entity_id=email.id, message="Correo marcado como sin pedido")
     return _redirect_back(request)
 

@@ -16,7 +16,7 @@ from app.db.models import ChannelSetting, Company, EmailSettings, InputChannel
 from app.dashboard.service import recent_processed_emails_overview
 from app.logs.service import log_action
 from app.master.database import get_master_db
-from app.master.models import EmailSyncState
+from app.master.models import EmailSyncState, MasterWhatsAppEndpoint
 from app.master.service import TenantUser
 from app.settings.email_config import email_config_status
 from app.settings.service import get_or_create_settings
@@ -29,6 +29,7 @@ from app.whatsapp.service import (
     redact_whatsapp_config,
     whatsapp_config,
     whatsapp_webhook_url,
+    upsert_master_whatsapp_endpoint,
 )
 
 router = APIRouter()
@@ -279,6 +280,7 @@ def channels_settings_page(request: Request, db: Session = Depends(get_tenant_db
 async def complete_whatsapp_embedded_signup(
     request: Request,
     db: Session = Depends(get_tenant_db),
+    master_db: Session = Depends(get_master_db),
     user: TenantUser = Depends(current_user),
 ):
     if not has_admin_access(user):
@@ -319,6 +321,19 @@ async def complete_whatsapp_embedded_signup(
         elif exc.error_type in {"invalid_signup_payload", "asset_mismatch"}:
             status_code = 400
         return JSONResponse({"ok": False, "message": str(exc), "error_type": exc.error_type}, status_code=status_code)
+    try:
+        upsert_master_whatsapp_endpoint(
+            master_db,
+            company_id=user.company_id,
+            business_account_id=result.business_account_id,
+            phone_number_id=result.phone_number_id,
+            display_phone_number=result.display_phone_number,
+            verified_name=result.verified_name,
+        )
+        master_db.commit()
+    except ValueError as exc:
+        master_db.rollback()
+        return JSONResponse({"ok": False, "message": str(exc), "error_type": "endpoint_conflict"}, status_code=409)
     request.session.pop("whatsapp_embedded_signup_state", None)
     log_action(
         db,
@@ -371,6 +386,16 @@ async def activate_channel(
             user.company_id,
             active=True,
         )
+    elif channel.key == "whatsapp":
+        config = whatsapp_config(db, user.company_id)
+        upsert_master_whatsapp_endpoint(
+            master_db,
+            company_id=user.company_id,
+            business_account_id=config.business_account_id,
+            phone_number_id=config.phone_number_id,
+            active=True,
+        )
+        master_db.commit()
 
     log_action(db, company_id=user.company_id, user=user, action="channel.activate", entity_type="input_channel", entity_id=channel.id, message=f"Canal activado: {channel.name}")
     return RedirectResponse(f"/settings/channels?focus={channel.key}", status_code=303)
@@ -400,6 +425,11 @@ async def deactivate_channel(
             user.company_id,
             active=False,
         )
+    elif channel.key == "whatsapp":
+        master_db.query(MasterWhatsAppEndpoint).filter(
+            MasterWhatsAppEndpoint.company_id == user.company_id,
+        ).update({"active": False, "updated_at": datetime.now(timezone.utc)}, synchronize_session=False)
+        master_db.commit()
 
     log_action(db, company_id=user.company_id, user=user, action="channel.deactivate", entity_type="input_channel", entity_id=channel.id, message=f"Canal desactivado: {channel.name}")
     return RedirectResponse("/settings/channels", status_code=303)

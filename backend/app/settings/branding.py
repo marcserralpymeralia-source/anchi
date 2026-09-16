@@ -278,8 +278,10 @@ def delete_brand_asset(value: str | None) -> None:
     if not is_internal_brand_asset(value):
         return
     relative = value.removeprefix("/static/")
-    path = Path(__file__).resolve().parents[1] / "static" / relative
-    if path.exists():
+    static_root = Path(__file__).resolve().parents[1] / "static"
+    path = (static_root / relative).resolve()
+    branding_root = BRANDING_UPLOAD_DIR.resolve()
+    if branding_root in path.parents and path.is_file():
         path.unlink()
 
 
@@ -287,11 +289,12 @@ async def store_brand_asset(company_id: int, upload: UploadFile, prefix: str) ->
     suffix = Path(upload.filename or "").suffix.lower()
     if suffix not in ALLOWED_LOGO_EXTENSIONS:
         raise ValueError("Formato de archivo no permitido. Usa PNG, JPG, SVG o WEBP.")
-    BRANDING_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    filename = f"{company_id}-{prefix}-{uuid4().hex}{suffix}"
-    path = BRANDING_UPLOAD_DIR / filename
+    tenant_dir = BRANDING_UPLOAD_DIR / f"tenant-{int(company_id)}"
+    tenant_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{prefix}-{uuid4().hex}{suffix}"
+    path = tenant_dir / filename
     path.write_bytes(await upload.read())
-    return f"/static/uploads/branding/{filename}"
+    return f"/static/uploads/branding/tenant-{int(company_id)}/{filename}"
 
 
 def reset_branding(branding: BrandingSettings, user_id: int | None) -> None:

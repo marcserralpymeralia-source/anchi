@@ -20,6 +20,7 @@ from app.whatsapp.routes import router as whatsapp_router
 from app.whatsapp.inbox_routes import router as whatsapp_inbox_router
 from app.settings.channels_routes import router as channels_settings_router
 from app.settings.routes import router as settings_router
+from app.superadmin.routes import router as superadmin_router
 from app.setup.routes import router as setup_router
 from app.users.routes import router as users_router
 from app.workbench.routes import router as workbench_router
@@ -39,6 +40,7 @@ def get_registered_routers() -> list:
     routers = [
         auth_router,
         admin_router,
+        superadmin_router,
         dashboard_router,
         pages_router,
         entries_router,

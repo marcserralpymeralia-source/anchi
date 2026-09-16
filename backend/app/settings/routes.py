@@ -1633,7 +1633,7 @@ def duplicate_email_template(template_id: int, db: Session = Depends(get_tenant_
 @router.post("/email/templates/reset-defaults")
 def reset_email_templates(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if can_edit_email_settings(user):
-        ensure_default_email_templates(db, user.company_id, user.id)
+        ensure_default_email_templates(db, user.company_id, user.actor_id)
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="settings.email.templates.reset", entity_type="email_template", message="Plantillas de correo restauradas")
     return RedirectResponse("/settings#email-templates", status_code=303)
@@ -1853,7 +1853,7 @@ def read_email(request: Request, db: Session = Depends(get_tenant_db), user: Ten
     )
     settings = get_or_create_settings(db, EmailSettings, user.company_id)
     safe_limit = max(min(int(settings.read_limit or 10), 50), 1)
-    job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": False, "limit": safe_limit}, created_by_user_id=user.id)
+    job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": False, "limit": safe_limit}, created_by_user_id=user.actor_id)
     logger.info(
         "settings.email.read.requested",
         extra={"event": "settings.email.read.requested", "request_id": request_id, "company_id": user.company_id, "job_id": job.id, "job_type": job.job_type},
@@ -1883,7 +1883,7 @@ def read_unprocessed_email(request: Request, db: Session = Depends(get_tenant_db
     )
     settings = get_or_create_settings(db, EmailSettings, user.company_id)
     safe_limit = max(min(int(settings.read_limit or 10), 50), 1)
-    job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": True, "limit": safe_limit}, created_by_user_id=user.id)
+    job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": True, "limit": safe_limit}, created_by_user_id=user.actor_id)
     logger.info(
         "settings.email.read_unprocessed.requested",
         extra={"event": "settings.email.read_unprocessed.requested", "request_id": request_id, "company_id": user.company_id, "job_id": job.id, "job_type": job.job_type},
@@ -1938,7 +1938,7 @@ def backfill_email_history(
         company_id=user.company_id,
         job_type="backfill_imap",
         payload=payload,
-        created_by_user_id=user.id,
+        created_by_user_id=user.actor_id,
     )
     db.commit()
     result = _run_backfill_job_once(
@@ -2306,7 +2306,7 @@ def reset_agent_prompts(db: Session = Depends(get_tenant_db), user: TenantUser =
                 db.add(template)
                 db.flush()
             last_version = db.scalar(select(PromptVersion.version).where(PromptVersion.template_id == template.id).order_by(PromptVersion.version.desc())) or 0
-            version = PromptVersion(company_id=user.company_id, template_id=template.id, version=last_version + 1, content=content, created_by_user_id=user.id)
+            version = PromptVersion(company_id=user.company_id, template_id=template.id, version=last_version + 1, content=content, created_by_user_id=user.actor_id)
             db.add(version)
             db.flush()
             template.active_version_id = version.id
@@ -2322,7 +2322,7 @@ def duplicate_prompt(template_id: int, db: Session = Depends(get_tenant_db), use
         active = db.get(PromptVersion, template.active_version_id) if template.active_version_id else None
         if active:
             last_version = db.scalar(select(PromptVersion.version).where(PromptVersion.template_id == template.id).order_by(PromptVersion.version.desc())) or 0
-            version = PromptVersion(company_id=user.company_id, template_id=template.id, version=last_version + 1, content=active.content, created_by_user_id=user.id)
+            version = PromptVersion(company_id=user.company_id, template_id=template.id, version=last_version + 1, content=active.content, created_by_user_id=user.actor_id)
             db.add(version)
             db.commit()
             log_action(db, company_id=user.company_id, user=user, action="agent.prompt_updated", entity_type="prompt", entity_id=template.id, message=f"Prompt duplicado: {template.purpose}")
@@ -2334,7 +2334,7 @@ def save_prompt(template_id: int, content: str = Form(...), db: Session = Depend
     template = db.get(PromptTemplate, template_id)
     if template and template.company_id == user.company_id:
         last_version = db.scalar(select(PromptVersion.version).where(PromptVersion.template_id == template.id).order_by(PromptVersion.version.desc())) or 0
-        version = PromptVersion(company_id=user.company_id, template_id=template.id, version=last_version + 1, content=content, created_by_user_id=user.id)
+        version = PromptVersion(company_id=user.company_id, template_id=template.id, version=last_version + 1, content=content, created_by_user_id=user.actor_id)
         db.add(version)
         db.flush()
         template.active_version_id = version.id
@@ -2608,7 +2608,7 @@ def sync_external_database_mapping(connection_id: int, entity_type: str, request
     if not mapping.sync_enabled:
         return JSONResponse({"ok": False, "message": "Activa la sincronización del mapeo antes de ejecutarla."}, status_code=422)
     try:
-        result = sync_mapping(db, connection, mapping, user.company_id, user.id)
+        result = sync_mapping(db, connection, mapping, user.company_id, user.actor_id)
         mapping.last_sync_at = datetime.now(timezone.utc)
         has_errors = bool(result.get("errors"))
         mapping.last_sync_ok = not has_errors

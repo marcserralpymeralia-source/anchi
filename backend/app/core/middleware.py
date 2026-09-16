@@ -4,11 +4,14 @@ import logging
 import uuid
 import time
 from collections.abc import Awaitable, Callable
+from urllib.parse import urlsplit
 
 from fastapi import Request
+from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import get_settings
+from app.core.csrf import CSRF_COOKIE, get_or_create_token
 from app.core.performance import performance_profiling_enabled, performance_scope, start_performance
 from app.core.metrics import record_request
 from app.core.observability import current_context, observability_scope
@@ -57,6 +60,35 @@ def _set_cached_branding(company_id: int, value: dict) -> None:
     _BRANDING_CACHE[company_id] = (time.time() + _branding_cache_ttl(), value)
 
 
+def _same_origin_mutation_guard(request: Request):
+    """Reject browser mutations initiated from a different origin.
+
+    Server-to-server webhooks and cron calls do not send Origin/Referer and
+    remain available; browser requests with an explicit source must match the
+    current host. SameSite cookies remain the first line of defence, while
+    this check protects forms and fetch calls from cross-origin POSTs.
+    """
+
+    if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return None
+    path = request.url.path or "/"
+    if path.startswith("/cron"):
+        return None
+    # These two Meta ingress routes validate X-Hub-Signature-256 in their
+    # handler.  The authenticated manual response route must not be exempt.
+    if path.startswith("/webhooks/whatsapp/") and not path.endswith("/respond"):
+        return None
+    source = request.headers.get("origin") or request.headers.get("referer")
+    if source:
+        parsed = urlsplit(source)
+        source_host = parsed.netloc.lower()
+        request_host = (request.headers.get("host") or request.url.netloc or "").lower()
+        if source_host and request_host and source_host != request_host:
+            return JSONResponse(status_code=403, content={"detail": "Origen no permitido"})
+
+    return None
+
+
 def invalidate_branding_cache(company_id: int) -> None:
     """Discard the cached branding after a tenant changes its identity."""
     _BRANDING_CACHE.pop(company_id, None)
@@ -75,6 +107,12 @@ async def branding_middleware(request: Request, call_next: Callable[[Request], A
         scenario=request.headers.get("x-performance-scenario"),
     )
     request.state.performance = perf_collector
+    get_or_create_token(request)
+    csrf_response = _same_origin_mutation_guard(request)
+    if csrf_response is not None:
+        csrf_response.headers["X-Request-ID"] = request_id
+        csrf_response.headers["X-Correlation-ID"] = correlation_id
+        return csrf_response
     master_db = None
     tenant = None
     try:
@@ -193,6 +231,17 @@ async def branding_middleware(request: Request, call_next: Callable[[Request], A
                         "displayed_item_count": perf_summary["displayed_item_count"],
                         "sql_duplicate_count": perf_summary["sql_duplicate_count"],
                     },
+                )
+            if getattr(request.state, "csrf_token_needs_cookie", False):
+                settings = get_settings()
+                response.set_cookie(
+                    CSRF_COOKIE,
+                    request.state.csrf_token,
+                    max_age=settings.session_max_age,
+                    path="/",
+                    secure=bool(settings.session_cookie_secure),
+                    httponly=False,
+                    samesite=settings.session_cookie_samesite or "lax",
                 )
             logger.info(
                 "request.end",

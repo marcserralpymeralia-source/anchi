@@ -373,7 +373,7 @@ def approve_learning_alias(alias_id: int, request: Request, db: Session = Depend
     alias = db.scalar(select(LearnedAlias).where(LearnedAlias.id == alias_id, LearnedAlias.company_id == user.company_id))
     if alias:
         alias.approved = True
-        alias.approved_by = user.id
+        alias.approved_by = user.actor_id
         db.commit()
         log_action(db, company_id=user.company_id, user=user, action="learning.alias.approve", entity_type="learned_alias", entity_id=alias.id, message="Alias aprobado")
     return RedirectResponse(f"/learning?tab={request.query_params.get('tab', 'suggestions')}", status_code=303)

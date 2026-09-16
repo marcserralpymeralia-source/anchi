@@ -59,6 +59,8 @@ class User(Base):
     name: Mapped[str] = mapped_column(String(200))
     password_hash: Mapped[str] = mapped_column(String(255))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    master_user_id: Mapped[int | None] = mapped_column(Integer, index=True)
+    actor_type: Mapped[str] = mapped_column(String(30), default="human")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     role: Mapped[Role] = relationship()

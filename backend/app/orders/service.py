@@ -242,7 +242,7 @@ def _can_delete(user: TenantUser) -> bool:
 def _soft_delete_order(db: Session, order: Order, user: TenantUser, reason: str | None = None) -> None:
     order.status = "deleted"
     order.deleted_at = datetime.now(timezone.utc)
-    order.deleted_by = user.id
+    order.deleted_by = getattr(user, "actor_id", getattr(user, "id", None))
     order.delete_reason = reason or "Eliminado desde la app"
     db.commit()
     log_action(db, company_id=user.company_id, user=user, action="order.delete", entity_type="order", entity_id=order.id, message=reason or "Pedido eliminado")

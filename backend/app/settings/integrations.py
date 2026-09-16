@@ -1583,6 +1583,7 @@ def _save_attachments(
             filename=f"email-{email.id}-{filename}",
             payload=payload,
             content_type=content_type,
+            company_id=company_id,
         )
         attachment = EmailAttachment(
             company_id=company_id,

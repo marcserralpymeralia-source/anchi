@@ -25,6 +25,7 @@ class FTPTransportTests(unittest.TestCase):
 
     def _export(self):
         return SimpleNamespace(
+            company_id=1,
             filename="PEDIDO_1.csv",
             content="pedido;cliente\n1;C001\n",
         )
@@ -132,6 +133,7 @@ class FTPTransportTests(unittest.TestCase):
         ftp_cls.return_value = client
 
         export = SimpleNamespace(
+            company_id=1,
             filename="PEDIDO_1.csv",
             content="descripcion\nCafé\n",
         )

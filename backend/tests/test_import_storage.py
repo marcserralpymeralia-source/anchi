@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -34,7 +35,7 @@ class ImportStorageTests(unittest.TestCase):
                 side_effect=AssertionError("mkdir should not be called during import"),
             ):
                 module = importlib.import_module(module_name)
-                self.assertEqual(str(module.PREVIEW_DIR), "/tmp/anchi/import_previews")
+                self.assertEqual(module.PREVIEW_DIR.as_posix(), "/tmp/anchi/import_previews")
         finally:
             sys.modules.pop(module_name, None)
             if previous is not None:
@@ -81,6 +82,27 @@ class ImportStorageTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "Persistent attachment storage"):
                 save_attachment(filename="pedido.txt", payload=b"pedido", content_type="text/plain")
+
+    def test_save_attachment_namespaces_local_files_by_company(self):
+        from app.core.attachment_storage import read_attachment, save_attachment
+
+        with tempfile.TemporaryDirectory() as tempdir, patch.dict(
+            os.environ,
+            {"TEMP_STORAGE_DIR": tempdir, "VERCEL": "", "VERCEL_ENV": ""},
+            clear=False,
+        ):
+            storage_ref = save_attachment(
+                filename="pedido.pdf",
+                payload=b"tenant-file",
+                content_type="application/pdf",
+                company_id=7,
+            )
+
+            path = Path(storage_ref)
+            self.assertTrue(path.is_file())
+            self.assertEqual(path.parent.parent.name, "7")
+            self.assertEqual(path.parent.parent.parent.name, "tenants")
+            self.assertEqual(read_attachment(storage_ref), b"tenant-file")
 
 
 if __name__ == "__main__":

@@ -23,9 +23,11 @@ def save_attachment(
     filename: str,
     payload: bytes,
     content_type: str | None = None,
+    company_id: int | None = None,
 ) -> str:
     safe_filename = Path(filename).name
-    storage_name = f"attachments/{uuid4().hex}-{safe_filename}"
+    prefix = f"tenants/{int(company_id)}/attachments" if company_id is not None else "attachments"
+    storage_name = f"{prefix}/{uuid4().hex}-{safe_filename}"
 
     if _use_vercel_blob():
         from vercel.blob import BlobClient
@@ -49,7 +51,8 @@ def save_attachment(
     root = resolve_temp_storage_dir("attachments")
     root.mkdir(parents=True, exist_ok=True)
 
-    path = root / storage_name.replace("attachments/", "", 1)
+    path = root / storage_name
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(payload)
     return str(path)
 

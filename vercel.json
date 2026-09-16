@@ -13,6 +13,10 @@
     {
       "path": "/cron/jobs",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/cron/platform-snapshots",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

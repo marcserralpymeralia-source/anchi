@@ -290,7 +290,7 @@
                   <summary class="button secondary compact-button">...</summary>
                   <div class="row-more-actions-panel">
                     {% if order.email_id %}<a href="/?focus=email-{{ order.email_id }}" onclick="event.stopPropagation();">Ver origen</a>{% endif %}
-                    <a href="/orders/{{ order.id }}/export-preview" onclick="event.stopPropagation();">Ver exportación</a>
+                    <form method="post" action="/orders/{{ order.id }}/export-preview" class="inline-form" onclick="event.stopPropagation();"><button type="submit" class="link-button">Ver exportación</button></form>
                     <form class="js-loading-form" method="post" action="/orders/{{ order.id }}/delete" data-confirm="¿Seguro que quieres eliminar este pedido? Se quitará de la gestión activa.">
                       <button type="submit" class="secondary compact-button danger" data-loading-text="Eliminando...">Eliminar</button>
                     </form>

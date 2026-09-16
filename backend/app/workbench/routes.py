@@ -46,7 +46,7 @@ def _run_job_inline_if_needed(request: Request, db: Session, user: TenantUser, j
     request_id = getattr(request.state, "request_id", None)
     logger.info(
         "workbench.job.inline.start",
-        extra={"event": "workbench.job.inline.start", "request_id": request_id, "company_id": user.company_id, "user_id": user.id, "job_id": job.id, "job_type": job.job_type},
+        extra={"event": "workbench.job.inline.start", "request_id": request_id, "company_id": user.company_id, "user_id": user.actor_id, "job_id": job.id, "job_type": job.job_type},
     )
     result = execute_job_inline(db, job)
     log_action(db, company_id=user.company_id, user=user, action=action, entity_type="job", entity_id=job.id, message=result.get("message") or message)
@@ -56,7 +56,7 @@ def _run_job_inline_if_needed(request: Request, db: Session, user: TenantUser, j
             "event": "workbench.job.inline.end",
             "request_id": request_id,
             "company_id": user.company_id,
-            "user_id": user.id,
+            "user_id": user.actor_id,
             "job_id": job.id,
             "job_type": job.job_type,
             "ok": bool(result.get("ok")),
@@ -307,11 +307,11 @@ def workbench_read_email(request: Request, db: Session = Depends(get_tenant_db),
     request_id = getattr(request.state, "request_id", None)
     logger.info(
         "workbench.email.read.start",
-        extra={"event": "workbench.email.read.start", "request_id": request_id, "company_id": user.company_id, "user_id": user.id},
+        extra={"event": "workbench.email.read.start", "request_id": request_id, "company_id": user.company_id, "user_id": user.actor_id},
     )
     settings = get_or_create_settings(db, EmailSettings, user.company_id)
     safe_limit = max(min(int(settings.read_limit or 10), 50), 1)
-    job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": False, "limit": safe_limit}, created_by_user_id=user.id)
+    job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": False, "limit": safe_limit}, created_by_user_id=user.actor_id)
     logger.info(
         "workbench.email.read.requested",
         extra={"event": "workbench.email.read.requested", "request_id": request_id, "company_id": user.company_id, "job_id": job.id, "job_type": job.job_type},
@@ -323,7 +323,7 @@ def workbench_read_email(request: Request, db: Session = Depends(get_tenant_db),
 
 @router.post("/workbench/process-pending")
 def workbench_process_pending(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
-    job = enqueue_job(db, company_id=user.company_id, job_type="process_pending_emails", payload={}, created_by_user_id=user.id)
+    job = enqueue_job(db, company_id=user.company_id, job_type="process_pending_emails", payload={}, created_by_user_id=user.actor_id)
     result = _run_job_inline_if_needed(request, db, user, job, action="workbench.process_pending.inline", message="Procesamiento de pendientes completado")
     if result is not None:
         return _queued_job_response(request, job.id, result=result)
@@ -337,9 +337,9 @@ def workbench_process_recent(request: Request, limit: int = Form(3), db: Session
     request_id = getattr(request.state, "request_id", None)
     logger.info(
         "workbench.process_recent.start",
-        extra={"event": "workbench.process_recent.start", "request_id": request_id, "company_id": user.company_id, "user_id": user.id, "limit": safe_limit},
+        extra={"event": "workbench.process_recent.start", "request_id": request_id, "company_id": user.company_id, "user_id": user.actor_id, "limit": safe_limit},
     )
-    job = enqueue_job(db, company_id=user.company_id, job_type="process_recent_emails", payload={"limit": safe_limit}, created_by_user_id=user.id)
+    job = enqueue_job(db, company_id=user.company_id, job_type="process_recent_emails", payload={"limit": safe_limit}, created_by_user_id=user.actor_id)
     logger.info(
         "workbench.process_recent.queued",
         extra={"event": "workbench.process_recent.queued", "request_id": request_id, "company_id": user.company_id, "job_id": job.id, "job_type": job.job_type, "limit": safe_limit},
@@ -368,7 +368,7 @@ def workbench_bulk_action(
         company_id=user.company_id,
         job_type="bulk_order_action",
         payload={"action": action, "selected_items": items, "target_state": target_state},
-        created_by_user_id=user.id,
+        created_by_user_id=user.actor_id,
     )
     log_action(db, company_id=user.company_id, user=user, action="workbench.bulk_action", entity_type="job", entity_id=job.id, message=f"Accion masiva encolada: {action}")
     return _queued_job_response(request, job.id)
@@ -378,14 +378,17 @@ def workbench_bulk_action(
 def workbench_mark_email_no_order(email_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     email = db.get(Email, email_id)
     if email and email.company_id == user.company_id:
-        mark_email_no_order(db, company_id=user.company_id, user_id=user.id, email_id=email.id)
+        mark_email_no_order(db, company_id=user.company_id, user_id=user.actor_id, email_id=email.id)
         log_action(db, company_id=user.company_id, user=user, action="workbench.email.mark_no_order", entity_type="email", entity_id=email.id, message="Correo marcado como no pedido desde Bandeja")
     return RedirectResponse("/?mode=no_order", status_code=303)
 
 
 @router.post("/workbench/email/{email_id}/process")
 def workbench_process_email(email_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
-    job = queue_email_processing(db, company_id=user.company_id, user_id=user.id, email_id=email_id)
+    email = db.scalar(select(Email).where(Email.id == email_id, Email.company_id == user.company_id))
+    if email is None:
+        return PlainTextResponse("No encontrado", status_code=404)
+    job = queue_email_processing(db, company_id=user.company_id, user_id=user.actor_id, email_id=email_id)
     log_action(db, company_id=user.company_id, user=user, action="workbench.email.process", entity_type="job", entity_id=job.id, message=f"Correo encolado para procesar: {email_id}")
     return _queued_job_response(request, job.id)
 
@@ -394,7 +397,7 @@ def workbench_process_email(email_id: int, request: Request, db: Session = Depen
 def workbench_close_email(email_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     email = db.get(Email, email_id)
     if email and email.company_id == user.company_id:
-        close_email(db, company_id=user.company_id, user_id=user.id, email_id=email.id)
+        close_email(db, company_id=user.company_id, user_id=user.actor_id, email_id=email.id)
         log_action(db, company_id=user.company_id, user=user, action="workbench.email.close", entity_type="email", entity_id=email.id, message="Correo cerrado desde Bandeja")
     return RedirectResponse("/", status_code=303)
 
@@ -403,7 +406,7 @@ def workbench_close_email(email_id: int, db: Session = Depends(get_tenant_db), u
 def workbench_discard_email(email_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     email = db.get(Email, email_id)
     if email and email.company_id == user.company_id:
-        discard_email(db, company_id=user.company_id, user_id=user.id, email_id=email.id)
+        discard_email(db, company_id=user.company_id, user_id=user.actor_id, email_id=email.id)
         log_action(db, company_id=user.company_id, user=user, action="workbench.email.discard", entity_type="email", entity_id=email.id, message="Correo descartado desde Bandeja")
     return RedirectResponse("/?mode=no_order", status_code=303)
 
@@ -415,9 +418,16 @@ def _workbench_email_attachment_payload(
     attachment_id: int,
     company_id: int,
 ) -> tuple[EmailAttachment, bytes] | PlainTextResponse:
+    email = db.scalar(
+        select(Email).where(
+            Email.id == email_id,
+            Email.company_id == company_id,
+        )
+    )
     attachment = db.get(EmailAttachment, attachment_id)
     if (
-        not attachment
+        not email
+        or not attachment
         or attachment.company_id != company_id
         or attachment.email_id != email_id
     ):

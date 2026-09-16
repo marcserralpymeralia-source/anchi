@@ -268,7 +268,7 @@ def setup_email_test(
 
 @router.post("/email/sync")
 def setup_email_sync(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
-    job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": False}, created_by_user_id=user.id)
+    job = enqueue_job(db, company_id=user.company_id, job_type="email_sync", payload={"auto_process": False, "unread_only": False}, created_by_user_id=user.actor_id)
     result = execute_job_inline(db, job)
     return _redirect_step("channels", message=result.get("message") or "Sincronización completada")
 
@@ -287,8 +287,8 @@ def setup_customers(request: Request, db: Session = Depends(get_tenant_db), user
 async def setup_import_preview(entity_type: str, request: Request, file: UploadFile = File(...), db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if entity_type not in {"products", "customers"}:
         return RedirectResponse("/setup", status_code=303)
-    preview = await create_preview(file, entity_type)
-    validation = validate_import(db, company_id=user.company_id, entity_type=entity_type, df=read_preview(preview["token"], preview["filename"]), mapping=preview["guessed_mapping"])
+    preview = await create_preview(file, entity_type, company_id=user.company_id)
+    validation = validate_import(db, company_id=user.company_id, entity_type=entity_type, df=read_preview(preview["token"], preview["filename"], company_id=user.company_id), mapping=preview["guessed_mapping"])
     return templates.TemplateResponse("setup/wizard.html", _setup_context(request, db, user, entity_type, preview=preview, validation=validation))
 
 
@@ -300,11 +300,11 @@ async def setup_import_confirm(entity_type: str, request: Request, db: Session =
     token = str(form.get("token") or "")
     filename = str(form.get("filename") or "import.csv")
     mapping = _mapping_from_form(form)
-    df = read_preview(token, filename)
+    df = read_preview(token, filename, company_id=user.company_id)
     job = confirm_import(
         db,
         company_id=user.company_id,
-        user=SimpleNamespace(id=user.id),
+        user=SimpleNamespace(id=user.actor_id),
         entity_type=entity_type,
         filename=filename,
         df=df,
@@ -332,13 +332,13 @@ def setup_customer_knowledge_skip(db: Session = Depends(get_tenant_db), user: Te
 async def setup_customer_knowledge_import(request: Request, file: UploadFile = File(...), customer_id: int = Form(0), db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if not customer_id:
         return _redirect_step("customer-knowledge", error="Selecciona el cliente al que pertenece la información.")
-    preview = await create_preview(file, "customer_knowledge_articles", customer_id=customer_id, import_kind="history")
+    preview = await create_preview(file, "customer_knowledge_articles", company_id=user.company_id, customer_id=customer_id, import_kind="history")
     mapping = preview["guessed_mapping"]
-    df = read_preview(preview["token"], preview["filename"])
+    df = read_preview(preview["token"], preview["filename"], company_id=user.company_id)
     validation = validate_import(db, company_id=user.company_id, entity_type="customer_knowledge_articles", df=df, mapping=mapping, customer_id=customer_id)
     if validation.rows_error and not validation.rows_new and not validation.rows_update:
         return _redirect_step("customer-knowledge", error=validation.errors[0] if validation.errors else "No se pudo importar la información adicional.")
-    job = confirm_import(db, company_id=user.company_id, user=SimpleNamespace(id=user.id), entity_type="customer_knowledge_articles", filename=preview["filename"], df=df, mapping=mapping, mode="update_existing", customer_id=customer_id, import_kind="history")
+    job = confirm_import(db, company_id=user.company_id, user=SimpleNamespace(id=user.actor_id), entity_type="customer_knowledge_articles", filename=preview["filename"], df=df, mapping=mapping, mode="update_existing", customer_id=customer_id, import_kind="history")
     return _redirect_step("openai", message=f"Información adicional importada: {job.rows_created} nuevas · {job.rows_updated} actualizadas")
 
 

@@ -70,10 +70,19 @@ def resolve_updated_by_id(db: Session, user) -> int | None:
         return None
 
     try:
-        user_id = getattr(user, "id", None)
-        if user_id is not None:
-            tenant_user = db.get(User, user_id)
+        actor_id = getattr(user, "tenant_actor_id", None)
+        if actor_id is not None:
+            tenant_user = db.get(User, actor_id)
             if tenant_user and tenant_user.company_id == user.company_id:
+                return tenant_user.id
+
+        master_user_id = getattr(user, "master_user_id", None) or getattr(user, "id", None)
+        if master_user_id is not None:
+            tenant_user = db.query(User).filter(
+                User.company_id == user.company_id,
+                User.master_user_id == master_user_id,
+            ).one_or_none()
+            if tenant_user:
                 return tenant_user.id
 
         email = (getattr(user, "email", None) or "").strip().lower()

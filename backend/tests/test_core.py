@@ -143,7 +143,7 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.assertEqual(resolved.company_id, 2)
         db.close()
 
-    def test_authenticate_master_user_repairs_missing_demo_account(self):
+    def test_demo_does_not_repair_arbitrary_company_accounts(self):
         db = self.MasterSession()
         company = MasterCompany(id=2, name="Mulet Hidalgo", slug="mulet-hidalgo", active=True)
         tenant = MasterTenantDatabase(company_id=2, database_key="mulet-hidalgo", database_url=f"sqlite:///{self.tenant_path.as_posix()}", is_active=True, health_status="ok")
@@ -164,12 +164,9 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
             resolved = authenticate_master_user(db, "admin@mulet-hidalgo.local", "AnchiDemo2026!")
         get_settings.cache_clear()
 
-        self.assertIsNotNone(resolved)
-        self.assertEqual(resolved.company_slug, "mulet-hidalgo")
+        self.assertIsNone(resolved)
         repaired_user = db.scalar(select(MasterUser).where(MasterUser.email == "admin@mulet-hidalgo.local"))
-        self.assertIsNotNone(repaired_user)
-        repaired_membership = db.scalar(select(CompanyMembership).where(CompanyMembership.user_id == repaired_user.id, CompanyMembership.company_id == 2))
-        self.assertIsNotNone(repaired_membership)
+        self.assertIsNone(repaired_user)
         db.close()
 
     def test_authenticate_master_user_accepts_demo_password_fallback(self):
@@ -251,11 +248,11 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.assertEqual(getattr(request.state, "tenant", None), None)
         fake_db.close()
 
-    def test_get_tenant_db_redirects_when_schema_provisioning_fails(self):
+    def test_get_tenant_db_returns_503_when_schema_is_not_ready(self):
         self.seed_master(with_tenant_db=True)
         db = self.MasterSession()
         request = FakeRequest(session={"membership_id": 1, "user_id": 1, "company_id": 1, "company_slug": "demo"})
-        with patch("app.tenancy.database.ensure_tenant_schema", side_effect=OperationalError("select 1", {}, Exception("boom"))):
+        with patch("app.tenancy.database.tenant_migration_report", return_value={"is_current": False, "status": "failed"}):
             with self.assertRaises(HTTPException) as ctx:
                 next(get_tenant_db(request, db))
         self.assertEqual(ctx.exception.status_code, 503)
@@ -1020,7 +1017,9 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         request = FakeRequest(session={})
         fake_user = SimpleNamespace(id=7, company_id=1, membership_id=9, company_slug="demo", email="admin@anchi.local")
         fake_db = SimpleNamespace(get=lambda _model, _id: SimpleNamespace(name="Demo"))
-        with patch("app.auth.routes.authenticate_user", return_value=fake_user):
+        with patch("app.auth.routes.authenticate_user", return_value=fake_user), patch(
+            "app.auth.routes.create_server_session", return_value="test-session"
+        ), patch("app.auth.routes.bind_server_session_context"):
             response = login(request, email="admin@anchi.local", password="demo", master_db=fake_db)
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers.get("location"), "/")

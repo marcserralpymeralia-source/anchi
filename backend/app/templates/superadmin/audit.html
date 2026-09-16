@@ -1,0 +1,60 @@
+{% extends "superadmin/layout.html" %}
+{% block content %}
+<div class="superadmin-page-header">
+  <div>
+    <span class="page-kicker">Seguridad y trazabilidad</span>
+    <h1 class="page-title">Auditoría de plataforma</h1>
+    <p class="muted">Registro cronológico de operaciones sobre empresas, accesos y configuraciones. Solo se guardan metadatos operativos, nunca contraseñas ni datos sensibles de negocio.</p>
+  </div>
+</div>
+
+<section class="panel superadmin-panel">
+  <div class="section-title-row">
+    <div>
+      <h2 class="panel-title">Registro de eventos</h2>
+      <p class="muted">Últimas operaciones realizadas en la consola global</p>
+    </div>
+  </div>
+
+  <div class="superadmin-table-wrap">
+    <table class="superadmin-table">
+      <thead>
+        <tr>
+          <th>Fecha y hora</th>
+          <th>Acción</th>
+          <th>Objeto afectado</th>
+          <th>Resultado</th>
+          <th>Metadatos</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for event in events %}
+          <tr>
+            <td style="white-space: nowrap;">
+              <span class="muted">{{ event.created_at | local_dt(default_timezone, "%d/%m/%Y %H:%M:%S", "") }}</span>
+            </td>
+            <td>
+              <strong class="audit-action-text">{{ event.action }}</strong>
+            </td>
+            <td>
+              <span class="audit-target-badge">{{ event.target_type }}{% if event.target_id %} #{{ event.target_id }}{% endif %}</span>
+            </td>
+            <td>
+              <span class="status-pill {{ 'is-ok' if event.outcome == 'ok' else 'is-warning' }}">
+                {{ event.outcome }}
+              </span>
+            </td>
+            <td>
+              <code class="metadata-box">{{ event.metadata_json or '{}' }}</code>
+            </td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="5" class="superadmin-empty">No hay eventos de auditoría registrados.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

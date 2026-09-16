@@ -9,6 +9,7 @@ services:
       APP_ENV: production
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/anchi
       MASTER_DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/anchi_master
+      RUN_INTERNAL_JOB_WORKER: "false"
     depends_on:
       postgres:
         condition: service_healthy
@@ -25,6 +26,7 @@ services:
       APP_ENV: production
       DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/anchi
       MASTER_DATABASE_URL: postgresql+psycopg://postgres:postgres@postgres:5432/anchi_master
+      RUN_INTERNAL_JOB_WORKER: "true"
     depends_on:
       postgres:
         condition: service_healthy

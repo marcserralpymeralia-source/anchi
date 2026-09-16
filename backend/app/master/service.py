@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from datetime import timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import get_settings
+from app.core.permissions import DEFAULT_ROLE_PERMISSIONS
 from app.core.security import hash_password
 from app.core.security import verify_password
-from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser
+from app.auth.sessions import validate_server_session
+from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser, utcnow
 
 DEMO_ADMIN_PASSWORD_FALLBACKS = {"AnchiDemo2026!"}
 
@@ -35,12 +38,24 @@ class TenantUser:
     email: str
     name: str
     is_active: bool
-    company_id: int
+    company_id: int | None
     company_name: str
     company_slug: str
     role: TenantRole
-    membership_id: int
+    membership_id: int | None
     database_url: str | None = None
+    platform_role_key: str | None = None
+    session_version: int = 1
+    master_user_id: int | None = None
+    tenant_actor_id: int | None = None
+
+    @property
+    def actor_id(self) -> int:
+        """Return the local tenant actor id used by operational foreign keys."""
+
+        if self.tenant_actor_id is None:
+            raise RuntimeError("La identidad local del tenant no está disponible")
+        return int(self.tenant_actor_id)
 
 
 @dataclass(slots=True)
@@ -74,7 +89,15 @@ def _company_to_context(company: MasterCompany, tenant_db: MasterTenantDatabase 
     )
 
 
-def _membership_to_user(membership: CompanyMembership, tenant_db: MasterTenantDatabase | None = None) -> TenantUser:
+def _membership_to_user(
+    membership: CompanyMembership,
+    tenant_db: MasterTenantDatabase | None = None,
+    *,
+    tenant_actor_id: int | None = None,
+) -> TenantUser:
+    role_name = membership.role_key or "Usuario"
+    if role_name == "Superadmin":
+        role_name = "Administrador"
     return TenantUser(
         id=membership.user_id,
         email=membership.user.email,
@@ -83,9 +106,32 @@ def _membership_to_user(membership: CompanyMembership, tenant_db: MasterTenantDa
         company_id=membership.company_id,
         company_name=membership.company.name,
         company_slug=membership.company.slug,
-        role=TenantRole(name=membership.role_key or "Usuario", permissions=""),
+        role=TenantRole(name=role_name, permissions=DEFAULT_ROLE_PERMISSIONS.get(role_name, "")),
         membership_id=membership.id,
         database_url=tenant_db.database_url if tenant_db else None,
+        platform_role_key=membership.user.platform_role_key,
+        session_version=int(membership.user.session_version or 1),
+        master_user_id=membership.user_id,
+        tenant_actor_id=tenant_actor_id,
+    )
+
+
+def _platform_user_to_context(user: MasterUser) -> TenantUser:
+    """Represent a platform identity without inventing a tenant context."""
+
+    return TenantUser(
+        id=user.id,
+        email=user.email,
+        name=user.full_name,
+        is_active=user.is_active,
+        company_id=None,
+        company_name="Plataforma Anchi",
+        company_slug="platform",
+        role=TenantRole(name="Superadmin", permissions="manage_tenants,manage_users,view_logs"),
+        membership_id=None,
+        platform_role_key=user.platform_role_key or "superadmin",
+        session_version=int(user.session_version or 1),
+        master_user_id=user.id,
     )
 
 
@@ -110,6 +156,7 @@ def _repair_demo_master_access(master_db: Session, email: str, password: str, se
             full_name=f"Administrador {company.name}",
             password_hash=hash_password(password),
             is_active=True,
+            platform_role_key="superadmin" if email == settings.default_admin_email.strip().lower() else "tenant_user",
         )
         master_db.add(user)
         master_db.flush()
@@ -144,13 +191,49 @@ def _repair_demo_master_access(master_db: Session, email: str, password: str, se
 
 
 def authenticate_master_user(master_db: Session, email: str, password: str) -> TenantUser | None:
+    email = (email or "").strip().lower()
     settings = get_settings()
-    demo_runtime = settings.environment == "demo" or os.getenv("VERCEL") == "1" or bool(os.getenv("VERCEL_ENV"))
+    # Account recovery by email-domain is a local development convenience
+    # only.  It must never run on a shared/demo/production deployment where an
+    # attacker could manufacture an address and obtain company ownership.
+    demo_runtime = settings.environment == "development" or (
+        settings.environment == "demo"
+        and email == settings.default_admin_email.strip().lower()
+    )
+    platform_user = master_db.scalar(
+        select(MasterUser).where(
+            MasterUser.email == email,
+            MasterUser.is_active.is_(True),
+            MasterUser.platform_role_key == "superadmin",
+        )
+    )
+    if platform_user:
+        now = utcnow()
+        if platform_user.locked_until and platform_user.locked_until > now:
+            return None
+        if not verify_password(password, platform_user.password_hash):
+            platform_user.failed_login_count = (platform_user.failed_login_count or 0) + 1
+            if platform_user.failed_login_count >= 5:
+                platform_user.locked_until = now + timedelta(minutes=15)
+            master_db.commit()
+            return None
+        platform_user.failed_login_count = 0
+        platform_user.locked_until = None
+        platform_user.last_login_at = utcnow()
+        master_db.commit()
+        return _platform_user_to_context(platform_user)
     memberships = master_db.scalars(
         select(CompanyMembership)
         .join(CompanyMembership.user)
         .options(selectinload(CompanyMembership.user), selectinload(CompanyMembership.company))
-        .where(MasterUser.email == email, MasterUser.is_active.is_(True), CompanyMembership.is_active.is_(True))
+        .where(
+            MasterUser.email == email,
+            MasterUser.is_active.is_(True),
+            CompanyMembership.is_active.is_(True),
+            MasterCompany.active.is_(True),
+            MasterCompany.status == "active",
+        )
+        .join(MasterCompany, MasterCompany.id == CompanyMembership.company_id)
         .order_by(CompanyMembership.is_owner.desc(), CompanyMembership.id.asc())
     ).all()
     if demo_runtime and _is_demo_admin_password(password, settings) and not memberships:
@@ -160,16 +243,36 @@ def authenticate_master_user(master_db: Session, email: str, password: str) -> T
                 select(CompanyMembership)
                 .join(CompanyMembership.user)
                 .options(selectinload(CompanyMembership.user), selectinload(CompanyMembership.company))
-                .where(MasterUser.email == email, MasterUser.is_active.is_(True), CompanyMembership.is_active.is_(True))
+                .where(
+                    MasterUser.email == email,
+                    MasterUser.is_active.is_(True),
+                    CompanyMembership.is_active.is_(True),
+                    MasterCompany.active.is_(True),
+                    MasterCompany.status == "active",
+                )
+                .join(MasterCompany, MasterCompany.id == CompanyMembership.company_id)
                 .order_by(CompanyMembership.is_owner.desc(), CompanyMembership.id.asc())
             ).all()
     if not memberships:
         return None
-    password_ok = verify_password(password, memberships[0].user.password_hash)
+    master_user = memberships[0].user
+    now = utcnow()
+    if master_user.locked_until and master_user.locked_until > now:
+        return None
+    password_ok = verify_password(password, master_user.password_hash)
     if not password_ok and demo_runtime and _is_demo_admin_password(password, settings):
         password_ok = True
     if not password_ok:
+        master_user.failed_login_count = (master_user.failed_login_count or 0) + 1
+        if master_user.failed_login_count >= 5:
+            master_user.locked_until = now + timedelta(minutes=15)
+        master_db.commit()
         return None
+
+    master_user.failed_login_count = 0
+    master_user.locked_until = None
+    master_user.last_login_at = now
+    master_db.commit()
 
     email_slug = ""
     if "@" in email:
@@ -195,10 +298,6 @@ def authenticate_master_user(master_db: Session, email: str, password: str) -> T
     )
     membership = ordered_memberships[0]
     tenant_db = _tenant_db_for(membership)
-    if tenant_db and tenant_db.database_url:
-        from app.tenancy.database import ensure_tenant_schema_once
-
-        ensure_tenant_schema_once(tenant_db.database_url, company_id=membership.company_id)
     return _membership_to_user(membership, tenant_db)
 
 
@@ -227,6 +326,17 @@ def load_tenant_context(request, master_db: Session) -> TenantContext | None:
     )
     if not membership or not membership.user.is_active or not membership.company.active:
         return None
+    if not validate_server_session(request, master_db, membership.user):
+        request.state.auth_invalid = True
+        return None
+    expected_version = session.get("tenant_session_version")
+    try:
+        if expected_version is not None and int(expected_version) != int(membership.user.session_version or 1):
+            request.state.auth_invalid = True
+            return None
+    except (TypeError, ValueError):
+        request.state.auth_invalid = True
+        return None
     if company_slug and membership.company.slug != company_slug:
         return None
     if not running_on_vercel and host and host not in {"localhost", "127.0.0.1"} and "." in host:
@@ -240,10 +350,11 @@ def load_tenant_context(request, master_db: Session) -> TenantContext | None:
             MasterTenantDatabase.is_active.is_(True),
         )
     )
-    if tenant_db and tenant_db.database_url:
-        from app.tenancy.database import ensure_tenant_schema_once
-
-        ensure_tenant_schema_once(tenant_db.database_url, company_id=membership.company_id)
     company = _company_to_context(membership.company, tenant_db)
-    user = _membership_to_user(membership, tenant_db)
+    actor_id = session.get("tenant_actor_id")
+    try:
+        actor_id = int(actor_id) if actor_id is not None else None
+    except (TypeError, ValueError):
+        actor_id = None
+    user = _membership_to_user(membership, tenant_db, tenant_actor_id=actor_id)
     return TenantContext(company=company, user=user)
