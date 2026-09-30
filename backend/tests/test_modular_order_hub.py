@@ -18,7 +18,7 @@ from app.connectors.fake import FakeERPConnector, FakeInboundConnector  # noqa: 
 from app.connectors.identity import ExternalIdentityConflict, bind_external_identity, resolve_customer_by_external_identity  # noqa: E402
 from app.db.database import Base  # noqa: E402
 from app.db.models import Company, Customer, ExternalIdentity, InboundMessage, Order, OrderLine, OrderRoute, Product  # noqa: E402
-from app.migrations.registry import _apply_tenant_modular_order_hub, _apply_tenant_order_delivery_reliability  # noqa: E402
+from app.migrations.registry import _apply_tenant_modular_order_hub, _apply_tenant_order_delivery_reliability, _apply_tenant_whatsapp_catalog_inbound  # noqa: E402
 from app.orders.delivery import process_order_delivery  # noqa: E402
 from app.orders.modular import process_inbound_order_event  # noqa: E402
 
@@ -195,11 +195,13 @@ class ModularOrderMigrationTests(unittest.TestCase):
                 conn.execute(text("CREATE TABLE order_lines (id INTEGER PRIMARY KEY, company_id INTEGER, order_id INTEGER)"))
             actions = _apply_tenant_modular_order_hub(engine, dry_run=False)
             actions.extend(_apply_tenant_order_delivery_reliability(engine, dry_run=False))
+            actions.extend(_apply_tenant_whatsapp_catalog_inbound(engine, dry_run=False))
             inspector = inspect(engine)
             order_columns = {item["name"] for item in inspector.get_columns("orders")}
             line_columns = {item["name"] for item in inspector.get_columns("order_lines")}
             self.assertIn("source_external_event_id", order_columns)
             self.assertIn("export_status", order_columns)
+            self.assertIn("source_catalog_id", order_columns)
             self.assertIn("source_product_external_id", line_columns)
             self.assertIn("external_identities", inspector.get_table_names())
             self.assertIn("order_routes", inspector.get_table_names())
