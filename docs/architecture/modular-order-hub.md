@@ -1,7 +1,7 @@
-# Modular Order Hub — estado de BLOQUE 2
+# Modular Order Hub — estado de BLOQUE 3
 
 Fecha: 2026-09-30
-Estado: BLOQUE 2 implementado localmente en `feat/modular-order-hub`; sin conectores externos reales.
+Estado: BLOQUE 3 implementado localmente en `feat/modular-order-hub`; sin conectores externos reales.
 
 ## Decisión de dominio
 
@@ -139,6 +139,8 @@ No se conectan bases reales ni se ejecutan migraciones productivas.
 
 La migración posterior `2026.09.30.2 — tenant order delivery reliability` crea `order_deliveries` y `order_delivery_attempts` con índices únicos tenant-scoped.
 
+La migración posterior `2026.09.30.3 — tenant whatsapp catalog inbound` añade `orders.source_catalog_id` sin modificar migraciones anteriores. No crea una jerarquía de catálogos ni sincroniza datos con Meta.
+
 ## Compatibilidad
 
 - Email: pipeline existente intacto; sigue usando extracción y scoring.
@@ -148,6 +150,39 @@ La migración posterior `2026.09.30.2 — tenant order delivery reliability` cre
 - Multi-tenancy: todas las resoluciones nuevas filtran por `company_id` y las rutas son tenant-scoped.
 - El procesamiento inbound no depende de la disponibilidad del destino; un fallo de connector A no bloquea connector B.
 
+## WhatsApp Catalog inbound
+
+WhatsApp Catalog reutiliza el webhook, la verificación de token/firma, el límite de 512 KiB, la resolución de tenant por WABA/phone number ID, la persistencia de `InboundMessage` y la deduplicación existentes. No se creó un segundo endpoint Meta.
+
+El clasificador existente reconoce `type=order` y entrega el evento a `WhatsAppCatalogInboundConnector`. El connector solo adapta el payload a `InboundOrderEvent`; no crea `Order`, no conoce FakeERP, no llama a OpenAI y no hace matching semántico.
+
+| Meta | ANCHI |
+|---|---|
+| `messages[].id` (`wamid`) | `Order.source_external_event_id` y dedupe inbound con provider `meta` |
+| `messages[].from` | `ExternalIdentity(meta_whatsapp, wa_id)`; fallback al matching determinista por teléfono |
+| `order.catalog_id` | `Order.source_catalog_id`; además debe coincidir con el catálogo autorizado del tenant |
+| `product_items[].product_retailer_id` | `ExternalIdentity(meta_whatsapp_catalog, retailer_id)` y `OrderLine.source_product_external_id` |
+| `product_items[].quantity` | `OrderLine.quantity`, convertido y validado determinísticamente |
+| `item_price` / `currency` | `OrderLine.unit_price_received` / `currency_received` como source price |
+| `order.text` | `Order.notes`, sin interpretación semántica |
+
+La configuración local separa `catalog_enabled`, `catalog_orders_enabled` y `catalog_id`. Un evento de catálogo sin esas tres condiciones, o con otro `catalog_id`, queda trazable en Inbox como revisión y no crea `OrderDelivery`. Las identidades y las órdenes filtran siempre por `company_id`; un mapping de otro tenant no puede resolverse.
+
+El flujo válido es:
+
+```text
+Meta fixture → webhook existente → InboundMessage
+             → WhatsAppCatalogInboundConnector
+             → ExternalIdentity determinista
+             → Order / OrderLine validated
+             → OrderRoute → OrderDelivery
+             → FakeERPConnector → FAKE-ORDER-000001
+```
+
+Un `wamid` repetido produce un único `InboundMessage`, `Order`, `OrderDelivery` y job de entrega. Los `text`, `image`, `document`, `audio`, `interactive` y demás tipos siguen en el pipeline conversacional existente. `context.referred_product` se conserva en el payload auditado y no se convierte en pedido.
+
+Las cantidades cero, negativas, no numéricas o no finitas, las monedas inválidas y las órdenes con monedas mezcladas quedan en revisión controlada. Un cliente o producto desconocido deja la orden en `pending_review`, sin exportación automática. `item_price` no sustituye todavía al precio autoritativo del ERP: FakeERP acepta el source price en esta fase y un futuro conector Sage/Odoo/SAP podrá recalcularlo.
+
 ## Pending reliability work
 
 - Circuit breaker `healthy → degraded/open → half-open` si un connector real lo requiere.
@@ -155,9 +190,13 @@ La migración posterior `2026.09.30.2 — tenant order delivery reliability` cre
 - UI avanzada de DLQ y replay.
 - Reconciliación por cursor/`updated_at` para destinos sin idempotency key directa.
 
-## Planificado
+## Fuera de este bloque
 
-- Adaptar resultados de email/WhatsApp al contrato neutral sin reescribirlos.
-- Añadir un input estructurado real, comenzando por WhatsApp Catalog o una API sandbox.
-- Añadir un output connector real en sandbox.
-- Añadir configuración/UI de routing solo cuando exista un caso real.
+- No hay outbound Catalog, respuestas automáticas de producto ni confirmación de pedido por Meta.
+- No hay sincronización ERP → Meta Catalog ni llamadas a `whatsapp_commerce_settings`.
+- No hay ERP real ni pricing/FX: el destino local sigue siendo FakeERP.
+- No se añadió UI de mapping; los helpers de `ExternalIdentity` permiten seeds y operaciones futuras.
+
+## Siguiente fase
+
+La recomendación para BLOQUE 4 es seleccionar primero una variante concreta de Sage —producto, edición, región, API disponible y modalidad de integración— y solo después diseñar el connector real. No se recomienda implementar todavía un “Sage” genérico.
