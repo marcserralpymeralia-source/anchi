@@ -50,6 +50,7 @@ class StructuredOrderItem:
     unit_price: float | None = None
     currency: str | None = None
     description: str | None = None
+    source_product_system: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,11 +61,13 @@ class InboundOrderEvent:
     source_mode: InputMode
     external_event_id: str
     external_system: str
+    customer_external_system: str | None = None
     external_order_id: str | None = None
     customer_external_id: str | None = None
     customer_name: str | None = None
     items: tuple[StructuredOrderItem, ...] = ()
     notes: str | None = None
+    source_catalog_id: str | None = None
     raw_payload: Mapping[str, Any] = field(default_factory=dict)
 
 

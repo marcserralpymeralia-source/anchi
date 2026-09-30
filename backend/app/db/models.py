@@ -1195,6 +1195,7 @@ class Order(Base):
     source_provider: Mapped[str | None] = mapped_column(String(80), index=True)
     source_external_event_id: Mapped[str | None] = mapped_column(String(255), index=True)
     source_external_order_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    source_catalog_id: Mapped[str | None] = mapped_column(String(255), index=True)
     customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"))
     validated_customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"))
     customer_detected_name: Mapped[str | None] = mapped_column(String(255))

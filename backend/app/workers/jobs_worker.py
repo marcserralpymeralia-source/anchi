@@ -41,6 +41,7 @@ from app.tenancy.migrations import tenant_migration_report
 from app.tenancy.database import tenant_db_session
 from app.whatsapp.conversation_orders import evaluate_conversation_order
 from app.whatsapp.conversation_semantics import evaluate_whatsapp_conversation_semantics
+from app.whatsapp.catalog import is_whatsapp_catalog_order_message, process_whatsapp_catalog_message
 from app.whatsapp.service import send_automatic_response, whatsapp_config
 
 logger = logging.getLogger(__name__)
@@ -319,6 +320,13 @@ def _process_job(db, job: BackgroundJob) -> dict:
         inbound_message = db.get(InboundMessage, inbound_message_id)
         if not inbound_message or inbound_message.company_id != job.company_id:
             raise RuntimeError("No se encontró el mensaje a procesar.")
+
+        if (
+            str(payload.get("channel") or "").strip().lower() == "whatsapp"
+            and str(inbound_message.provider or "").strip().lower() == "meta"
+            and is_whatsapp_catalog_order_message(inbound_message)
+        ):
+            return process_whatsapp_catalog_message(db, inbound_message)
 
         pipeline = AgentProcessingService().pipeline
 

@@ -80,6 +80,9 @@ class WhatsAppTenantConfig:
     verify_token: str = ""
     webhook_enabled: bool = False
     bot_enabled: bool = True
+    catalog_enabled: bool = False
+    catalog_orders_enabled: bool = False
+    catalog_id: str = ""
     connection_status: str = "not_connected"
     connected_at: str = ""
     last_error: str = ""
@@ -150,6 +153,9 @@ def whatsapp_config(db: Session, company_id: int) -> WhatsAppTenantConfig:
         verify_token=_secret_value(settings_map.get("verify_token")).strip(),
         webhook_enabled=_as_bool(settings_map.get("webhook_enabled")),
         bot_enabled=_as_bool(settings_map.get("bot_enabled"), default=True),
+        catalog_enabled=_as_bool(settings_map.get("catalog_enabled")),
+        catalog_orders_enabled=_as_bool(settings_map.get("catalog_orders_enabled")),
+        catalog_id=(settings_map.get("catalog_id") or "").strip(),
         connection_status=(settings_map.get("connection_status") or "not_connected").strip().lower(),
         connected_at=(settings_map.get("connected_at") or "").strip(),
         last_error=(settings_map.get("last_error") or "").strip(),
@@ -179,6 +185,9 @@ def redact_whatsapp_config(config: WhatsAppTenantConfig) -> dict[str, Any]:
         "verify_token": "••••••••" if config.verify_token else "",
         "webhook_enabled": config.webhook_enabled,
         "bot_enabled": config.bot_enabled,
+        "catalog_enabled": config.catalog_enabled,
+        "catalog_orders_enabled": config.catalog_orders_enabled,
+        "catalog_id": config.catalog_id,
         "connection_status": config.connection_status,
         "connected_at": config.connected_at,
         "last_error": config.last_error,
@@ -295,6 +304,19 @@ def whatsapp_event_matches_config(event: dict[str, Any], config: WhatsAppTenantC
         and event_waba == config.business_account_id
         and event_phone == config.phone_number_id
     )
+
+
+def whatsapp_catalog_order_event(event: dict[str, Any]) -> bool:
+    return str(event.get("message_type") or "").strip().lower() == "order"
+
+
+def whatsapp_catalog_event_matches_config(event: dict[str, Any], config: WhatsAppTenantConfig) -> bool:
+    """Require catalog orders to use the catalog explicitly authorized for the tenant."""
+
+    if not whatsapp_catalog_order_event(event):
+        return True
+    catalog_id = str(event.get("catalog_id") or "").strip()
+    return bool(config.catalog_enabled and config.catalog_orders_enabled and config.catalog_id and catalog_id == config.catalog_id)
 
 
 def _should_advance_delivery_status(current: str | None, incoming: str) -> bool:
@@ -1343,6 +1365,11 @@ def _message_event(
         "business_account_id": business_account_id,
         "text_content": _extract_message_text(message),
         "message_type": message.get("type"),
+        "catalog_id": (
+            str((message.get("order") or {}).get("catalog_id") or "").strip()
+            if str(message.get("type") or "").strip().lower() == "order" and isinstance(message.get("order"), dict)
+            else None
+        ),
         "message_status": str(history_context.get("status") or "").strip().lower(),
         "occurred_at": _event_timestamp(message.get("timestamp")),
         "metadata": event_metadata,
@@ -2472,6 +2499,9 @@ def _extract_message_text(message: dict[str, Any]) -> str | None:
     if message.get("type") == "video":
         video = message.get("video") or {}
         return video.get("caption")
+    if message.get("type") == "order":
+        order = message.get("order") if isinstance(message.get("order"), dict) else {}
+        return order.get("text")
     if message.get("type") == "revoke":
         return "Mensaje eliminado desde WhatsApp Business App"
     if message.get("type") == "edit":
@@ -2550,6 +2580,8 @@ def whatsapp_event_requires_media_download(event: dict[str, Any]) -> bool:
 def whatsapp_event_has_processable_content(event: dict[str, Any]) -> bool:
     if not isinstance(event, dict) or whatsapp_event_requires_media_download(event):
         return False
+    if whatsapp_catalog_order_event(event):
+        return True
     return bool(str(event.get("text_content") or "").strip())
 
 

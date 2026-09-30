@@ -1267,6 +1267,17 @@ def _apply_tenant_order_delivery_reliability(engine, dry_run: bool) -> list[str]
     return actions
 
 
+def _apply_tenant_whatsapp_catalog_inbound(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Add the source catalog reference without changing prior migrations."""
+
+    return ensure_columns(
+        engine,
+        "orders",
+        {"source_catalog_id": "VARCHAR(255)"},
+        dry_run=dry_run,
+    )
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -1387,6 +1398,12 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant order delivery reliability",
         checksum=checksum_text("tenant", "order_delivery_reliability", "order_deliveries", "order_delivery_attempts"),
         upgrade=_apply_tenant_order_delivery_reliability,
+    ),
+    MigrationSpec(
+        version="2026.09.30.3",
+        name="tenant whatsapp catalog inbound",
+        checksum=checksum_text("tenant", "whatsapp_catalog_inbound", "source_catalog_id"),
+        upgrade=_apply_tenant_whatsapp_catalog_inbound,
     ),
 ]
 

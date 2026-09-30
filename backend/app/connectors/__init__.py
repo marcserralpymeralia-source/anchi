@@ -14,6 +14,7 @@ from app.connectors.contracts import (
     InputMode,
     StructuredOrderItem,
 )
+from app.connectors.whatsapp_catalog import WhatsAppCatalogInboundConnector
 
 __all__ = [
     "BaseConnector",
@@ -28,4 +29,5 @@ __all__ = [
     "InboundOrderEvent",
     "InputMode",
     "StructuredOrderItem",
+    "WhatsAppCatalogInboundConnector",
 ]

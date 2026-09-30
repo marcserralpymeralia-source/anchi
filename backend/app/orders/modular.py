@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from app.connectors.contracts import ConnectorRegistry, InboundOrderEvent, InputMode
 from app.connectors.identity import resolve_customer_by_external_identity, resolve_product_by_external_identity
 from app.connectors.routing import RoutingResult
-from app.db.models import InboundMessage, Order, OrderDelivery, OrderLine
+from app.db.models import Customer, InboundMessage, Order, OrderDelivery, OrderLine
+from app.customers.matching import resolve_customer_id_by_phone
 from app.messages.service import persist_normalized_message
 from app.orders.delivery import enqueue_order_delivery
 
@@ -80,13 +81,24 @@ def process_inbound_order_event(
         return ModularOrderResult(order=existing, inbound_message=inbound, duplicate=True)
 
     customer = None
+    customer_identification_method = "unresolved"
     if event.customer_external_id:
+        customer_external_system = event.customer_external_system or event.external_system
         customer = resolve_customer_by_external_identity(
             db,
             company_id=event.company_id,
-            external_system=event.external_system,
+            external_system=customer_external_system,
             external_id=event.customer_external_id,
         )
+        if customer is None and customer_external_system == "meta_whatsapp":
+            customer_id = resolve_customer_id_by_phone(db, event.company_id, event.customer_external_id)
+            customer = db.scalar(
+                select(Customer).where(Customer.company_id == event.company_id, Customer.id == customer_id)
+            ) if customer_id else None
+            if customer is not None:
+                customer_identification_method = "phone"
+    if customer is not None and customer_identification_method == "unresolved":
+        customer_identification_method = "external_identity"
     order = Order(
         company_id=event.company_id,
         conversation_id=conversation.id,
@@ -95,10 +107,11 @@ def process_inbound_order_event(
         source_provider=event.provider,
         source_external_event_id=event.external_event_id,
         source_external_order_id=event.external_order_id,
+        source_catalog_id=event.source_catalog_id,
         customer_id=customer.id if customer else None,
         validated_customer_id=customer.id if customer else None,
         customer_detected_name=event.customer_name or (customer.fiscal_name if customer else None),
-        customer_identification_method="external_identity" if customer else "unresolved",
+        customer_identification_method=customer_identification_method,
         customer_score=100 if customer else 0,
         notes=event.notes or "",
         status="pending_review",
@@ -109,10 +122,11 @@ def process_inbound_order_event(
     db.add(order)
     db.flush()
     for item in event.items:
+        product_system = item.source_product_system or event.external_system
         product = resolve_product_by_external_identity(
             db,
             company_id=event.company_id,
-            external_system=event.external_system,
+            external_system=product_system,
             external_id=item.source_product_id,
         )
         quantity_valid = item.quantity > 0
@@ -122,7 +136,7 @@ def process_inbound_order_event(
                 order_id=order.id,
                 product_id=product.id if product else None,
                 validated_product_id=product.id if product and quantity_valid else None,
-                source_product_system=event.external_system,
+                source_product_system=product_system,
                 source_product_external_id=item.source_product_id,
                 original_text=item.description or item.source_product_id,
                 detected_reference=product.reference if product else item.source_product_id,

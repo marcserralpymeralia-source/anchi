@@ -25,6 +25,8 @@ from app.whatsapp.service import (
     whatsapp_event_matches_config,
     whatsapp_event_has_processable_content,
     whatsapp_event_requires_media_download,
+    whatsapp_catalog_event_matches_config,
+    whatsapp_catalog_order_event,
     whatsapp_ingress_is_ready,
     verify_signature,
     verify_webhook_token,
@@ -34,6 +36,7 @@ from app.whatsapp.service import (
 
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["whatsapp"])
 logger = logging.getLogger(__name__)
+MAX_WHATSAPP_WEBHOOK_BYTES = 512 * 1024
 
 
 def _webhook_payload_summary(
@@ -206,6 +209,15 @@ async def _receive_default_webhook_request(
         "signature_present": bool(x_hub_signature_256),
         "path": request.url.path,
     }
+    if len(raw_body) > MAX_WHATSAPP_WEBHOOK_BYTES:
+        _log_webhook_activity(
+            request=request,
+            action="whatsapp.webhook_payload_too_large",
+            message="Webhook WhatsApp rechazado: payload demasiado grande.",
+            metadata={**summary, "status": "error", "reason": "payload_too_large"},
+            level=logging.WARNING,
+        )
+        return JSONResponse({"ok": False, "message": "payload too large"}, status_code=413)
     _log_webhook_activity(
         request=request,
         action="whatsapp.webhook_started",
@@ -353,7 +365,13 @@ async def _receive_default_webhook_request(
             if message:
                 stored.append(message.id)
                 if event.get("kind") == "message":
-                    if whatsapp_event_requires_media_download(event):
+                    if whatsapp_catalog_order_event(event) and not whatsapp_catalog_event_matches_config(event, config):
+                        not_processable += 1
+                        queue_action = "catalog_review_required"
+                        message.status = "doubtful"
+                        message.processing_step = "catalog_order_review"
+                        message.processing_error = "El catálogo WhatsApp no está autorizado para este tenant."
+                    elif whatsapp_event_requires_media_download(event):
                         enqueue_whatsapp_media_download(config_db, company.id, message.id)
                         queued_media += 1
                         queue_action = "download_whatsapp_media"
@@ -548,6 +566,22 @@ async def _receive_tenant_webhook_request(
         )
         return JSONResponse({"ok": False, "message": "tenant not found"}, status_code=404)
     raw_body = await request.body()
+    if len(raw_body) > MAX_WHATSAPP_WEBHOOK_BYTES:
+        _log_webhook_activity(
+            request=request,
+            action="whatsapp.webhook_payload_too_large",
+            message="Webhook WhatsApp rechazado: payload demasiado grande.",
+            metadata={
+                "body_size_bytes": len(raw_body),
+                "signature_present": bool(x_hub_signature_256),
+                "route_scope": "tenant",
+                "status": "error",
+                "reason": "payload_too_large",
+            },
+            level=logging.WARNING,
+            company_id=company.id,
+        )
+        return JSONResponse({"ok": False, "message": "payload too large"}, status_code=413)
     config_db = tenant_db_session(tenant_db.database_url)()
     try:
         base_metadata = {
@@ -662,7 +696,13 @@ async def _receive_tenant_webhook_request(
             if message:
                 stored.append(message.id)
                 if event.get("kind") == "message":
-                    if whatsapp_event_requires_media_download(event):
+                    if whatsapp_catalog_order_event(event) and not whatsapp_catalog_event_matches_config(event, config):
+                        not_processable += 1
+                        queue_action = "catalog_review_required"
+                        message.status = "doubtful"
+                        message.processing_step = "catalog_order_review"
+                        message.processing_error = "El catálogo WhatsApp no está autorizado para este tenant."
+                    elif whatsapp_event_requires_media_download(event):
                         enqueue_whatsapp_media_download(config_db, company.id, message.id)
                         queued_media += 1
                         queue_action = "download_whatsapp_media"
