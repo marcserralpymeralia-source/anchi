@@ -16,10 +16,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.connectors.contracts import ConnectorRegistry  # noqa: E402
 from app.connectors.fake import FakeERPConnector, FakeInboundConnector  # noqa: E402
 from app.connectors.identity import ExternalIdentityConflict, bind_external_identity, resolve_customer_by_external_identity  # noqa: E402
-from app.connectors.routing import route_order  # noqa: E402
 from app.db.database import Base  # noqa: E402
 from app.db.models import Company, Customer, ExternalIdentity, InboundMessage, Order, OrderLine, OrderRoute, Product  # noqa: E402
-from app.migrations.registry import _apply_tenant_modular_order_hub  # noqa: E402
+from app.migrations.registry import _apply_tenant_modular_order_hub, _apply_tenant_order_delivery_reliability  # noqa: E402
+from app.orders.delivery import process_order_delivery  # noqa: E402
 from app.orders.modular import process_inbound_order_event  # noqa: E402
 
 
@@ -83,9 +83,14 @@ class ModularOrderHubTests(unittest.TestCase):
         with patch("app.agent.platform.OrderExtractionAgent.extract", side_effect=AssertionError("structured no debe usar agente")) as agent_extract:
             result = process_inbound_order_event(db, self._event(), registry=registry)
 
+        self.assertEqual(result.order.status, "pedido_validado")
+        self.assertEqual(result.order.export_status, "ready_to_export")
+        self.assertIsNone(result.order.destination_external_order_id)
+        delivery = process_order_delivery(db, result.delivery, registry=registry)
         db.commit()
         self.assertEqual(result.order.source_mode, "structured")
         self.assertEqual(result.order.validation_status, "validated")
+        self.assertEqual(delivery.delivery.status, "exported")
         self.assertEqual(result.order.status, "pedido_exportado")
         self.assertEqual(result.order.destination_external_order_id, "FAKE-ORDER-000001")
         self.assertEqual(result.order.export_status, "exported")
@@ -165,13 +170,17 @@ class ModularOrderHubTests(unittest.TestCase):
         registry = ConnectorRegistry([fake_erp])
         result = process_inbound_order_event(db, self._event(), registry=registry)
         db.commit()
-        first_external_id = result.order.destination_external_order_id
-        second_routing = route_order(db, result.order, registry)
+        first_delivery = process_order_delivery(db, result.delivery, registry=registry)
+        db.commit()
+        first_external_id = first_delivery.destination.external_order_id
+        second_routing = process_order_delivery(db, result.delivery, registry=registry)
         db.commit()
         self.assertEqual(second_routing.destination.external_order_id, first_external_id)
         self.assertTrue(second_routing.destination.idempotent_replay)
-        self.assertEqual(result.order.export_attempt_count, 1)
-        self.assertEqual(fake_erp.created_orders, {"evt-001": "FAKE-ORDER-000001"})
+        self.assertEqual(
+            fake_erp.created_orders,
+            {"1/order/1/fake_erp": "FAKE-ORDER-000001"},
+        )
         db.close()
 
 
@@ -185,6 +194,7 @@ class ModularOrderMigrationTests(unittest.TestCase):
                 conn.execute(text("CREATE TABLE orders (id INTEGER PRIMARY KEY, company_id INTEGER, status VARCHAR(80))"))
                 conn.execute(text("CREATE TABLE order_lines (id INTEGER PRIMARY KEY, company_id INTEGER, order_id INTEGER)"))
             actions = _apply_tenant_modular_order_hub(engine, dry_run=False)
+            actions.extend(_apply_tenant_order_delivery_reliability(engine, dry_run=False))
             inspector = inspect(engine)
             order_columns = {item["name"] for item in inspector.get_columns("orders")}
             line_columns = {item["name"] for item in inspector.get_columns("order_lines")}
@@ -193,6 +203,8 @@ class ModularOrderMigrationTests(unittest.TestCase):
             self.assertIn("source_product_external_id", line_columns)
             self.assertIn("external_identities", inspector.get_table_names())
             self.assertIn("order_routes", inspector.get_table_names())
+            self.assertIn("order_deliveries", inspector.get_table_names())
+            self.assertIn("order_delivery_attempts", inspector.get_table_names())
             self.assertTrue(actions)
         finally:
             engine.dispose()
