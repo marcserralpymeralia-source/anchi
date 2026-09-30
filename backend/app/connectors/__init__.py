@@ -1,0 +1,29 @@
+"""Channel-neutral connector contracts for the modular order hub."""
+
+from app.connectors.contracts import (
+    BaseConnector,
+    ConnectorCapability,
+    ConnectorHealth,
+    ConnectorRegistry,
+    ConnectorStatus,
+    DestinationConnector,
+    DestinationOrderResult,
+    InboundConnector,
+    InboundOrderEvent,
+    InputMode,
+    StructuredOrderItem,
+)
+
+__all__ = [
+    "BaseConnector",
+    "ConnectorCapability",
+    "ConnectorHealth",
+    "ConnectorRegistry",
+    "ConnectorStatus",
+    "DestinationConnector",
+    "DestinationOrderResult",
+    "InboundConnector",
+    "InboundOrderEvent",
+    "InputMode",
+    "StructuredOrderItem",
+]

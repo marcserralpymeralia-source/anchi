@@ -631,6 +631,27 @@ class ProductAlias(Base):
     alias: Mapped[str] = mapped_column(String(255), index=True)
 
 
+class ExternalIdentity(Base):
+    """Tenant-scoped identity shared by connectors and the local domain."""
+
+    __tablename__ = "external_identities"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    entity_type: Mapped[str] = mapped_column(String(50), index=True)
+    entity_id: Mapped[int] = mapped_column(Integer, index=True)
+    external_system: Mapped[str] = mapped_column(String(80), index=True)
+    external_id: Mapped[str] = mapped_column(String(255), index=True)
+    external_subtype: Mapped[str | None] = mapped_column(String(80))
+    metadata_json: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "entity_type", "external_system", "external_id"),
+    )
+
+
 class ProductEmbedding(Base):
     __tablename__ = "product_embeddings"
 
@@ -948,6 +969,20 @@ class ScoringResult(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class OrderRoute(Base):
+    __tablename__ = "order_routes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    order_type: Mapped[str] = mapped_column(String(50), default="order")
+    destination_connector_key: Mapped[str] = mapped_column(String(120))
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (UniqueConstraint("company_id", "order_type"),)
+
+
 class ExportJob(Base):
     __tablename__ = "export_jobs"
 
@@ -1104,6 +1139,11 @@ class Order(Base):
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
     conversation_id: Mapped[int | None] = mapped_column(ForeignKey("conversations.id"), index=True)
     email_id: Mapped[int | None] = mapped_column(ForeignKey("emails.id"))
+    source_channel_key: Mapped[str | None] = mapped_column(String(80), index=True)
+    source_mode: Mapped[str] = mapped_column(String(30), default="unstructured", index=True)
+    source_provider: Mapped[str | None] = mapped_column(String(80), index=True)
+    source_external_event_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    source_external_order_id: Mapped[str | None] = mapped_column(String(255), index=True)
     customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"))
     validated_customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"))
     customer_detected_name: Mapped[str | None] = mapped_column(String(255))
@@ -1114,7 +1154,14 @@ class Order(Base):
     notes: Mapped[str | None] = mapped_column(Text)
     score: Mapped[float] = mapped_column(Float, default=0)
     status: Mapped[str] = mapped_column(String(80), default="pending_review")
+    validation_status: Mapped[str] = mapped_column(String(50), default="pending")
+    review_status: Mapped[str] = mapped_column(String(50), default="not_required")
     review_reasons: Mapped[str | None] = mapped_column(Text)
+    destination_connector_key: Mapped[str | None] = mapped_column(String(120))
+    destination_external_order_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    export_status: Mapped[str] = mapped_column(String(50), default="not_requested")
+    export_attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    export_last_error: Mapped[str | None] = mapped_column(Text)
     archived: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
@@ -1138,11 +1185,15 @@ class OrderLine(Base):
     order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"))
     product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"))
     validated_product_id: Mapped[int | None] = mapped_column(ForeignKey("products.id"))
+    source_product_system: Mapped[str | None] = mapped_column(String(80), index=True)
+    source_product_external_id: Mapped[str | None] = mapped_column(String(255), index=True)
     original_text: Mapped[str | None] = mapped_column(Text)
     detected_reference: Mapped[str | None] = mapped_column(String(120))
     detected_product: Mapped[str | None] = mapped_column(String(255))
     quantity: Mapped[float | None] = mapped_column(Float)
     unit: Mapped[str | None] = mapped_column(String(80))
+    unit_price_received: Mapped[float | None] = mapped_column(Float)
+    currency_received: Mapped[str | None] = mapped_column(String(10))
     extraction_confidence: Mapped[float] = mapped_column(Float, default=0)
     line_score: Mapped[float] = mapped_column(Float, default=0)
     validation_status: Mapped[str] = mapped_column(String(80), default="pending")

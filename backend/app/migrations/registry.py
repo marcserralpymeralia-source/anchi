@@ -69,6 +69,24 @@ TENANT_COMPAT_COLUMNS = {
         "deleted_at": "DATETIME",
         "deleted_by": "INTEGER",
         "delete_reason": "TEXT",
+        "source_channel_key": "VARCHAR(80)",
+        "source_mode": "VARCHAR(30) DEFAULT 'unstructured'",
+        "source_provider": "VARCHAR(80)",
+        "source_external_event_id": "VARCHAR(255)",
+        "source_external_order_id": "VARCHAR(255)",
+        "validation_status": "VARCHAR(50) DEFAULT 'pending'",
+        "review_status": "VARCHAR(50) DEFAULT 'not_required'",
+        "destination_connector_key": "VARCHAR(120)",
+        "destination_external_order_id": "VARCHAR(255)",
+        "export_status": "VARCHAR(50) DEFAULT 'not_requested'",
+        "export_attempt_count": "INTEGER DEFAULT 0",
+        "export_last_error": "TEXT",
+    },
+    "order_lines": {
+        "source_product_system": "VARCHAR(80)",
+        "source_product_external_id": "VARCHAR(255)",
+        "unit_price_received": "FLOAT",
+        "currency_received": "VARCHAR(10)",
     },
     "decision_settings": {
         "enable_exact_match": "BOOLEAN DEFAULT true",
@@ -1175,6 +1193,45 @@ def _apply_tenant_actor_bridge(engine, dry_run: bool) -> list[str]:  # noqa: ANN
     return ensure_columns(engine, "users", TENANT_COMPAT_COLUMNS["users"], dry_run=dry_run)
 
 
+def _apply_tenant_modular_order_hub(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Add the neutral order contract and tenant-scoped connector identities."""
+
+    from app.db.models import ExternalIdentity, OrderRoute
+
+    actions: list[str] = []
+    actions.extend(ensure_columns(engine, "orders", TENANT_COMPAT_COLUMNS["orders"], dry_run=dry_run))
+    actions.extend(ensure_columns(engine, "order_lines", TENANT_COMPAT_COLUMNS["order_lines"], dry_run=dry_run))
+    with engine.connect() as conn:
+        table_names = set(inspect(conn).get_table_names())
+    for model in (ExternalIdentity, OrderRoute):
+        if model.__tablename__ in table_names:
+            continue
+        actions.append(f"CREATE TABLE {model.__tablename__} (...)")
+        if not dry_run:
+            model.__table__.create(bind=engine, checkfirst=True)
+    # The model-level constraints cover fresh databases; keep named indexes
+    # explicit for legacy databases upgraded by this migration.
+    actions.extend(
+        ensure_unique_index(
+            engine,
+            "external_identities",
+            "uq_external_identity_scope",
+            ("company_id", "entity_type", "external_system", "external_id"),
+            dry_run=dry_run,
+        )
+    )
+    actions.extend(
+        ensure_unique_index(
+            engine,
+            "order_routes",
+            "uq_order_route_scope",
+            ("company_id", "order_type"),
+            dry_run=dry_run,
+        )
+    )
+    return actions
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -1283,6 +1340,12 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant actor identity bridge",
         checksum=checksum_text("tenant", "actor_identity_bridge", "users", "master_user_id", "actor_type"),
         upgrade=_apply_tenant_actor_bridge,
+    ),
+    MigrationSpec(
+        version="2026.09.30.1",
+        name="tenant modular order hub",
+        checksum=checksum_text("tenant", "modular_order_hub", "orders", "order_lines", "external_identities", "order_routes"),
+        upgrade=_apply_tenant_modular_order_hub,
     ),
 ]
 
