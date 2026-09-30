@@ -15,6 +15,17 @@ from app.connectors.contracts import (
     StructuredOrderItem,
 )
 from app.connectors.whatsapp_catalog import WhatsAppCatalogInboundConnector
+from app.connectors.sage200es import (
+    MockSage200ESTransport,
+    Sage200ESClient,
+    Sage200ESConfig,
+    Sage200ESConnector,
+    Sage200ESIdentity,
+    Sage200ESPriceResolution,
+    Sage200ESSalesOrderDTO,
+    Sage200ESSalesOrderMapper,
+    Sage200ESTransportError,
+)
 
 __all__ = [
     "BaseConnector",
@@ -30,4 +41,13 @@ __all__ = [
     "InputMode",
     "StructuredOrderItem",
     "WhatsAppCatalogInboundConnector",
+    "MockSage200ESTransport",
+    "Sage200ESClient",
+    "Sage200ESConfig",
+    "Sage200ESConnector",
+    "Sage200ESIdentity",
+    "Sage200ESPriceResolution",
+    "Sage200ESSalesOrderDTO",
+    "Sage200ESSalesOrderMapper",
+    "Sage200ESTransportError",
 ]
