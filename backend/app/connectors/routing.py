@@ -66,7 +66,7 @@ def route_order(db: Session, order: Order, registry: ConnectorRegistry) -> Routi
 
     order.export_attempt_count = int(order.export_attempt_count or 0) + 1
     order.export_status = "exporting"
-    result = connector.create_order(db, order)
+    result = connector.create_order(db, order, idempotency_key=f"{order.company_id}/order/{order.id}/{route.destination_connector_key}")
     order.destination_external_order_id = result.external_order_id
     order.export_status = "exported"
     order.export_last_error = None

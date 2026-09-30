@@ -28,8 +28,11 @@ class ConnectorCapability(str, Enum):
 
 
 class ConnectorStatus(str, Enum):
+    HEALTHY = "healthy"
     READY = "ready"
     DEGRADED = "degraded"
+    UNAVAILABLE = "unavailable"
+    MISCONFIGURED = "misconfigured"
     NOT_CONFIGURED = "not_configured"
 
 
@@ -73,13 +76,30 @@ class DestinationOrderResult:
     idempotent_replay: bool = False
 
 
+class ConnectorDeliveryError(RuntimeError):
+    """Normalized connector failure used by the delivery retry policy."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_type: str = "connector_error",
+        retryable: bool = False,
+        remote_commit_unknown: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.error_type = error_type
+        self.retryable = retryable
+        self.remote_commit_unknown = remote_commit_unknown
+
+
 class BaseConnector(ABC):
     identifier: str
     capabilities: frozenset[ConnectorCapability] = frozenset()
 
     @property
     def health(self) -> ConnectorHealth:
-        return ConnectorHealth(ConnectorStatus.READY)
+        return ConnectorHealth(ConnectorStatus.HEALTHY)
 
     def validate_configuration(self) -> list[str]:
         return []
@@ -97,8 +117,13 @@ class DestinationConnector(BaseConnector):
         """Return deterministic acceptance errors without side effects."""
 
     @abstractmethod
-    def create_order(self, db: Session, order: Order) -> DestinationOrderResult:
+    def create_order(self, db: Session, order: Order, *, idempotency_key: str | None = None) -> DestinationOrderResult:
         """Create or idempotently replay the destination order."""
+
+    def find_order_by_idempotency_key(self, db: Session, *, idempotency_key: str) -> str | None:
+        """Optionally reconcile a remote order after an unknown local outcome."""
+
+        return None
 
 
 class ConnectorRegistry:

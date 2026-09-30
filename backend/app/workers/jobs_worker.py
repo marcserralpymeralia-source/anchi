@@ -22,10 +22,11 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import record_job
 from app.core.observability import observability_scope
-from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, ExportSettings, ImportJob, InboundMessage, Order, ScoringSettings
+from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, ExportSettings, ImportJob, InboundMessage, Order, OrderDelivery, ScoringSettings
 from app.exports.service import ExportService, FTPService, resolve_ftp_destination
 from app.logs.service import log_action, log_flow_event
 from app.orders.state import ORDER_STATE
+from app.orders.delivery import default_destination_registry, process_order_delivery
 import app.master.database as master_database
 from app.master.database import MasterSessionLocal
 from app.master.models import EmailSyncState, MasterCompany, MasterTenantDatabase
@@ -59,6 +60,7 @@ JOB_TYPES = {
     "import_file",
     "export_order",
     "export_order_ftp",
+    "deliver_order",
     "bulk_order_action",
     "index_product_embeddings",
     "index_knowledge_entries",
@@ -104,6 +106,8 @@ def _process_job(db, job: BackgroundJob) -> dict:
         return _process_import_job(db, job, payload)
     if job.job_type in {"export_order", "export_order_ftp"}:
         return _process_export_job(db, job, payload)
+    if job.job_type == "deliver_order":
+        return _process_delivery_job(db, job, payload)
     if job.job_type == "index_product_embeddings":
         return _process_product_embeddings_job(db, job, payload)
     if job.job_type == "index_knowledge_entries":
@@ -498,6 +502,42 @@ def _serialize_export(export: ExportFile) -> dict:
         "filename": export.filename,
         "status": export.status,
         "created_at": export.created_at.isoformat() if export.created_at else None,
+    }
+
+
+def _process_delivery_job(db, job: BackgroundJob, payload: dict) -> dict:
+    delivery_id = int(payload.get("delivery_id") or 0)
+    delivery = db.scalar(
+        select(OrderDelivery).where(
+            OrderDelivery.id == delivery_id,
+            OrderDelivery.company_id == job.company_id,
+        )
+    )
+    if delivery is None:
+        raise RuntimeError("No se encontró la entrega de pedido.")
+    logger.info(
+        "order.delivery.attempt",
+        extra={
+            "event": "order.delivery.attempt",
+            "delivery_id": delivery.id,
+            "order_id": delivery.order_id,
+            "company_id": delivery.company_id,
+            "connector": delivery.destination_connector_key,
+            "idempotency_key": delivery.idempotency_key,
+            "attempt": delivery.attempt_count + 1,
+        },
+    )
+    result = process_order_delivery(db, delivery, registry=default_destination_registry())
+    destination = result.destination
+    return {
+        "ok": True,
+        "message": "Entrega de pedido completada" if destination else "Entrega de pedido procesada",
+        "delivery_id": delivery.id,
+        "order_id": delivery.order_id,
+        "connector": delivery.destination_connector_key,
+        "idempotency_key": delivery.idempotency_key,
+        "external_order_id": destination.external_order_id if destination else None,
+        "reconciled": result.reconciled,
     }
 
 

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.connectors.contracts import (
     ConnectorCapability,
+    ConnectorDeliveryError,
     ConnectorHealth,
     ConnectorStatus,
     DestinationConnector,
@@ -81,14 +82,24 @@ class FakeERPConnector(DestinationConnector):
         }
     )
 
-    def __init__(self) -> None:
+    def __init__(self, *, scenario: str = "success", identifier: str | None = None) -> None:
+        if identifier:
+            self.identifier = identifier
         self.created_orders: dict[str, str] = {}
+        self.scenario = scenario
+        self._health = ConnectorHealth(ConnectorStatus.HEALTHY, "Conector local determinista.")
         self.customer_fixtures = {"C001": {"external_id": "C001", "name": "Cliente Fake"}}
         self.product_fixtures = {"ART001": {"external_id": "ART001", "name": "Artículo Fake"}}
 
     @property
     def health(self) -> ConnectorHealth:
-        return ConnectorHealth(ConnectorStatus.READY, "Conector local determinista.")
+        return self._health
+
+    def set_scenario(self, scenario: str) -> None:
+        self.scenario = scenario
+
+    def set_health(self, status: ConnectorStatus, message: str | None = None) -> None:
+        self._health = ConnectorHealth(status, message or status.value)
 
     def lookup_customer(self, external_id: str) -> dict[str, str] | None:
         return self.customer_fixtures.get(external_id)
@@ -98,6 +109,8 @@ class FakeERPConnector(DestinationConnector):
 
     def validate_order(self, db: Session, order) -> list[str]:  # noqa: ANN001
         errors: list[str] = []
+        if self.scenario == "permanent_validation_error":
+            errors.append("FakeERP rechazó la validación de forma permanente")
         if not order.validated_customer_id:
             errors.append("Cliente no validado")
         if not order.lines:
@@ -109,11 +122,43 @@ class FakeERPConnector(DestinationConnector):
                 errors.append(f"Cantidad inválida en línea {line.id}")
         return errors
 
-    def create_order(self, db: Session, order) -> DestinationOrderResult:  # noqa: ANN001
-        idempotency_key = order.source_external_event_id or f"order:{order.id}"
+    def find_order_by_idempotency_key(self, db: Session, *, idempotency_key: str) -> str | None:
+        return self.created_orders.get(idempotency_key)
+
+    def create_order(self, db: Session, order, *, idempotency_key: str | None = None) -> DestinationOrderResult:  # noqa: ANN001
+        if self._health.status in {ConnectorStatus.MISCONFIGURED, ConnectorStatus.NOT_CONFIGURED}:
+            raise ConnectorDeliveryError(
+                "FakeERP está mal configurado.",
+                error_type="misconfigured",
+                retryable=False,
+            )
+        if self._health.status in {ConnectorStatus.DEGRADED, ConnectorStatus.UNAVAILABLE}:
+            raise ConnectorDeliveryError(
+                "FakeERP no está disponible temporalmente.",
+                error_type="connector_unavailable",
+                retryable=True,
+            )
+
+        idempotency_key = idempotency_key or order.source_external_event_id or f"order:{order.id}"
         existing = self.created_orders.get(idempotency_key)
         if existing:
             return DestinationOrderResult(self.identifier, existing, status="already_exists", idempotent_replay=True)
         external_id = f"FAKE-ORDER-{len(self.created_orders) + 1:06d}"
+
+        if self.scenario == "timeout_before_create":
+            raise ConnectorDeliveryError("Timeout antes de crear el pedido remoto.", error_type="timeout", retryable=True)
+        if self.scenario == "temporary_unavailable":
+            raise ConnectorDeliveryError("FakeERP temporalmente no disponible.", error_type="temporary_unavailable", retryable=True)
+        if self.scenario == "rate_limited":
+            raise ConnectorDeliveryError("FakeERP ha limitado la tasa.", error_type="rate_limited", retryable=True)
+        if self.scenario == "timeout_after_create":
+            self.created_orders[idempotency_key] = external_id
+            raise ConnectorDeliveryError(
+                "Timeout después de crear el pedido remoto.",
+                error_type="timeout_after_remote_commit",
+                retryable=True,
+                remote_commit_unknown=True,
+            )
+
         self.created_orders[idempotency_key] = external_id
         return DestinationOrderResult(self.identifier, external_id)

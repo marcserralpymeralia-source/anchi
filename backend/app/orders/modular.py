@@ -7,9 +7,10 @@ from sqlalchemy.orm import Session
 
 from app.connectors.contracts import ConnectorRegistry, InboundOrderEvent, InputMode
 from app.connectors.identity import resolve_customer_by_external_identity, resolve_product_by_external_identity
-from app.connectors.routing import RoutingResult, route_order
-from app.db.models import InboundMessage, Order, OrderLine
+from app.connectors.routing import RoutingResult
+from app.db.models import InboundMessage, Order, OrderDelivery, OrderLine
 from app.messages.service import persist_normalized_message
+from app.orders.delivery import enqueue_order_delivery
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,6 +18,7 @@ class ModularOrderResult:
     order: Order
     inbound_message: InboundMessage
     routing: RoutingResult | None = None
+    delivery: OrderDelivery | None = None
     duplicate: bool = False
 
 
@@ -151,12 +153,12 @@ def process_inbound_order_event(
     inbound.customer_id = customer.id if customer else None
     inbound.status = "processed" if not order.review_reasons else "doubtful"
     inbound.processing_step = "structured_order"
-    if route and not order.review_reasons and registry is not None:
-        routing = route_order(db, order, registry)
-    else:
-        routing = None
+    # The connector registry is retained as a compatibility argument from
+    # BLOQUE 1; external delivery now happens only through the outbox worker.
+    delivery = enqueue_order_delivery(db, order) if route and not order.review_reasons else None
+    routing = None
     db.flush()
-    return ModularOrderResult(order=order, inbound_message=inbound, routing=routing)
+    return ModularOrderResult(order=order, inbound_message=inbound, routing=routing, delivery=delivery)
 
 
 def _normalized_message(event: InboundOrderEvent):
