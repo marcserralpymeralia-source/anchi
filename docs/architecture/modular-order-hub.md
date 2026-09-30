@@ -1,7 +1,7 @@
-# Modular Order Hub — estado de BLOQUE 3
+# Modular Order Hub — estado de BLOQUE 4B
 
 Fecha: 2026-09-30
-Estado: BLOQUE 3 implementado localmente en `feat/modular-order-hub`; sin conectores externos reales.
+Estado: BLOQUE 4B implementado localmente en `feat/modular-order-hub`; Sage 200 ES usa solo transporte mock y no hay HTTP externo real.
 
 ## Decisión de dominio
 
@@ -44,6 +44,16 @@ BackgroundJob `deliver_order` → delivery worker
 FakeERPConnector → FAKE-ORDER-000001
 ```
 
+El PoC de Sage conserva el mismo flujo y cambia únicamente el destino registrado explícitamente:
+
+```text
+WhatsApp Catalog fixture → WhatsAppCatalogInboundConnector
+        → Order / ExternalIdentity → OrderDelivery
+        → Sage200ESConnector (`sage_200_es`)
+        → Sage200ESClient → MockSage200ESTransport
+        → SAGE-ORDER-000001 → Order exported
+```
+
 Los inputs estructurados no calculan confidence semántico: `extraction_confidence` queda en cero y la validación depende de identidad, producto y cantidad. Un pedido estructurado validado no queda bloqueado por el umbral de scoring semántico.
 
 Los inputs desconocidos producen `pending_review` y razones explícitas; no crean un pedido externo. Un pedido validado pasa a `ready_to_export` y la entrega queda separada del procesamiento inbound.
@@ -66,7 +76,16 @@ En `backend/app/connectors/fake.py`:
 - `FakeERPConnector`: lookup local de clientes/productos y creación idempotente `FAKE-ORDER-*`.
 - FakeERP permite simular timeout antes/después de crear, indisponibilidad temporal, rate limit, validación permanente y health configurable.
 
-El contrato está preparado para nuevos conectores, pero Sage, SAP, Odoo, Meta, Shopify, WooCommerce y Salesforce siguen planificados.
+En `backend/app/connectors/sage200es.py`:
+
+- `Sage200ESConnector` es explícito y tenant-scoped; no existe un `SageConnector` genérico.
+- `Sage200ESClient` separa la lógica del adapter del transporte.
+- `MockSage200ESTransport` simula lookup de sites/clientes/productos, pricing, creación, errores y reconciliación.
+- `Sage200ESSalesOrderMapper` solo convierte `Order` a un DTO conceptual marcado `UNVERIFIED_SAGE_CONTRACT`.
+- `Sage200ESConfig.real_http_enabled` es `False` por defecto y rechaza HTTP real en esta fase.
+- `capabilities` permanece vacío para impedir runtime enablement; `mock_capabilities` documenta el alcance del fixture.
+
+El contrato está preparado para nuevos conectores. Sage 200 ES tiene un PoC local mock; SAP, Odoo, Meta, Shopify, WooCommerce y Salesforce siguen planificados.
 
 ## Identidades externas
 
@@ -82,7 +101,7 @@ La unicidad es `(company_id, entity_type, external_system, external_id)`. Una id
 
 ## Routing
 
-`OrderRoute` permite una ruta activa por tenant y tipo de pedido. En este bloque el destino de prueba es `order → fake_erp`. El router solo conoce el connector key y el contrato; no conoce campos de Sage, Shopify u Odoo.
+`OrderRoute` permite una ruta activa por tenant y tipo de pedido. El destino existente de prueba sigue siendo `order → fake_erp`; el PoC alternativo usa `order → sage_200_es` cuando se inyecta explícitamente un registry con configuración Sage mock. El router solo conoce el connector key y el contrato; no conoce campos de Sage, Shopify u Odoo.
 
 El resultado se guarda en `Order.destination_external_order_id`, junto con `destination_connector_key`, `export_status`, `export_attempt_count` y `export_last_error`.
 
@@ -122,7 +141,7 @@ Esto proporciona entrega effectively-once/idempotente para destinos que soportan
 
 ## Reconciliation strategy
 
-FakeERP demuestra `remote success + local timeout`: crea una sola orden remota, simula timeout y la siguiente entrega recupera el mismo `FAKE-ORDER-*` sin duplicar. Otros ERPs podrían necesitar búsqueda por referencia externa o reconciliación periódica por `updated_at`.
+FakeERP demuestra `remote success + local timeout`: crea una sola orden remota, simula timeout y la siguiente entrega recupera el mismo `FAKE-ORDER-*` sin duplicar. Sage mock demuestra el mismo caso con `SAGE-ORDER-*`, siempre fuera de HTTP real. Otros ERPs podrían necesitar búsqueda por referencia externa o reconciliación periódica por `updated_at`.
 
 ## Migración
 
@@ -179,6 +198,18 @@ Meta fixture → webhook existente → InboundMessage
              → FakeERPConnector → FAKE-ORDER-000001
 ```
 
+El flujo Sage del PoC es:
+
+```text
+Meta fixture → webhook/adapter existente → InboundMessage
+             → WhatsAppCatalogInboundConnector
+             → ExternalIdentity determinista
+             → Order / OrderLine validated
+             → OrderRoute → OrderDelivery
+             → Sage200ESConnector → MockSage200ESTransport
+             → SAGE-ORDER-000001
+```
+
 Un `wamid` repetido produce un único `InboundMessage`, `Order`, `OrderDelivery` y job de entrega. Los `text`, `image`, `document`, `audio`, `interactive` y demás tipos siguen en el pipeline conversacional existente. `context.referred_product` se conserva en el payload auditado y no se convierte en pedido.
 
 Las cantidades cero, negativas, no numéricas o no finitas, las monedas inválidas y las órdenes con monedas mezcladas quedan en revisión controlada. Un cliente o producto desconocido deja la orden en `pending_review`, sin exportación automática. `item_price` no sustituye todavía al precio autoritativo del ERP: FakeERP acepta el source price en esta fase y un futuro conector Sage/Odoo/SAP podrá recalcularlo.
@@ -194,9 +225,9 @@ Las cantidades cero, negativas, no numéricas o no finitas, las monedas inválid
 
 - No hay outbound Catalog, respuestas automáticas de producto ni confirmación de pedido por Meta.
 - No hay sincronización ERP → Meta Catalog ni llamadas a `whatsapp_commerce_settings`.
-- No hay ERP real ni pricing/FX: el destino local sigue siendo FakeERP.
+- No hay ERP real ni HTTP Sage: el destino Sage del PoC es `MockSage200ESTransport` y el destino legacy sigue siendo FakeERP.
 - No se añadió UI de mapping; los helpers de `ExternalIdentity` permiten seeds y operaciones futuras.
 
 ## Siguiente fase
 
-La recomendación para BLOQUE 4 es seleccionar primero una variante concreta de Sage —producto, edición, región, API disponible y modalidad de integración— y solo después diseñar el connector real. No se recomienda implementar todavía un “Sage” genérico.
+BLOQUE 4C será la primera validación contra una instancia Sage 200 real/controlada. Requiere producto exacto, versión, Advanced, Soluciones Conectadas activa, site, credenciales/API y autorización explícita. No se debe habilitar `HTTPSage200ESTransport` ni HTTP real antes de cerrar el informe de contract verification.

@@ -1,8 +1,25 @@
-# Plan de POC para Block4B — Sage 200 España
+# Block4B — Sage200ESConnector PoC
 
-Estado: plan aprobado para discovery/POC; no implementado.
+Estado: PoC local implementado con transporte mock; HTTP Sage real no habilitado.
 Fecha: 2026-09-30
 Conector objetivo: `Sage200ESConnector` condicionado a cliente piloto y contrato confirmado.
+
+## Resultado de implementación
+
+El PoC demuestra el camino local:
+
+```text
+WhatsApp Catalog fixture
+  → WhatsAppCatalogInboundConnector
+  → ANCHI Order / ExternalIdentity
+  → OrderDelivery
+  → Sage200ESConnector
+  → Sage200ESClient
+  → MockSage200ESTransport
+  → SAGE-ORDER-000001
+```
+
+El transporte mock es sustituible por una implementación futura, pero no existe todavía `HTTPSage200ESTransport`. Las formas de payload del mock incluyen `UNVERIFIED_SAGE_CONTRACT` y no se presentan como schema oficial.
 
 ## Objetivo
 
@@ -185,3 +202,60 @@ No se deben mezclar DTOs, endpoints ni auth de ambas variantes.
 - checklist de revocación;
 - decisión `GO`, `GO CONDICIONADO` o `NO-GO`;
 - recomendación de implementación del siguiente bloque.
+
+## Estado A–M de la entrega
+
+### A. APIs Sage verificadas oficialmente
+
+La documentación oficial consultada verifica la existencia, licencia, edición, versión mínima y activación de Soluciones Conectadas, no el contrato completo de las operaciones del adapter. El detalle está en [sage200es-contract-verification.md](../integrations/sage200es-contract-verification.md).
+
+### B. Operaciones todavía no verificadas
+
+`sites.read`, `products.read`, `customers.read`, `rates.read`, `price_offers.read`, `orders.create`, `orders.read` y reconciliación permanecen no verificadas para runtime. `inventory.read` no se implementa ni se mockea como capability.
+
+### C. Capabilities reales frente a mock-only
+
+`Sage200ESConnector.capabilities` queda vacío para impedir habilitación accidental. `mock_capabilities` declara solo el alcance soportado por el fixture: customers, products, pricing, orders create/read. No se declara inventory.
+
+### D. Mapping ANCHI → Sage
+
+- `Customer` y `Product` se resuelven exclusivamente mediante `ExternalIdentity` tenant-scoped con `external_system = sage_200_es`.
+- `external_id` representa el ID remoto canónico del mock y `metadata.reference` conserva la referencia visible; no se mezclan ambas identidades.
+- La ausencia de identidad bloquea la entrega antes del transporte.
+- El mapper puro es `Sage200ESSalesOrderMapper`; no contiene HTTP, retries, persistencia ni WhatsApp.
+
+### E. Pricing semantics
+
+El payload conserva `source_price` y `authoritative_price` por separado. El mock puede devolver una oferta de cliente distinta; ANCHI no calcula ni impone el precio final. No se habilita `Sage = pricing authority` en runtime hasta verificar el contrato.
+
+### F. Idempotencia/reconciliation
+
+La clave estable de delivery sigue siendo la generada por BLOQUE 2. El mock registra `(site, idempotency_key)`, soporta lookup y simula `remote create + local timeout`; el segundo intento reconcilia `SAGE-ORDER-000001` sin duplicar. No hay retries propios dentro de Sage.
+
+### G. Flujo end-to-end demostrado
+
+La suite específica prueba WhatsApp Catalog estructurado, resolución de identidades, validación, routing, outbox, delivery, mock sales order, external ID y estado `exported`, sin invocar LLM.
+
+### H. Tests
+
+`backend/tests/test_sage200es_connector.py` contiene 26 pruebas para identifier/capabilities mock-only, tenant/site, identidades, rates/pricing, mapper, referencia, éxito, 429, 503, timeout, validación, reconciliación, duplicados, gate HTTP y flujo WhatsApp. Las suites existentes de BLOQUES 1–3 y reliability se ejecutan aparte.
+
+### I. Migraciones
+
+No se creó migración. Se reutilizan `ExternalIdentity`, `OrderRoute`, `OrderDelivery` y `OrderDeliveryAttempt`.
+
+### J. Compatibilidad con BLOQUES 1–3
+
+WhatsApp no conoce Sage; la reliability layer conserva outbox, attempts, backoff y reconciliación; el Workbench y `Order` permanecen canónicos. El registro del connector es explícito en tests/ejecución local y no cambia el destino fake existente.
+
+### K. Gates para activar HTTP real
+
+Se necesita documentación oficial aplicable al producto/versión o evidencia autorizada de tenant no productivo para cada operación, una implementación separada `HTTPSage200ESTransport`, secret manager, scopes, rate limits, redacción de logs, pruebas de timeout y aprobación explícita. `real_http_enabled=True` queda rechazado por configuración en este PoC.
+
+### L. Información exacta del cliente piloto
+
+Producto, edición Advanced, versión, licencia Soluciones Conectadas, site/empresa, modalidad de alojamiento, documentación del portal aplicable, identidad técnica, permisos, límites, conectividad, datos sintéticos y autorización escrita para pruebas. Ver [checklist de discovery](../integrations/sage-client-discovery-checklist.md).
+
+### M. Recomendación para BLOQUE 4C
+
+BLOQUE 4C debe ser la primera validación contra una instancia Sage 200 real/controlada, solo cuando estén confirmados producto, versión, Advanced, Soluciones Conectadas, site, credenciales/API y autorización explícita. No implementar 4C en esta entrega.
