@@ -1232,6 +1232,41 @@ def _apply_tenant_modular_order_hub(engine, dry_run: bool) -> list[str]:  # noqa
     return actions
 
 
+def _apply_tenant_order_delivery_reliability(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Add the tenant-scoped order outbox and durable attempt history."""
+
+    from app.db.models import OrderDelivery, OrderDeliveryAttempt
+
+    actions: list[str] = []
+    with engine.connect() as conn:
+        table_names = set(inspect(conn).get_table_names())
+    for model in (OrderDelivery, OrderDeliveryAttempt):
+        if model.__tablename__ in table_names:
+            continue
+        actions.append(f"CREATE TABLE {model.__tablename__} (...)")
+        if not dry_run:
+            model.__table__.create(bind=engine, checkfirst=True)
+    actions.extend(
+        ensure_unique_index(
+            engine,
+            "order_deliveries",
+            "uq_order_delivery_idempotency",
+            ("company_id", "idempotency_key"),
+            dry_run=dry_run,
+        )
+    )
+    actions.extend(
+        ensure_unique_index(
+            engine,
+            "order_delivery_attempts",
+            "uq_order_delivery_attempt_number",
+            ("delivery_id", "attempt_number"),
+            dry_run=dry_run,
+        )
+    )
+    return actions
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -1346,6 +1381,12 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant modular order hub",
         checksum=checksum_text("tenant", "modular_order_hub", "orders", "order_lines", "external_identities", "order_routes"),
         upgrade=_apply_tenant_modular_order_hub,
+    ),
+    MigrationSpec(
+        version="2026.09.30.2",
+        name="tenant order delivery reliability",
+        checksum=checksum_text("tenant", "order_delivery_reliability", "order_deliveries", "order_delivery_attempts"),
+        upgrade=_apply_tenant_order_delivery_reliability,
     ),
 ]
 

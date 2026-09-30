@@ -30,6 +30,7 @@ DEFAULT_MAX_RETRIES = {
     "download_whatsapp_media": 3,
     "export_order": 3,
     "export_order_ftp": 3,
+    "deliver_order": 3,
     "bulk_order_action": 2,
     "import_confirm": 1,
     "import_file": 1,

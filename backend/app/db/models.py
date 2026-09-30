@@ -983,6 +983,57 @@ class OrderRoute(Base):
     __table_args__ = (UniqueConstraint("company_id", "order_type"),)
 
 
+class OrderDelivery(Base):
+    """Transactional outbox record for one order destination intent."""
+
+    __tablename__ = "order_deliveries"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), index=True)
+    order_type: Mapped[str] = mapped_column(String(50), default="order")
+    destination_connector_key: Mapped[str] = mapped_column(String(120), index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255), index=True)
+    status: Mapped[str] = mapped_column(String(40), default="queued", index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=3)
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    last_error_type: Mapped[str | None] = mapped_column(String(120))
+    destination_external_order_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "idempotency_key"),
+    )
+
+
+class OrderDeliveryAttempt(Base):
+    """Durable delivery-attempt history without storing the order payload."""
+
+    __tablename__ = "order_delivery_attempts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    delivery_id: Mapped[int] = mapped_column(ForeignKey("order_deliveries.id"), index=True)
+    attempt_number: Mapped[int] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(40), default="running")
+    error_type: Mapped[str | None] = mapped_column(String(120))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    external_order_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("delivery_id", "attempt_number"),
+    )
+
+
 class ExportJob(Base):
     __tablename__ = "export_jobs"
 
