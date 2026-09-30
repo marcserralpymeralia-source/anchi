@@ -1,0 +1,48 @@
+{
+  "contract_status": "UNVERIFIED_SAGE_CONTRACT",
+  "source_documentation": "docs/research/sage-api-analysis.md",
+  "source_url": "https://sage200c.sage.es/help/Content/Conect/Sage-soluciones-conectadas.htm",
+  "sites": [
+    {
+      "internal_id": "SITE-DEMO",
+      "reference": "SITE-DEMO",
+      "name": "Sage 200 ES PoC site"
+    }
+  ],
+  "customers": [
+    {
+      "internal_id": "SAGE-CUST-001",
+      "reference": "C001",
+      "name": "Cliente Sage PoC"
+    }
+  ],
+  "products": [
+    {
+      "internal_id": "SAGE-PROD-001",
+      "reference": "ART001",
+      "name": "Producto Sage PoC"
+    }
+  ],
+  "rates": [
+    {
+      "rate_id": "RATE-BASE",
+      "name": "Tarifa base",
+      "contract_status": "UNVERIFIED_SAGE_CONTRACT"
+    },
+    {
+      "rate_id": "RATE-CUSTOMER",
+      "name": "Tarifa cliente",
+      "contract_status": "UNVERIFIED_SAGE_CONTRACT"
+    }
+  ],
+  "price_offers": [
+    {
+      "customer_internal_id": "SAGE-CUST-001",
+      "product_internal_id": "SAGE-PROD-001",
+      "authoritative_price": 10.5,
+      "currency": "EUR",
+      "source": "mock_customer_rate",
+      "contract_status": "UNVERIFIED_SAGE_CONTRACT"
+    }
+  ]
+}
