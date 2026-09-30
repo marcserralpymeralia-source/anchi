@@ -63,7 +63,7 @@ def validate_confirmation(order: Order, scoring: ScoringSettings) -> list[str]:
         errors = ["No se puede confirmar porque hay lineas sin referencia validada.", *errors]
     if scoring.block_without_quantity and any(not is_positive_quantity(line.quantity) for line in order.lines):
         errors = ["No se puede confirmar porque hay lineas sin cantidad valida.", *errors]
-    if scoring.block_below_threshold and order.score < scoring.doubtful_threshold:
+    if scoring.block_below_threshold and ORDER_STATE.requires_semantic_score(order) and order.score < scoring.doubtful_threshold:
         errors = ["No se puede confirmar porque el scoring esta por debajo del umbral minimo.", *errors]
     return list(dict.fromkeys(errors))
 

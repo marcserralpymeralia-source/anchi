@@ -29,6 +29,14 @@ TERMINAL_ORDER_STATUSES = {
 
 @dataclass(slots=True)
 class OrderStateService:
+    def requires_semantic_score(self, order: Order) -> bool:
+        """Structured orders can be validated deterministically without AI confidence."""
+
+        return not (
+            getattr(order, "source_mode", None) == "structured"
+            and getattr(order, "validation_status", None) == "validated"
+        )
+
     def scoring_category(self, score: float | None, settings: ScoringSettings) -> str:
         if score is None:
             return "without_score"
@@ -66,7 +74,7 @@ class OrderStateService:
             blockers.append("Productos sin referencia")
         if settings.block_without_quantity and metrics["invalid_quantity_count"] > 0:
             blockers.append("Cantidad dudosa")
-        if settings.block_below_threshold and (order.score is None or order.score < settings.doubtful_threshold):
+        if settings.block_below_threshold and self.requires_semantic_score(order) and (order.score is None or order.score < settings.doubtful_threshold):
             blockers.append("Confianza baja")
         return blockers
 
