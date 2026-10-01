@@ -1,0 +1,468 @@
+"""Tenant-scoped integration configuration and capability validation."""
+
+from __future__ import annotations
+
+import json
+import os
+from datetime import datetime, timezone
+from typing import Any, Mapping
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.connectors.contracts import ConnectorStatus
+from app.connectors.registry import (
+    IntegrationHealth,
+    IntegrationRegistry,
+    IntegrationState,
+)
+from app.db.models import IntegrationConnection, OrderRoute, TenantIntegrationRole
+
+
+ROLE_CAPABILITIES = {
+    "customers_source": "customers.read",
+    "products_source": "products.read",
+    "pricing_source": "pricing.read",
+    "inventory_source": "inventory.read",
+    "order_destination": "orders.create",
+}
+ROLE_LABELS = {
+    "customers_source": "Clientes",
+    "products_source": "Productos",
+    "pricing_source": "Precios",
+    "inventory_source": "Stock",
+    "order_destination": "Pedidos",
+}
+SECRET_KEY_PARTS = (
+    "secret",
+    "password",
+    "token",
+    "api_key",
+    "apikey",
+    "authorization",
+    "subscription_key",
+    "private_key",
+    "credential",
+)
+
+
+class IntegrationConfigurationError(ValueError):
+    def __init__(self, message: str, *, errors: list[str] | None = None) -> None:
+        super().__init__(message)
+        self.errors = errors or [message]
+
+
+def _environment() -> str:
+    return os.getenv("APP_ENV", "development").strip().lower()
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _json_config(raw: str | None) -> dict[str, Any]:
+    try:
+        parsed = json.loads(raw or "{}")
+    except json.JSONDecodeError as exc:
+        raise IntegrationConfigurationError("La configuración de integración no es JSON válido.") from exc
+    if not isinstance(parsed, dict):
+        raise IntegrationConfigurationError("La configuración de integración debe ser un objeto JSON.")
+    return parsed
+
+
+def _secret_keys(value: Any, path: str = "") -> list[str]:
+    if isinstance(value, Mapping):
+        found: list[str] = []
+        for key, child in value.items():
+            key_text = str(key).strip().lower()
+            current_path = f"{path}.{key_text}" if path else key_text
+            if any(part in key_text for part in SECRET_KEY_PARTS):
+                found.append(current_path)
+            else:
+                found.extend(_secret_keys(child, current_path))
+        return found
+    if isinstance(value, (list, tuple)):
+        found = []
+        for index, child in enumerate(value):
+            found.extend(_secret_keys(child, f"{path}[{index}]"))
+        return found
+    return []
+
+
+def _normalize_field_value(field, value: Any) -> Any:  # noqa: ANN001
+    if value is None or value == "":
+        return value
+    if field.value_type == "boolean":
+        if isinstance(value, bool):
+            return value
+        normalized = str(value).strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+        raise ValueError(f"{field.label} debe ser booleano.")
+    if field.value_type == "integer":
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field.label} debe ser entero.") from exc
+    return str(value).strip()
+
+
+def normalize_and_validate_config(definition, config: Mapping[str, Any] | None) -> tuple[dict[str, Any], list[str]]:  # noqa: ANN001
+    raw = dict(config or {})
+    errors: list[str] = []
+    secret_keys = _secret_keys(raw)
+    if secret_keys:
+        errors.append("No se permiten secretos en config_json: " + ", ".join(secret_keys))
+    normalized: dict[str, Any] = {}
+    fields = {field.key: field for field in definition.config_schema}
+    for key, value in raw.items():
+        field = fields.get(key)
+        if field is None:
+            normalized[key] = value
+            continue
+        try:
+            normalized[key] = _normalize_field_value(field, value)
+        except ValueError as exc:
+            errors.append(str(exc))
+    for field in definition.config_schema:
+        value = normalized.get(field.key, field.default)
+        if field.required and (value is None or str(value).strip() == ""):
+            errors.append(f"Falta configuración obligatoria: {field.key}.")
+        if value is not None:
+            normalized[field.key] = value
+    if definition.key == "sage_200_es" and normalized.get("real_http_enabled") is True:
+        errors.append("HTTP real de Sage 200 ES está bloqueado durante el PoC.")
+    return normalized, list(dict.fromkeys(errors))
+
+
+def get_connection(db: Session, *, company_id: int, connection_id: int) -> IntegrationConnection | None:
+    return db.scalar(
+        select(IntegrationConnection).where(
+            IntegrationConnection.id == connection_id,
+            IntegrationConnection.company_id == company_id,
+        )
+    )
+
+
+def list_connections(db: Session, *, company_id: int) -> list[IntegrationConnection]:
+    return db.scalars(
+        select(IntegrationConnection)
+        .where(IntegrationConnection.company_id == company_id)
+        .order_by(IntegrationConnection.name, IntegrationConnection.id)
+    ).all()
+
+
+def connection_config_errors(connection: IntegrationConnection, *, registry: IntegrationRegistry | None = None) -> list[str]:
+    registry = registry or IntegrationRegistry()
+    definition = registry.definition(connection.connector_key)
+    _, errors = normalize_and_validate_config(definition, _json_config(connection.config_json))
+    if connection.requires_credentials and not connection.credentials_configured:
+        is_mock = connection.connector_key == "sage_200_es" and _environment() in {"development", "test"}
+        if not is_mock:
+            errors.append("Faltan credenciales configuradas fuera de config_json.")
+    return list(dict.fromkeys(errors))
+
+
+def _legacy_credentials_configured(db: Session, connection: IntegrationConnection) -> bool:
+    if connection.credentials_configured:
+        return True
+    if connection.connector_key == "whatsapp_catalog":
+        from app.whatsapp.service import whatsapp_config
+
+        config = whatsapp_config(db, connection.company_id)
+        return bool(config.access_token and config.phone_number_id)
+    if connection.connector_key == "email":
+        from app.db.models import EmailSettings
+
+        settings = db.scalar(select(EmailSettings).where(EmailSettings.company_id == connection.company_id))
+        return bool(settings and (settings.access_token_encrypted or settings.imap_password_encrypted))
+    return False
+
+
+def create_connection(
+    db: Session,
+    *,
+    company_id: int,
+    connector_key: str,
+    name: str,
+    config: Mapping[str, Any] | None = None,
+    secret_provider_ref: str | None = None,
+    credentials_configured: bool = False,
+    registry: IntegrationRegistry | None = None,
+) -> IntegrationConnection:
+    registry = registry or IntegrationRegistry()
+    definition = registry.definition(connector_key)
+    normalized, errors = normalize_and_validate_config(definition, config)
+    if any(error.startswith("No se permiten secretos") for error in errors):
+        raise IntegrationConfigurationError("Configuración inválida.", errors=errors)
+    name = str(name or "").strip()
+    if not name:
+        raise IntegrationConfigurationError("La conexión necesita un nombre.")
+    connection = IntegrationConnection(
+        company_id=company_id,
+        connector_key=connector_key,
+        name=name[:200],
+        state=IntegrationState.MISCONFIGURED.value if errors else IntegrationState.CONFIGURED.value,
+        config_json=json.dumps(normalized, ensure_ascii=False, sort_keys=True),
+        secret_provider_ref=str(secret_provider_ref or "").strip() or None,
+        requires_credentials=definition.requires_credentials,
+        credentials_configured=bool(credentials_configured),
+        health_status=IntegrationHealth.UNKNOWN.value,
+    )
+    db.add(connection)
+    db.flush()
+    return connection
+
+
+def update_connection(
+    db: Session,
+    *,
+    company_id: int,
+    connection_id: int,
+    name: str | None = None,
+    config: Mapping[str, Any] | None = None,
+    secret_provider_ref: str | None = None,
+    registry: IntegrationRegistry | None = None,
+) -> IntegrationConnection:
+    connection = get_connection(db, company_id=company_id, connection_id=connection_id)
+    if connection is None:
+        raise KeyError(f"Conexión de integración no encontrada: {connection_id}")
+    registry = registry or IntegrationRegistry()
+    definition = registry.definition(connection.connector_key)
+    current = _json_config(connection.config_json)
+    if config is not None:
+        current.update(dict(config))
+    normalized, errors = normalize_and_validate_config(definition, current)
+    if any(error.startswith("No se permiten secretos") for error in errors):
+        connection.state = IntegrationState.MISCONFIGURED.value
+        raise IntegrationConfigurationError("Configuración inválida.", errors=errors)
+    if name is not None:
+        connection.name = str(name).strip()[:200] or connection.name
+    connection.config_json = json.dumps(normalized, ensure_ascii=False, sort_keys=True)
+    if secret_provider_ref is not None:
+        connection.secret_provider_ref = str(secret_provider_ref).strip() or None
+    connection.state = IntegrationState.MISCONFIGURED.value if errors else IntegrationState.CONFIGURED.value
+    connection.updated_at = _now()
+    return connection
+
+
+def activate_connection(db: Session, *, company_id: int, connection_id: int, registry: IntegrationRegistry | None = None) -> IntegrationConnection:
+    connection = get_connection(db, company_id=company_id, connection_id=connection_id)
+    if connection is None:
+        raise KeyError(f"Conexión de integración no encontrada: {connection_id}")
+    registry = registry or IntegrationRegistry()
+    definition = registry.definition(connection.connector_key)
+    if not connection.credentials_configured and _legacy_credentials_configured(db, connection):
+        connection.credentials_configured = True
+    errors = connection_config_errors(connection, registry=registry)
+    config = _json_config(connection.config_json)
+    if definition.key == "sage_200_es" and bool(config.get("real_http_enabled")):
+        errors.append("Sage 200 ES no puede activar HTTP real.")
+    if errors:
+        connection.state = IntegrationState.MISCONFIGURED.value
+        connection.updated_at = _now()
+        raise IntegrationConfigurationError("La conexión no puede activarse.", errors=list(dict.fromkeys(errors)))
+    connection.state = IntegrationState.ACTIVE.value
+    connection.health_status = IntegrationHealth.UNKNOWN.value
+    connection.health_message = "Pendiente de health check on-demand."
+    connection.updated_at = _now()
+    return connection
+
+
+def disable_connection(db: Session, *, company_id: int, connection_id: int) -> IntegrationConnection:
+    connection = get_connection(db, company_id=company_id, connection_id=connection_id)
+    if connection is None:
+        raise KeyError(f"Conexión de integración no encontrada: {connection_id}")
+    connection.state = IntegrationState.DISABLED.value
+    connection.health_status = IntegrationHealth.UNKNOWN.value
+    connection.health_message = "Conexión deshabilitada; no se ejecuta health externo."
+    connection.updated_at = _now()
+    return connection
+
+
+def _connection_capabilities(connection: IntegrationConnection, registry: IntegrationRegistry) -> set[str]:
+    return {capability.value for capability in registry.capabilities_for(connection, environment=_environment())}
+
+
+def set_integration_role(
+    db: Session,
+    *,
+    company_id: int,
+    role_key: str,
+    connection_id: int,
+    registry: IntegrationRegistry | None = None,
+) -> TenantIntegrationRole:
+    if role_key not in ROLE_CAPABILITIES:
+        raise IntegrationConfigurationError(f"Rol de integración no soportado: {role_key}.")
+    registry = registry or IntegrationRegistry()
+    connection = get_connection(db, company_id=company_id, connection_id=connection_id)
+    if connection is None:
+        raise KeyError(f"Conexión de integración no encontrada: {connection_id}")
+    if connection.state in {IntegrationState.DISABLED.value, IntegrationState.MISCONFIGURED.value}:
+        raise IntegrationConfigurationError("No se puede seleccionar una conexión deshabilitada o inválida.")
+    required = ROLE_CAPABILITIES[role_key]
+    if required not in _connection_capabilities(connection, registry):
+        raise IntegrationConfigurationError(
+            f"{connection.name} no declara la capability requerida: {required}.",
+            errors=[f"missing_capability:{required}"],
+        )
+    role = db.scalar(
+        select(TenantIntegrationRole).where(
+            TenantIntegrationRole.company_id == company_id,
+            TenantIntegrationRole.role_key == role_key,
+        )
+    )
+    if role is None:
+        role = TenantIntegrationRole(company_id=company_id, role_key=role_key, connection_id=connection_id)
+        db.add(role)
+    else:
+        role.connection_id = connection_id
+        role.updated_at = _now()
+    db.flush()
+    return role
+
+
+def list_integration_roles(db: Session, *, company_id: int) -> list[TenantIntegrationRole]:
+    return db.scalars(
+        select(TenantIntegrationRole)
+        .where(TenantIntegrationRole.company_id == company_id)
+        .order_by(TenantIntegrationRole.role_key)
+    ).all()
+
+
+def set_order_route(
+    db: Session,
+    *,
+    company_id: int,
+    destination_connection_id: int,
+    source_connection_id: int | None = None,
+    order_type: str = "order",
+    registry: IntegrationRegistry | None = None,
+) -> OrderRoute:
+    registry = registry or IntegrationRegistry()
+    destination = get_connection(db, company_id=company_id, connection_id=destination_connection_id)
+    if destination is None:
+        raise KeyError(f"Conexión de integración no encontrada: {destination_connection_id}")
+    if destination.state != IntegrationState.ACTIVE.value:
+        raise IntegrationConfigurationError("El destino debe estar ACTIVE para entrar en routing.")
+    if "orders.create" not in _connection_capabilities(destination, registry):
+        raise IntegrationConfigurationError(
+            "El destino no declara orders.create.",
+            errors=["missing_capability:orders.create"],
+        )
+    source = None
+    if source_connection_id is not None:
+        source = get_connection(db, company_id=company_id, connection_id=source_connection_id)
+        if source is None:
+            raise KeyError(f"Conexión de entrada no encontrada: {source_connection_id}")
+        if source.state != IntegrationState.ACTIVE.value:
+            raise IntegrationConfigurationError("La fuente debe estar ACTIVE para entrar en routing.")
+    route = db.scalar(
+        select(OrderRoute).where(OrderRoute.company_id == company_id, OrderRoute.order_type == order_type)
+    )
+    if route is None:
+        route = OrderRoute(company_id=company_id, order_type=order_type, destination_connector_key=destination.connector_key)
+        db.add(route)
+    route.destination_connector_key = destination.connector_key
+    route.source_connection_id = source.id if source else None
+    route.destination_connection_id = destination.id
+    route.is_active = True
+    route.updated_at = _now()
+    db.flush()
+    return route
+
+
+def health_check_connection(
+    db: Session,
+    *,
+    company_id: int,
+    connection_id: int,
+    registry: IntegrationRegistry | None = None,
+) -> IntegrationConnection:
+    connection = get_connection(db, company_id=company_id, connection_id=connection_id)
+    if connection is None:
+        raise KeyError(f"Conexión de integración no encontrada: {connection_id}")
+    connection.health_checked_at = _now()
+    if connection.state == IntegrationState.DISABLED.value:
+        connection.health_status = IntegrationHealth.UNKNOWN.value
+        connection.health_message = "Conexión deshabilitada; no se ejecuta health externo."
+        return connection
+    registry = registry or IntegrationRegistry()
+    errors = connection_config_errors(connection, registry=registry)
+    if errors:
+        connection.health_status = IntegrationHealth.MISCONFIGURED.value
+        connection.health_message = "; ".join(errors)
+        return connection
+    definition = registry.definition(connection.connector_key)
+    if not definition.health_check_supported or not definition.factory_path:
+        connection.health_status = IntegrationHealth.UNKNOWN.value
+        connection.health_message = "Health adapter pendiente; se mantiene la configuración legacy como source of truth."
+        return connection
+    if connection.state != IntegrationState.ACTIVE.value:
+        connection.health_status = IntegrationHealth.UNKNOWN.value
+        connection.health_message = "La conexión no está ACTIVE."
+        return connection
+    try:
+        connector = registry.resolve(db, company_id=company_id, connection_id=connection_id)
+        status = connector.health.status
+        mapped = {
+            ConnectorStatus.HEALTHY: IntegrationHealth.HEALTHY,
+            ConnectorStatus.READY: IntegrationHealth.HEALTHY,
+            ConnectorStatus.DEGRADED: IntegrationHealth.DEGRADED,
+            ConnectorStatus.UNAVAILABLE: IntegrationHealth.UNAVAILABLE,
+            ConnectorStatus.MISCONFIGURED: IntegrationHealth.MISCONFIGURED,
+            ConnectorStatus.NOT_CONFIGURED: IntegrationHealth.MISCONFIGURED,
+        }.get(status, IntegrationHealth.UNKNOWN)
+        connection.health_status = mapped.value
+        connection.health_message = connector.health.message or mapped.value
+    except Exception as exc:  # noqa: BLE001
+        connection.health_status = IntegrationHealth.UNAVAILABLE.value
+        connection.health_message = f"Health check fallido: {exc}"
+    return connection
+
+
+def connection_to_dict(connection: IntegrationConnection, *, registry: IntegrationRegistry | None = None) -> dict[str, Any]:
+    registry = registry or IntegrationRegistry()
+    definition = registry.definition(connection.connector_key)
+    config = _json_config(connection.config_json)
+    _, config_errors = normalize_and_validate_config(definition, config)
+    return {
+        "id": connection.id,
+        "company_id": connection.company_id,
+        "connector_key": connection.connector_key,
+        "display_name": definition.display_name,
+        "name": connection.name,
+        "state": connection.state,
+        "config": config,
+        "secret_provider_ref": connection.secret_provider_ref,
+        "requires_credentials": connection.requires_credentials,
+        "credentials_configured": connection.credentials_configured,
+        "health": {
+            "status": connection.health_status,
+            "message": connection.health_message,
+            "checked_at": connection.health_checked_at.isoformat() if connection.health_checked_at else None,
+        },
+        "config_errors": config_errors,
+        "capabilities": sorted(capability.value for capability in registry.capabilities_for(connection)),
+    }
+
+
+__all__ = [
+    "IntegrationConfigurationError",
+    "ROLE_CAPABILITIES",
+    "ROLE_LABELS",
+    "activate_connection",
+    "connection_config_errors",
+    "connection_to_dict",
+    "create_connection",
+    "disable_connection",
+    "get_connection",
+    "health_check_connection",
+    "list_connections",
+    "list_integration_roles",
+    "set_integration_role",
+    "set_order_route",
+    "update_connection",
+]

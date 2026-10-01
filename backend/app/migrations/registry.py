@@ -77,10 +77,22 @@ TENANT_COMPAT_COLUMNS = {
         "validation_status": "VARCHAR(50) DEFAULT 'pending'",
         "review_status": "VARCHAR(50) DEFAULT 'not_required'",
         "destination_connector_key": "VARCHAR(120)",
+        "source_connection_id": "INTEGER",
+        "destination_connection_id": "INTEGER",
         "destination_external_order_id": "VARCHAR(255)",
         "export_status": "VARCHAR(50) DEFAULT 'not_requested'",
         "export_attempt_count": "INTEGER DEFAULT 0",
         "export_last_error": "TEXT",
+    },
+    "inbound_messages": {
+        "source_connection_id": "INTEGER",
+    },
+    "order_routes": {
+        "source_connection_id": "INTEGER",
+        "destination_connection_id": "INTEGER",
+    },
+    "order_deliveries": {
+        "destination_connection_id": "INTEGER",
     },
     "order_lines": {
         "source_product_system": "VARCHAR(80)",
@@ -1278,6 +1290,32 @@ def _apply_tenant_whatsapp_catalog_inbound(engine, dry_run: bool) -> list[str]: 
     )
 
 
+def _apply_tenant_integration_registry(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Add tenant connection instances and connection-aware routing fields."""
+
+    from app.db.models import IntegrationConnection, TenantIntegrationRole
+
+    actions: list[str] = []
+    for table_name, columns in (
+        ("inbound_messages", TENANT_COMPAT_COLUMNS["inbound_messages"]),
+        ("orders", TENANT_COMPAT_COLUMNS["orders"]),
+        ("order_routes", TENANT_COMPAT_COLUMNS["order_routes"]),
+        ("order_deliveries", TENANT_COMPAT_COLUMNS["order_deliveries"]),
+    ):
+        actions.extend(ensure_columns(engine, table_name, columns, dry_run=dry_run))
+
+    with engine.connect() as conn:
+        table_names = set(inspect(conn).get_table_names())
+    for model in (IntegrationConnection, TenantIntegrationRole):
+        if model.__tablename__ in table_names:
+            continue
+        actions.append(f"CREATE TABLE {model.__tablename__} (...)")
+        if not dry_run:
+            model.__table__.create(bind=engine, checkfirst=True)
+
+    return actions
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -1404,6 +1442,19 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant whatsapp catalog inbound",
         checksum=checksum_text("tenant", "whatsapp_catalog_inbound", "source_catalog_id"),
         upgrade=_apply_tenant_whatsapp_catalog_inbound,
+    ),
+    MigrationSpec(
+        version="2026.09.30.4",
+        name="tenant integration registry",
+        checksum=checksum_text(
+            "tenant",
+            "integration_registry",
+            "integration_connections",
+            "tenant_integration_roles",
+            "source_connection_id",
+            "destination_connection_id",
+        ),
+        upgrade=_apply_tenant_integration_registry,
     ),
 ]
 

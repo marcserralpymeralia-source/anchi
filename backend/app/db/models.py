@@ -791,6 +791,47 @@ class ChannelSetting(Base):
     __table_args__ = (UniqueConstraint("company_id", "channel_id", "key"),)
 
 
+class IntegrationConnection(Base):
+    """Tenant-owned installation of one connector definition.
+
+    ``config_json`` is deliberately limited to non-secret configuration.  A
+    connector may point at ``secret_provider_ref`` in a future secret store,
+    but ANCHI never persists raw credentials in this record.
+    """
+
+    __tablename__ = "integration_connections"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    connector_key: Mapped[str] = mapped_column(String(120), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    state: Mapped[str] = mapped_column(String(30), default="DRAFT", index=True)
+    config_json: Mapped[str] = mapped_column(Text, default="{}")
+    secret_provider_ref: Mapped[str | None] = mapped_column(String(255))
+    requires_credentials: Mapped[bool] = mapped_column(Boolean, default=False)
+    credentials_configured: Mapped[bool] = mapped_column(Boolean, default=False)
+    health_status: Mapped[str] = mapped_column(String(30), default="UNKNOWN")
+    health_message: Mapped[str | None] = mapped_column(Text)
+    health_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class TenantIntegrationRole(Base):
+    """Tenant selection for a master-data source or order destination."""
+
+    __tablename__ = "tenant_integration_roles"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    role_key: Mapped[str] = mapped_column(String(50), index=True)
+    connection_id: Mapped[int] = mapped_column(ForeignKey("integration_connections.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (UniqueConstraint("company_id", "role_key"),)
+
+
 class InboundMessage(Base):
     __tablename__ = "inbound_messages"
 
@@ -800,6 +841,7 @@ class InboundMessage(Base):
     provider: Mapped[str] = mapped_column(String(50), default="imap")
     conversation_id: Mapped[int | None] = mapped_column(ForeignKey("conversations.id"), index=True)
     source_external_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    source_connection_id: Mapped[int | None] = mapped_column(ForeignKey("integration_connections.id"), index=True)
     source_thread_id: Mapped[str | None] = mapped_column(String(255), index=True)
     source_message_id: Mapped[str | None] = mapped_column(String(255), index=True)
     source_mailbox: Mapped[str | None] = mapped_column(String(255), index=True)
@@ -976,6 +1018,8 @@ class OrderRoute(Base):
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
     order_type: Mapped[str] = mapped_column(String(50), default="order")
     destination_connector_key: Mapped[str] = mapped_column(String(120))
+    source_connection_id: Mapped[int | None] = mapped_column(ForeignKey("integration_connections.id"), index=True)
+    destination_connection_id: Mapped[int | None] = mapped_column(ForeignKey("integration_connections.id"), index=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -993,6 +1037,7 @@ class OrderDelivery(Base):
     order_id: Mapped[int] = mapped_column(ForeignKey("orders.id"), index=True)
     order_type: Mapped[str] = mapped_column(String(50), default="order")
     destination_connector_key: Mapped[str] = mapped_column(String(120), index=True)
+    destination_connection_id: Mapped[int | None] = mapped_column(ForeignKey("integration_connections.id"), index=True)
     idempotency_key: Mapped[str] = mapped_column(String(255), index=True)
     status: Mapped[str] = mapped_column(String(40), default="queued", index=True)
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -1195,6 +1240,7 @@ class Order(Base):
     source_provider: Mapped[str | None] = mapped_column(String(80), index=True)
     source_external_event_id: Mapped[str | None] = mapped_column(String(255), index=True)
     source_external_order_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    source_connection_id: Mapped[int | None] = mapped_column(ForeignKey("integration_connections.id"), index=True)
     source_catalog_id: Mapped[str | None] = mapped_column(String(255), index=True)
     customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"))
     validated_customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"))
@@ -1210,6 +1256,7 @@ class Order(Base):
     review_status: Mapped[str] = mapped_column(String(50), default="not_required")
     review_reasons: Mapped[str | None] = mapped_column(Text)
     destination_connector_key: Mapped[str | None] = mapped_column(String(120))
+    destination_connection_id: Mapped[int | None] = mapped_column(ForeignKey("integration_connections.id"), index=True)
     destination_external_order_id: Mapped[str | None] = mapped_column(String(255), index=True)
     export_status: Mapped[str] = mapped_column(String(50), default="not_requested")
     export_attempt_count: Mapped[int] = mapped_column(Integer, default=0)

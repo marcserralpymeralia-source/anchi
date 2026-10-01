@@ -14,17 +14,15 @@ from app.connectors.contracts import (
     InputMode,
     StructuredOrderItem,
 )
-from app.connectors.whatsapp_catalog import WhatsAppCatalogInboundConnector
-from app.connectors.sage200es import (
-    MockSage200ESTransport,
-    Sage200ESClient,
-    Sage200ESConfig,
-    Sage200ESConnector,
-    Sage200ESIdentity,
-    Sage200ESPriceResolution,
-    Sage200ESSalesOrderDTO,
-    Sage200ESSalesOrderMapper,
-    Sage200ESTransportError,
+from app.connectors.registry import (
+    ConnectionRuntimeRegistry,
+    ConnectorConfigField,
+    ConnectorDefinition,
+    ConnectorDirection,
+    ConnectorMaturity,
+    IntegrationHealth,
+    IntegrationRegistry,
+    IntegrationState,
 )
 
 __all__ = [
@@ -50,4 +48,37 @@ __all__ = [
     "Sage200ESSalesOrderDTO",
     "Sage200ESSalesOrderMapper",
     "Sage200ESTransportError",
+    "ConnectionRuntimeRegistry",
+    "ConnectorConfigField",
+    "ConnectorDefinition",
+    "ConnectorDirection",
+    "ConnectorMaturity",
+    "IntegrationHealth",
+    "IntegrationRegistry",
+    "IntegrationState",
 ]
+
+
+def __getattr__(name: str):
+    """Keep optional connector modules out of process startup imports."""
+
+    if name == "WhatsAppCatalogInboundConnector":
+        from app.connectors.whatsapp_catalog import WhatsAppCatalogInboundConnector
+
+        return WhatsAppCatalogInboundConnector
+    sage_names = {
+        "MockSage200ESTransport",
+        "Sage200ESClient",
+        "Sage200ESConfig",
+        "Sage200ESConnector",
+        "Sage200ESIdentity",
+        "Sage200ESPriceResolution",
+        "Sage200ESSalesOrderDTO",
+        "Sage200ESSalesOrderMapper",
+        "Sage200ESTransportError",
+    }
+    if name in sage_names:
+        from app.connectors import sage200es
+
+        return getattr(sage200es, name)
+    raise AttributeError(name)

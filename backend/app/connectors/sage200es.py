@@ -590,6 +590,40 @@ class Sage200ESConnector(DestinationConnector):
         return DestinationOrderResult(self.identifier, external_id)
 
 
+def build_sage200es_mock_connector(config: Mapping[str, Any]) -> Sage200ESConnector:
+    """Build the safe tenant-scoped PoC instance used by the registry.
+
+    The factory intentionally wires ``MockSage200ESTransport``.  There is no
+    registry path that can enable Sage HTTP until the verified contract work
+    from BLOQUE 4C explicitly replaces this factory.
+    """
+
+    try:
+        tenant_id = int(config.get("tenant_id") or 0)
+    except (TypeError, ValueError):
+        tenant_id = 0
+    def fixture_values(key: str) -> Sequence[Mapping[str, Any]] | None:
+        value = config.get(key)
+        return value if isinstance(value, Sequence) and not isinstance(value, (str, bytes)) else None
+
+    return Sage200ESConnector(
+        config=Sage200ESConfig(
+            tenant_id=tenant_id,
+            site=str(config.get("site") or "").strip(),
+            base_url=str(config.get("base_url") or "").strip(),
+            timeout_seconds=float(config.get("timeout_seconds") or 10),
+            real_http_enabled=bool(config.get("real_http_enabled", False)),
+        ),
+        transport=MockSage200ESTransport(
+            sites=fixture_values("mock_sites"),
+            customers=fixture_values("mock_customers"),
+            products=fixture_values("mock_products"),
+            rates=fixture_values("mock_rates"),
+            price_offers=fixture_values("mock_price_offers"),
+        ),
+    )
+
+
 __all__ = [
     "MockSage200ESTransport",
     "Sage200ESClient",
@@ -600,6 +634,7 @@ __all__ = [
     "Sage200ESSalesOrderDTO",
     "Sage200ESSalesOrderMapper",
     "Sage200ESTransportError",
+    "build_sage200es_mock_connector",
     "SAGE200ES_EXTERNAL_SYSTEM",
     "SAGE_EXTERNAL_REFERENCE_FIELD",
     "UNVERIFIED_SAGE_CONTRACT",

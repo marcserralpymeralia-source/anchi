@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.connectors.contracts import ConnectorRegistry, InboundOrderEvent, InputMode
 from app.connectors.identity import resolve_customer_by_external_identity, resolve_product_by_external_identity
 from app.connectors.routing import RoutingResult
-from app.db.models import Customer, InboundMessage, Order, OrderDelivery, OrderLine
+from app.db.models import Customer, InboundMessage, IntegrationConnection, Order, OrderDelivery, OrderLine
 from app.customers.matching import resolve_customer_id_by_phone
 from app.messages.service import persist_normalized_message
 from app.orders.delivery import enqueue_order_delivery
@@ -56,6 +56,19 @@ def process_inbound_order_event(
         raise ValueError("Este flujo solo procesa eventos structured.")
     if event.company_id <= 0:
         raise ValueError("El evento necesita un tenant válido.")
+    if event.source_connection_id is not None:
+        source_connection = db.scalar(
+            select(IntegrationConnection).where(
+                IntegrationConnection.id == event.source_connection_id,
+                IntegrationConnection.company_id == event.company_id,
+            )
+        )
+        if source_connection is None:
+            raise ValueError("La conexión de entrada no pertenece al tenant del evento.")
+        if source_connection.state != "ACTIVE":
+            raise ValueError("La conexión de entrada no está activa.")
+        if source_connection.connector_key != event.connector_key:
+            raise ValueError("El connector del evento no coincide con su conexión de entrada.")
 
     existing = _existing_order(db, event)
     if existing:
@@ -107,6 +120,7 @@ def process_inbound_order_event(
         source_provider=event.provider,
         source_external_event_id=event.external_event_id,
         source_external_order_id=event.external_order_id,
+        source_connection_id=event.source_connection_id,
         source_catalog_id=event.source_catalog_id,
         customer_id=customer.id if customer else None,
         validated_customer_id=customer.id if customer else None,
@@ -183,6 +197,7 @@ def _normalized_message(event: InboundOrderEvent):
         channel_key=event.connector_key,
         provider=event.provider,
         external_id=event.external_event_id,
+        source_connection_id=event.source_connection_id,
         sender=event.customer_external_id,
         subject="Structured order",
         text_content=None,

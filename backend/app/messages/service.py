@@ -19,6 +19,7 @@ class NormalizedMessage:
     channel_key: str
     provider: str
     external_id: str | None
+    source_connection_id: int | None = None
     sender: str | None = None
     recipients: list[str] = field(default_factory=list)
     subject: str | None = None
@@ -47,6 +48,7 @@ def persist_normalized_message(
         channel_key=message.channel_key,
         provider=message.provider,
         external_id=message.external_id,
+        source_connection_id=message.source_connection_id,
         sender=message.sender,
         recipients=message.recipients,
         subject=message.subject,
@@ -197,6 +199,7 @@ def upsert_inbound_message(
     provider: str,
     external_id: str | None,
     sender: str | None,
+    source_connection_id: int | None = None,
     recipients: Any = None,
     subject: str | None = None,
     text_content: str | None = None,
@@ -240,6 +243,7 @@ def upsert_inbound_message(
         if matched_customer_id and not existing.customer_id:
             existing.customer_id = matched_customer_id
         existing.provider = normalize_provider(provider)
+        existing.source_connection_id = source_connection_id or existing.source_connection_id
         existing.direction = normalized_direction
         existing.sender = sender or existing.sender
         if recipient_values:
@@ -277,6 +281,7 @@ def upsert_inbound_message(
         provider=normalize_provider(provider),
         conversation_id=conversation.id,
         source_external_id=external_id,
+        source_connection_id=source_connection_id,
         source_thread_id=external_thread_id,
         direction=normalized_direction,
         sender=sender,

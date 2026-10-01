@@ -61,6 +61,7 @@ class InboundOrderEvent:
     source_mode: InputMode
     external_event_id: str
     external_system: str
+    source_connection_id: int | None = None
     customer_external_system: str | None = None
     external_order_id: str | None = None
     customer_external_id: str | None = None
