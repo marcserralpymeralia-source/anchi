@@ -197,6 +197,13 @@ class EgressPolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(EgressPolicyError, "DNS"):
             EgressPolicy(resolver=resolver).validate_url(binding, "https://erp.example/api/orders")
 
+    def test_connection_allowlist_accepts_only_exact_hostname(self):
+        policy = EgressPolicy(resolver=FakeResolver(), allowed_hosts=("erp.example",))
+        binding = policy.bind(tenant_id=1, connection_id=7, base_url="https://erp.example/api")
+        self.assertEqual(binding.hostname, "erp.example")
+        with self.assertRaisesRegex(EgressPolicyError, "allowlist"):
+            policy.bind(tenant_id=1, connection_id=7, base_url="https://other.example/api")
+
     def test_rejects_destination_host_port_scheme_path_and_url_injection_changes(self):
         policy = EgressPolicy(resolver=FakeResolver())
         binding = policy.bind(tenant_id=1, connection_id=7, base_url="https://erp.example/api")
@@ -294,6 +301,7 @@ class SecureTransportTests(unittest.TestCase):
         self.assertEqual(events[0].event_type, "http.request_attempted")
         self.assertEqual(events[0].correlation_id, "corr-1")
         self.assertEqual(events[0].destination_hostname, "erp.example")
+        self.assertEqual(events[1].event_type, "http.request_succeeded")
 
     def test_blocked_audit_event_does_not_include_secret_or_headers(self):
         events = []

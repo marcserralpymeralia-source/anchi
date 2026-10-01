@@ -56,6 +56,7 @@ _SECRET_MARKERS = (
     "apikey",
     "subscription-key",
     "proxy-authorization",
+    "test-credential",
 )
 
 _SECRET_ASSIGNMENT_RE = re.compile(
@@ -132,6 +133,7 @@ def redact_http_headers(headers: Any) -> dict[str, str]:
         "apikey",
         "ocp-apim-subscription-key",
         "subscription-key",
+        "x-anchi-test-credential",
     }
     safe: dict[str, str] = {}
     for key, value in headers.items():

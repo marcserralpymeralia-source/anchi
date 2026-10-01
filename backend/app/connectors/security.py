@@ -157,8 +157,9 @@ class EgressBinding:
 class EgressPolicy:
     """Connection-scoped origin policy with DNS rebinding checks."""
 
-    def __init__(self, *, resolver: DNSResolver | None = None) -> None:
+    def __init__(self, *, resolver: DNSResolver | None = None, allowed_hosts: Sequence[str] = ()) -> None:
         self.resolver = resolver or SystemDNSResolver()
+        self.allowed_hosts = frozenset(str(item).lower().rstrip(".") for item in allowed_hosts if str(item).strip())
 
     def bind(
         self,
@@ -183,6 +184,8 @@ class EgressPolicy:
             raise EgressPolicyError("El destino externo contiene componentes no permitidos.", code="ORIGIN_INVALID")
         if host in {"localhost", "metadata", "metadata.google.internal", "instance-data"} or host.endswith(".localhost"):
             raise EgressPolicyError("El destino externo apunta a un host local/metadata.", code="HOST_BLOCKED")
+        if self.allowed_hosts and host not in self.allowed_hosts:
+            raise EgressPolicyError("El destino externo no está en la allowlist de la connection.", code="HOST_NOT_ALLOWLISTED")
         try:
             port = parsed.port or (443 if parsed.scheme == "https" else 80)
         except ValueError as exc:
@@ -280,6 +283,7 @@ class SecureHTTPTransportConfig:
     global_enabled: bool | None = None
     allow_http: bool = False
     allowed_private_hosts: tuple[str, ...] = ()
+    allowed_hosts: tuple[str, ...] = ()
     connect_timeout_seconds: float = 5.0
     read_timeout_seconds: float = 15.0
     total_timeout_seconds: float = 20.0
@@ -319,7 +323,7 @@ class SecureHTTPTransport:
     ) -> None:
         self.config = config
         self.secret_provider = secret_provider or EnvironmentSecretProvider()
-        self.egress_policy = egress_policy or EgressPolicy()
+        self.egress_policy = egress_policy or EgressPolicy(allowed_hosts=config.allowed_hosts)
         self.http_client = http_client
         self.audit_sink = audit_sink
         self.binding = self.egress_policy.bind(
@@ -334,7 +338,7 @@ class SecureHTTPTransport:
     def global_gate_enabled() -> bool:
         return str(os.getenv("EXTERNAL_CONNECTOR_HTTP_ENABLED", "false")).strip().lower() in {"1", "true", "yes", "on"}
 
-    def gate_status(self) -> dict[str, Any]:
+    def gate_status(self, *, requires_credential: bool = True) -> dict[str, Any]:
         global_enabled = self.global_gate_enabled()
         if not self.config.connection_enabled:
             return {"status": "blocked", "reason": "connection_disabled"}
@@ -342,7 +346,7 @@ class SecureHTTPTransport:
             return {"status": "blocked", "reason": "connector_gate"}
         if not global_enabled:
             return {"status": "blocked", "reason": "global_gate"}
-        if not self.config.credential_ref:
+        if requires_credential and not self.config.credential_ref:
             return {"status": "blocked", "reason": "missing_credentials"}
         return {"status": "ready", "reason": "all_gates_pass"}
 
@@ -351,7 +355,8 @@ class SecureHTTPTransport:
         context = current_context()
         correlation_id = str(getattr(request, "correlation_id", None) or context.get("correlation_id") or request_id)
         started = time.perf_counter()
-        gate = self.gate_status()
+        requires_credential = bool(getattr(request, "requires_credential", True))
+        gate = self.gate_status(requires_credential=requires_credential)
         try:
             if gate["status"] != "ready":
                 raise SecureHTTPTransportError(
@@ -377,14 +382,29 @@ class SecureHTTPTransport:
                 body_bytes = len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
             if body_bytes > self.config.max_request_bytes:
                 raise SecureHTTPTransportError("El request supera el límite técnico.", category=ExternalConnectorErrorCategory.VALIDATION, code="REQUEST_TOO_LARGE")
-            secret = self.secret_provider.resolve(
-                tenant_id=self.config.tenant_id,
-                connection_id=self.config.connection_id,
-                credential_ref=str(self.config.credential_ref),
-                credential_name=self.config.credential_name,
-            )
             headers = dict(raw_headers)
-            self._inject_credential(headers, secret.value)
+            if requires_credential:
+                secret = self.secret_provider.resolve(
+                    tenant_id=self.config.tenant_id,
+                    connection_id=self.config.connection_id,
+                    credential_ref=str(self.config.credential_ref),
+                    credential_name=self.config.credential_name,
+                )
+                self._inject_credential(headers, secret.value)
+            self._emit(
+                SecureHTTPAuditEvent(
+                    tenant_id=self.config.tenant_id,
+                    connection_id=self.config.connection_id,
+                    connector_key=self.config.connector_key,
+                    operation=str(getattr(request, "operation", "unknown")),
+                    event_type="http.request_attempted",
+                    outcome="attempted",
+                    correlation_id=correlation_id,
+                    request_id=request_id,
+                    destination_hostname=self.binding.hostname,
+                    duration_ms=round((time.perf_counter() - started) * 1000),
+                )
+            )
             response = self._request(request, headers)
             status_code = int(getattr(response, "status_code", 0) or 0)
             if 300 <= status_code < 400:
@@ -417,7 +437,7 @@ class SecureHTTPTransport:
                     connection_id=self.config.connection_id,
                     connector_key=self.config.connector_key,
                     operation=str(getattr(request, "operation", "unknown")),
-                    event_type="http.request_attempted",
+                    event_type="http.request_succeeded",
                     outcome="succeeded",
                     correlation_id=correlation_id,
                     request_id=request_id,
