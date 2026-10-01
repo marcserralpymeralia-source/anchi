@@ -58,6 +58,14 @@ __all__ = [
     "OdooSalesOrderDTO",
     "OdooSalesOrderMapper",
     "OdooTransportError",
+    "GenericRESTClient",
+    "GenericRESTConfig",
+    "GenericRESTConnector",
+    "GenericRESTRequest",
+    "GenericRESTResponse",
+    "GenericRESTTransportError",
+    "HTTPGenericRESTTransport",
+    "MockGenericRESTTransport",
     "ConnectionRuntimeRegistry",
     "ConnectorConfigField",
     "ConnectorDefinition",
@@ -107,4 +115,18 @@ def __getattr__(name: str):
         from app.connectors import odoo
 
         return getattr(odoo, name)
+    generic_rest_names = {
+        "GenericRESTClient",
+        "GenericRESTConfig",
+        "GenericRESTConnector",
+        "GenericRESTRequest",
+        "GenericRESTResponse",
+        "GenericRESTTransportError",
+        "HTTPGenericRESTTransport",
+        "MockGenericRESTTransport",
+    }
+    if name in generic_rest_names:
+        from app.connectors import generic_rest
+
+        return getattr(generic_rest, name)
     raise AttributeError(name)
