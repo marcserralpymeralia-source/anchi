@@ -92,6 +92,21 @@ def _secret_keys(value: Any, path: str = "") -> list[str]:
 def _normalize_field_value(field, value: Any) -> Any:  # noqa: ANN001
     if value is None or value == "":
         return value
+    if field.value_type == "json":
+        if isinstance(value, (dict, list)):
+            return value
+        try:
+            parsed = json.loads(str(value))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{field.label} debe ser JSON válido.") from exc
+        if not isinstance(parsed, (dict, list)):
+            raise ValueError(f"{field.label} debe ser un objeto o lista JSON.")
+        return parsed
+    if field.value_type == "number":
+        try:
+            return float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field.label} debe ser numérico.") from exc
     if field.value_type == "boolean":
         if isinstance(value, bool):
             return value
@@ -134,6 +149,10 @@ def normalize_and_validate_config(definition, config: Mapping[str, Any] | None) 
             normalized[field.key] = value
     if definition.mock_only and normalized.get("real_http_enabled") is True:
         errors.append(f"HTTP real de {definition.display_name} está bloqueado durante el PoC.")
+    if definition.key == "generic_rest":
+        from app.connectors.generic_rest_mapping import validate_generic_rest_config
+
+        errors.extend(validate_generic_rest_config(normalized))
     return normalized, list(dict.fromkeys(errors))
 
 

@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import current_user, require_tenant_role
 from app.core.templating import templates
-from app.db.models import OrderRoute
+from app.db.models import Order, OrderRoute
 from app.integrations.service import (
     IntegrationConfigurationError,
     ROLE_CAPABILITIES,
@@ -174,6 +174,31 @@ def check_integration_health(connection_id: int, db: Session = Depends(get_tenan
     except KeyError as exc:
         db.rollback()
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/integrations/connections/{connection_id}/dry-run")
+async def dry_run_integration_connection(connection_id: int, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(_admin_user)):
+    payload = await _payload(request)
+    try:
+        order_id = int(payload.get("order_id"))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="order_id debe ser un entero.") from exc
+    connection = get_connection(db, company_id=user.company_id, connection_id=connection_id)
+    order = db.scalar(select(Order).where(Order.id == order_id, Order.company_id == user.company_id))
+    if connection is None or order is None:
+        raise HTTPException(status_code=404, detail="Conexión o pedido no encontrado.")
+    if connection.connector_key != "generic_rest":
+        raise HTTPException(status_code=400, detail="dry-run solo está disponible para Generic REST.")
+    try:
+        connector = registry.resolve(db, company_id=user.company_id, connection_id=connection_id)
+        dry_run = getattr(connector, "dry_run_order", None)
+        if not callable(dry_run):
+            raise HTTPException(status_code=400, detail="El connector no soporta dry-run.")
+        return {"ok": True, "dry_run": dry_run(db, order)}
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=422)
 
 
 @router.get("/integrations/roles")

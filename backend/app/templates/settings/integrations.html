@@ -52,8 +52,10 @@
     <form id="integration-create-form" class="form-grid">
       <label>Connector<select name="connector_key" required>{% for definition in definitions %}<option value="{{ definition.key }}">{{ definition.display_name }}{% if definition.maturity == "experimental" %} · experimental{% endif %}</option>{% endfor %}</select></label>
       <label>Nombre<input name="name" required placeholder="Sage principal"></label>
-      <label class="span-2">Configuración no secreta (JSON)<textarea name="config" rows="4" placeholder='{"site":"SITE-DEMO","real_http_enabled":false}'>{}</textarea></label>
-      <div class="span-2"><button class="button" type="submit">Crear conexión</button><span class="muted">WhatsApp y email reutilizan su configuración tenant-scoped existente.</span></div>
+      <label>SecretProvider reference<input name="secret_provider_ref" placeholder="erp/acme/rest" autocomplete="off"></label>
+      <label class="checkbox-label"><input type="checkbox" name="credentials_configured"> Credenciales configuradas fuera de config</label>
+      <label class="span-2">Configuración no secreta (JSON)<textarea name="config" rows="7" placeholder='{"base_url":"https://erp.example/api","operations":{}}'>{}</textarea></label>
+      <div class="span-2"><button class="button" type="submit">Crear conexión</button><span class="muted">Generic REST valida operaciones y mappings en backend; nunca acepta secretos en este JSON.</span></div>
     </form>
   </section>
   {% endif %}
@@ -95,7 +97,7 @@
     const data = new FormData(form);
     let config;
     try { config = JSON.parse(data.get("config") || "{}"); } catch { show("La configuración debe ser JSON válido."); return; }
-    try { await call("/integrations/connections", { method: "POST", body: JSON.stringify({ connector_key: data.get("connector_key"), name: data.get("name"), config }) }); window.location.reload(); }
+    try { await call("/integrations/connections", { method: "POST", body: JSON.stringify({ connector_key: data.get("connector_key"), name: data.get("name"), secret_provider_ref: data.get("secret_provider_ref"), credentials_configured: data.get("credentials_configured") === "on", config }) }); window.location.reload(); }
     catch (error) { show(error.message); }
   });
 })();

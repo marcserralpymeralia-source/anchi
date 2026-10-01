@@ -123,6 +123,12 @@ def build_whatsapp_catalog_connector(config: Mapping[str, Any]) -> BaseConnector
     return WhatsAppCatalogInboundConnector()
 
 
+def build_generic_rest_mock_connector(config: Mapping[str, Any]) -> BaseConnector:
+    from app.connectors.generic_rest import build_generic_rest_mock_connector as build
+
+    return build(config)
+
+
 def _builtin_definitions() -> tuple[ConnectorDefinition, ...]:
     return (
         ConnectorDefinition(
@@ -231,6 +237,31 @@ def _builtin_definitions() -> tuple[ConnectorDefinition, ...]:
             runtime_enabled=False,
             mock_only=True,
         ),
+        ConnectorDefinition(
+            key="generic_rest",
+            display_name="Generic REST",
+            direction=ConnectorDirection.OUTBOUND,
+            # Capabilities are derived from the validated operations of each connection.
+            capabilities=frozenset(),
+            config_schema=(
+                ConnectorConfigField("base_url", "Base URL", required=True),
+                ConnectorConfigField("operations", "Operations", value_type="json", required=True),
+                ConnectorConfigField("auth", "Esquema de autenticación", value_type="json"),
+                ConnectorConfigField("timeout_seconds", "Timeout", value_type="number", default=10),
+                ConnectorConfigField("max_request_bytes", "Máximo request", value_type="integer", default=262144),
+                ConnectorConfigField("max_response_bytes", "Máximo response", value_type="integer", default=1048576),
+                ConnectorConfigField("max_lines", "Máximo líneas", value_type="integer", default=500),
+                ConnectorConfigField("private_network_allowlist", "Allowlist privada", value_type="json"),
+                ConnectorConfigField("real_http_enabled", "HTTP real", value_type="boolean", default=False),
+                ConnectorConfigField("mock_scenario", "Fixture mock", default="acme_a"),
+            ),
+            requires_credentials=True,
+            credentials_source="future_secret_provider",
+            maturity=ConnectorMaturity.EXPERIMENTAL,
+            factory_path="app.connectors.registry:build_generic_rest_mock_connector",
+            runtime_enabled=False,
+            mock_only=True,
+        ),
     )
 
 
@@ -294,6 +325,7 @@ class IntegrationRegistry:
         if not isinstance(config, dict):
             raise ValueError("La configuración de integración no es un objeto JSON.")
         config["tenant_id"] = company_id
+        config["connection_id"] = connection.id
         config["secret_provider_ref"] = connection.secret_provider_ref
         return self._factory(definition)(config)
 
@@ -301,6 +333,12 @@ class IntegrationRegistry:
         definition = self.definition(connection.connector_key)
         environment = environment or os.getenv("APP_ENV", "development").strip().lower()
         config = json.loads(connection.config_json or "{}")
+        if not isinstance(config, dict):
+            return frozenset()
+        if connection.connector_key == "generic_rest":
+            from app.connectors.generic_rest_mapping import configured_capability_values
+
+            return frozenset(ConnectorCapability(value) for value in configured_capability_values(config))
         if (
             definition.mock_capabilities
             and bool(config.get("mock_mode", definition.mock_only))
