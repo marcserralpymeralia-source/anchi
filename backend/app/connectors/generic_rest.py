@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import re
+import time
+from uuid import uuid4
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol, Sequence
 from urllib.parse import quote, urlsplit, urlunsplit
@@ -76,6 +78,17 @@ class GenericRESTRequest:
     query: Mapping[str, Any]
     body: Mapping[str, Any] | None
     credential_ref: str | None = None
+    request_id: str = field(default_factory=lambda: uuid4().hex)
+
+
+@dataclass(frozen=True, slots=True)
+class GenericRESTAuditRecord:
+    connection_id: int
+    operation: str
+    request_id: str
+    result_category: str
+    status_code: int | None = None
+    duration_ms: int | None = None
 
 
 class GenericRESTTransport(Protocol):
@@ -98,6 +111,7 @@ class GenericRESTClient:
     def __init__(self, config: GenericRESTConfig, transport: GenericRESTTransport) -> None:
         self.config = config
         self.transport = transport
+        self.audit_records: list[GenericRESTAuditRecord] = []
 
     def _operation(self, operation_name: str) -> Mapping[str, Any]:
         try:
@@ -120,6 +134,10 @@ class GenericRESTClient:
         idempotency_key: str | None = None,
     ) -> GenericRESTRequest:
         operation = self._operation(operation_name)
+        order_context = context.get("order") if isinstance(context, Mapping) else None
+        if isinstance(order_context, Mapping) and isinstance(order_context.get("lines"), Sequence):
+            if len(order_context["lines"]) > self.config.max_lines:
+                raise GenericRESTConfigError("El pedido supera el máximo de líneas permitido.")
         path_params = evaluate_mapping(operation.get("path_params", {}), context, label=f"{operation_name}.path_params")
         path = str(operation.get("path") or "")
         for name, value in path_params.items():
@@ -180,25 +198,42 @@ class GenericRESTClient:
         idempotency_key: str | None = None,
     ) -> GenericRESTResponse:
         request = self.build_request(operation_name, context, idempotency_key=idempotency_key)
-        response = self.transport.execute(request)
-        if not isinstance(response, GenericRESTResponse):
-            raise GenericRESTTransportError("El transport no devolvió una respuesta JSON válida.", error_type="invalid_response")
-        body_bytes = response.body_bytes
-        if body_bytes is None:
-            body_bytes = len(json.dumps(response.body, ensure_ascii=False).encode("utf-8"))
-        if body_bytes > self.config.max_response_bytes:
-            raise GenericRESTTransportError("La respuesta supera el máximo de bytes permitido.", error_type="response_too_large")
-        operation = self._operation(operation_name)
-        success = set(operation.get("success_status_codes", [200]))
-        if response.status_code not in success:
-            retryable = set(operation.get("retryable_status_codes", [429, 500, 502, 503, 504]))
-            raise GenericRESTTransportError(
-                f"Generic REST devolvió HTTP {response.status_code}.",
-                status_code=response.status_code,
-                error_type="retryable_http" if response.status_code in retryable else "permanent_http",
-                remote_commit_unknown=response.status_code in {408, 500, 502, 503, 504},
-            )
-        return response
+        started = time.perf_counter()
+        try:
+            response = self.transport.execute(request)
+            if not isinstance(response, GenericRESTResponse):
+                raise GenericRESTTransportError("El transport no devolvió una respuesta JSON válida.", error_type="invalid_response")
+            body_bytes = response.body_bytes
+            if body_bytes is None:
+                body_bytes = len(json.dumps(response.body, ensure_ascii=False).encode("utf-8"))
+            if body_bytes > self.config.max_response_bytes:
+                raise GenericRESTTransportError("La respuesta supera el máximo de bytes permitido.", error_type="response_too_large")
+            operation = self._operation(operation_name)
+            success = set(operation.get("success_status_codes", [200, 201, 202]))
+            if response.status_code not in success:
+                retryable = set(operation.get("retryable_status_codes", [429, 500, 502, 503, 504]))
+                raise GenericRESTTransportError(
+                    f"Generic REST devolvió HTTP {response.status_code}.",
+                    status_code=response.status_code,
+                    error_type="retryable_http" if response.status_code in retryable else "permanent_http",
+                    remote_commit_unknown=response.status_code in {408, 500, 502, 503, 504},
+                )
+            self.audit_records.append(self._audit(request, "success", response.status_code, started))
+            return response
+        except GenericRESTTransportError as exc:
+            category = "retryable" if exc.status_code == 429 or (exc.status_code is not None and exc.status_code >= 500) or exc.remote_commit_unknown else "failed"
+            self.audit_records.append(self._audit(request, category, exc.status_code, started))
+            raise
+
+    def _audit(self, request: GenericRESTRequest, result_category: str, status_code: int | None, started: float) -> GenericRESTAuditRecord:
+        return GenericRESTAuditRecord(
+            connection_id=self.config.connection_id,
+            operation=request.operation,
+            request_id=request.request_id,
+            result_category=result_category,
+            status_code=status_code,
+            duration_ms=round((time.perf_counter() - started) * 1000),
+        )
 
 
 class MockGenericRESTTransport:
@@ -461,6 +496,16 @@ class GenericRESTConnector(DestinationConnector):
         except GenericRESTTransportError as exc:
             raise self._delivery_error(exc) from exc
 
+    def lookup_product(self, db: Session, *, entity_id: int, company_id: int) -> Mapping[str, Any]:
+        identity = self._identity_for_entity(db, company_id=company_id, entity_type="product", entity_id=entity_id)
+        if identity is None:
+            raise ConnectorDeliveryError("Falta ExternalIdentity Generic REST del producto.", error_type="permanent_validation_error")
+        context = {"order": {"lines": [], "customer": {}}, "line": {"product": {"external_id": identity.external_id}}}
+        try:
+            return self.client.execute("products.read", context).body
+        except GenericRESTTransportError as exc:
+            raise self._delivery_error(exc) from exc
+
 
 def _config_from_mapping(config: Mapping[str, Any]) -> GenericRESTConfig:
     errors = validate_generic_rest_config(config)
@@ -497,6 +542,7 @@ __all__ = [
     "GenericRESTConfig",
     "GenericRESTConnector",
     "GenericRESTRequest",
+    "GenericRESTAuditRecord",
     "GenericRESTResponse",
     "GenericRESTTransportError",
     "HTTPGenericRESTTransport",

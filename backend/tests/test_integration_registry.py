@@ -56,7 +56,7 @@ class IntegrationRegistryTests(unittest.TestCase):
         registry = IntegrationRegistry()
         self.assertEqual(
             {item.key for item in registry.list_definitions(environment="test")},
-            {"email", "fake_erp", "fake_inbound", "odoo", "sage_200_es", "whatsapp_catalog"},
+            {"email", "fake_erp", "fake_inbound", "generic_rest", "odoo", "sage_200_es", "whatsapp_catalog"},
         )
         self.assertNotIn("fake_erp", {item.key for item in registry.list_definitions(environment="production")})
         self.assertIsNone(registry._factories.get("fake_erp"))
