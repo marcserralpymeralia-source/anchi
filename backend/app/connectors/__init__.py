@@ -40,6 +40,7 @@ __all__ = [
     "StructuredOrderItem",
     "WhatsAppCatalogInboundConnector",
     "MockSage200ESTransport",
+    "HTTPSage200ESTransport",
     "Sage200ESClient",
     "Sage200ESConfig",
     "Sage200ESConnector",
@@ -49,6 +50,7 @@ __all__ = [
     "Sage200ESSalesOrderMapper",
     "Sage200ESTransportError",
     "MockOdooJSON2Transport",
+    "HTTPOdooJSON2Transport",
     "OdooClient",
     "OdooConnector",
     "OdooExternalIdentity",
@@ -67,6 +69,12 @@ __all__ = [
     "GenericRESTTransportError",
     "HTTPGenericRESTTransport",
     "MockGenericRESTTransport",
+    "DNSResolver",
+    "EgressPolicy",
+    "EnvironmentSecretProvider",
+    "ExternalConnectorErrorCategory",
+    "SecureHTTPTransport",
+    "SecureHTTPTransportConfig",
     "ConnectionRuntimeRegistry",
     "ConnectorConfigField",
     "ConnectorDefinition",
@@ -87,6 +95,7 @@ def __getattr__(name: str):
         return WhatsAppCatalogInboundConnector
     sage_names = {
         "MockSage200ESTransport",
+        "HTTPSage200ESTransport",
         "Sage200ESClient",
         "Sage200ESConfig",
         "Sage200ESConnector",
@@ -102,6 +111,7 @@ def __getattr__(name: str):
         return getattr(sage200es, name)
     odoo_names = {
         "MockOdooJSON2Transport",
+        "HTTPOdooJSON2Transport",
         "OdooClient",
         "OdooConnector",
         "OdooExternalIdentity",
@@ -131,4 +141,16 @@ def __getattr__(name: str):
         from app.connectors import generic_rest
 
         return getattr(generic_rest, name)
+    security_names = {
+        "DNSResolver",
+        "EgressPolicy",
+        "EnvironmentSecretProvider",
+        "ExternalConnectorErrorCategory",
+        "SecureHTTPTransport",
+        "SecureHTTPTransportConfig",
+    }
+    if name in security_names:
+        from app.connectors import security
+
+        return getattr(security, name)
     raise AttributeError(name)

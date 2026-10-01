@@ -13,6 +13,8 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+from types import SimpleNamespace
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -26,6 +28,8 @@ from app.connectors.contracts import (
     DestinationOrderResult,
 )
 from app.db.models import ExternalIdentity, Order
+from app.connectors.security import SecureHTTPTransport, SecureHTTPTransportError
+from app.core.observability import current_context
 
 
 SAGE200ES_EXTERNAL_SYSTEM = "sage_200_es"
@@ -174,6 +178,66 @@ class Sage200ESTransport(Protocol):
     ) -> Mapping[str, Any]: ...
 
     def find_sales_order_by_idempotency_key(self, *, site: str, idempotency_key: str) -> Mapping[str, Any] | None: ...
+
+
+class HTTPSage200ESTransport:
+    """Future Sage adapter; all network access remains behind SecureHTTPTransport."""
+
+    def __init__(self, secure_transport: SecureHTTPTransport | None = None) -> None:
+        self.secure_transport = secure_transport
+
+    def _execute(self, operation: str, path: str, body: Mapping[str, Any] | None = None) -> Mapping[str, Any]:
+        if self.secure_transport is None:
+            raise Sage200ESTransportError("HTTP real de Sage 200 ES está bloqueado durante el PoC.", error_type="real_http_blocked")
+        bridge = SimpleNamespace(
+            operation=operation,
+            method="POST",
+            url=f"{self.secure_transport.config.base_url.rstrip('/')}/{path.lstrip('/')}",
+            path=f"/{path.lstrip('/')}",
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            query={},
+            body=dict(body or {}),
+            request_id=uuid4().hex,
+            correlation_id=current_context().get("correlation_id"),
+        )
+        try:
+            return dict(self.secure_transport.execute(bridge).body)
+        except SecureHTTPTransportError as exc:
+            raise Sage200ESTransportError(str(exc), status_code=exc.status_code, error_type=exc.category.value) from exc
+
+    def read_sites(self) -> Sequence[Mapping[str, Any]]:
+        return self._execute("sage.sites.read", "/sites").get("items", [])
+
+    def read_rates(self, *, site: str) -> Sequence[Mapping[str, Any]]:
+        return self._execute("sage.rates.read", "/rates", {"site": site}).get("items", [])
+
+    def read_price_offers(self, *, site: str) -> Sequence[Mapping[str, Any]]:
+        return self._execute("sage.price_offers.read", "/price-offers", {"site": site}).get("items", [])
+
+    def read_customer(self, *, site: str, internal_id: str) -> Mapping[str, Any] | None:
+        return self._execute("sage.customer.read", "/customers/read", {"site": site, "id": internal_id})
+
+    def read_product(self, *, site: str, internal_id: str) -> Mapping[str, Any] | None:
+        return self._execute("sage.product.read", "/products/read", {"site": site, "id": internal_id})
+
+    def resolve_price(self, *, site: str, customer_internal_id: str, product_internal_id: str, source_price: float | None, currency: str | None) -> Sage200ESPriceResolution:
+        payload = self._execute(
+            "sage.price.resolve",
+            "/prices/resolve",
+            {"site": site, "customer_id": customer_internal_id, "product_id": product_internal_id, "source_price": source_price, "currency": currency},
+        )
+        return Sage200ESPriceResolution(
+            source_price=source_price,
+            authoritative_price=float(payload["authoritative_price"]) if payload.get("authoritative_price") is not None else None,
+            currency=str(payload.get("currency") or currency or "").strip() or None,
+            source=str(payload.get("source") or "source_price"),
+        )
+
+    def create_sales_order(self, *, site: str, idempotency_key: str, payload: Mapping[str, Any]) -> Mapping[str, Any]:
+        return self._execute("sage.sales_order.create", "/sales-orders", {"site": site, "idempotency_key": idempotency_key, "payload": dict(payload)})
+
+    def find_sales_order_by_idempotency_key(self, *, site: str, idempotency_key: str) -> Mapping[str, Any] | None:
+        return self._execute("sage.sales_order.find", "/sales-orders/find", {"site": site, "idempotency_key": idempotency_key})
 
 
 class Sage200ESClient:

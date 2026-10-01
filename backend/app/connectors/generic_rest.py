@@ -39,6 +39,8 @@ from app.connectors.generic_rest_mapping import (
     identity_namespace,
     validate_generic_rest_config,
 )
+from app.connectors.security import SecureHTTPTransport, SecureHTTPTransportError
+from app.core.observability import current_context
 from app.db.models import ExternalIdentity, Order
 
 
@@ -79,6 +81,7 @@ class GenericRESTRequest:
     body: Mapping[str, Any] | None
     credential_ref: str | None = None
     request_id: str = field(default_factory=lambda: uuid4().hex)
+    correlation_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,12 +99,31 @@ class GenericRESTTransport(Protocol):
 
 
 class HTTPGenericRESTTransport:
-    """Reserved future transport; never opens a socket in BLOQUE 7."""
+    """Future adapter over the shared transport boundary.
+
+    The registry still selects the mock transport.  This adapter is available
+    only for an explicit future runtime factory and cannot open a socket unless
+    a fully gated ``SecureHTTPTransport`` is injected.
+    """
+
+    def __init__(self, secure_transport: SecureHTTPTransport | None = None) -> None:
+        self.secure_transport = secure_transport
 
     def execute(self, request: GenericRESTRequest) -> GenericRESTResponse:
-        raise GenericRESTTransportError(
-            "HTTP real de Generic REST está bloqueado durante el PoC.",
-            error_type="real_http_blocked",
+        if self.secure_transport is None:
+            raise GenericRESTTransportError("HTTP real de Generic REST está bloqueado durante el PoC.", error_type="real_http_blocked")
+        try:
+            response = self.secure_transport.execute(request)
+        except SecureHTTPTransportError as exc:
+            raise GenericRESTTransportError(
+                str(exc),
+                status_code=exc.status_code,
+                error_type=exc.category.value,
+            ) from exc
+        return GenericRESTResponse(
+            status_code=response.status_code,
+            body=response.body,
+            body_bytes=response.body_bytes,
         )
 
 
@@ -175,6 +197,7 @@ class GenericRESTClient:
             query=query,
             body=body,
             credential_ref=self.config.credential_ref,
+            correlation_id=str(context.get("correlation_id") or current_context().get("correlation_id") or "") or None,
         )
 
     @staticmethod

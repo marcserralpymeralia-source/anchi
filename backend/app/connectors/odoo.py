@@ -12,6 +12,8 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+from types import SimpleNamespace
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -25,6 +27,8 @@ from app.connectors.contracts import (
     DestinationOrderResult,
 )
 from app.connectors.odoo_fixtures import ODOO_MOCK_CUSTOMERS, ODOO_MOCK_PRICES, ODOO_MOCK_PRODUCTS
+from app.connectors.security import SecureHTTPTransport, SecureHTTPTransportError
+from app.core.observability import current_context
 from app.db.models import ExternalIdentity, Order
 
 
@@ -107,6 +111,33 @@ class OdooTransport(Protocol):
     """Future HTTP adapter seam; it must not retry or own reliability."""
 
     def execute(self, request: OdooJSON2Request) -> Any: ...
+
+
+class HTTPOdooJSON2Transport:
+    """Future Odoo adapter; only an injected secure boundary may perform HTTP."""
+
+    def __init__(self, secure_transport: SecureHTTPTransport | None = None) -> None:
+        self.secure_transport = secure_transport
+
+    def execute(self, request: OdooJSON2Request) -> Mapping[str, Any] | Sequence[Mapping[str, Any]]:
+        if self.secure_transport is None:
+            raise OdooTransportError("HTTP real de Odoo está bloqueado durante el PoC.", error_type="real_http_blocked")
+        bridge = SimpleNamespace(
+            operation=f"odoo.{request.model}.{request.method}",
+            method="POST",
+            url=f"{self.secure_transport.config.base_url.rstrip('/')}{request.path}",
+            path=request.path,
+            headers=dict(request.headers),
+            query={},
+            body=dict(request.body),
+            request_id=uuid4().hex,
+            correlation_id=current_context().get("correlation_id"),
+        )
+        try:
+            response = self.secure_transport.execute(bridge)
+        except SecureHTTPTransportError as exc:
+            raise OdooTransportError(str(exc), status_code=exc.status_code, error_type=exc.category.value) from exc
+        return response.body
 
 
 class OdooClient:
