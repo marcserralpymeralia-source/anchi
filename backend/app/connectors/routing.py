@@ -6,7 +6,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.connectors.contracts import ConnectorRegistry, DestinationOrderResult
-from app.db.models import Order, OrderRoute
+from app.connectors.registry import IntegrationState
+from app.db.models import IntegrationConnection, Order, OrderRoute
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +45,27 @@ def route_order(db: Session, order: Order, registry: ConnectorRegistry) -> Routi
         return RoutingResult(order=order, errors=("No hay destino configurado para pedidos.",))
 
     order.destination_connector_key = route.destination_connector_key
-    connector = registry.get(route.destination_connector_key)
+    order.destination_connection_id = route.destination_connection_id
+    connector = None
+    if route.destination_connection_id is not None:
+        connection = db.scalar(
+            select(IntegrationConnection).where(
+                IntegrationConnection.id == route.destination_connection_id,
+                IntegrationConnection.company_id == order.company_id,
+            )
+        )
+        if connection is None:
+            order.export_status = "failed"
+            order.export_last_error = "La conexión de destino no existe para este tenant."
+            return RoutingResult(order=order, errors=(order.export_last_error,))
+        if connection.state != IntegrationState.ACTIVE.value:
+            order.export_status = "failed"
+            order.export_last_error = "La conexión de destino no está activa."
+            return RoutingResult(order=order, errors=(order.export_last_error,))
+        get_for_connection = getattr(registry, "get_for_connection", None)
+        connector = get_for_connection(route.destination_connection_id, route.destination_connector_key) if get_for_connection else None
+    if connector is None:
+        connector = registry.get(route.destination_connector_key)
     if connector is None:
         order.export_status = "failed"
         order.export_last_error = f"Connector no registrado: {route.destination_connector_key}"

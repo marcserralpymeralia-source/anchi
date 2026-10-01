@@ -8,6 +8,7 @@ from app.channels.routes import entries_router, router as channels_router
 from app.customers.routes import router as customers_router
 from app.databases.routes import router as databases_router
 from app.imports.routes import router as imports_router
+from app.integrations.routes import router as integrations_router
 from app.jobs.routes import router as jobs_router
 from app.legal.routes import router as legal_router
 from app.logs.routes import router as logs_router
@@ -58,6 +59,7 @@ def get_registered_routers() -> list:
         customers_router,
         products_router,
         imports_router,
+        integrations_router,
         jobs_router,
         legal_router,
         settings_router,

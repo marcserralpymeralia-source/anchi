@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% set title = "Integraciones" %}
+
+{% block content %}
+<main class="page-shell settings-page">
+  <div class="page-header">
+    <div>
+      <p class="eyebrow">Configuración</p>
+      <h1>Integraciones</h1>
+      <p class="muted">Conexiones del tenant, destinos de pedidos y fuentes de datos maestros.</p>
+    </div>
+    <a class="button secondary compact-button" href="/settings">Volver a configuración</a>
+  </div>
+
+  <section class="card" aria-labelledby="integration-connections-title">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">Tenant actual</p>
+        <h2 id="integration-connections-title">Conexiones</h2>
+      </div>
+      <span class="muted">Las credenciales siguen en la configuración legacy o en un futuro SecretProvider.</span>
+    </div>
+    <div id="integration-feedback" class="notice hidden" role="status"></div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Nombre</th><th>Connector</th><th>Estado</th><th>Health</th><th>Capabilities</th><th></th></tr></thead>
+        <tbody>
+        {% for connection in connections %}
+          <tr>
+            <td><strong>{{ connection.name }}</strong><br><span class="muted">#{{ connection.id }}</span></td>
+            <td>{{ connection.display_name }}</td>
+            <td><span class="status-pill">{{ connection.state }}</span></td>
+            <td>{{ connection.health.status }}{% if connection.health.message %}<br><span class="muted">{{ connection.health.message }}</span>{% endif %}</td>
+            <td>{{ connection.capabilities|join(", ") if connection.capabilities else "Sin capabilities runtime verificadas" }}</td>
+            <td class="table-actions">
+              {% if can_edit and connection.state != "ACTIVE" %}<button type="button" class="button compact-button" data-integration-action="/integrations/connections/{{ connection.id }}/enable">Activar</button>{% endif %}
+              {% if can_edit and connection.state == "ACTIVE" %}<button type="button" class="button secondary compact-button" data-integration-action="/integrations/connections/{{ connection.id }}/disable">Desactivar</button>{% endif %}
+              <button type="button" class="button secondary compact-button" data-integration-action="/integrations/connections/{{ connection.id }}/health">Test</button>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="6" class="muted">Todavía no hay conexiones configuradas.</td></tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {% if can_edit %}
+  <section class="card" aria-labelledby="add-integration-title">
+    <div class="section-heading"><div><p class="eyebrow">Nueva conexión</p><h2 id="add-integration-title">Añadir integración</h2></div></div>
+    <form id="integration-create-form" class="form-grid">
+      <label>Connector<select name="connector_key" required>{% for definition in definitions %}<option value="{{ definition.key }}">{{ definition.display_name }}{% if definition.maturity == "experimental" %} · experimental{% endif %}</option>{% endfor %}</select></label>
+      <label>Nombre<input name="name" required placeholder="Sage principal"></label>
+      <label class="span-2">Configuración no secreta (JSON)<textarea name="config" rows="4" placeholder='{"site":"SITE-DEMO","real_http_enabled":false}'>{}</textarea></label>
+      <div class="span-2"><button class="button" type="submit">Crear conexión</button><span class="muted">WhatsApp y email reutilizan su configuración tenant-scoped existente.</span></div>
+    </form>
+  </section>
+  {% endif %}
+
+  <section class="card" aria-labelledby="routing-title">
+    <div class="section-heading"><div><p class="eyebrow">Routing</p><h2 id="routing-title">Destino de pedidos</h2></div></div>
+    <p class="muted">La edición avanzada se expone por la API interna <code>/integrations/routes/order</code>; solo se aceptan conexiones activas con <code>orders.create</code>.</p>
+    {% if route.destination_connection_id %}<p>Destino actual: conexión #{{ route.destination_connection_id }}{% if route.source_connection_id %} · fuente #{{ route.source_connection_id }}{% endif %}</p>{% else %}<p class="muted">No hay destino por conexión configurado. Las rutas legacy por connector siguen siendo compatibles.</p>{% endif %}
+  </section>
+
+  <section class="card" aria-labelledby="master-data-title">
+    <div class="section-heading"><div><p class="eyebrow">Master data</p><h2 id="master-data-title">Fuentes configuradas</h2></div></div>
+    <div class="form-grid">
+      {% for role_key, role_label in role_labels.items() %}
+        {% set selected = (roles | selectattr("role_key", "equalto", role_key) | list | first) %}
+        <div><span class="muted">{{ role_label }}</span><br><strong>{% if selected %}Conexión #{{ selected.connection_id }}{% else %}No configurado{% endif %}</strong></div>
+      {% endfor %}
+    </div>
+    <p class="muted">La edición se realiza mediante <code>/integrations/roles/{role_key}</code>; el backend valida la capability de cada fuente.</p>
+  </section>
+</main>
+<script>
+(() => {
+  const feedback = document.getElementById("integration-feedback");
+  const show = (message, ok = false) => { feedback.textContent = message; feedback.classList.remove("hidden"); feedback.classList.toggle("success", ok); };
+  const call = async (url, options = {}) => {
+    const response = await fetch(url, { credentials: "same-origin", ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok === false) throw new Error(payload.message || payload.detail || "No se pudo completar la operación.");
+    return payload;
+  };
+  document.querySelectorAll("[data-integration-action]").forEach((button) => button.addEventListener("click", async () => {
+    try { await call(button.dataset.integrationAction, { method: "POST", body: "{}" }); window.location.reload(); }
+    catch (error) { show(error.message); }
+  }));
+  const form = document.getElementById("integration-create-form");
+  if (form) form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const data = new FormData(form);
+    let config;
+    try { config = JSON.parse(data.get("config") || "{}"); } catch { show("La configuración debe ser JSON válido."); return; }
+    try { await call("/integrations/connections", { method: "POST", body: JSON.stringify({ connector_key: data.get("connector_key"), name: data.get("name"), config }) }); window.location.reload(); }
+    catch (error) { show(error.message); }
+  });
+})();
+</script>
+{% endblock %}

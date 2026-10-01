@@ -13,9 +13,10 @@ from app.connectors.contracts import (
     DestinationOrderResult,
 )
 from app.connectors.fake import FakeERPConnector
+from app.connectors.registry import IntegrationState, build_runtime_registry
 from app.connectors.routing import resolve_order_route
 from app.core.config import get_settings
-from app.db.models import BackgroundJob, Order, OrderDelivery, OrderDeliveryAttempt
+from app.db.models import BackgroundJob, IntegrationConnection, Order, OrderDelivery, OrderDeliveryAttempt
 from app.jobs.service import enqueue_job, retry_job
 from app.logs.service import log_flow_event
 
@@ -46,8 +47,9 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def delivery_idempotency_key(order: Order, destination_connector_key: str) -> str:
-    return f"{order.company_id}/order/{order.id}/{destination_connector_key}"
+def delivery_idempotency_key(order: Order, destination_connector_key: str, destination_connection_id: int | None = None) -> str:
+    suffix = f"/{destination_connection_id}" if destination_connection_id is not None else ""
+    return f"{order.company_id}/order/{order.id}/{destination_connector_key}{suffix}"
 
 
 def delivery_job_dedupe_key(idempotency_key: str) -> str:
@@ -77,7 +79,19 @@ def enqueue_order_delivery(
         return None
 
     destination_key = route.destination_connector_key
-    idempotency_key = delivery_idempotency_key(order, destination_key)
+    destination_connection_id = route.destination_connection_id
+    if destination_connection_id is not None:
+        connection = db.scalar(
+            select(IntegrationConnection).where(
+                IntegrationConnection.id == destination_connection_id,
+                IntegrationConnection.company_id == order.company_id,
+            )
+        )
+        if connection is None or connection.state != IntegrationState.ACTIVE.value:
+            order.export_status = "not_configured"
+            order.export_last_error = "La conexión de destino no está activa para este tenant."
+            return None
+    idempotency_key = delivery_idempotency_key(order, destination_key, destination_connection_id)
     existing = db.scalar(
         select(OrderDelivery).where(
             OrderDelivery.company_id == order.company_id,
@@ -89,6 +103,7 @@ def enqueue_order_delivery(
 
     now = _now()
     order.destination_connector_key = destination_key
+    order.destination_connection_id = destination_connection_id
     order.export_status = "ready_to_export"
     order.export_last_error = None
     delivery = OrderDelivery(
@@ -96,6 +111,7 @@ def enqueue_order_delivery(
         order_id=order.id,
         order_type=order_type,
         destination_connector_key=destination_key,
+        destination_connection_id=destination_connection_id,
         idempotency_key=idempotency_key,
         status="queued",
         max_attempts=max(1, int(max_attempts)),
@@ -289,6 +305,27 @@ def process_order_delivery(
         delivery.updated_at = _now()
         raise DeliveryProcessingError(str(failure), error_type=failure.error_type, retryable=False)
 
+    if delivery.destination_connection_id is not None:
+        connection = db.scalar(
+            select(IntegrationConnection).where(
+                IntegrationConnection.id == delivery.destination_connection_id,
+                IntegrationConnection.company_id == delivery.company_id,
+            )
+        )
+        if connection is None or connection.state != IntegrationState.ACTIVE.value:
+            message = "La conexión de destino está deshabilitada o no pertenece al tenant."
+            delivery.status = "failed"
+            delivery.last_error = message
+            delivery.last_error_type = "integration_disabled"
+            delivery.updated_at = _now()
+            order.export_status = "failed"
+            order.export_last_error = message
+            raise DeliveryProcessingError(
+                message,
+                error_type="integration_disabled",
+                retryable=False,
+            )
+
     if delivery.status == "exported" and delivery.destination_external_order_id:
         return DeliveryExecutionResult(
             delivery=delivery,
@@ -300,8 +337,20 @@ def process_order_delivery(
             ),
         )
 
-    connector_registry = registry or default_destination_registry()
-    connector = connector_registry.get(delivery.destination_connector_key)
+    if registry is None and delivery.destination_connection_id is not None:
+        connector_registry = build_runtime_registry(
+            db,
+            company_id=delivery.company_id,
+            connection_ids={delivery.destination_connection_id},
+        )
+    else:
+        connector_registry = registry or default_destination_registry()
+    get_for_connection = getattr(connector_registry, "get_for_connection", None)
+    connector = (
+        get_for_connection(delivery.destination_connection_id, delivery.destination_connector_key)
+        if get_for_connection and delivery.destination_connection_id is not None
+        else connector_registry.get(delivery.destination_connector_key)
+    )
     attempt = _start_attempt(db, delivery)
     order.export_attempt_count = int(order.export_attempt_count or 0) + 1
     order.export_status = "exporting"

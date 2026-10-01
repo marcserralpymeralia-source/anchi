@@ -143,6 +143,16 @@
   </section>
 
   <section class="settings-modules">
+    <article class="module-card panel">
+      <div class="module-card-head">
+        <div><h3>Integraciones</h3><span class="module-state optional">Opcional</span></div>
+        <a class="button secondary compact-button" href="/settings/integrations">Abrir</a>
+      </div>
+      <p>Conexiones tenant-scoped, routing por instancia y fuentes de clientes, productos, precios y stock.</p>
+    </article>
+  </section>
+
+  <section class="settings-modules">
     {% for module in dashboard.modules %}
       <article id="{{ module.key }}" class="module-card panel" data-search="{{ module.label }} {{ module.summary }} {{ module.state }}">
         <div class="module-card-head">
