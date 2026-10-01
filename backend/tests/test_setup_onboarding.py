@@ -43,11 +43,12 @@ class SetupFixture:
         root = Path(self.tempdir.name)
         self.master_url = f"sqlite:///{(root / 'master.db').as_posix()}"
         self.tenant_url = f"sqlite:///{(root / 'tenant.db').as_posix()}"
-        self.previous_env = {key: os.environ.get(key) for key in ["APP_ENV", "MASTER_DATABASE_URL", "TENANT_DATABASE_URL", "DATABASE_URL", "DEFAULT_ADMIN_EMAIL", "DEFAULT_ADMIN_PASSWORD"]}
+        self.previous_env = {key: os.environ.get(key) for key in ["APP_ENV", "MASTER_DATABASE_URL", "TENANT_DATABASE_URL", "DATABASE_URL", "TEMP_STORAGE_DIR", "DEFAULT_ADMIN_EMAIL", "DEFAULT_ADMIN_PASSWORD"]}
         os.environ["APP_ENV"] = "test"
         os.environ["MASTER_DATABASE_URL"] = self.master_url
         os.environ["TENANT_DATABASE_URL"] = self.tenant_url
         os.environ["DATABASE_URL"] = self.tenant_url
+        os.environ["TEMP_STORAGE_DIR"] = str(root / "storage")
         os.environ["DEFAULT_ADMIN_EMAIL"] = "admin@setup.local"
         os.environ["DEFAULT_ADMIN_PASSWORD"] = "setup-password"
         get_settings.cache_clear()

@@ -16,7 +16,7 @@ from app.connectors.fake import FakeERPConnector
 from app.connectors.registry import IntegrationState, build_runtime_registry
 from app.connectors.routing import resolve_order_route
 from app.core.config import get_settings
-from app.db.models import BackgroundJob, IntegrationConnection, Order, OrderDelivery, OrderDeliveryAttempt
+from app.db.models import BackgroundJob, Company, IntegrationConnection, Order, OrderDelivery, OrderDeliveryAttempt
 from app.integrations.audit import append_integration_audit
 from app.jobs.service import enqueue_job, retry_job
 from app.logs.service import log_flow_event
@@ -72,6 +72,12 @@ def enqueue_order_delivery(
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
 ) -> OrderDelivery | None:
     """Create the outbox row and its generic worker job in one DB commit."""
+
+    tenant_company = db.get(Company, order.company_id)
+    if tenant_company is not None and not tenant_company.active:
+        order.export_status = "paused"
+        order.export_last_error = "El tenant está pausado u offboarded."
+        return None
 
     route = resolve_order_route(db, company_id=order.company_id, order_type=order_type)
     if route is None:

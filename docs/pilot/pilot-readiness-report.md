@@ -2,14 +2,14 @@
 
 Fecha: 2026-10-01
 
-Versión auditada: commit Block 9 `3bac724` más cambios y evidencia de Block 11
-Resultado: **NO GO condicionado**
+Versión auditada: baseline Block 10/11 `3df6d8b` más validación Block 12.1 sin commit
+Resultado: **NO GO**
 
 ## Resumen ejecutivo
 
 El camino más seguro para un primer piloto es WhatsApp Catalog estructurado → un único destino REST/ERP, con revisión humana para excepciones. La lógica de deduplicación, aislamiento de tenant, outbox, backoff, reconciliación y roles tiene evidencia automatizada positiva.
 
-No se recomienda abrir todavía un piloto con adjuntos, email autodiscovery/backfill, audio/transcripción o múltiples conectores. Block 11 añade readiness de storage y recuperación manual de entregas, pero siguen sin demostrarse storage persistente tras reinicio, backup/restore, cron/alertas y offboarding ejecutable.
+No se recomienda abrir todavía un piloto con adjuntos, email autodiscovery/backfill, audio/transcripción o múltiples conectores. Block 12.1 añade una rehearsal PostgreSQL sintética, backup/restore master+tenant, procesos separados web/worker, heartbeats, scheduler, readiness y offboarding; siguen abiertos storage durable del proveedor, cron/alertas externas, browser final y aprobaciones humanas de RBAC/retención. La evidencia detallada está en [block-12-1-final-runtime-validation.md](./block-12-1-final-runtime-validation.md).
 
 ## Evidencia ejecutada
 
@@ -23,7 +23,7 @@ No se recomienda abrir todavía un piloto con adjuntos, email autodiscovery/back
 | Storage + reliability + observability focalizados | 21/21 y 9/9 OK |
 | Fresh deployment browser smoke | Login, pedidos, workbench y entregas fallidas visibles en servidor sintético |
 | Smoke sintético de volumen | 100 pedidos → 100 deliveries → 100 jobs |
-| Full suite | 673 tests; 10 failures, 2 errors, 1 skipped |
+| Suite Block 12.1 | Suite crítica 207 tests, 0 failures, 0 errors; full suite 681 tests, 4 fallos y 1 skip, todos los fallos clasificados fuera de Catalog-only |
 
 El full suite y cada fallo están clasificados en [pilot-gap-register.md](./pilot-gap-register.md). Los cuatro fallos de multitenancy se reprodujeron como 4/4 OK al ejecutar el módulo aislado; no deben ocultarse, pero apuntan a contaminación de estado/orden de suite.
 
@@ -52,14 +52,14 @@ Excluido:
 |---|---|---|
 | Funcionalidad Catalog | Verde condicionado | 10/10; deduplicación, mappings, review y outbox cubiertos |
 | Entrega | Verde condicionado | 13/13; retries, reconciliación, tenant scope y concurrencia cubiertos |
-| Multitenancy/RBAC | Ámbar | tests aislados OK; falta cerrar determinismo de full suite y matriz firmada |
-| Storage | Ámbar condicionado | readiness real implementado; persistencia final y reinicio aún no demostrados |
-| DB/migraciones | Ámbar | 24/24 en copias/SQLite; falta ejecución real y restore de PostgreSQL |
-| Workers/cron | Ámbar | lógica presente; faltan alerta, proveedor y prueba operativa |
+| Multitenancy/RBAC | Ámbar | determinismo offline corregido; falta matriz firmada y aceptación final |
+| Storage | Ámbar condicionado | supervivencia entre procesos/readiness OK; persistencia final y Blob/volumen aún no demostrados |
+| DB/migraciones | Ámbar | fresh install, upgrade/no-op y backup/restore PostgreSQL sintético OK; falta proveedor final/política gestionada |
+| Workers/cron | Ámbar | procesos separados, heartbeat y auth cron OK sintético; faltan proveedor y alertas |
 | Email | Rojo para inclusión | fallos de backfill/autoconfig; excluir del primer contrato |
 | WhatsApp audio | Rojo para inclusión | descarga/transcripción no pasa; excluir |
 | Observabilidad | Ámbar | IDs/audit útiles; métricas no durables y no hay timeline unificado |
-| PII/offboarding | Rojo | no hay política ejecutable verificada |
+| PII/offboarding | Ámbar/rojo | offboarding técnico y retención no destructiva OK; falta aprobación externa de PII/retención |
 | UI/browser | Ámbar | smoke local completado; falta repetir en runtime y navegador finales |
 
 ## Gates de go-live
@@ -89,4 +89,4 @@ Email, audio, autodiscovery y adjuntos pueden permanecer como P2 si el contrato 
 
 ## Decisión
 
-**No abrir tráfico real todavía.** Re-evaluar cuando los gates P1 estén cerrados y exista una prueba de extremo a extremo en el entorno que se va a entregar. Si se decide un piloto aún más reducido, debe ser Catalog-only, sin adjuntos/audio/email, con datos sintéticos y un único destino mock/REST controlado.
+**NO GO.** No abrir tráfico real. Re-evaluar cuando los gates P1 estén cerrados y exista una prueba de extremo a extremo en el entorno que se va a entregar. Si se decide un piloto aún más reducido, debe ser Catalog-only, sin adjuntos/audio/email, con datos sintéticos y un único destino mock/REST controlado.

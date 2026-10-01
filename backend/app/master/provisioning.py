@@ -452,6 +452,8 @@ def provision_demo_external_tenant(
     tenant_database_url: str,
     company_name: str = "Anchi Demo",
     company_slug: str = "anchi-demo",
+    admin_email: str | None = None,
+    admin_password: str | None = None,
 ) -> dict[str, str]:
     result = provision_external_tenant(
         master_db,
@@ -459,4 +461,18 @@ def provision_demo_external_tenant(
         company_name=company_name,
         company_slug=company_slug,
     )
+    if admin_email and admin_password:
+        company = master_db.scalar(select(MasterCompany).where(MasterCompany.slug == company_slug))
+        tenant = master_db.scalar(select(MasterTenantDatabase).where(MasterTenantDatabase.company_id == company.id)) if company else None
+        if company is None or tenant is None:
+            raise RuntimeError("No se pudo resolver el tenant externo recién provisionado")
+        admin_user = _ensure_master_user(
+            master_db,
+            admin_email.strip().lower(),
+            admin_email.split("@", 1)[0].strip() or "Administrador",
+            admin_password,
+        )
+        _ensure_membership(master_db, admin_user, company)
+        synchronize_tenant_actors(master_db, tenant)
+        master_db.commit()
     return result

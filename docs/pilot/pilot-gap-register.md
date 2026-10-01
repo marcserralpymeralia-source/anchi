@@ -2,7 +2,7 @@
 
 Fecha de auditoría: 2026-10-01
 
-Ámbito: Block 10, ANCHI-GEMAVI, worktree `modular-order-hub`
+Ámbito: Block 12, ANCHI-GEMAVI, worktree `modular-order-hub`
 Decisión de alcance: auditoría y preparación operativa. Este documento no autoriza una remediation spree.
 
 ## Cómo leer el registro
@@ -51,9 +51,9 @@ Comando ejecutado previamente en entorno local:
 rtk env PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=backend python3 -m unittest discover -s backend/tests -p 'test*.py'
 ```
 
-Resultado: `Ran 673 tests in 1055.545s`, `FAILED (failures=10, errors=2, skipped=1)`.
+Resultado histórico Block 11: `Ran 673 tests`, `FAILED (failures=10, errors=2, skipped=1)`. Block 12 repitió la suite tras aislar storage/settings y corregir cron: `Ran 681 tests in 248.800s`, `FAILED (failures=4, skipped=1)`. Los 4 fallos son autodiscovery de email (3) y audio/transcripción (1), fuera del contrato Catalog-only.
 
-### Resultados individuales
+### Resultados individuales del baseline Block 11 (histórico; sustituido por el addendum Block 12)
 
 | Resultado | Test exacto | Reproducción aislada | Clasificación |
 |---|---|---|---|
@@ -78,6 +78,35 @@ Resultado: `Ran 673 tests in 1055.545s`, `FAILED (failures=10, errors=2, skipped
 | Email autoconfig | 3 fallos reproducibles aislados | Gap de discovery/probes y dependencia de red | Configuración manual o exclusión explícita |
 | WhatsApp audio | 1 fallo reproducible aislado | Gap de media/transcripción | Fuera del primer piloto |
 
+## Addendum Block 12 — clasificación vigente
+
+| Estado vigente | Gaps | Evidencia |
+|---|---|---|
+| RESUELTO offline | G-19, G-21, G-23 | storage temporal por test, reset de `APP_ENV`/settings y previews resueltos; la suite ya no muestra esos fallos |
+| RESUELTO offline, pendiente runtime | G-01, G-02, G-08, G-10, G-11, G-12, G-16, G-17 | `test_pilot_closure.py` 5/5, `test_mail_inbox_routes.py` + cierre 13/13, runbook y endpoint de offboarding |
+| ABIERTO bloqueante | G-01/G-02 runtime persistente, G-08 staging, G-09 migración real, G-10 PostgreSQL/política gestionada, G-11/G-12 proveedor/alertas, G-13 drift, G-16 aprobación PII, G-17 matriz firmada, G-18 browser final | No ejecutado en el entorno final |
+| FUERA DEL contrato Catalog-only | G-04/G-05/G-06/G-20/G-22/G-24 | Email/autodiscovery/backfill y audio no se incluyen; no se presentan como GO |
+
+Los 4 fallos observados en la suite completa (3 de autodiscovery y 1 de audio) permanecen clasificados como features fuera del contrato, no ocultos ni convertidos en `skip`. El fallo de `/cron/jobs` autorizado fue una regresión de telemetría y queda corregido; la suite completa post-fix ya no lo reproduce.
+
 ## Aprobación mínima
 
-No hay P0 demostrado en el código auditado, pero el piloto se mantiene en **NO GO** hasta cerrar o aceptar formalmente como exclusión los P1 G-01, G-03, G-07, G-08, G-09, G-10, G-11, G-12, G-13, G-16, G-17 y G-18.
+No hay P0 demostrado en el código auditado, pero el piloto se mantiene en **NO GO** hasta cerrar o aceptar formalmente como exclusión los P1 G-01, G-02, G-08, G-09, G-10, G-11, G-12, G-13, G-16, G-17 y G-18. G-07 continúa sujeto al procedimiento explícito de confirmación/exportación; no se amplía en Block 12.
+
+## Addendum Block 12.1 — validación final de runtime
+
+La evidencia sintética adicional está documentada en [block-12-1-final-runtime-validation.md](./block-12-1-final-runtime-validation.md).
+
+| Área | Estado Block 12.1 | Evidencia | Estado para piloto |
+|---|---|---|---|
+| PostgreSQL fresh install/upgrade | PASS sintético | Compose aislado, master/tenant migrados y segunda ejecución no-op | Repetir en proveedor final |
+| Backup/restore PostgreSQL | PASS sintético | `pg_dump`/`pg_restore` master+tenant; checksums e invariantes restauradas | Política gestionada/RPO/RTO abiertos |
+| Storage readiness | PASS local | probe write/read/delete y tests de aislamiento/fallo | Storage durable final OPEN; bloqueante |
+| Web/worker separados | PASS sintético | procesos independientes, heartbeat y recuperación tras reinicio | Alerta externa pendiente |
+| Scheduler/cron | PASS local condicionado | secreto, heartbeat previo, doble ejecución sin duplicación | Proveedor y alertas OPEN; bloqueante |
+| Failed delivery/manual recovery | PASS sintético | browser mostró delivery fallida y retry; worker dejó error clasificado | Repetir con destino aprobado |
+| Offboarding | PASS servicio/ORM sintético | canales 4/4 inactivos, memberships, audit e histórico conservado | Aprobación humana pendiente |
+| RBAC/retención | PENDING HUMAN APPROVAL | documentos de aprobación creados | Bloqueante |
+| Browser final | OPEN | navegador nativo local; confirmación final bloqueada por driver | Repetir en navegador/proveedor final |
+
+La suite crítica del piloto terminó con **207 tests, 0 failures, 0 errors**. El full suite terminó con `681 tests, 4 failures, 1 skipped`; los cuatro casos son los tres fallos de email autodiscovery y el fallo de audio/transcripción ya clasificados como fuera del contrato Catalog-only. La decisión vigente permanece **NO GO**.

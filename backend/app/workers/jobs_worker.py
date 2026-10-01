@@ -21,6 +21,7 @@ from app.agent.services import AgentProcessingService, ScoringService
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import record_job
+from app.core.operational import record_heartbeat
 from app.core.observability import observability_scope
 from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, ExportSettings, ImportJob, InboundMessage, Order, OrderDelivery, ScoringSettings
 from app.exports.service import ExportService, FTPService, resolve_ftp_destination
@@ -991,6 +992,7 @@ def _handle_tenant_jobs(
 
 def run_worker_cycle(*, max_jobs: int | None = None, include_provisioning: bool = False) -> dict[str, int]:
     configure_logging()
+    cycle_started = time.perf_counter()
     if include_provisioning:
         from app.workers.provisioning_worker import run_provisioning_cycle
 
@@ -1049,6 +1051,23 @@ def run_worker_cycle(*, max_jobs: int | None = None, include_provisioning: bool 
         summary["processed"],
         _identity(),
     )
+    heartbeat_db = MasterSessionLocal()
+    try:
+        try:
+            record_heartbeat(
+                heartbeat_db,
+                component="worker",
+                name="jobs",
+                status="healthy",
+                owner=_identity(),
+                success=True,
+                duration_ms=int((time.perf_counter() - cycle_started) * 1000),
+            )
+        except Exception as heartbeat_error:  # noqa: BLE001
+            # Liveness telemetry must not discard a completed tenant cycle.
+            logger.warning("No se pudo registrar heartbeat worker/jobs: %s", heartbeat_error)
+    finally:
+        heartbeat_db.close()
     return summary
 
 

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import current_tenant_user, require_master_admin
 from app.admin.diagnostics import company_diagnostics, company_diagnostics_overview
 from app.core.metrics import snapshot_metrics
+from app.core.operational import operational_status
 from app.core.storage import check_storage_readiness
 from app.master.database import get_master_db
 from app.master.migrations import master_migration_report
@@ -47,10 +48,11 @@ def health_ready(request: Request, master_db: Session = Depends(get_master_db)):
     tenant = getattr(request.state, "tenant", None)
     master_schema = master_migration_report(master_db, persist=False)
     storage = check_storage_readiness()
+    master_ok = _ping_db(master_db)
     payload = {
         "ok": True,
         "timestamp": datetime.now(timezone.utc),
-        "master": _ping_db(master_db),
+        "master": master_ok,
         "master_schema_report": master_schema,
         "tenant": bool(tenant),
         "tenant_company_id": tenant.company.id if tenant else None,
@@ -69,8 +71,16 @@ def health_ready(request: Request, master_db: Session = Depends(get_master_db)):
         try:
             payload["tenant_ping"] = _ping_db(tenant_db)
             payload["tenant_schema_report"] = tenant_migration_report(tenant_db, tenant.company.id, persist=False)
+            payload["operational"] = operational_status(
+                master_db,
+                tenant_db=tenant_db,
+                storage=storage,
+                database_ok=bool(master_ok and payload["tenant_ping"]),
+            )
         finally:
             tenant_db.close()
+    else:
+        payload["operational"] = operational_status(master_db, storage=storage, database_ok=master_ok)
     master_schema_status = payload["master_schema_report"].get("status")
     master_schema_ok = master_schema_status == "current"
     payload["master_schema_ok"] = master_schema_ok

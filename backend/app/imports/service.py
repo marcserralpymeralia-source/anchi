@@ -28,9 +28,12 @@ except ValueError:
 
 
 def _preview_directory(company_id: int | None = None) -> Path:
+    # Resolve the root at operation time so isolated workers/tests that change
+    # TEMP_STORAGE_DIR do not write into the importer's initial process root.
+    preview_root = resolve_temp_storage_dir("import_previews")
     if company_id is None:
-        return PREVIEW_DIR
-    return PREVIEW_DIR / f"company-{int(company_id)}"
+        return preview_root
+    return preview_root / f"company-{int(company_id)}"
 
 CUSTOMER_FIELDS = {
     "code": "Codigo cliente",

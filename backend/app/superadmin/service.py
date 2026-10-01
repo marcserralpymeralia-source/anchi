@@ -13,8 +13,17 @@ from app.core.config import get_settings
 from app.core.permissions import DEFAULT_ROLE_PERMISSIONS
 from app.core.security import hash_password
 from app.db.database import Base
-from app.db.models import Company as TenantCompany
-from app.db.models import Role, User
+from app.db.models import (
+    AuditLog,
+    BackgroundJob,
+    Company as TenantCompany,
+    InputChannel,
+    IntegrationConnection,
+    OrderDelivery,
+    OrderRoute,
+    Role,
+    User,
+)
 from app.master.models import (
     CompanyMembership,
     MasterCompany,
@@ -371,6 +380,8 @@ def toggle_company(master_db: Session, company_id: int, actor_user_id: int) -> M
     company = master_db.get(MasterCompany, company_id)
     if not company:
         raise ValueError("Empresa no encontrada")
+    if company.status == "offboarded":
+        raise ValueError("La empresa está offboarded y requiere un proceso de reactivación explícito")
     if not company.active and company.provisioning_status != "ready":
         raise ValueError("La empresa todavía no está aprovisionada y no se puede activar")
     company.active = not company.active
@@ -379,6 +390,90 @@ def toggle_company(master_db: Session, company_id: int, actor_user_id: int) -> M
     record_platform_audit(master_db, actor_user_id=actor_user_id, action="company.activate" if company.active else "company.suspend", target_type="company", target_id=company.id, company_id=company.id, metadata={})
     master_db.commit()
     return company
+
+
+def offboard_company(
+    master_db: Session,
+    company_id: int,
+    actor_user_id: int,
+    *,
+    reason: str,
+) -> dict[str, object]:
+    """Freeze a tenant without deleting history or pretending to revoke provider secrets."""
+
+    company = master_db.get(MasterCompany, company_id)
+    tenant_row = master_db.scalar(select(MasterTenantDatabase).where(MasterTenantDatabase.company_id == company_id))
+    if not company or not tenant_row or not tenant_row.database_url:
+        raise ValueError("La empresa no tiene una base operativa disponible")
+    if company.status == "offboarded":
+        return {"company_id": company_id, "status": "offboarded", "already_offboarded": True}
+
+    reason_text = (reason or "Offboarding operativo solicitado").strip()[:500]
+    tenant_engine = _engine_for(tenant_row.database_url)
+    tenant_db = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)()
+    try:
+        queued_jobs = int(tenant_db.query(BackgroundJob).filter(BackgroundJob.company_id == company_id, BackgroundJob.status.in_(("queued", "retrying"))).count())
+        running_jobs = int(tenant_db.query(BackgroundJob).filter(BackgroundJob.company_id == company_id, BackgroundJob.status == "running").count())
+        pending_deliveries = int(tenant_db.query(OrderDelivery).filter(OrderDelivery.company_id == company_id, OrderDelivery.status.in_(("queued", "retrying"))).count())
+        failed_deliveries = int(tenant_db.query(OrderDelivery).filter(OrderDelivery.company_id == company_id, OrderDelivery.status == "failed").count())
+        credential_refs = [
+            row[0]
+            for row in tenant_db.query(IntegrationConnection.secret_provider_ref)
+            .filter(IntegrationConnection.company_id == company_id, IntegrationConnection.secret_provider_ref.is_not(None))
+            .all()
+            if row[0]
+        ]
+
+        tenant_db.query(InputChannel).filter(InputChannel.company_id == company_id).update({InputChannel.is_active: False}, synchronize_session=False)
+        tenant_db.query(IntegrationConnection).filter(IntegrationConnection.company_id == company_id).update({IntegrationConnection.state: "DISABLED"}, synchronize_session=False)
+        tenant_db.query(OrderRoute).filter(OrderRoute.company_id == company_id).update({OrderRoute.is_active: False}, synchronize_session=False)
+        tenant_db.query(BackgroundJob).filter(BackgroundJob.company_id == company_id, BackgroundJob.status.in_(("queued", "retrying"))).update({BackgroundJob.status: "paused", BackgroundJob.lock_owner: None, BackgroundJob.lock_until: None}, synchronize_session=False)
+        tenant_db.query(OrderDelivery).filter(OrderDelivery.company_id == company_id, OrderDelivery.status.in_(("queued", "retrying"))).update({OrderDelivery.status: "paused", OrderDelivery.next_attempt_at: None}, synchronize_session=False)
+        tenant_company = tenant_db.get(TenantCompany, company_id)
+        if tenant_company is not None:
+            tenant_company.active = False
+        tenant_db.add(AuditLog(company_id=company_id, user_id=None, action="tenant.offboard", entity_type="company", entity_id=company_id, message=f"Tenant pausado y offboarded: {reason_text}"))
+        tenant_db.commit()
+    except Exception:
+        tenant_db.rollback()
+        raise
+    finally:
+        tenant_db.close()
+        tenant_engine.dispose()
+
+    company.active = False
+    company.status = "offboarded"
+    company.suspended_reason = reason_text
+    tenant_row.is_active = False
+    for membership in master_db.scalars(select(CompanyMembership).where(CompanyMembership.company_id == company_id)).all():
+        membership.is_active = False
+    record_platform_audit(
+        master_db,
+        actor_user_id=actor_user_id,
+        action="company.offboard",
+        target_type="company",
+        target_id=company_id,
+        company_id=company_id,
+        metadata={
+            "queued_jobs": queued_jobs,
+            "running_jobs": running_jobs,
+            "pending_deliveries": pending_deliveries,
+            "failed_deliveries": failed_deliveries,
+            "credential_refs_count": len(credential_refs),
+            "external_secret_revocation_required": bool(credential_refs),
+        },
+    )
+    master_db.commit()
+    return {
+        "company_id": company_id,
+        "status": "offboarded",
+        "queued_jobs_paused": queued_jobs,
+        "running_jobs_preserved": running_jobs,
+        "pending_deliveries_paused": pending_deliveries,
+        "failed_deliveries_preserved": failed_deliveries,
+        "credential_refs": credential_refs,
+        "external_secret_revocation_required": bool(credential_refs),
+    }
 
 
 def retry_company_provisioning(master_db: Session, company_id: int, actor_user_id: int) -> MasterCompany:

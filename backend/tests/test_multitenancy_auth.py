@@ -19,6 +19,7 @@ os.environ.setdefault("SECRET_KEY", "multi-tenant-auth-test-secret-key-012345678
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core import middleware as middleware_module  # noqa: E402
+from app.core.config import get_settings  # noqa: E402
 from app.core.app_factory import create_app  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.db.database import Base  # noqa: E402
@@ -34,6 +35,9 @@ class MultiTenancyAuthenticationTests(unittest.TestCase):
     """End-to-end coverage for the multi-company browser session flow."""
 
     def setUp(self):
+        self.previous_app_env = os.environ.get("APP_ENV")
+        os.environ["APP_ENV"] = "test"
+        get_settings.cache_clear()
         clear_tenant_engine_cache()
         clear_tenant_schema_cache()
         middleware_module._BRANDING_CACHE.clear()
@@ -61,6 +65,11 @@ class MultiTenancyAuthenticationTests(unittest.TestCase):
             engine.dispose()
         self.master_engine.dispose()
         self.tempdir.cleanup()
+        if self.previous_app_env is None:
+            os.environ.pop("APP_ENV", None)
+        else:
+            os.environ["APP_ENV"] = self.previous_app_env
+        get_settings.cache_clear()
 
     def _seed_master(self):
         root = Path(self.tempdir.name)

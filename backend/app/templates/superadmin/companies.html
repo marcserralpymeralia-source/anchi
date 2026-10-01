@@ -92,6 +92,13 @@
                   <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
                   <button class="button secondary compact-button" type="submit">{{ 'Suspender' if item.company.active else 'Reactivar' }}</button>
                 </form>
+                {% if item.company.active and item.company.status != 'offboarded' %}
+                  <form method="post" action="/superadmin/companies/{{ item.company.id }}/offboard" class="js-loading-form" data-confirm="Offboarding: se pausarán canales, conexiones, rutas y trabajos pendientes. El histórico no se borrará. ¿Continuar?" style="margin: 0;">
+                    <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
+                    <input type="hidden" name="reason" value="Offboarding operativo desde Superadmin">
+                    <button class="button secondary compact-button" type="submit">Offboard</button>
+                  </form>
+                {% endif %}
                 {% if item.company.provisioning_status in ['failed', 'provisioning'] %}
                   <form method="post" action="/superadmin/companies/{{ item.company.id }}/retry-provisioning" style="margin: 0;">
                     <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">

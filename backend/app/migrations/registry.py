@@ -942,6 +942,20 @@ def _apply_master_health_snapshot_metrics(engine, dry_run: bool) -> list[str]:  
     )
 
 
+def _apply_master_operational_heartbeats(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Persist worker/scheduler liveness without an external monitoring service."""
+
+    from app.master.models import OperationalHeartbeat
+
+    with engine.connect() as conn:
+        exists = OperationalHeartbeat.__tablename__ in set(inspect(conn).get_table_names())
+    if exists:
+        return []
+    if not dry_run:
+        OperationalHeartbeat.__table__.create(bind=engine, checkfirst=True)
+    return ["CREATE TABLE operational_heartbeats (...)"]
+
+
 def _apply_tenant_ai_learning(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     from app.db.models import LearningProposal, PromptExecution
 
@@ -1550,6 +1564,12 @@ MASTER_SCHEMA_MIGRATIONS = [
         name="shared authentication rate limit buckets",
         checksum=checksum_text("master", "shared_authentication_rate_limit_buckets", "rate_limit_buckets"),
         upgrade=_apply_master_rate_limit_buckets,
+    ),
+    MigrationSpec(
+        version="2026.10.01.1",
+        name="master operational heartbeats",
+        checksum=checksum_text("master", "operational_heartbeats", "worker", "scheduler", "last_success_at"),
+        upgrade=_apply_master_operational_heartbeats,
     ),
 ]
 

@@ -140,6 +140,8 @@ class EmailAiLearningTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
         base = Path(self.tempdir.name)
+        self.previous_temp_storage_dir = os.environ.get("TEMP_STORAGE_DIR")
+        os.environ["TEMP_STORAGE_DIR"] = str(base / "storage")
         self.master_path = base / "master.sqlite"
         self.tenant_path = base / "tenant.sqlite"
         self.master_engine = create_engine(f"sqlite:///{self.master_path.as_posix()}", connect_args={"check_same_thread": False})
@@ -153,6 +155,10 @@ class EmailAiLearningTests(unittest.TestCase):
         self.master_engine.dispose()
         self.tenant_engine.dispose()
         self.tempdir.cleanup()
+        if self.previous_temp_storage_dir is None:
+            os.environ.pop("TEMP_STORAGE_DIR", None)
+        else:
+            os.environ["TEMP_STORAGE_DIR"] = self.previous_temp_storage_dir
 
     def _seed_prompt(self, db):
         db.add(LLMSettings(company_id=1, api_key_encrypted=encrypt_secret("dummy-key")))

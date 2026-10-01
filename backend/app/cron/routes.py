@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import logging
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -9,8 +11,9 @@ from sqlalchemy.orm import Session
 
 from app.channels.service import is_channel_enabled
 from app.core.config import get_settings
+from app.core.operational import record_heartbeat
 from app.db.models import EmailSettings
-from app.master.database import get_master_db
+from app.master.database import MasterSessionLocal, get_master_db
 from app.master.models import EmailSyncState, MasterCompany, MasterTenantDatabase
 from app.superadmin.metrics import collect_platform_snapshots
 from app.settings.integrations import read_latest_imap_emails
@@ -20,6 +23,29 @@ from app.workers.email_worker import _acquire_lock, _release_lock  # noqa: PLC27
 from app.workers.jobs_worker import run_worker_cycle
 
 router = APIRouter(prefix="/cron", tags=["cron"])
+logger = logging.getLogger(__name__)
+
+
+def _record_scheduler_event(name: str, *, success: bool, error: Exception | None = None, duration_ms: int | None = None) -> None:
+    db = MasterSessionLocal()
+    try:
+        try:
+            record_heartbeat(
+                db,
+                component="scheduler",
+                name=name,
+                status="healthy" if success else "error",
+                owner="cron",
+                success=success,
+                error=error,
+                duration_ms=duration_ms,
+            )
+        except Exception as heartbeat_error:  # noqa: BLE001
+            # A telemetry write must not turn a successful cron execution into
+            # a false 5xx.  Readiness will expose the missing/stale heartbeat.
+            logger.warning("No se pudo registrar heartbeat scheduler/%s: %s", name, heartbeat_error)
+    finally:
+        db.close()
 
 
 def _cron_token(request: Request) -> str:
@@ -49,7 +75,13 @@ def jobs_cron(request: Request):
     _cron_authorized(request)
     settings = get_settings()
     batch_size = max(1, min(int(getattr(settings, "cron_job_batch_size", 5) or 5), 20))
-    result = run_worker_cycle(max_jobs=batch_size)
+    started = time.perf_counter()
+    try:
+        result = run_worker_cycle(max_jobs=batch_size)
+    except Exception as exc:  # noqa: BLE001
+        _record_scheduler_event("jobs", success=False, error=exc, duration_ms=int((time.perf_counter() - started) * 1000))
+        raise
+    _record_scheduler_event("jobs", success=True, duration_ms=int((time.perf_counter() - started) * 1000))
     return JSONResponse({"ok": True, **result})
 
 
@@ -58,7 +90,14 @@ def platform_snapshots_cron(request: Request, master_db: Session = Depends(get_m
     """Refresh platform health/usage outside Superadmin page requests."""
 
     _cron_authorized(request)
-    return JSONResponse({"ok": True, **collect_platform_snapshots(master_db)})
+    started = time.perf_counter()
+    try:
+        result = collect_platform_snapshots(master_db)
+    except Exception as exc:  # noqa: BLE001
+        record_heartbeat(master_db, component="scheduler", name="platform-snapshots", status="error", owner="cron", error=exc, duration_ms=int((time.perf_counter() - started) * 1000))
+        raise
+    record_heartbeat(master_db, component="scheduler", name="platform-snapshots", status="healthy", owner="cron", success=True, duration_ms=int((time.perf_counter() - started) * 1000))
+    return JSONResponse({"ok": True, **result})
 
 
 @router.api_route("/email-sync", methods=["GET", "POST"])
@@ -160,4 +199,13 @@ def email_sync_cron(request: Request, master_db: Session = Depends(get_master_db
         finally:
             db.close()
     master_db.commit()
+    record_heartbeat(
+        master_db,
+        component="scheduler",
+        name="email-sync",
+        status="healthy" if result["errors"] == 0 else "error",
+        owner="cron",
+        success=result["errors"] == 0,
+        error=RuntimeError("email-sync completed with tenant errors") if result["errors"] else None,
+    )
     return JSONResponse(result)

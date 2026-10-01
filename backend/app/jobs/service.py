@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.observability import encode_trace_payload, split_trace_payload
-from app.db.models import BackgroundJob, JobAttempt, User
+from app.db.models import BackgroundJob, Company, JobAttempt, User
 from app.logs.service import log_flow_event
 
 
@@ -198,6 +198,9 @@ def enqueue_job(
     max_retries: int | None = None,
 ) -> BackgroundJob:
     normalized_payload = _safe_payload(payload)
+    tenant_company = db.get(Company, company_id)
+    if tenant_company is not None and not tenant_company.active:
+        raise RuntimeError("No se pueden crear trabajos para un tenant pausado u offboarded.")
     key = dedupe_key or build_dedupe_key(job_type, normalized_payload)
     existing = db.scalars(
         select(BackgroundJob).where(

@@ -15,7 +15,7 @@ from app.master.models import CompanyMembership, MasterCompany, MasterTenantData
 from app.master.provisioning import find_tenant_actor_id, synchronize_tenant_actors
 from app.master.service import TenantUser
 from app.superadmin.metrics import latest_health_snapshots
-from app.superadmin.service import TENANT_ROLES, create_company, create_company_user, platform_stats, retry_company_provisioning, toggle_company, toggle_user
+from app.superadmin.service import TENANT_ROLES, create_company, create_company_user, offboard_company, platform_stats, retry_company_provisioning, toggle_company, toggle_user
 
 
 router = APIRouter(prefix="/superadmin", tags=["superadmin"])
@@ -92,6 +92,20 @@ def companies_create(
 def companies_toggle(company_id: int, master_db: Session = Depends(get_master_db), user: TenantUser = Depends(require_superadmin)):
     try:
         toggle_company(master_db, company_id, user.id)
+    except ValueError as exc:
+        return _redirect("/superadmin/companies", str(exc))
+    return _redirect("/superadmin/companies")
+
+
+@router.post("/companies/{company_id}/offboard")
+def companies_offboard(
+    company_id: int,
+    reason: str = Form("Offboarding operativo solicitado"),
+    master_db: Session = Depends(get_master_db),
+    user: TenantUser = Depends(require_superadmin),
+):
+    try:
+        offboard_company(master_db, company_id, user.id, reason=reason)
     except ValueError as exc:
         return _redirect("/superadmin/companies", str(exc))
     return _redirect("/superadmin/companies")
