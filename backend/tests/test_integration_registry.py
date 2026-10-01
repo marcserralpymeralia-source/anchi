@@ -54,7 +54,10 @@ class IntegrationRegistryTests(unittest.TestCase):
 
     def test_registry_lists_without_instantiating_and_hides_fake_in_production(self):
         registry = IntegrationRegistry()
-        self.assertEqual({item.key for item in registry.list_definitions(environment="test")}, {"email", "fake_erp", "fake_inbound", "sage_200_es", "whatsapp_catalog"})
+        self.assertEqual(
+            {item.key for item in registry.list_definitions(environment="test")},
+            {"email", "fake_erp", "fake_inbound", "odoo", "sage_200_es", "whatsapp_catalog"},
+        )
         self.assertNotIn("fake_erp", {item.key for item in registry.list_definitions(environment="production")})
         self.assertIsNone(registry._factories.get("fake_erp"))
 
