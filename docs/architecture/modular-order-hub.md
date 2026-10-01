@@ -1,7 +1,7 @@
-# Modular Order Hub — estado de BLOQUE 4B
+# Modular Order Hub — estado de BLOQUE 5
 
 Fecha: 2026-09-30
-Estado: BLOQUE 4B implementado localmente en `feat/modular-order-hub`; Sage 200 ES usa solo transporte mock y no hay HTTP externo real.
+Estado: BLOQUE 5 implementado localmente en `feat/modular-order-hub`; Sage 200 ES usa solo transporte mock y no hay HTTP externo real.
 
 ## Decisión de dominio
 
@@ -32,7 +32,7 @@ ANCHI Order + OrderLine
 Deterministic validation (sin agente/LLM)
         │
         ▼
-OrderRoute por tenant
+OrderRoute por tenant y `destination_connection_id`
         │
         ▼
 OrderDelivery / transactional outbox
@@ -101,7 +101,9 @@ La unicidad es `(company_id, entity_type, external_system, external_id)`. Una id
 
 ## Routing
 
-`OrderRoute` permite una ruta activa por tenant y tipo de pedido. El destino existente de prueba sigue siendo `order → fake_erp`; el PoC alternativo usa `order → sage_200_es` cuando se inyecta explícitamente un registry con configuración Sage mock. El router solo conoce el connector key y el contrato; no conoce campos de Sage, Shopify u Odoo.
+`OrderRoute` permite una ruta activa por tenant y tipo de pedido. Las nuevas rutas guardan `destination_connection_id` (y opcionalmente `source_connection_id`) además del `destination_connector_key` legacy. Así dos conexiones Sage o FakeERP del mismo tenant no colisionan. Las rutas antiguas por connector key siguen resolviéndose sin migración destructiva.
+
+El destino por conexión solo se procesa si la conexión pertenece al tenant y está `ACTIVE`. La entrega lazy resuelve exactamente esa conexión; una conexión `DISABLED` no puede recibir eventos, ser elegida por routing ni procesar un outbox pendiente.
 
 El resultado se guarda en `Order.destination_external_order_id`, junto con `destination_connector_key`, `export_status`, `export_attempt_count` y `export_last_error`.
 
@@ -127,7 +129,7 @@ Al agotar el máximo de intentos, el outbox queda `failed`, el pedido queda en `
 
 - Inbound: tenant + provider + external event ID evita otro `Order`.
 - Outbound: `(tenant, idempotency_key)` tiene unicidad de base de datos.
-- La clave estable es `tenant/order/order_id/destination`.
+- La clave estable es `tenant/order/order_id/destination[/connection_id]`; el sufijo evita colisiones cuando hay varias instancias del mismo connector.
 - Un único `BackgroundJob` puede reclamar una entrega mediante actualización atómica y lock.
 - Si el destino creó el pedido pero la respuesta se perdió, `find_order_by_idempotency_key()` reconcilia antes de crear otro.
 
@@ -160,6 +162,8 @@ La migración posterior `2026.09.30.2 — tenant order delivery reliability` cre
 
 La migración posterior `2026.09.30.3 — tenant whatsapp catalog inbound` añade `orders.source_catalog_id` sin modificar migraciones anteriores. No crea una jerarquía de catálogos ni sincroniza datos con Meta.
 
+La migración `2026.09.30.4 — tenant integration registry` crea `integration_connections` y `tenant_integration_roles`, y añade referencias opcionales de conexión a inbound messages, orders, routes y deliveries.
+
 ## Compatibilidad
 
 - Email: pipeline existente intacto; sigue usando extracción y scoring.
@@ -167,6 +171,8 @@ La migración posterior `2026.09.30.3 — tenant whatsapp catalog inbound` añad
 - Workbench: sigue mostrando `Order` existente; no se añadió una UI paralela.
 - Matching: el flujo estructurado usa resolución determinista por identidad externa; email/WhatsApp siguen usando sus servicios actuales.
 - Multi-tenancy: todas las resoluciones nuevas filtran por `company_id` y las rutas son tenant-scoped.
+- Integraciones: WhatsApp/email reutilizan su configuración tenant-scoped legacy; la nueva conexión guarda solo configuración no secreta y deja una frontera explícita para un futuro SecretProvider.
+- Lazy loading: listar definitions no importa ni instancia adapters; el factory se importa únicamente al resolver una conexión activa o ejecutar su health on-demand.
 - El procesamiento inbound no depende de la disponibilidad del destino; un fallo de connector A no bloquea connector B.
 
 ## WhatsApp Catalog inbound
