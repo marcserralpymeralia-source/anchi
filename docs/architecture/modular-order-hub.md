@@ -1,7 +1,7 @@
-# Modular Order Hub — estado de BLOQUE 6
+# Modular Order Hub — estado de BLOQUE 7
 
 Fecha: 2026-10-01
-Estado: BLOQUE 6 implementado localmente en `feat/modular-order-hub`; Sage 200 ES y Odoo usan solo transportes mock y no hay HTTP externo real.
+Estado: BLOQUE 7 implementado localmente en `feat/modular-order-hub`; Sage, Odoo y Generic REST usan solo transportes mock y no hay HTTP externo real.
 
 ## Decisión de dominio
 
@@ -64,6 +64,21 @@ WhatsApp Catalog fixture → WhatsAppCatalogInboundConnector
         → ODOO-ORDER-000001 → Order exported
 ```
 
+Generic REST demuestra que dos APIs con contratos diferentes se integran únicamente con configuración:
+
+```text
+WhatsApp Catalog fixture → WhatsAppCatalogInboundConnector
+        → Order / ExternalIdentity → OrderDelivery
+        → GenericRESTConnector (`generic_rest`)
+        → GenericRESTClient → MockGenericRESTTransport
+        → AcmeERP A (`customerCode`, `lines`, `orderNumber`)
+        → ACME-ORDER-000001 → Order exported
+
+La misma implementación + otra IntegrationConnection/mapping
+        → ERP B (`client`, `items`, `salesOrderNo`)
+        → BETA-ORDER-000001 → Order exported
+```
+
 Los inputs estructurados no calculan confidence semántico: `extraction_confidence` queda en cero y la validación depende de identidad, producto y cantidad. Un pedido estructurado validado no queda bloqueado por el umbral de scoring semántico.
 
 Los inputs desconocidos producen `pending_review` y razones explícitas; no crean un pedido externo. Un pedido validado pasa a `ready_to_export` y la entrega queda separada del procesamiento inbound.
@@ -105,6 +120,16 @@ En `backend/app/connectors/odoo.py`:
 - Los campos concretos y la estrategia `client_order_ref` están marcados `UNVERIFIED_ODOO_CONTRACT` hasta revisar `/doc` de una base cliente.
 - `real_http_enabled` está bloqueado y las capabilities reales permanecen vacías.
 
+En `backend/app/connectors/generic_rest_mapping.py` y `backend/app/connectors/generic_rest.py`:
+
+- `GenericRESTConnector → GenericRESTClient → Transport` separa dominio, request building y transporte.
+- La DSL solo permite field paths ANCHI, rename, arrays, constants, optional/default y conversiones `string`/`integer`/`number`/`boolean`.
+- Solo se admiten `GET`, `POST`, `PUT` y `PATCH`; no DELETE, scripting, eval, templates, XML, SOAP, CSV, multipart ni GraphQL.
+- Cada operation valida path relativo, mappings, status codes, idempotencia y response mapping antes de activar la connection.
+- `MockGenericRESTTransport` cubre AcmeERP A y ERP B; no existe `AcmeERPConnector`.
+- `dry_run_order()` construye el request sin ejecutar transporte; la API de integración lo expone sin HTTP.
+- `HTTPGenericRESTTransport` está preparado pero rechaza toda ejecución durante BLOQUE 7.
+
 El contrato está preparado para nuevos conectores. Sage 200 ES y Odoo tienen PoC local mock; el HTTP Odoo real, SAP, Meta, Shopify, WooCommerce y Salesforce siguen fuera de scope.
 
 ## Identidades externas
@@ -118,6 +143,8 @@ El contrato está preparado para nuevos conectores. Sage 200 ES y Odoo tienen Po
 - `external_subtype` y metadata opcional.
 
 La unicidad es `(company_id, entity_type, external_system, external_id)`. Una identidad del tenant A nunca resuelve una entidad del tenant B. `CustomerAlias` y `ProductAlias` se mantienen para aliases locales; no se reutilizan para representar múltiples sistemas externos.
+
+Para Generic REST, `external_system` no es la key global `generic_rest`: es `generic_rest:<connection_id>`. Así un ERP propio A y una API logística B pueden convivir en el mismo tenant sin compartir accidentalmente clientes o productos.
 
 ## Routing
 
@@ -252,9 +279,9 @@ Las cantidades cero, negativas, no numéricas o no finitas, las monedas inválid
 
 - No hay outbound Catalog, respuestas automáticas de producto ni confirmación de pedido por Meta.
 - No hay sincronización ERP → Meta Catalog ni llamadas a `whatsapp_commerce_settings`.
-- No hay ERP real ni HTTP Sage/Odoo: los destinos PoC son `MockSage200ESTransport` y `MockOdooJSON2Transport`; el destino legacy sigue siendo FakeERP.
-- No se añadió UI de mapping; los helpers de `ExternalIdentity` permiten seeds y operaciones futuras.
+- No hay ERP real ni HTTP Sage/Odoo/Generic REST: los destinos PoC son `MockSage200ESTransport`, `MockOdooJSON2Transport` y `MockGenericRESTTransport`; el destino legacy sigue siendo FakeERP.
+- No se añadió un visual mapper sofisticado: Settings ofrece JSON estructurado no secreto, el backend valida la DSL y dry-run permite revisar el payload antes de cualquier futuro HTTP.
 
 ## Siguiente fase
 
-BLOQUE 4C será la primera validación contra una instancia Sage 200 real/controlada. Requiere completar también discovery Odoo y verificar `/doc` de una base cliente. No se debe habilitar `HTTPOdooJSON2Transport`, `HTTPSage200ESTransport` ni HTTP real antes de cerrar los informes de contract verification.
+El siguiente bloque recomendado es una contract verification controlada de una API REST real y su SecretProvider. No se debe habilitar `HTTPGenericRESTTransport` hasta cerrar allowlists SSRF, resolución DNS segura, límites operativos, redacción de logs y pruebas contra un sandbox. Sage/Odoo permanecen en sus PoC y no se reimplementan sobre Generic REST.

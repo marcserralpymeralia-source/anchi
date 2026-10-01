@@ -1,6 +1,6 @@
 # Integration Registry y configuración por tenant
 
-Estado: BLOQUE 5, implementado localmente en `feat/modular-order-hub`.
+Estado: BLOQUE 7, implementado localmente en `feat/modular-order-hub`.
 
 Este diseño separa el catálogo estático de adapters de las conexiones concretas que un tenant decide activar. No es un marketplace: no hay billing, licensing, descarga de plugins, código externo ni sandbox.
 
@@ -21,7 +21,7 @@ lazy connector instance
 
 `IntegrationRegistry` vive en `backend/app/connectors/registry.py`. Sus definiciones no contienen estado de tenant y listar el registro no importa ni instancia adapters. Cada definición declara:
 
-- key estable: `whatsapp_catalog`, `email`, `fake_inbound`, `fake_erp`, `sage_200_es`, `odoo`;
+- key estable: `whatsapp_catalog`, `email`, `fake_inbound`, `fake_erp`, `sage_200_es`, `odoo`, `generic_rest`;
 - display name, dirección y madurez `stable`/`experimental`;
 - capabilities runtime verificadas;
 - `mock_capabilities` separadas de las capabilities reales;
@@ -34,6 +34,8 @@ Sage 200 ES mantiene `capabilities=[]` porque BLOQUE 4B no verificó el contrato
 FakeInbound y FakeERP solo aparecen en el listado operativo de `development/test`. No se ofrecen como opciones productivas.
 
 Odoo 19+ JSON-2 aparece como `odoo`, pero es `mock_only`: sus capabilities runtime son vacías hasta verificar el `/doc` de una base concreta. En `development/test` sus fixtures exponen clientes, variantes de producto, pricing y pedidos; `inventory.read` no se declara. `real_http_enabled=true` y la activación fuera de `development/test` quedan bloqueadas.
+
+`generic_rest` es también `mock_only`, pero sus capabilities no son globales ni fijas: se derivan de las operations declarativas válidas de cada `IntegrationConnection`. La misma key puede tener una conexión con `customers.read`/`orders.create` y otra solo con `orders.create`. Sus ExternalIdentity usan `generic_rest:<connection_id>` como namespace estable para no mezclar dos APIs genéricas del mismo tenant. El PoC usa `MockGenericRESTTransport`; `HTTPGenericRESTTransport` está preparado como seam, pero siempre bloqueado.
 
 ## IntegrationConnection
 
@@ -98,6 +100,7 @@ Endpoints autenticados y tenant-scoped:
 - `GET/POST /integrations/connections`;
 - `PATCH /integrations/connections/{id}`;
 - `POST /integrations/connections/{id}/enable|disable|validate|health`;
+- `POST /integrations/connections/{id}/dry-run` para Generic REST sin HTTP;
 - `GET /integrations/roles` y `PUT /integrations/roles/{role_key}`;
 - `GET /integrations/routes` y `PUT /integrations/routes/{order_type}`.
 
@@ -113,9 +116,9 @@ Los tenants con `OrderRoute.destination_connector_key` siguen operativos. Los de
 
 - Sage HTTP real y contrato externo verificado: BLOQUE 4C.
 - Secret vault, OAuth flows y rotación de credenciales.
-- Odoo HTTP real, SAP, Salesforce, Shopify, WooCommerce y Generic REST. El PoC Odoo local está documentado en `docs/integrations/odoo-contract-verification.md`.
+- Odoo HTTP real, Generic REST HTTP real, SAP, Salesforce, Shopify y WooCommerce. Los PoC locales están documentados en sus guías de integración.
 - Sincronización de master data.
 - UI avanzada de edición de routes/roles y observabilidad continua.
 - Marketplace, billing/licensing y carga dinámica de código.
 
-Próximo bloque recomendado: **BLOQUE 4C — validación Sage real controlada**, manteniendo este registry como frontera y sin modificar el core para cada ERP futuro.
+Próximo bloque recomendado: **contract verification controlada de una conexión Generic REST real**, manteniendo HTTP bloqueado hasta cerrar allowlists, SecretProvider y observabilidad.

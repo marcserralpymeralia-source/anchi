@@ -336,7 +336,7 @@ def _validate_operation(name: str, operation: Any) -> list[str]:
     for key, mapping in response_mapping.items():
         if not isinstance(mapping, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,119}", mapping):
             errors.append(f"operations.{name}.response_mapping.{key} debe ser un path JSON simple.")
-    for field, default in (("success_status_codes", [200]), ("retryable_status_codes", [429, 500, 502, 503, 504])):
+    for field, default in (("success_status_codes", [200, 201, 202]), ("retryable_status_codes", [429, 500, 502, 503, 504])):
         codes = operation.get(field, default)
         if not isinstance(codes, list) or not codes or any(not isinstance(code, int) or not 100 <= code <= 599 for code in codes):
             errors.append(f"operations.{name}.{field} debe ser una lista de status HTTP.")
