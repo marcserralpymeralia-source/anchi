@@ -49,19 +49,28 @@ _SECRET_MARKERS = (
     "private_key",
     "database_url",
     "dsn",
+    "authorization",
+    "cookie",
+    "set-cookie",
+    "api-key",
+    "apikey",
+    "subscription-key",
+    "proxy-authorization",
 )
 
 _SECRET_ASSIGNMENT_RE = re.compile(
-    r"(?i)(\b(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|password|secret|authorization)\b\s*[:=]\s*)([^\s,;]+)"
+    r"(?i)(\b(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|subscription[_ -]?key|password|secret|authorization|cookie)\b\s*[:=]\s*)([^\s,;]+)"
 )
 _BEARER_RE = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{16,}")
+_AUTH_HEADER_RE = re.compile(r"(?i)\b(authorization|proxy-authorization)\s*[:=]\s*(?:Bearer|Basic|Token)\s+[^\s,;]+")
 _TOKEN_SHAPE_RE = re.compile(r"\b(?:EA[A-Za-z0-9]{24,}|sk-[A-Za-z0-9_-]{20,})\b")
 
 
 def redact_log_text(value: str) -> str:
     """Remove common credential representations from human-readable messages."""
 
-    redacted = _SECRET_ASSIGNMENT_RE.sub(r"\1[redacted]", value)
+    redacted = _AUTH_HEADER_RE.sub(r"\1: [redacted]", value)
+    redacted = _SECRET_ASSIGNMENT_RE.sub(r"\1[redacted]", redacted)
     redacted = _BEARER_RE.sub("Bearer [redacted]", redacted)
     return _TOKEN_SHAPE_RE.sub("[redacted]", redacted)
 
@@ -103,6 +112,32 @@ def redact_sensitive_data(value: Any) -> Any:
     if isinstance(value, str):
         return redact_log_text(value)
     return _normalize(value)
+
+
+def redact_http_headers(headers: Any) -> dict[str, str]:
+    """Return safe headers for diagnostics/audit without credential values."""
+
+    if not isinstance(headers, dict):
+        try:
+            headers = dict(headers or {})
+        except (TypeError, ValueError):
+            return {}
+    sensitive_names = {
+        "authorization",
+        "cookie",
+        "set-cookie",
+        "proxy-authorization",
+        "x-api-key",
+        "api-key",
+        "apikey",
+        "ocp-apim-subscription-key",
+        "subscription-key",
+    }
+    safe: dict[str, str] = {}
+    for key, value in headers.items():
+        name = str(key)
+        safe[name] = "[redacted]" if name.lower() in sensitive_names else str(redact_sensitive_data(value))
+    return safe
 
 
 @contextmanager
@@ -174,4 +209,3 @@ def decode_structured_message(raw_message: str | None) -> dict[str, Any]:
         "context": redact_sensitive_data(context),
         "metadata": redact_sensitive_data(metadata),
     }
-
