@@ -11,7 +11,7 @@ from app.core.observability import current_context, encode_structured_message, r
 from app.db.models import AuditLog
 
 
-_AUDIT_ACTION_PREFIXES = ("connection.", "delivery.", "http.")
+_AUDIT_ACTION_PREFIXES = ("connection.", "delivery.", "http.", "onboarding.", "mapping.", "route.", "dry_run.")
 
 
 def append_integration_audit(

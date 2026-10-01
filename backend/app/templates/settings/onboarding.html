@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% set title = "Onboarding de cliente" %}
+
+{% block content %}
+<main class="page-shell settings-page">
+  <div class="page-header">
+    <div>
+      <p class="eyebrow">Activación guiada</p>
+      <h1>Configurar cliente</h1>
+      <p class="muted">El progreso se calcula desde la configuración real del tenant; no hay checkboxes manuales de readiness.</p>
+    </div>
+    <div class="table-actions"><button class="button secondary compact-button" id="onboarding-start">Iniciar onboarding</button><a class="button secondary compact-button" href="/settings/integrations">Integraciones avanzadas</a></div>
+  </div>
+
+  <div id="onboarding-feedback" class="notice hidden" role="status"></div>
+
+  <section class="card" aria-labelledby="onboarding-status-title">
+    <div class="section-heading"><div><p class="eyebrow">Readiness</p><h2 id="onboarding-status-title">{{ readiness.status }}</h2></div><span class="status-pill">Paso: {{ readiness.current_step }}</span></div>
+    <div class="form-grid">
+      {% for key, label in [("source", "1. Entrada"), ("destination", "2. Destino"), ("master_data", "3. Master data"), ("routing", "4. Routing"), ("mappings", "5. Mappings"), ("test", "6. Test"), ("activation", "7. Activación")] %}
+      <div><strong>{{ label }}</strong><br><span class="muted">{% if readiness.current_step == key %}Pendiente{% elif readiness.status == "ACTIVE" %}Completado{% else %}Revisar checklist{% endif %}</span></div>
+      {% endfor %}
+    </div>
+    {% if readiness.blocking_issues %}<div class="notice"><strong>Blockers accionables</strong><ul>{% for item in readiness.blocking_issues %}<li>{{ item.message }}</li>{% endfor %}</ul></div>{% endif %}
+    {% if readiness.warnings %}<div class="notice"><strong>Warnings</strong><ul>{% for item in readiness.warnings %}<li>{{ item.message }}</li>{% endfor %}</ul></div>{% endif %}
+  </section>
+
+  <section class="card" aria-labelledby="onboarding-connections-title">
+    <div class="section-heading"><div><p class="eyebrow">Registry</p><h2 id="onboarding-connections-title">Entrada y destino</h2></div><span class="muted">Las opciones proceden de ConnectorRegistry.</span></div>
+    <div class="table-wrap"><table><thead><tr><th>Connection</th><th>Tipo</th><th>Estado</th><th>Credenciales</th><th>Contrato/runtime</th><th>Acciones</th></tr></thead><tbody>
+      {% for connection in connections %}<tr>
+        <td><strong>{{ connection.name }}</strong><br><span class="muted">#{{ connection.id }} · {{ connection.connector_key }}</span></td>
+        <td>{{ connection.direction if connection.direction is defined else "—" }}</td>
+        <td>{{ connection.state }}</td><td>{{ connection.credentials_status }}</td>
+        <td>{% if connection.connector_key in ["sage_200_es", "odoo"] %}Contract verification required{% elif connection.connector_key == "generic_rest" %}Mock / development{% else %}{{ connection.state }}{% endif %}</td>
+        <td><button class="button secondary compact-button" data-test="{{ connection.id }}">Test connection</button><button class="button secondary compact-button" data-dry-run="{{ connection.id }}">Dry-run</button></td>
+      </tr>{% else %}<tr><td colspan="6" class="muted">Añade una connection para comenzar.</td></tr>{% endfor %}
+    </tbody></table></div>
+  </section>
+
+  {% if can_edit %}
+  <section class="card" aria-labelledby="onboarding-add-title">
+    <div class="section-heading"><div><p class="eyebrow">Paso 1/2</p><h2 id="onboarding-add-title">Añadir connection</h2></div><span class="muted">La connection empieza CONFIGURED; no se activa automáticamente.</span></div>
+    <form id="onboarding-connection-form" class="form-grid">
+      <label>Connector<select name="connector_key" required>{% for definition in source_definitions + destination_definitions %}<option value="{{ definition.key }}">{{ definition.display_name }}{% if definition.mock_only %} · mock-only{% endif %}</option>{% endfor %}</select></label>
+      <label>Nombre<input name="name" required placeholder="ERP principal"></label>
+      <label>Credential reference<input name="secret_provider_ref" placeholder="secret://tenant-N/connection-N/api_key" autocomplete="off"></label>
+      <label class="checkbox-label"><input type="checkbox" name="credentials_configured"> Credenciales configuradas fuera de config_json</label>
+      <label class="span-2">Configuración no secreta (JSON)<textarea name="config" rows="6">{}</textarea></label>
+      <div class="span-2"><button class="button" type="submit">Crear connection</button><span class="muted">No se acepta ningún valor secreto en este JSON.</span></div>
+    </form>
+  </section>
+
+  <section class="card" aria-labelledby="onboarding-routing-title">
+    <div class="section-heading"><div><p class="eyebrow">Pasos 3/4</p><h2 id="onboarding-routing-title">Master data y routing</h2></div><span class="muted">Las capabilities limitan las selecciones válidas.</span></div>
+    <form id="onboarding-route-form" class="form-grid">
+      <label>Entrada<select name="source_connection_id"><option value="">Seleccionar</option>{% for connection in connections if connection.direction in ["inbound", "bidirectional"] %}<option value="{{ connection.id }}">{{ connection.name }} · {{ connection.connector_key }}</option>{% endfor %}</select></label>
+      <label>Destino<select name="destination_connection_id" required><option value="">Seleccionar</option>{% for connection in connections if connection.direction in ["outbound", "bidirectional"] %}<option value="{{ connection.id }}">{{ connection.name }} · {{ connection.connector_key }}</option>{% endfor %}</select></label>
+      <div class="span-2"><button class="button" type="submit">Guardar routing</button></div>
+    </form>
+    <div class="form-grid"><h3 class="span-2">Roles de master data</h3>{% for role in readiness.available_roles %}<label>{{ role.label }} · {{ role.capability }}<select data-role-key="{{ role.key }}"><option value="">No configurado</option>{% for connection in connections %}<option value="{{ connection.id }}" {% if role.capability not in connection.capabilities %}disabled{% endif %}>{{ connection.name }}{% if role.capability not in connection.capabilities %} · capability no disponible{% endif %}</option>{% endfor %}</select></label>{% endfor %}</div>
+    <p class="muted">Busca y selecciona un customer/producto local; su external ID se guarda como ExternalIdentity, nunca en config_json.</p>
+    <form id="onboarding-mapping-form" class="form-grid"><label>Destino<select name="connection_id" id="mapping-connection" required><option value="">Seleccionar</option>{% for connection in connections if connection.direction in ["outbound", "bidirectional"] %}<option value="{{ connection.id }}">{{ connection.name }} · {{ connection.connector_key }}</option>{% endfor %}</select></label><label>Tipo<select name="entity_type" id="mapping-entity-type"><option value="customer">Customer</option><option value="product">Product</option></select></label><label>Buscar<input id="mapping-search" placeholder="Código o nombre" autocomplete="off"></label><label>Entidad local<select name="entity_id" id="mapping-entity-id" required><option value="">Seleccionar destino y tipo</option></select></label><label>External ID<input name="external_id" required></label><div class="span-2"><button class="button secondary" type="submit">Guardar mapping</button></div></form>
+  </section>
+
+  <section class="card" aria-labelledby="onboarding-activation-title">
+    <div class="section-heading"><div><p class="eyebrow">Pasos 5/6/7</p><h2 id="onboarding-activation-title">Prueba y activación</h2></div><span class="muted">La activación reevalúa readiness dentro de una transacción.</span></div>
+    <p class="muted">Dry-run: genera payload sin enviar. Test connection distingue SUCCESS, FAILED y BLOCKED. Sage/Odoo requieren verificación contractual adicional.</p>
+    <pre id="onboarding-result" class="code-block muted">Sin resultados todavía.</pre>
+    <div class="table-actions"><button class="button" id="onboarding-activate">Activar integración</button><button class="button secondary" id="onboarding-pause">Pausar integración</button></div>
+  </section>
+  {% endif %}
+</main>
+<script>
+(() => {
+  const feedback = document.getElementById("onboarding-feedback");
+  const result = document.getElementById("onboarding-result");
+  const show = (message, ok = false) => { feedback.textContent = message; feedback.classList.remove("hidden"); feedback.classList.toggle("success", ok); };
+  const call = async (url, options = {}) => {
+    const response = await fetch(url, { credentials: "same-origin", ...options, headers: { "Content-Type": "application/json", ...(options.headers || {}) } });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || payload.ok === false) throw new Error(payload.message || payload.detail || (payload.blockers || []).map((item) => item.message).join("; ") || "No se pudo completar la operación.");
+    return payload;
+  };
+  const reload = () => window.location.reload();
+  document.getElementById("onboarding-start")?.addEventListener("click", async () => { try { await call("/integrations/onboarding/start", { method: "POST", body: "{}" }); reload(); } catch (error) { show(error.message); } });
+  document.getElementById("onboarding-connection-form")?.addEventListener("submit", async (event) => { event.preventDefault(); const data = new FormData(event.currentTarget); let config; try { config = JSON.parse(data.get("config") || "{}"); } catch { show("La configuración debe ser JSON válido."); return; } try { await call("/integrations/connections", { method: "POST", body: JSON.stringify({ connector_key: data.get("connector_key"), name: data.get("name"), secret_provider_ref: data.get("secret_provider_ref"), credentials_configured: data.get("credentials_configured") === "on", config }) }); reload(); } catch (error) { show(error.message); } });
+  document.getElementById("onboarding-route-form")?.addEventListener("submit", async (event) => { event.preventDefault(); const data = new FormData(event.currentTarget); try { await call("/integrations/onboarding/route", { method: "PUT", body: JSON.stringify({ source_connection_id: data.get("source_connection_id"), destination_connection_id: data.get("destination_connection_id") }) }); reload(); } catch (error) { show(error.message); } });
+  document.querySelectorAll("[data-role-key]").forEach((select) => select.addEventListener("change", async () => { if (!select.value) return; try { await call(`/integrations/onboarding/roles/${select.dataset.roleKey}`, { method: "PUT", body: JSON.stringify({ connection_id: select.value }) }); reload(); } catch (error) { show(error.message); } }));
+  const mappingConnection = document.getElementById("mapping-connection");
+  const mappingType = document.getElementById("mapping-entity-type");
+  const mappingSearch = document.getElementById("mapping-search");
+  const mappingEntity = document.getElementById("mapping-entity-id");
+  const loadMappingCandidates = async () => {
+    if (!mappingConnection?.value || !mappingEntity) return;
+    const params = new URLSearchParams({ entity_type: mappingType.value, q: mappingSearch.value });
+    try {
+      const payload = await call(`/integrations/onboarding/mappings/${mappingConnection.value}/candidates?${params}`);
+      mappingEntity.innerHTML = '<option value="">Seleccionar</option>';
+      payload.items.forEach((item) => { const option = document.createElement("option"); option.value = item.id; option.textContent = `${item.reference} · ${item.name}`; mappingEntity.appendChild(option); });
+    } catch (error) { show(error.message); }
+  };
+  mappingConnection?.addEventListener("change", loadMappingCandidates);
+  mappingType?.addEventListener("change", loadMappingCandidates);
+  mappingSearch?.addEventListener("input", loadMappingCandidates);
+  document.getElementById("onboarding-mapping-form")?.addEventListener("submit", async (event) => { event.preventDefault(); const data = new FormData(event.currentTarget); try { await call("/integrations/onboarding/mappings", { method: "PUT", body: JSON.stringify(Object.fromEntries(data.entries())) }); reload(); } catch (error) { show(error.message); } });
+  document.querySelectorAll("[data-test]").forEach((button) => button.addEventListener("click", async () => { try { const payload = await call(`/integrations/onboarding/test/${button.dataset.test}`, { method: "POST", body: "{}" }); result.textContent = JSON.stringify(payload.test, null, 2); show(payload.test.message, payload.test.status === "SUCCESS"); } catch (error) { show(error.message); } }));
+  document.querySelectorAll("[data-dry-run]").forEach((button) => button.addEventListener("click", async () => { try { const payload = await call("/integrations/onboarding/dry-run", { method: "POST", body: JSON.stringify({ connection_id: button.dataset.dryRun }) }); result.textContent = JSON.stringify(payload.dry_run, null, 2); show("Dry-run correcto; external request NOT SENT.", true); } catch (error) { show(error.message); } }));
+  document.getElementById("onboarding-activate")?.addEventListener("click", async () => { if (!window.confirm("Activar integración: se habilitarán las connections y el routing configurados.")) return; try { const payload = await call("/integrations/onboarding/activate", { method: "POST", body: JSON.stringify({ acknowledge: true }) }); result.textContent = JSON.stringify(payload.readiness, null, 2); show("Integración activada.", true); setTimeout(reload, 500); } catch (error) { show(error.message); } });
+  document.getElementById("onboarding-pause")?.addEventListener("click", async () => { if (!window.confirm("Pausar integración: se detendrá el procesamiento nuevo y se conservará la configuración.")) return; try { await call("/integrations/onboarding/pause", { method: "POST", body: "{}" }); reload(); } catch (error) { show(error.message); } });
+})();
+</script>
+{% endblock %}

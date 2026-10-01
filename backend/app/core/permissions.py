@@ -25,6 +25,8 @@ PERMISSIONS = {
     "manage_jobs": "Gestionar tareas tecnicas",
     "manage_whatsapp": "Responder en WhatsApp",
     "manage_tenants": "Gestionar tenants",
+    "configure_integrations": "Configurar integraciones",
+    "activate_integrations": "Activar y pausar integraciones",
 }
 
 DEFAULT_ROLE_PERMISSIONS = {
@@ -93,6 +95,11 @@ def permission_for_request(method: str, path: str) -> str | None:
         return "approve_learning"
     if normalized.startswith("/jobs"):
         return "manage_jobs"
+    if normalized.startswith("/integrations"):
+        if any(token in normalized for token in ("/activate", "/pause", "/enable", "/disable")):
+            return "activate_integrations"
+        if normalized.startswith("/integrations/onboarding") or normalized.startswith("/integrations/connections") or normalized.startswith("/integrations/roles") or normalized.startswith("/integrations/routes"):
+            return "configure_integrations"
     if normalized.startswith("/imports"):
         return "manage_inbox"
     if normalized == "/logs/delete":
@@ -108,4 +115,3 @@ def permission_for_request(method: str, path: str) -> str | None:
     if normalized.startswith("/settings"):
         return "configure_settings"
     return None
-

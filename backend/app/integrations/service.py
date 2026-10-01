@@ -352,6 +352,7 @@ def set_integration_role(
     company_id: int,
     role_key: str,
     connection_id: int,
+    allow_inactive: bool = False,
     registry: IntegrationRegistry | None = None,
 ) -> TenantIntegrationRole:
     if role_key not in ROLE_CAPABILITIES:
@@ -362,6 +363,8 @@ def set_integration_role(
         raise KeyError(f"Conexión de integración no encontrada: {connection_id}")
     if connection.state in {IntegrationState.DISABLED.value, IntegrationState.MISCONFIGURED.value}:
         raise IntegrationConfigurationError("No se puede seleccionar una conexión deshabilitada o inválida.")
+    if connection.state != IntegrationState.ACTIVE.value and not allow_inactive:
+        raise IntegrationConfigurationError("La conexión debe estar ACTIVE para este rol.")
     required = ROLE_CAPABILITIES[role_key]
     if required not in _connection_capabilities(connection, registry):
         raise IntegrationConfigurationError(
@@ -381,6 +384,16 @@ def set_integration_role(
         role.connection_id = connection_id
         role.updated_at = _now()
     db.flush()
+    append_integration_audit(
+        db,
+        company_id=company_id,
+        connection_id=connection_id,
+        connector_key=connection.connector_key,
+        event_type="mapping.role_changed",
+        outcome="configured",
+        message="Rol de master data actualizado.",
+        metadata={"role_key": role_key},
+    )
     return role
 
 
@@ -399,13 +412,16 @@ def set_order_route(
     destination_connection_id: int,
     source_connection_id: int | None = None,
     order_type: str = "order",
+    allow_inactive: bool = False,
     registry: IntegrationRegistry | None = None,
 ) -> OrderRoute:
     registry = registry or IntegrationRegistry()
     destination = get_connection(db, company_id=company_id, connection_id=destination_connection_id)
     if destination is None:
         raise KeyError(f"Conexión de integración no encontrada: {destination_connection_id}")
-    if destination.state != IntegrationState.ACTIVE.value:
+    if destination.state in {IntegrationState.DISABLED.value, IntegrationState.MISCONFIGURED.value}:
+        raise IntegrationConfigurationError("El destino está deshabilitado o mal configurado.")
+    if destination.state != IntegrationState.ACTIVE.value and not allow_inactive:
         raise IntegrationConfigurationError("El destino debe estar ACTIVE para entrar en routing.")
     if "orders.create" not in _connection_capabilities(destination, registry):
         raise IntegrationConfigurationError(
@@ -417,7 +433,9 @@ def set_order_route(
         source = get_connection(db, company_id=company_id, connection_id=source_connection_id)
         if source is None:
             raise KeyError(f"Conexión de entrada no encontrada: {source_connection_id}")
-        if source.state != IntegrationState.ACTIVE.value:
+        if source.state in {IntegrationState.DISABLED.value, IntegrationState.MISCONFIGURED.value}:
+            raise IntegrationConfigurationError("La fuente está deshabilitada o mal configurada.")
+        if source.state != IntegrationState.ACTIVE.value and not allow_inactive:
             raise IntegrationConfigurationError("La fuente debe estar ACTIVE para entrar en routing.")
     route = db.scalar(
         select(OrderRoute).where(OrderRoute.company_id == company_id, OrderRoute.order_type == order_type)
@@ -428,9 +446,19 @@ def set_order_route(
     route.destination_connector_key = destination.connector_key
     route.source_connection_id = source.id if source else None
     route.destination_connection_id = destination.id
-    route.is_active = True
+    route.is_active = bool(destination.state == IntegrationState.ACTIVE.value and (source is None or source.state == IntegrationState.ACTIVE.value))
     route.updated_at = _now()
     db.flush()
+    append_integration_audit(
+        db,
+        company_id=company_id,
+        connection_id=destination.id,
+        connector_key=destination.connector_key,
+        event_type="route.changed",
+        outcome="active" if route.is_active else "configured",
+        message="Routing de pedidos actualizado.",
+        metadata={"order_type": order_type, "source_connection_id": source.id if source else None},
+    )
     return route
 
 
@@ -515,6 +543,7 @@ def connection_to_dict(connection: IntegrationConnection, *, registry: Integrati
         "company_id": connection.company_id,
         "connector_key": connection.connector_key,
         "display_name": definition.display_name,
+        "direction": definition.direction.value,
         "name": connection.name,
         "state": connection.state,
         "config": config,

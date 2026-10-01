@@ -4,14 +4,14 @@ import json
 import os
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import current_user, require_tenant_role
 from app.core.templating import templates
-from app.db.models import Order, OrderRoute
+from app.db.models import Customer, Order, OrderRoute, Product
 from app.integrations.service import (
     IntegrationConfigurationError,
     ROLE_CAPABILITIES,
@@ -29,6 +29,18 @@ from app.integrations.service import (
     update_connection,
 )
 from app.integrations.audit import integration_audit_to_dict, list_integration_audit
+from app.integrations.onboarding import (
+    activate_onboarding,
+    execute_onboarding_dry_run,
+    pause_onboarding,
+    readiness as onboarding_readiness,
+    save_onboarding_mapping,
+    save_onboarding_role,
+    save_onboarding_route,
+    start_onboarding,
+    test_onboarding_connection,
+)
+from app.integrations.readiness import IntegrationReadinessError, IntegrationReadinessService
 from app.connectors.registry import IntegrationRegistry
 from app.master.service import TenantUser
 from app.tenancy.database import get_tenant_db
@@ -60,6 +72,10 @@ def _error_response(exc: IntegrationConfigurationError) -> JSONResponse:
     return JSONResponse({"ok": False, "message": str(exc), "errors": exc.errors}, status_code=422)
 
 
+def _readiness_error_response(exc: IntegrationReadinessError) -> JSONResponse:
+    return JSONResponse({"ok": False, "message": str(exc), "blockers": exc.blockers}, status_code=422)
+
+
 def _route_payload(db: Session, company_id: int) -> dict[str, Any]:
     route = db.scalar(select(OrderRoute).where(OrderRoute.company_id == company_id, OrderRoute.order_type == "order"))
     return {
@@ -87,6 +103,177 @@ def integration_audit(db: Session = Depends(get_tenant_db), user: TenantUser = D
     """Return only this tenant's redacted connector activity stream."""
 
     return {"items": [integration_audit_to_dict(item) for item in list_integration_audit(db, company_id=user.company_id)]}
+
+
+@router.get("/integrations/onboarding/readiness")
+def onboarding_readiness_status(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    return {"ok": True, "readiness": onboarding_readiness(db, company_id=user.company_id, registry=registry)}
+
+
+@router.get("/integrations/onboarding/connectors")
+def onboarding_connectors(user: TenantUser = Depends(current_user)):
+    environment = os.getenv("APP_ENV", "development").strip().lower()
+    definitions = [item.to_dict(environment=environment) for item in registry.list_definitions(environment=environment)]
+    return {
+        "sources": [item for item in definitions if item["direction"] in {"inbound", "bidirectional"}],
+        "destinations": [item for item in definitions if item["direction"] in {"outbound", "bidirectional"}],
+    }
+
+
+@router.post("/integrations/onboarding/start")
+def onboarding_start(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(_admin_user)):
+    result = start_onboarding(db, company_id=user.company_id, registry=registry)
+    db.commit()
+    return {"ok": True, "readiness": result}
+
+
+@router.put("/integrations/onboarding/roles/{role_key}")
+async def onboarding_role(role_key: str, request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(_admin_user)):
+    payload = await _payload(request)
+    try:
+        result = save_onboarding_role(db, company_id=user.company_id, role_key=role_key, connection_id=int(payload.get("connection_id")), registry=registry)
+        db.commit()
+        return {"ok": True, "role": result, "readiness": onboarding_readiness(db, company_id=user.company_id, registry=registry)}
+    except (TypeError, ValueError) as exc:
+        db.rollback()
+        return JSONResponse({"ok": False, "message": "connection_id debe ser un entero."}, status_code=400)
+    except (IntegrationConfigurationError, KeyError) as exc:
+        db.rollback()
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=422)
+
+
+@router.put("/integrations/onboarding/route")
+async def onboarding_route(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(_admin_user)):
+    payload = await _payload(request)
+    try:
+        result = save_onboarding_route(
+            db,
+            company_id=user.company_id,
+            source_connection_id=int(payload["source_connection_id"]) if payload.get("source_connection_id") not in {None, ""} else None,
+            destination_connection_id=int(payload["destination_connection_id"]),
+            order_type=str(payload.get("order_type") or "order"),
+            registry=registry,
+        )
+        db.commit()
+        return {"ok": True, "route": result, "readiness": onboarding_readiness(db, company_id=user.company_id, registry=registry)}
+    except (TypeError, ValueError, KeyError) as exc:
+        db.rollback()
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+    except IntegrationConfigurationError as exc:
+        db.rollback()
+        return _error_response(exc)
+
+
+@router.get("/integrations/onboarding/mappings/{connection_id}")
+def onboarding_mappings(connection_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    connection = get_connection(db, company_id=user.company_id, connection_id=connection_id)
+    if connection is None:
+        raise HTTPException(status_code=404, detail="Conexión no encontrada")
+    return {"ok": True, "mapping": IntegrationReadinessService(db, company_id=user.company_id, registry=registry).mapping_status(connection)}
+
+
+@router.get("/integrations/onboarding/mappings/{connection_id}/candidates")
+def onboarding_mapping_candidates(
+    connection_id: int,
+    entity_type: str = Query("customer"),
+    q: str = Query(""),
+    limit: int = Query(20),
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    """Return tenant-scoped local records that can receive an external mapping."""
+
+    if get_connection(db, company_id=user.company_id, connection_id=connection_id) is None:
+        raise HTTPException(status_code=404, detail="Conexión no encontrada")
+    normalized_type = entity_type.strip().lower()
+    if normalized_type not in {"customer", "product"}:
+        raise HTTPException(status_code=400, detail="entity_type debe ser customer o product")
+    bounded_limit = max(1, min(int(limit), 100))
+    search = q.strip()
+    if normalized_type == "customer":
+        statement = select(Customer.id, Customer.code, Customer.fiscal_name, Customer.commercial_name).where(Customer.company_id == user.company_id)
+        if search:
+            pattern = f"%{search}%"
+            statement = statement.where(Customer.code.ilike(pattern) | Customer.fiscal_name.ilike(pattern) | Customer.commercial_name.ilike(pattern))
+        rows = db.execute(statement.order_by(Customer.fiscal_name, Customer.id).limit(bounded_limit)).all()
+        items = [{"id": row.id, "code": row.code, "name": row.commercial_name or row.fiscal_name, "reference": row.code} for row in rows]
+    else:
+        statement = select(Product.id, Product.reference, Product.name).where(Product.company_id == user.company_id)
+        if search:
+            pattern = f"%{search}%"
+            statement = statement.where(Product.reference.ilike(pattern) | Product.name.ilike(pattern))
+        rows = db.execute(statement.order_by(Product.name, Product.id).limit(bounded_limit)).all()
+        items = [{"id": row.id, "code": row.reference, "name": row.name, "reference": row.reference} for row in rows]
+    return {"ok": True, "entity_type": normalized_type, "items": items}
+
+
+@router.put("/integrations/onboarding/mappings")
+async def onboarding_mapping(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(_admin_user)):
+    payload = await _payload(request)
+    try:
+        result = save_onboarding_mapping(
+            db,
+            company_id=user.company_id,
+            connection_id=int(payload.get("connection_id")),
+            entity_type=str(payload.get("entity_type") or ""),
+            entity_id=int(payload.get("entity_id")),
+            external_id=str(payload.get("external_id") or ""),
+            external_system=payload.get("external_system"),
+            registry=registry,
+        )
+        db.commit()
+        return {"ok": True, "mapping": result, "readiness": onboarding_readiness(db, company_id=user.company_id, registry=registry)}
+    except (TypeError, ValueError) as exc:
+        db.rollback()
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=400)
+    except (IntegrationConfigurationError, KeyError) as exc:
+        db.rollback()
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=422)
+
+
+@router.post("/integrations/onboarding/dry-run")
+async def onboarding_dry_run(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(_admin_user)):
+    payload = await _payload(request)
+    try:
+        result = execute_onboarding_dry_run(db, company_id=user.company_id, connection_id=int(payload.get("connection_id")), order_id=int(payload["order_id"]) if payload.get("order_id") not in {None, ""} else None, registry=registry)
+        db.commit()
+        return {"ok": True, "dry_run": result}
+    except (TypeError, ValueError, KeyError, IntegrationConfigurationError) as exc:
+        db.rollback()
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=422)
+
+
+@router.post("/integrations/onboarding/test/{connection_id}")
+def onboarding_test(connection_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(_admin_user)):
+    try:
+        result = test_onboarding_connection(db, company_id=user.company_id, connection_id=connection_id, registry=registry)
+        db.commit()
+        return {"ok": True, "test": result, "readiness": onboarding_readiness(db, company_id=user.company_id, registry=registry)}
+    except KeyError as exc:
+        db.rollback()
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/integrations/onboarding/activate")
+async def onboarding_activate(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(_admin_user)):
+    payload = await _payload(request)
+    try:
+        result = activate_onboarding(db, company_id=user.company_id, acknowledge=bool(payload.get("acknowledge")), registry=registry)
+        db.commit()
+        return {"ok": True, "readiness": result}
+    except IntegrationReadinessError as exc:
+        db.rollback()
+        return _readiness_error_response(exc)
+    except (IntegrationConfigurationError, KeyError) as exc:
+        db.rollback()
+        return JSONResponse({"ok": False, "message": str(exc)}, status_code=422)
+
+
+@router.post("/integrations/onboarding/pause")
+def onboarding_pause(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(_admin_user)):
+    result = pause_onboarding(db, company_id=user.company_id, registry=registry)
+    db.commit()
+    return {"ok": True, "readiness": result}
 
 
 @router.post("/integrations/connections")
@@ -287,6 +474,25 @@ def integrations_settings_page(request: Request, db: Session = Depends(get_tenan
             "role_labels": ROLE_LABELS,
             "route": _route_payload(db, user.company_id),
             "audit_events": [integration_audit_to_dict(item) for item in list_integration_audit(db, company_id=user.company_id, limit=20)],
+            "can_edit": user.role.name in {"Administrador", "Superadmin"},
+        },
+    )
+
+
+@router.get("/settings/onboarding")
+def integrations_onboarding_page(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    environment = os.getenv("APP_ENV", "development").strip().lower()
+    definitions = list(registry.list_definitions(environment=environment))
+    return templates.TemplateResponse(
+        "settings/onboarding.html",
+        {
+            "request": request,
+            "user": user,
+            "readiness": onboarding_readiness(db, company_id=user.company_id, registry=registry),
+            "connections": [connection_to_dict(item, registry=registry) for item in list_connections(db, company_id=user.company_id)],
+            "source_definitions": [item.to_dict(environment=environment) for item in definitions if item.direction.value in {"inbound", "bidirectional"}],
+            "destination_definitions": [item.to_dict(environment=environment) for item in definitions if item.direction.value in {"outbound", "bidirectional"}],
+            "roles": ROLE_LABELS,
             "can_edit": user.role.name in {"Administrador", "Superadmin"},
         },
     )
