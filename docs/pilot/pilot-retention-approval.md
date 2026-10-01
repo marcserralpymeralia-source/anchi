@@ -1,27 +1,38 @@
 # Aprobación humana de retención y offboarding del piloto
 
-Estado: **PENDING HUMAN APPROVAL**
+Estado: **APPROVED FOR PILOT**
 
 Fecha de propuesta: 2026-10-01  
 Revisión técnica Block 13: 2026-10-01  
 Ámbito: primer piloto Catalog-only de ANCHI-GEMAVI  
 Datos usados en esta validación: únicamente sintéticos
 
-## Decisión que debe aprobarse
+## Decisión del owner
 
-La persona responsable de Seguridad/Legal y la persona responsable de Operaciones deben aprobar por escrito la matriz de retención, exportación, anonimización, borrado y revocación de accesos antes de cargar datos reales. Este documento es una propuesta técnica; no fija por sí mismo plazos legales ni autoriza el piloto.
+| Pilot Owner | Decision | Date |
+|---|---|---|
+| Marc Serral | APPROVED | 2026-10-01 |
 
-## Tratamiento técnico propuesto
+Esta es la única aprobación humana registrada en este documento. No se inventan aprobadores ni firmas de terceros.
 
-| Clase de dato | Ubicación | Tratamiento durante el piloto | Acción de offboarding | Plazo/criterio final |
-|---|---|---|---|---|
-| Pedidos, clientes, productos y mensajes | Base tenant | Conservar para operación, soporte y trazabilidad | Congelar escritura operativa; conservar hasta decisión aprobada | **Por aprobar** |
-| Entregas, intentos, jobs y errores | Base tenant | Conservar para recovery, auditoría y reconciliación | Pausar trabajos pendientes; conservar histórico | **Por aprobar** |
-| Audit logs y correlation IDs | Base tenant/master | Conservar para evidencia y seguridad | No borrar como efecto automático del offboarding | **Por aprobar** |
-| Secret references | Base tenant | Conservar sólo la referencia al gestor externo; nunca el secreto en esta salida | Revocar el secreto en el gestor externo y registrar resultado | **Por aprobar** |
-| Adjuntos y exports | Storage privado del proveedor | No activar hasta validar storage durable, acceso por tenant y política de PII | Revocar acceso; exportar/borrar/anonimizar según política aprobada | **Por aprobar** |
-| Import previews y temporales | Filesystem/storage temporal | TTL y limpieza con dry-run; no son copia de negocio | Limpiar sólo tras comprobación de no dependencia | **Por aprobar** |
-| Backups | Servicio de backup gestionado | Cifrados, fuera del runtime, con checksum y prueba de restore | Aplicar expiración del backup según política aprobada | **Por aprobar** |
+## Alcance de la política
+
+Estas duraciones son política operacional del primer piloto; no declaran que cada plazo venga impuesto legalmente. Las instrucciones contractuales del responsable del tratamiento pueden sustituirlas cuando ANCHI trate datos por cuenta del cliente.
+
+## Retención piloto aprobada
+
+| Categoría | Retención piloto aprobada |
+|---|---|
+| Pedidos canónicos | Durante el piloto + 90 días después de offboarding, salvo instrucción contractual distinta |
+| Clientes/productos replicados y mappings | Mientras tenant activo + 90 días después de offboarding |
+| Mensajes WhatsApp de origen | 90 días después de procesamiento correcto |
+| Deliveries, attempts, jobs y errores | 12 meses |
+| AuditLog y correlation IDs | 12 meses |
+| Attachments/documentos | 30–90 días después de procesamiento, según necesidad operativa/contractual |
+| Temporales/previews | 24–72 horas |
+| Backups | Rotación inicial de 30 días |
+| Secret references | Mientras exista la conexión; retirar referencia después de revocación confirmada |
+| Datos sujetos a reclamación/obligación de conservación | `BLOCKED/LEGAL HOLD` durante el periodo aplicable |
 
 ## Garantías implementadas
 
@@ -30,22 +41,60 @@ La persona responsable de Seguridad/Legal y la persona responsable de Operacione
 - La acción es idempotente y deja rastro `company.offboard` en master y `tenant.offboard` en tenant.
 - No se implementa borrado destructivo automático del tenant como parte de este bloque.
 
+## Principios operativos aprobados
+
+### ANCHI como sistema operativo intermedio
+
+Cuando ANCHI trate datos por cuenta del cliente, la política definitiva podrá quedar sustituida por las instrucciones contractuales del responsable del tratamiento.
+
+### Offboarding no equivale a borrado
+
+El flujo aprobado es:
+
+```text
+ACTIVE
+  -> OFFBOARDED / tratamiento activo detenido
+  -> RETAINED
+  -> BLOCKED / LEGAL HOLD cuando proceda
+  -> DELETED cuando corresponda
+```
+
+Offboarding detiene nuevas operaciones, pero no destruye automáticamente el histórico.
+
+### Backups
+
+- La eliminación en sistemas activos no requiere manipular individualmente cada backup histórico.
+- Los datos desaparecerán de backups mediante su ciclo de rotación.
+- Un restore no debe devolver deliberadamente a explotación normal datos que ya debían permanecer suprimidos/bloqueados.
+- `pg_dump`/backup de DB no equivale a backup de object storage.
+
+### Safe default
+
+Hasta que exista una instrucción contractual diferente:
+
+- no ejecutar borrado destructivo de Orders;
+- no ejecutar borrado destructivo de AuditLog;
+- preservar histórico requerido para trazabilidad;
+- mantener cleanup técnico de temporales;
+- utilizar dry-run antes de cualquier política futura de cleanup masivo.
+
+RPO/RTO no forman parte de esta política de retención; permanecen en continuidad/backup como decisión separada.
+
 ## Revisión técnica Block 13
 
 - La preservación de pedidos, mensajes, deliveries, jobs, audit y referencias externas quedó verificada en la rehearsal sintética.
 - El filesystem temporal no se acepta como almacenamiento de retención del piloto; falta el storage durable del runtime final.
-- No se ha definido ni inferido ningún plazo legal, RPO/RTO o regla de borrado.
+- Los plazos anteriores son una política operacional aprobada, no una inferencia de obligación legal.
 - La revocación de secretos depende de un gestor externo que no está conectado en este worktree.
 
-El estado permanece **PENDING HUMAN APPROVAL**. Esta revisión técnica no equivale a aprobación de Marc, Seguridad/Legal u Operaciones.
+La política está **APPROVED FOR PILOT** por Marc Serral. Su enforcement automático, storage durable y ejecución en runtime final no están validados; el gate técnico de retención permanece **OPEN**.
 
-## Aprobaciones requeridas
+## Registro de aprobación
 
 | Rol | Nombre | Decisión | Fecha | Firma/enlace |
 |---|---|---|---|---|
-| Seguridad/Legal | ____________________ | PENDING HUMAN APPROVAL | __________ | ____________________ |
-| Operaciones/Owner del piloto | ____________________ | PENDING HUMAN APPROVAL | __________ | ____________________ |
+| Pilot Owner | Marc Serral | APPROVED | 2026-10-01 | Decisión humana registrada |
 
 ## Condición de salida
 
-No se aceptan datos reales ni se declara GO PILOT hasta que los responsables completen esta matriz, definan los plazos y confirmen el tratamiento de backups, logs, storage y revocación externa.
+La aprobación humana no cierra el gate global: el enforcement técnico de retención, storage durable, backups gestionados y revocación externa deben validarse en el runtime final.

@@ -105,17 +105,17 @@ PASS sintético: la entrega fallida apareció en UI, el retry manual fue auditad
 
 PASS técnico sintético: offboarding idempotente, compañía/membership/canales inactivos, jobs/deliveries pendientes pausados, histórico y audit preservados, referencias externas de secreto conservadas para revocación. La confirmación browser final no se declara PASS por la limitación del driver.
 
-## O. RBAC: APPROVED/PENDING
+## O. RBAC: APPROVED
 
-**PENDING HUMAN APPROVAL**.
+**APPROVED** — Pilot Owner: Marc Serral, Decision: APPROVED, Date: 2026-10-01.
 
-La revisión técnica confirma la separación propuesta: Operador/Supervisor no ejecutan offboarding; Administrador opera el tenant; Superadmin gestiona tenants y offboarding. La matriz sigue sin aprobación firmada de Marc/Seguridad/Owner.
+La revisión técnica confirma la separación propuesta: Operador/Supervisor no ejecutan offboarding; Administrador opera el tenant; Superadmin gestiona tenants y offboarding. Queda abierta una discrepancia: `Administrador` hereda `view_technical_logs`, mientras la cadena de permisos de plataforma `Superadmin` no contiene esa clave; aunque las rutas de plataforma usan `require_superadmin`, la separación del permiso técnico no es limpia. No se cambia código en este encargo.
 
-## P. Retention: APPROVED/PENDING
+## P. Retention: APPROVED
 
-**PENDING HUMAN APPROVAL**.
+**APPROVED** — Pilot Owner: Marc Serral, Decision: APPROVED, Date: 2026-10-01.
 
-La revisión técnica confirma preservación de histórico, audit, jobs/deliveries y referencias externas durante offboarding, sin borrado destructivo automático. Los plazos, PII, backups, exportación, anonimización y revocación externa siguen sin aprobación humana.
+La política aprobada define plazos operativos, legal hold, safe default y offboarding sin borrado automático. El enforcement automático, storage durable, backups gestionados y revocación externa no están validados; el gate técnico permanece abierto.
 
 ## Q. P0/P1 abiertos
 
@@ -126,7 +126,7 @@ No se ha demostrado un P0 en esta revisión. Permanecen P1 abiertos:
 - cron del proveedor y alertas externas;
 - backup/restore gestionado, RPO/RTO y retención;
 - browser acceptance del runtime final;
-- aprobación humana RBAC y retention;
+- discrepancia técnica de `view_technical_logs` y enforcement de retención;
 - manifest/configuration drift del entorno que se vaya a entregar.
 
 Email autodiscovery y audio/transcripción quedan fuera del contrato, pero sus fallos permanecen documentados.
@@ -135,4 +135,4 @@ Email autodiscovery y audio/transcripción quedan fuera del contrato, pero sus f
 
 **NO GO**
 
-No se ejecutan deploy, push, cambios remotos, uso de credenciales, activación de HTTP externo ni tráfico real. El gate sólo puede reconsiderarse cuando exista un runtime final aislado y autorizado, se cierren todos los P1 y Marc/Seguridad/Owner cambien explícitamente RBAC y retention a aprobados.
+No se ejecutan deploy, push, cambios remotos, uso de credenciales, activación de HTTP externo ni tráfico real. El gate sólo puede reconsiderarse cuando exista un runtime final aislado y autorizado y se cierren los P1 técnicos restantes, incluida la discrepancia RBAC y el enforcement de retention.

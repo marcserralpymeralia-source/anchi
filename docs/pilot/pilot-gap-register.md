@@ -105,8 +105,8 @@ La evidencia sintética adicional está documentada en [block-12-1-final-runtime
 | Web/worker separados | PASS sintético | procesos independientes, heartbeat y recuperación tras reinicio | Alerta externa pendiente |
 | Scheduler/cron | PASS local condicionado | secreto, heartbeat previo, doble ejecución sin duplicación | Proveedor y alertas OPEN; bloqueante |
 | Failed delivery/manual recovery | PASS sintético | browser mostró delivery fallida y retry; worker dejó error clasificado | Repetir con destino aprobado |
-| Offboarding | PASS servicio/ORM sintético | canales 4/4 inactivos, memberships, audit e histórico conservado | Aprobación humana pendiente |
-| RBAC/retención | PENDING HUMAN APPROVAL | documentos de aprobación creados | Bloqueante |
+| Offboarding | PASS servicio/ORM sintético | canales 4/4 inactivos, memberships, audit e histórico conservado | Aprobación humana registrada; runtime final pendiente |
+| RBAC/retención | APPROVED HUMAN / OPEN TECHNICAL | aprobación de Marc Serral registrada; discrepancias técnicas y runtime final pendientes | Bloqueante |
 | Browser final | OPEN | navegador nativo local; confirmación final bloqueada por driver | Repetir en navegador/proveedor final |
 
 La suite crítica del piloto terminó con **207 tests, 0 failures, 0 errors**. El full suite terminó con `681 tests, 4 failures, 1 skipped`; los cuatro casos son los tres fallos de email autodiscovery y el fallo de audio/transcripción ya clasificados como fuera del contrato Catalog-only. La decisión vigente permanece **NO GO**.
@@ -122,8 +122,17 @@ La validación completa está documentada en [block-13-final-pilot-gate.md](./bl
 | G-09/G-10 | PostgreSQL/backup | PASS sintético / OPEN final | fresh/upgrade/restore heredados de Block 12.1; proveedor gestionado no validado | Sí |
 | G-11/G-12 | Worker/cron/alerts | PASS local condicionado / OPEN proveedor | procesos separados, heartbeat y cron idempotente local; sin alertas/proveedor | Sí |
 | G-13 | Runtime drift | OPEN | Docker/Vercel/Procfile describen topologías distintas; no existe manifest final enlazado | Sí |
-| G-17 | RBAC | PENDING HUMAN APPROVAL | revisión técnica Block 13 añadida; sin firma humana | Sí |
+| G-17 | RBAC | APPROVED HUMAN / OPEN TECHNICAL | aprobación de Marc registrada; `view_technical_logs` sigue heredado por Administrador | Sí |
 | G-18 | Browser | OPEN | smoke local; sin runtime/browser final y confirmación offboarding bloqueada por driver | Sí |
 | G-25 | Generic REST/SecretProvider | OPEN | `generic_rest` es `runtime_enabled=false`, `mock_only=true`, `future_secret_provider`; sin destino real autorizado | Sí |
 
 Los fallos aislados de email autodiscovery y audio/transcripción siguen fuera del contrato y no bloquean por sí mismos el perfil Catalog-only. No se habilitó ningún módulo opcional ni se modificó código para ocultar resultados.
+
+### Corrección de estado tras decisión del owner
+
+Marc Serral aprobó expresamente RBAC y retention el 2026-10-01. La aprobación humana queda registrada, pero no se cierran automáticamente los gates técnicos:
+
+| Gate | Estado humano | Estado técnico | Motivo |
+|---|---|---|---|
+| RBAC | `APPROVED FOR PILOT` | **OPEN** | `Administrador` hereda `view_technical_logs` y la cadena de permisos de Superadmin no contiene esa clave; la separación técnica no es limpia |
+| Retention | `APPROVED FOR PILOT` | **OPEN** | No hay enforcement automático/runtime final de plazos, storage durable, backup gestionado o revocación externa |
