@@ -104,6 +104,33 @@ class ImportStorageTests(unittest.TestCase):
             self.assertEqual(path.parent.parent.parent.name, "tenants")
             self.assertEqual(read_attachment(storage_ref), b"tenant-file")
 
+    def test_storage_readiness_probes_local_filesystem(self):
+        from app.core.storage import check_storage_readiness
+
+        with tempfile.TemporaryDirectory() as tempdir, patch.dict(
+            os.environ,
+            {"TEMP_STORAGE_DIR": tempdir, "VERCEL": "", "VERCEL_ENV": ""},
+            clear=False,
+        ):
+            result = check_storage_readiness()
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["backend"], "filesystem")
+        self.assertEqual(result["probe"], "write_read_delete")
+
+    def test_storage_readiness_rejects_vercel_without_blob_configuration(self):
+        from app.core.storage import check_storage_readiness
+
+        with patch.dict(
+            os.environ,
+            {"TEMP_STORAGE_DIR": "", "VERCEL": "1", "VERCEL_ENV": "production", "BLOB_READ_WRITE_TOKEN": ""},
+            clear=False,
+        ):
+            result = check_storage_readiness()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error_type"], "missing_configuration")
+
 
 if __name__ == "__main__":
     unittest.main()

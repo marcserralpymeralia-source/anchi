@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from sqlalchemy import create_engine, func, select
@@ -29,6 +30,7 @@ from app.orders.delivery import (  # noqa: E402
 from app.orders.modular import process_inbound_order_event  # noqa: E402
 from app.connectors.identity import bind_external_identity  # noqa: E402
 from app.workers.jobs_worker import _process_job  # noqa: E402
+from app.orders.routes import retry_failed_delivery  # noqa: E402
 
 
 class OrderDeliveryReliabilityTests(unittest.TestCase):
@@ -193,6 +195,31 @@ class OrderDeliveryReliabilityTests(unittest.TestCase):
         self.assertEqual(delivery.status, "exported")
         self.assertEqual(delivery.attempt_count, 3)
         self.assertEqual(db.scalar(select(func.count()).select_from(OrderDelivery)), 1)
+        db.close()
+
+    def test_manual_retry_route_is_tenant_scoped_and_returns_delivery_identity(self):
+        db = self.Session()
+        _order, delivery = self._create_order(db, "evt-manual-route")
+        delivery.max_attempts = 1
+        fake = FakeERPConnector(scenario="temporary_unavailable")
+        with self.assertRaises(DeliveryProcessingError):
+            process_order_delivery(db, delivery, registry=ConnectorRegistry([fake]))
+        db.commit()
+
+        response = retry_failed_delivery(
+            delivery.id,
+            SimpleNamespace(headers={"accept": "application/json"}),
+            reason="Destino recuperado en prueba de operación",
+            db=db,
+            user=SimpleNamespace(id=7, company_id=1, role=SimpleNamespace(name="Supervisor")),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.body.decode("utf-8")
+        self.assertIn('"delivery_id":', payload)
+        self.assertIn('"status":"queued"', payload)
+        self.assertEqual(db.scalar(select(func.count()).select_from(OrderDelivery)), 1)
+        self.assertEqual(delivery.status, "queued")
         db.close()
 
     def test_remote_success_then_local_timeout_reconciles_without_duplicate(self):

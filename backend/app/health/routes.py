@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.auth.dependencies import current_tenant_user, require_master_admin
 from app.admin.diagnostics import company_diagnostics, company_diagnostics_overview
 from app.core.metrics import snapshot_metrics
+from app.core.storage import check_storage_readiness
 from app.master.database import get_master_db
 from app.master.migrations import master_migration_report
 from app.tenancy.database import get_tenant_db
@@ -45,6 +46,7 @@ def health_live(request: Request):
 def health_ready(request: Request, master_db: Session = Depends(get_master_db)):
     tenant = getattr(request.state, "tenant", None)
     master_schema = master_migration_report(master_db, persist=False)
+    storage = check_storage_readiness()
     payload = {
         "ok": True,
         "timestamp": datetime.now(timezone.utc),
@@ -57,7 +59,8 @@ def health_ready(request: Request, master_db: Session = Depends(get_master_db)):
         "request_id": getattr(request.state, "request_id", None),
         "correlation_id": getattr(request.state, "correlation_id", None) or getattr(request.state, "request_id", None),
         "metrics": snapshot_metrics(),
-        "storage_ready": True,
+        "storage_ready": bool(storage["ok"]),
+        "storage": storage,
         "workers_ready": {"email_sync": is_email_sync_worker_started(), "jobs": is_job_worker_started()},
     }
     if tenant and tenant.company.database_url:
@@ -71,7 +74,7 @@ def health_ready(request: Request, master_db: Session = Depends(get_master_db)):
     master_schema_status = payload["master_schema_report"].get("status")
     master_schema_ok = master_schema_status == "current"
     payload["master_schema_ok"] = master_schema_ok
-    payload["ok"] = bool(payload["master"] and (not tenant or payload.get("tenant_ping", True)) and master_schema_ok)
+    payload["ok"] = bool(payload["master"] and (not tenant or payload.get("tenant_ping", True)) and master_schema_ok and storage["ok"])
     if tenant and tenant.company.database_url:
         tenant_schema_status = payload["tenant_schema_report"].get("status")
         tenant_schema_ok = tenant_schema_status == "current"

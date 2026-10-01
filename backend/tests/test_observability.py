@@ -264,7 +264,12 @@ class ObservabilityTests(unittest.TestCase):
         tenant_request.state.request_id = "req-3"
         tenant_request.state.correlation_id = "corr-3"
 
-        ready = health_ready(tenant_request, db)
+        with patch.dict(
+            os.environ,
+            {"TEMP_STORAGE_DIR": str(self.tempdir.name), "VERCEL": "", "VERCEL_ENV": ""},
+            clear=False,
+        ):
+            ready = health_ready(tenant_request, db)
         live = health_live(tenant_request)
         diagnostics = company_diagnostics(db, 1)
 

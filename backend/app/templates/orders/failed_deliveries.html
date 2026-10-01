@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% set title = "Entregas fallidas" %}
+{% block content %}
+<section class="page-section stack">
+  <div class="section-title-row">
+    <div>
+      <span class="page-kicker">Recuperación operativa</span>
+      <h2>Entregas fallidas</h2>
+      <p class="muted">Reabre la misma intención de entrega. No se crea un segundo outbox ni se cambia la clave de idempotencia.</p>
+    </div>
+    <div class="actions">
+      <a class="button secondary" href="/jobs/monitor?status=failed&job_type=deliver_order">Ver jobs de entrega</a>
+      <a class="button secondary" href="/orders">Pedidos</a>
+    </div>
+  </div>
+  {% if request.query_params.get("error") %}<div class="flash error" role="alert">{{ request.query_params.get("error") }}</div>{% endif %}
+  {% if request.query_params.get("message") %}<div class="flash success" role="status">{{ request.query_params.get("message") }}</div>{% endif %}
+</section>
+
+<section class="panel stack">
+  <div class="section-title-row">
+    <div>
+      <h3>{{ deliveries|length }} entrega{% if deliveries|length != 1 %}s{% endif %} requieren recuperación</h3>
+      <p class="muted">La acción está limitada a Administrador y Supervisor y queda auditada.</p>
+    </div>
+    <a class="button secondary compact-button" href="/orders/deliveries/failed">Refrescar</a>
+  </div>
+  <div class="jobs-list">
+    {% for delivery in deliveries %}
+      <article class="job-card job-status-failed">
+        <div class="job-card-main">
+          <div class="job-card-title-row">
+            <div class="job-card-title-wrap">
+              <strong class="job-card-title">Entrega #{{ delivery.id }} · Pedido #{{ delivery.order_id }}</strong>
+              <small class="muted">{{ delivery.destination_connector_key }} · {{ delivery.updated_at | local_dt(tenant_timezone, "%d/%m/%Y %H:%M") }}</small>
+            </div>
+            <span class="job-status-pill job-status-failed">Fallida</span>
+          </div>
+          <div class="job-card-meta">
+            <span class="job-pill">Intentos {{ delivery.attempt_count }}/{{ delivery.max_attempts }}</span>
+            <span class="job-pill">Tipo {{ delivery.last_error_type or "sin tipo" }}</span>
+            <span class="job-pill">Clave {{ delivery.idempotency_key[:18] }}</span>
+          </div>
+          <div class="job-error-block">
+            <span class="job-preview-label">Último error</span>
+            <p>{{ delivery.last_error or "Sin detalle registrado" }}</p>
+          </div>
+        </div>
+        <div class="job-card-actions">
+          <form class="js-loading-form" method="post" action="/orders/deliveries/{{ delivery.id }}/retry">
+            <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
+            <input type="hidden" name="reason" value="Recuperación operativa desde entregas fallidas">
+            <button class="secondary compact-button" data-loading-text="Encolando...">Reintentar entrega</button>
+          </form>
+          <a class="button secondary compact-button" href="/orders/{{ delivery.order_id }}">Abrir pedido</a>
+        </div>
+      </article>
+    {% else %}
+      <p class="muted">No hay entregas fallidas para este tenant.</p>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

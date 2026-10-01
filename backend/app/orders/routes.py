@@ -12,7 +12,7 @@ from app.core.templating import templates
 from app.dashboard.service import load_order_view_data, order_sender, orders_workbench_summary
 from app.agent.platform import LearningService
 from app.agent.services import MockAgentService, ScoringService
-from app.auth.dependencies import current_user
+from app.auth.dependencies import current_user, require_tenant_role
 from app.core.channel_identity import is_whatsapp_provider, order_channel_key
 from app.master.service import TenantUser
 from app.db.models import Conversation, Customer, CustomerContactPoint, Email, EmailAttachment, ExportFile, FTPSettings, InboundMessage, ManualCorrection, Order, OrderLine, Product, RagCase, ScoringSettings, User, utcnow
@@ -32,6 +32,7 @@ from app.orders.service import (
     order_score_category,
     validate_confirmation,
 )
+from app.orders.delivery import list_failed_deliveries, retry_order_delivery
 from app.orders.state import ORDER_STATE
 from app.orders.scoring import is_positive_quantity
 from app.settings.service import get_or_create_settings, resolve_updated_by_id
@@ -39,6 +40,59 @@ from app.tenancy.database import get_tenant_db
 from app.core.attachment_storage import read_attachment
 
 router = APIRouter(prefix="/orders", tags=["orders"])
+
+
+@router.get("/deliveries/failed")
+def failed_deliveries_page(
+    request: Request,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    deliveries = list_failed_deliveries(db, company_id=user.company_id, limit=100)
+    return templates.TemplateResponse(
+        "orders/failed_deliveries.html",
+        {
+            "request": request,
+            "user": user,
+            "deliveries": deliveries,
+        },
+    )
+
+
+@router.post("/deliveries/{delivery_id}/retry")
+def retry_failed_delivery(
+    delivery_id: int,
+    request: Request,
+    reason: str = Form(""),
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(require_tenant_role("Administrador", "Supervisor")),
+):
+    delivery = retry_order_delivery(db, company_id=user.company_id, delivery_id=delivery_id)
+    if delivery is None:
+        if "application/json" in (request.headers.get("accept") or ""):
+            return JSONResponse({"ok": False, "detail": "Entrega no encontrada."}, status_code=404)
+        return RedirectResponse("/orders/deliveries/failed?error=Entrega%20no%20encontrada", status_code=303)
+    log_action(
+        db,
+        company_id=user.company_id,
+        user=user,
+        action="order.delivery.manual_retry",
+        entity_type="order_delivery",
+        entity_id=delivery.id,
+        message=(reason.strip()[:500] or "Reintento manual solicitado desde operaciones."),
+    )
+    db.commit()
+    payload = {
+        "ok": True,
+        "delivery_id": delivery.id,
+        "order_id": delivery.order_id,
+        "status": delivery.status,
+        "attempt_count": delivery.attempt_count,
+        "idempotency_key": delivery.idempotency_key,
+    }
+    if "application/json" in (request.headers.get("accept") or ""):
+        return JSONResponse(payload)
+    return RedirectResponse("/orders/deliveries/failed?message=Reintento%20encolado", status_code=303)
 
 
 def _conversation_preview(order: Order | None) -> dict | None:
