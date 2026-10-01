@@ -2,7 +2,7 @@
 
 Fecha de auditoría: 2026-10-01
 
-Ámbito: Block 12, ANCHI-GEMAVI, worktree `modular-order-hub`
+Ámbito: Block 13, ANCHI-GEMAVI, worktree `modular-order-hub`
 Decisión de alcance: auditoría y preparación operativa. Este documento no autoriza una remediation spree.
 
 ## Cómo leer el registro
@@ -110,3 +110,20 @@ La evidencia sintética adicional está documentada en [block-12-1-final-runtime
 | Browser final | OPEN | navegador nativo local; confirmación final bloqueada por driver | Repetir en navegador/proveedor final |
 
 La suite crítica del piloto terminó con **207 tests, 0 failures, 0 errors**. El full suite terminó con `681 tests, 4 failures, 1 skipped`; los cuatro casos son los tres fallos de email autodiscovery y el fallo de audio/transcripción ya clasificados como fuera del contrato Catalog-only. La decisión vigente permanece **NO GO**.
+
+## Addendum Block 13 — Final Pilot Gate
+
+La validación completa está documentada en [block-13-final-pilot-gate.md](./block-13-final-pilot-gate.md) y el contrato formal en [catalog-only-pilot-profile.md](./catalog-only-pilot-profile.md).
+
+| ID | Área | Estado Block 13 | Evidencia | ¿Bloquea? |
+|---|---|---|---|---|
+| G-01/G-02 | Storage/readiness | OPEN | No existe runtime final con `write → restart → read`; sólo filesystem temporal sintético | Sí |
+| G-08 | Failed delivery | PASS sintético / OPEN final | UI, retry, worker y audit validados sintéticamente; destino final no disponible | Sí hasta staging/final |
+| G-09/G-10 | PostgreSQL/backup | PASS sintético / OPEN final | fresh/upgrade/restore heredados de Block 12.1; proveedor gestionado no validado | Sí |
+| G-11/G-12 | Worker/cron/alerts | PASS local condicionado / OPEN proveedor | procesos separados, heartbeat y cron idempotente local; sin alertas/proveedor | Sí |
+| G-13 | Runtime drift | OPEN | Docker/Vercel/Procfile describen topologías distintas; no existe manifest final enlazado | Sí |
+| G-17 | RBAC | PENDING HUMAN APPROVAL | revisión técnica Block 13 añadida; sin firma humana | Sí |
+| G-18 | Browser | OPEN | smoke local; sin runtime/browser final y confirmación offboarding bloqueada por driver | Sí |
+| G-25 | Generic REST/SecretProvider | OPEN | `generic_rest` es `runtime_enabled=false`, `mock_only=true`, `future_secret_provider`; sin destino real autorizado | Sí |
+
+Los fallos aislados de email autodiscovery y audio/transcripción siguen fuera del contrato y no bloquean por sí mismos el perfil Catalog-only. No se habilitó ningún módulo opcional ni se modificó código para ocultar resultados.

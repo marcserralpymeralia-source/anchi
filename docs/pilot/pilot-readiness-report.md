@@ -2,14 +2,14 @@
 
 Fecha: 2026-10-01
 
-Versión auditada: baseline Block 10/11 `3df6d8b` más validación Block 12.1 sin commit
+Versión auditada: `ce99718` más validación documental Block 13 sin commit
 Resultado: **NO GO**
 
 ## Resumen ejecutivo
 
 El camino más seguro para un primer piloto es WhatsApp Catalog estructurado → un único destino REST/ERP, con revisión humana para excepciones. La lógica de deduplicación, aislamiento de tenant, outbox, backoff, reconciliación y roles tiene evidencia automatizada positiva.
 
-No se recomienda abrir todavía un piloto con adjuntos, email autodiscovery/backfill, audio/transcripción o múltiples conectores. Block 12.1 añade una rehearsal PostgreSQL sintética, backup/restore master+tenant, procesos separados web/worker, heartbeats, scheduler, readiness y offboarding; siguen abiertos storage durable del proveedor, cron/alertas externas, browser final y aprobaciones humanas de RBAC/retención. La evidencia detallada está en [block-12-1-final-runtime-validation.md](./block-12-1-final-runtime-validation.md).
+No se recomienda abrir todavía un piloto con adjuntos, email autodiscovery/backfill, audio/transcripción o múltiples conectores. Block 13 formaliza el perfil Catalog-only, confirma la suite crítica en 207/207, clasifica los cuatro fallos residuales fuera de alcance y detecta que Generic REST sigue siendo mock-only. Siguen abiertos storage durable del proveedor, SecretProvider real, cron/alertas externas, browser final y aprobaciones humanas de RBAC/retención. La evidencia está en [block-13-final-pilot-gate.md](./block-13-final-pilot-gate.md).
 
 ## Evidencia ejecutada
 
@@ -24,6 +24,7 @@ No se recomienda abrir todavía un piloto con adjuntos, email autodiscovery/back
 | Fresh deployment browser smoke | Login, pedidos, workbench y entregas fallidas visibles en servidor sintético |
 | Smoke sintético de volumen | 100 pedidos → 100 deliveries → 100 jobs |
 | Suite Block 12.1 | Suite crítica 207 tests, 0 failures, 0 errors; full suite 681 tests, 4 fallos y 1 skip, todos los fallos clasificados fuera de Catalog-only |
+| Block 13 residual isolation | 4/4 fallos reproducidos individualmente; 3 email autodiscovery y 1 audio/transcripción, todos excluidos |
 
 El full suite y cada fallo están clasificados en [pilot-gap-register.md](./pilot-gap-register.md). Los cuatro fallos de multitenancy se reprodujeron como 4/4 OK al ejecutar el módulo aislado; no deben ocultarse, pero apuntan a contaminación de estado/orden de suite.
 
@@ -51,7 +52,7 @@ Excluido:
 | Dimensión | Estado | Lectura |
 |---|---|---|
 | Funcionalidad Catalog | Verde condicionado | 10/10; deduplicación, mappings, review y outbox cubiertos |
-| Entrega | Verde condicionado | 13/13; retries, reconciliación, tenant scope y concurrencia cubiertos |
+| Entrega | Verde condicionado | 13/13; retries, reconciliación, tenant scope y concurrencia cubiertos; destino REST real pendiente |
 | Multitenancy/RBAC | Ámbar | determinismo offline corregido; falta matriz firmada y aceptación final |
 | Storage | Ámbar condicionado | supervivencia entre procesos/readiness OK; persistencia final y Blob/volumen aún no demostrados |
 | DB/migraciones | Ámbar | fresh install, upgrade/no-op y backup/restore PostgreSQL sintético OK; falta proveedor final/política gestionada |

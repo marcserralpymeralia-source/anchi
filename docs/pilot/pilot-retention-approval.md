@@ -3,6 +3,7 @@
 Estado: **PENDING HUMAN APPROVAL**
 
 Fecha de propuesta: 2026-10-01  
+Revisión técnica Block 13: 2026-10-01  
 Ámbito: primer piloto Catalog-only de ANCHI-GEMAVI  
 Datos usados en esta validación: únicamente sintéticos
 
@@ -18,7 +19,7 @@ La persona responsable de Seguridad/Legal y la persona responsable de Operacione
 | Entregas, intentos, jobs y errores | Base tenant | Conservar para recovery, auditoría y reconciliación | Pausar trabajos pendientes; conservar histórico | **Por aprobar** |
 | Audit logs y correlation IDs | Base tenant/master | Conservar para evidencia y seguridad | No borrar como efecto automático del offboarding | **Por aprobar** |
 | Secret references | Base tenant | Conservar sólo la referencia al gestor externo; nunca el secreto en esta salida | Revocar el secreto en el gestor externo y registrar resultado | **Por aprobar** |
-| Adjuntos y exports | Storage privado del proveedor | No activar hasta validar storage durable, acceso por tenant y política de PII | Revocar acceso; exportar/borrar/anonomizar según política aprobada | **Por aprobar** |
+| Adjuntos y exports | Storage privado del proveedor | No activar hasta validar storage durable, acceso por tenant y política de PII | Revocar acceso; exportar/borrar/anonimizar según política aprobada | **Por aprobar** |
 | Import previews y temporales | Filesystem/storage temporal | TTL y limpieza con dry-run; no son copia de negocio | Limpiar sólo tras comprobación de no dependencia | **Por aprobar** |
 | Backups | Servicio de backup gestionado | Cifrados, fuera del runtime, con checksum y prueba de restore | Aplicar expiración del backup según política aprobada | **Por aprobar** |
 
@@ -28,6 +29,15 @@ La persona responsable de Seguridad/Legal y la persona responsable de Operacione
 - El endpoint no muestra secretos y devuelve únicamente referencias externas para revocación.
 - La acción es idempotente y deja rastro `company.offboard` en master y `tenant.offboard` en tenant.
 - No se implementa borrado destructivo automático del tenant como parte de este bloque.
+
+## Revisión técnica Block 13
+
+- La preservación de pedidos, mensajes, deliveries, jobs, audit y referencias externas quedó verificada en la rehearsal sintética.
+- El filesystem temporal no se acepta como almacenamiento de retención del piloto; falta el storage durable del runtime final.
+- No se ha definido ni inferido ningún plazo legal, RPO/RTO o regla de borrado.
+- La revocación de secretos depende de un gestor externo que no está conectado en este worktree.
+
+El estado permanece **PENDING HUMAN APPROVAL**. Esta revisión técnica no equivale a aprobación de Marc, Seguridad/Legal u Operaciones.
 
 ## Aprobaciones requeridas
 

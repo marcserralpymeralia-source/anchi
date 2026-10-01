@@ -3,6 +3,7 @@
 Estado: **PENDING HUMAN APPROVAL**
 
 Fecha de propuesta: 2026-10-01  
+Revisión técnica Block 13: 2026-10-01  
 Ámbito: primer piloto Catalog-only de ANCHI-GEMAVI  
 Datos usados en esta validación: únicamente sintéticos
 
@@ -23,6 +24,16 @@ Datos usados en esta validación: únicamente sintéticos
 | Ver logs técnicos de plataforma | No | No | No | Sí, sólo necesidad operativa |
 
 La matriz se basa en `DEFAULT_ROLE_PERMISSIONS` y en la dependencia de permisos de las rutas. La tabla es una propuesta de mínimo privilegio y debe ser confirmada por el owner del piloto y Seguridad.
+
+## Revisión técnica Block 13
+
+- `Administrador` y `Supervisor` son los únicos roles tenant autorizados para recovery manual de entregas fallidas.
+- `Operador` no tiene `manage_tenants`, `manage_users`, `configure_integrations` ni la ruta de offboarding.
+- `Superadmin` es necesario para gestionar tenants/offboarding; la ruta exige actor de plataforma, motivo y CSRF.
+- Las pruebas de aislamiento, permisos y offboarding pasan dentro de la suite pilot-critical.
+- No se ha revisado ninguna cuenta humana real, MFA, caducidad ni lista de soporte porque no existe un entorno final autorizado.
+
+Esta revisión técnica no equivale a aprobación. El documento permanece **PENDING HUMAN APPROVAL**.
 
 ## Controles de offboarding y soporte
 
