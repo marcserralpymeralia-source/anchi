@@ -46,3 +46,14 @@ Esta lista es una condición previa; no queda satisfecha por el trabajo del BLOQ
 - [ ] Se ejecuta la regresión de Generic REST, Odoo, Sage, registry, outbox y observabilidad.
 - [ ] Se revisan diff, migraciones, logs y un rollback operativo antes de cambiar el gate.
 - [ ] La aprobación de seguridad identifica explícitamente el tenant, connector, host y periodo de habilitación.
+
+## Evidencia BLOQUE 8.1
+
+- [x] Se validó opt-in contra `https://postman-echo.com` el 2026-10-01 con tenant/connection y SQLite temporales.
+- [x] GET y POST devolvieron HTTP 200; el POST confirmó body echo y mapping ficticio de transporte.
+- [x] Generic REST dry-run se comparó con el body POST recibido; `OrderDelivery` sintético terminó correctamente.
+- [x] Credential injection ficticio y redacción del header reflejado fueron verificadas.
+- [x] Allowlist exacta, localhost, kill switch y connector gate fueron verificados sin requests no autorizados.
+- [x] El opt-in real está separado de la suite offline y queda desactivado por defecto.
+
+Esta evidencia no habilita Sage, Odoo ni ningún connector real productivo; la checklist de habilitación contractual sigue pendiente.
