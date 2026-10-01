@@ -1,7 +1,7 @@
-# Modular Order Hub — estado de BLOQUE 5
+# Modular Order Hub — estado de BLOQUE 6
 
-Fecha: 2026-09-30
-Estado: BLOQUE 5 implementado localmente en `feat/modular-order-hub`; Sage 200 ES usa solo transporte mock y no hay HTTP externo real.
+Fecha: 2026-10-01
+Estado: BLOQUE 6 implementado localmente en `feat/modular-order-hub`; Sage 200 ES y Odoo usan solo transportes mock y no hay HTTP externo real.
 
 ## Decisión de dominio
 
@@ -54,6 +54,16 @@ WhatsApp Catalog fixture → WhatsAppCatalogInboundConnector
         → SAGE-ORDER-000001 → Order exported
 ```
 
+El PoC Odoo demuestra un segundo ERP sin modificar WhatsApp, `Order`, Workbench ni reliability:
+
+```text
+WhatsApp Catalog fixture → WhatsAppCatalogInboundConnector
+        → Order / ExternalIdentity → OrderDelivery
+        → OdooConnector (`odoo`)
+        → OdooClient → MockOdooJSON2Transport
+        → ODOO-ORDER-000001 → Order exported
+```
+
 Los inputs estructurados no calculan confidence semántico: `extraction_confidence` queda en cero y la validación depende de identidad, producto y cantidad. Un pedido estructurado validado no queda bloqueado por el umbral de scoring semántico.
 
 Los inputs desconocidos producen `pending_review` y razones explícitas; no crean un pedido externo. Un pedido validado pasa a `ready_to_export` y la entrega queda separada del procesamiento inbound.
@@ -85,7 +95,17 @@ En `backend/app/connectors/sage200es.py`:
 - `Sage200ESConfig.real_http_enabled` es `False` por defecto y rechaza HTTP real en esta fase.
 - `capabilities` permanece vacío para impedir runtime enablement; `mock_capabilities` documenta el alcance del fixture.
 
-El contrato está preparado para nuevos conectores. Sage 200 ES tiene un PoC local mock; SAP, Odoo, Meta, Shopify, WooCommerce y Salesforce siguen planificados.
+En `backend/app/connectors/odoo.py`:
+
+- `OdooConnector` usa el identifier explícito `odoo` para Odoo 19+ JSON-2.
+- `OdooClient` construye requests `/json/2/<model>/<method>` sin guardar ni emitir API keys.
+- `MockOdooJSON2Transport` simula clientes `res.partner`, variantes `product.product`, pricing y `sale.order`.
+- `OdooSalesOrderMapper` es puro, conserva variante y diferencia `source_price`/`authoritative_price`.
+- El pedido queda en `draft`; no se ejecuta `action_confirm`.
+- Los campos concretos y la estrategia `client_order_ref` están marcados `UNVERIFIED_ODOO_CONTRACT` hasta revisar `/doc` de una base cliente.
+- `real_http_enabled` está bloqueado y las capabilities reales permanecen vacías.
+
+El contrato está preparado para nuevos conectores. Sage 200 ES y Odoo tienen PoC local mock; el HTTP Odoo real, SAP, Meta, Shopify, WooCommerce y Salesforce siguen fuera de scope.
 
 ## Identidades externas
 
@@ -174,6 +194,7 @@ La migración `2026.09.30.4 — tenant integration registry` crea `integration_c
 - Integraciones: WhatsApp/email reutilizan su configuración tenant-scoped legacy; la nueva conexión guarda solo configuración no secreta y deja una frontera explícita para un futuro SecretProvider.
 - Lazy loading: listar definitions no importa ni instancia adapters; el factory se importa únicamente al resolver una conexión activa o ejecutar su health on-demand.
 - El procesamiento inbound no depende de la disponibilidad del destino; un fallo de connector A no bloquea connector B.
+- Odoo no busca clientes por nombre/teléfono en outbound: exige `ExternalIdentity` tenant-scoped para `res.partner` y `product.product`.
 
 ## WhatsApp Catalog inbound
 
@@ -231,9 +252,9 @@ Las cantidades cero, negativas, no numéricas o no finitas, las monedas inválid
 
 - No hay outbound Catalog, respuestas automáticas de producto ni confirmación de pedido por Meta.
 - No hay sincronización ERP → Meta Catalog ni llamadas a `whatsapp_commerce_settings`.
-- No hay ERP real ni HTTP Sage: el destino Sage del PoC es `MockSage200ESTransport` y el destino legacy sigue siendo FakeERP.
+- No hay ERP real ni HTTP Sage/Odoo: los destinos PoC son `MockSage200ESTransport` y `MockOdooJSON2Transport`; el destino legacy sigue siendo FakeERP.
 - No se añadió UI de mapping; los helpers de `ExternalIdentity` permiten seeds y operaciones futuras.
 
 ## Siguiente fase
 
-BLOQUE 4C será la primera validación contra una instancia Sage 200 real/controlada. Requiere producto exacto, versión, Advanced, Soluciones Conectadas activa, site, credenciales/API y autorización explícita. No se debe habilitar `HTTPSage200ESTransport` ni HTTP real antes de cerrar el informe de contract verification.
+BLOQUE 4C será la primera validación contra una instancia Sage 200 real/controlada. Requiere completar también discovery Odoo y verificar `/doc` de una base cliente. No se debe habilitar `HTTPOdooJSON2Transport`, `HTTPSage200ESTransport` ni HTTP real antes de cerrar los informes de contract verification.

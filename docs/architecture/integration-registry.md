@@ -21,7 +21,7 @@ lazy connector instance
 
 `IntegrationRegistry` vive en `backend/app/connectors/registry.py`. Sus definiciones no contienen estado de tenant y listar el registro no importa ni instancia adapters. Cada definición declara:
 
-- key estable: `whatsapp_catalog`, `email`, `fake_inbound`, `fake_erp`, `sage_200_es`;
+- key estable: `whatsapp_catalog`, `email`, `fake_inbound`, `fake_erp`, `sage_200_es`, `odoo`;
 - display name, dirección y madurez `stable`/`experimental`;
 - capabilities runtime verificadas;
 - `mock_capabilities` separadas de las capabilities reales;
@@ -32,6 +32,8 @@ lazy connector instance
 Sage 200 ES mantiene `capabilities=[]` porque BLOQUE 4B no verificó el contrato runtime. Sus capabilities mock solo se consideran en `APP_ENV=development/test` y no habilitan HTTP. `real_http_enabled=true` siempre queda bloqueado.
 
 FakeInbound y FakeERP solo aparecen en el listado operativo de `development/test`. No se ofrecen como opciones productivas.
+
+Odoo 19+ JSON-2 aparece como `odoo`, pero es `mock_only`: sus capabilities runtime son vacías hasta verificar el `/doc` de una base concreta. En `development/test` sus fixtures exponen clientes, variantes de producto, pricing y pedidos; `inventory.read` no se declara. `real_http_enabled=true` y la activación fuera de `development/test` quedan bloqueadas.
 
 ## IntegrationConnection
 
@@ -86,7 +88,7 @@ Resolver una conexión sigue siempre esta secuencia:
 4. importar la factory del connector;
 5. instanciar solo esa conexión.
 
-No se inicializan Sage, FakeERP ni futuros Odoo/Shopify/Salesforce al arrancar ANCHI. El health es on-demand y solo afecta a la conexión solicitada. Para Sage la instancia siempre utiliza `MockSage200ESTransport` en este bloque.
+No se inicializan Sage, FakeERP ni futuros Odoo/Shopify/Salesforce al arrancar ANCHI. El health es on-demand y solo afecta a la conexión solicitada. Para Sage la instancia siempre utiliza `MockSage200ESTransport` en este bloque. Para Odoo la cadena es `OdooConnector → OdooClient → MockOdooJSON2Transport`; no se importa ni ejecuta HTTP real. Los modelos conceptuales `res.partner`, `product.product` y `sale.order` permanecen sujetos a verificación dinámica en `/doc`.
 
 ## API interna y UI
 
@@ -111,7 +113,7 @@ Los tenants con `OrderRoute.destination_connector_key` siguen operativos. Los de
 
 - Sage HTTP real y contrato externo verificado: BLOQUE 4C.
 - Secret vault, OAuth flows y rotación de credenciales.
-- Odoo, SAP, Salesforce, Shopify, WooCommerce y Generic REST.
+- Odoo HTTP real, SAP, Salesforce, Shopify, WooCommerce y Generic REST. El PoC Odoo local está documentado en `docs/integrations/odoo-contract-verification.md`.
 - Sincronización de master data.
 - UI avanzada de edición de routes/roles y observabilidad continua.
 - Marketplace, billing/licensing y carga dinámica de código.
