@@ -17,6 +17,7 @@ from app.connectors.registry import IntegrationState, build_runtime_registry
 from app.connectors.routing import resolve_order_route
 from app.core.config import get_settings
 from app.db.models import BackgroundJob, IntegrationConnection, Order, OrderDelivery, OrderDeliveryAttempt
+from app.integrations.audit import append_integration_audit
 from app.jobs.service import enqueue_job, retry_job
 from app.logs.service import log_flow_event
 
@@ -128,6 +129,18 @@ def enqueue_order_delivery(
         max_retries=max(0, int(max_attempts) - 1),
     )
     db.refresh(delivery)
+    append_integration_audit(
+        db,
+        company_id=order.company_id,
+        connection_id=destination_connection_id,
+        connector_key=destination_key,
+        delivery_id=delivery.id,
+        order_id=order.id,
+        event_type="delivery.queued",
+        outcome="queued",
+        message="Entrega de pedido añadida al outbox.",
+        metadata={"idempotency_key": idempotency_key},
+    )
     log_flow_event(
         db,
         company_id=order.company_id,
@@ -177,6 +190,18 @@ def _start_attempt(db: Session, delivery: OrderDelivery) -> OrderDeliveryAttempt
     )
     db.add(attempt)
     db.flush()
+    append_integration_audit(
+        db,
+        company_id=delivery.company_id,
+        connection_id=delivery.destination_connection_id,
+        connector_key=delivery.destination_connector_key,
+        delivery_id=delivery.id,
+        order_id=delivery.order_id,
+        event_type="delivery.started",
+        outcome="running",
+        message="Intento de entrega iniciado.",
+        metadata={"attempt_number": delivery.attempt_count},
+    )
     return attempt
 
 
@@ -221,6 +246,18 @@ def _mark_success(
     order.export_last_error = None
     order.status = "pedido_exportado"
     order.exported_at = order.exported_at or now
+    append_integration_audit(
+        db,
+        company_id=delivery.company_id,
+        connection_id=delivery.destination_connection_id,
+        connector_key=delivery.destination_connector_key,
+        delivery_id=delivery.id,
+        order_id=order.id,
+        event_type="delivery.succeeded",
+        outcome="reconciled" if status == "reconciled" else "succeeded",
+        message="Entrega de pedido completada.",
+        metadata={"attempt_number": delivery.attempt_count, "external_order_id": external_order_id},
+    )
     return DeliveryExecutionResult(
         delivery=delivery,
         destination=DestinationOrderResult(
@@ -234,6 +271,7 @@ def _mark_success(
 
 
 def _mark_failure(
+    db: Session,
     delivery: OrderDelivery,
     order: Order,
     attempt: OrderDeliveryAttempt,
@@ -261,16 +299,31 @@ def _mark_failure(
     order.export_status = "retry_scheduled" if can_retry else "export_failed"
     if not can_retry:
         order.status = "error_exportacion"
+    append_integration_audit(
+        db,
+        company_id=delivery.company_id,
+        connection_id=delivery.destination_connection_id,
+        connector_key=delivery.destination_connector_key,
+        delivery_id=delivery.id,
+        order_id=order.id,
+        event_type="delivery.failed",
+        outcome="retrying" if can_retry else "failed",
+        message=message,
+        error_category=error_type,
+        metadata={"attempt_number": delivery.attempt_count, "retryable": retryable},
+    )
     return can_retry
 
 
 def _raise_delivery_failure(
+    db: Session,
     delivery: OrderDelivery,
     order: Order,
     attempt: OrderDeliveryAttempt,
     failure: ConnectorDeliveryError,
 ) -> None:
     can_retry = _mark_failure(
+        db,
         delivery,
         order,
         attempt,
@@ -356,6 +409,7 @@ def process_order_delivery(
     order.export_status = "exporting"
     if connector is None:
         _raise_delivery_failure(
+            db,
             delivery,
             order,
             attempt,
@@ -368,6 +422,7 @@ def process_order_delivery(
     health = connector.health
     if health.status in {ConnectorStatus.MISCONFIGURED, ConnectorStatus.NOT_CONFIGURED}:
         _raise_delivery_failure(
+            db,
             delivery,
             order,
             attempt,
@@ -375,6 +430,7 @@ def process_order_delivery(
         )
     if health.status in {ConnectorStatus.DEGRADED, ConnectorStatus.UNAVAILABLE}:
         _raise_delivery_failure(
+            db,
             delivery,
             order,
             attempt,
@@ -388,6 +444,7 @@ def process_order_delivery(
     validation_errors = tuple(connector.validate_order(db, order))
     if validation_errors:
         _raise_delivery_failure(
+            db,
             delivery,
             order,
             attempt,
@@ -411,9 +468,10 @@ def process_order_delivery(
         )
         return _mark_success(db, delivery, order, attempt, result.external_order_id)
     except ConnectorDeliveryError as failure:
-        _raise_delivery_failure(delivery, order, attempt, failure)
+        _raise_delivery_failure(db, delivery, order, attempt, failure)
     except (TimeoutError, ConnectionError, OSError) as exc:
         _raise_delivery_failure(
+            db,
             delivery,
             order,
             attempt,
@@ -421,6 +479,7 @@ def process_order_delivery(
         )
     except Exception as exc:  # noqa: BLE001
         _raise_delivery_failure(
+            db,
             delivery,
             order,
             attempt,

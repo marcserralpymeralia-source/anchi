@@ -23,13 +23,15 @@
     <div id="integration-feedback" class="notice hidden" role="status"></div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Nombre</th><th>Connector</th><th>Estado</th><th>Health</th><th>Capabilities</th><th></th></tr></thead>
+        <thead><tr><th>Nombre</th><th>Connector</th><th>Estado</th><th>Credenciales</th><th>HTTP externo</th><th>Health</th><th>Capabilities</th><th></th></tr></thead>
         <tbody>
         {% for connection in connections %}
           <tr>
             <td><strong>{{ connection.name }}</strong><br><span class="muted">#{{ connection.id }}</span></td>
             <td>{{ connection.display_name }}</td>
             <td><span class="status-pill">{{ connection.state }}</span></td>
+            <td>{{ connection.credentials_status|title }}</td>
+            <td><span class="status-pill">{{ connection.external_http.status|title }}</span><br><span class="muted">{{ connection.external_http.reason|replace("_", " ") }}</span></td>
             <td>{{ connection.health.status }}{% if connection.health.message %}<br><span class="muted">{{ connection.health.message }}</span>{% endif %}</td>
             <td>{{ connection.capabilities|join(", ") if connection.capabilities else "Sin capabilities runtime verificadas" }}</td>
             <td class="table-actions">
@@ -39,11 +41,26 @@
             </td>
           </tr>
         {% else %}
-          <tr><td colspan="6" class="muted">Todavía no hay conexiones configuradas.</td></tr>
+          <tr><td colspan="8" class="muted">Todavía no hay conexiones configuradas.</td></tr>
         {% endfor %}
         </tbody>
       </table>
     </div>
+  </section>
+
+  <section class="card" aria-labelledby="integration-audit-title">
+    <div class="section-heading"><div><p class="eyebrow">Trazabilidad</p><h2 id="integration-audit-title">Actividad reciente</h2></div><span class="muted">Mensajes y metadatos redactados, aislados por tenant.</span></div>
+    {% if audit_events %}
+    <div class="table-wrap"><table>
+      <thead><tr><th>Fecha</th><th>Evento</th><th>Resultado</th><th>Detalle</th></tr></thead>
+      <tbody>{% for event in audit_events %}<tr>
+        <td>{{ event.created_at }}</td>
+        <td><code>{{ event.action }}</code></td>
+        <td>{{ event.metadata.outcome or "—" }}</td>
+        <td>{{ event.message }}</td>
+      </tr>{% endfor %}</tbody>
+    </table></div>
+    {% else %}<p class="muted">Todavía no hay actividad de conectores.</p>{% endif %}
   </section>
 
   {% if can_edit %}

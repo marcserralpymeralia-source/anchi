@@ -28,6 +28,7 @@ from app.integrations.service import (
     set_order_route,
     update_connection,
 )
+from app.integrations.audit import integration_audit_to_dict, list_integration_audit
 from app.connectors.registry import IntegrationRegistry
 from app.master.service import TenantUser
 from app.tenancy.database import get_tenant_db
@@ -79,6 +80,13 @@ def integration_definitions(user: TenantUser = Depends(current_user)):
 @router.get("/integrations/connections")
 def integration_connections(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     return {"company_id": user.company_id, "items": [connection_to_dict(item, registry=registry) for item in list_connections(db, company_id=user.company_id)]}
+
+
+@router.get("/integrations/audit")
+def integration_audit(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    """Return only this tenant's redacted connector activity stream."""
+
+    return {"items": [integration_audit_to_dict(item) for item in list_integration_audit(db, company_id=user.company_id)]}
 
 
 @router.post("/integrations/connections")
@@ -278,6 +286,7 @@ def integrations_settings_page(request: Request, db: Session = Depends(get_tenan
             "roles": list_integration_roles(db, company_id=user.company_id),
             "role_labels": ROLE_LABELS,
             "route": _route_payload(db, user.company_id),
+            "audit_events": [integration_audit_to_dict(item) for item in list_integration_audit(db, company_id=user.company_id, limit=20)],
             "can_edit": user.role.name in {"Administrador", "Superadmin"},
         },
     )

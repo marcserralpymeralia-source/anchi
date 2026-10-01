@@ -16,7 +16,9 @@ from app.connectors.registry import (
     IntegrationRegistry,
     IntegrationState,
 )
+from app.connectors.security import external_http_gate_status
 from app.db.models import IntegrationConnection, OrderRoute, TenantIntegrationRole
+from app.integrations.audit import append_integration_audit
 
 
 ROLE_CAPABILITIES = {
@@ -234,6 +236,15 @@ def create_connection(
     )
     db.add(connection)
     db.flush()
+    append_integration_audit(
+        db,
+        company_id=company_id,
+        connection_id=connection.id,
+        connector_key=connector_key,
+        event_type="connection.created",
+        outcome="configured" if not errors else "misconfigured",
+        message="Conexión de integración creada.",
+    )
     return connection
 
 
@@ -266,6 +277,16 @@ def update_connection(
         connection.secret_provider_ref = str(secret_provider_ref).strip() or None
     connection.state = IntegrationState.MISCONFIGURED.value if errors else IntegrationState.CONFIGURED.value
     connection.updated_at = _now()
+    append_integration_audit(
+        db,
+        company_id=company_id,
+        connection_id=connection.id,
+        connector_key=connection.connector_key,
+        event_type="connection.config_changed",
+        outcome="updated" if not errors else "misconfigured",
+        message="Configuración de conexión actualizada.",
+        metadata={"config_errors": errors},
+    )
     return connection
 
 
@@ -289,6 +310,15 @@ def activate_connection(db: Session, *, company_id: int, connection_id: int, reg
     connection.health_status = IntegrationHealth.UNKNOWN.value
     connection.health_message = "Pendiente de health check on-demand."
     connection.updated_at = _now()
+    append_integration_audit(
+        db,
+        company_id=company_id,
+        connection_id=connection.id,
+        connector_key=connection.connector_key,
+        event_type="connection.enabled",
+        outcome="active",
+        message="Conexión de integración habilitada.",
+    )
     return connection
 
 
@@ -300,6 +330,15 @@ def disable_connection(db: Session, *, company_id: int, connection_id: int) -> I
     connection.health_status = IntegrationHealth.UNKNOWN.value
     connection.health_message = "Conexión deshabilitada; no se ejecuta health externo."
     connection.updated_at = _now()
+    append_integration_audit(
+        db,
+        company_id=company_id,
+        connection_id=connection.id,
+        connector_key=connection.connector_key,
+        event_type="connection.disabled",
+        outcome="disabled",
+        message="Conexión de integración deshabilitada.",
+    )
     return connection
 
 
@@ -406,24 +445,41 @@ def health_check_connection(
     if connection is None:
         raise KeyError(f"Conexión de integración no encontrada: {connection_id}")
     connection.health_checked_at = _now()
+
+    def record_health(outcome: str) -> None:
+        append_integration_audit(
+            db,
+            company_id=company_id,
+            connection_id=connection.id,
+            connector_key=connection.connector_key,
+            event_type="connection.health_checked",
+            outcome=outcome,
+            message=connection.health_message or "Health check de conexión completado.",
+            metadata={"health_status": connection.health_status},
+        )
+
     if connection.state == IntegrationState.DISABLED.value:
         connection.health_status = IntegrationHealth.UNKNOWN.value
         connection.health_message = "Conexión deshabilitada; no se ejecuta health externo."
+        record_health("disabled")
         return connection
     registry = registry or IntegrationRegistry()
     errors = connection_config_errors(connection, registry=registry)
     if errors:
         connection.health_status = IntegrationHealth.MISCONFIGURED.value
         connection.health_message = "; ".join(errors)
+        record_health("misconfigured")
         return connection
     definition = registry.definition(connection.connector_key)
     if not definition.health_check_supported or not definition.factory_path:
         connection.health_status = IntegrationHealth.UNKNOWN.value
         connection.health_message = "Health adapter pendiente; se mantiene la configuración legacy como source of truth."
+        record_health("unsupported")
         return connection
     if connection.state != IntegrationState.ACTIVE.value:
         connection.health_status = IntegrationHealth.UNKNOWN.value
         connection.health_message = "La conexión no está ACTIVE."
+        record_health("inactive")
         return connection
     try:
         connector = registry.resolve(db, company_id=company_id, connection_id=connection_id)
@@ -441,6 +497,7 @@ def health_check_connection(
     except Exception as exc:  # noqa: BLE001
         connection.health_status = IntegrationHealth.UNAVAILABLE.value
         connection.health_message = f"Health check fallido: {exc}"
+    record_health(connection.health_status.lower())
     return connection
 
 
@@ -449,6 +506,10 @@ def connection_to_dict(connection: IntegrationConnection, *, registry: Integrati
     definition = registry.definition(connection.connector_key)
     config = _json_config(connection.config_json)
     _, config_errors = normalize_and_validate_config(definition, config)
+    external_http = external_http_gate_status(
+        connection,
+        connector_runtime_enabled=bool(definition.runtime_enabled and not definition.mock_only and config.get("real_http_enabled")),
+    )
     return {
         "id": connection.id,
         "company_id": connection.company_id,
@@ -460,6 +521,8 @@ def connection_to_dict(connection: IntegrationConnection, *, registry: Integrati
         "secret_provider_ref": connection.secret_provider_ref,
         "requires_credentials": connection.requires_credentials,
         "credentials_configured": connection.credentials_configured,
+        "credentials_status": "configured" if connection.credentials_configured and connection.secret_provider_ref else "missing",
+        "external_http": external_http,
         "health": {
             "status": connection.health_status,
             "message": connection.health_message,
