@@ -73,6 +73,7 @@ class ConnectorDefinition:
     factory_path: str | None = None
     mock_capabilities: frozenset[ConnectorCapability] = frozenset()
     runtime_enabled: bool = True
+    mock_only: bool = False
     legacy_config_source: str | None = None
 
     def to_dict(self, *, environment: str) -> dict[str, Any]:
@@ -98,6 +99,7 @@ class ConnectorDefinition:
             "credentials_source": self.credentials_source,
             "maturity": self.maturity.value,
             "runtime_enabled": self.runtime_enabled,
+            "mock_only": self.mock_only,
             "legacy_config_source": self.legacy_config_source,
             "visible_in_environment": environment in self.visible_environments,
         }
@@ -198,6 +200,36 @@ def _builtin_definitions() -> tuple[ConnectorDefinition, ...]:
             maturity=ConnectorMaturity.EXPERIMENTAL,
             factory_path="app.connectors.sage200es:build_sage200es_mock_connector",
             runtime_enabled=False,
+            mock_only=True,
+        ),
+        ConnectorDefinition(
+            key="odoo",
+            display_name="Odoo 19 JSON-2",
+            direction=ConnectorDirection.OUTBOUND,
+            # No tenant-specific /doc contract has been verified yet.
+            capabilities=frozenset(),
+            mock_capabilities=frozenset(
+                {
+                    ConnectorCapability.CUSTOMERS_READ,
+                    ConnectorCapability.PRODUCTS_READ,
+                    ConnectorCapability.PRICING_READ,
+                    ConnectorCapability.ORDERS_CREATE,
+                    ConnectorCapability.ORDERS_READ,
+                }
+            ),
+            config_schema=(
+                ConnectorConfigField("base_url", "Base URL Odoo", required=True),
+                ConnectorConfigField("database", "Base de datos"),
+                ConnectorConfigField("language", "Idioma/contexto", default="es_ES"),
+                ConnectorConfigField("real_http_enabled", "HTTP real", value_type="boolean", default=False),
+                ConnectorConfigField("mock_scenario", "Escenario mock", default="success"),
+            ),
+            requires_credentials=True,
+            credentials_source="future_secret_provider",
+            maturity=ConnectorMaturity.EXPERIMENTAL,
+            factory_path="app.connectors.odoo:build_odoo_mock_connector",
+            runtime_enabled=False,
+            mock_only=True,
         ),
     )
 
@@ -253,12 +285,16 @@ class IntegrationRegistry:
         if connection.state != IntegrationState.ACTIVE.value:
             raise RuntimeError("La conexión de integración no está activa.")
         definition = self.definition(connection.connector_key)
-        if not definition.runtime_enabled and connection.connector_key != "sage_200_es":
+        environment = os.getenv("APP_ENV", "development").strip().lower()
+        if definition.mock_only and environment not in {"development", "test"}:
+            raise RuntimeError(f"El connector mock-only {definition.key} solo está disponible en development/test.")
+        if not definition.runtime_enabled and not definition.mock_only:
             raise RuntimeError(f"El runtime del connector {definition.key} está bloqueado.")
         config = json.loads(connection.config_json or "{}")
         if not isinstance(config, dict):
             raise ValueError("La configuración de integración no es un objeto JSON.")
         config["tenant_id"] = company_id
+        config["secret_provider_ref"] = connection.secret_provider_ref
         return self._factory(definition)(config)
 
     def capabilities_for(self, connection: IntegrationConnection, *, environment: str | None = None) -> frozenset[ConnectorCapability]:
@@ -267,7 +303,7 @@ class IntegrationRegistry:
         config = json.loads(connection.config_json or "{}")
         if (
             definition.mock_capabilities
-            and bool(config.get("mock_mode", connection.connector_key == "sage_200_es"))
+            and bool(config.get("mock_mode", definition.mock_only))
             and environment in {"development", "test"}
         ):
             return definition.mock_capabilities

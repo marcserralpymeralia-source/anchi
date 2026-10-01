@@ -132,8 +132,8 @@ def normalize_and_validate_config(definition, config: Mapping[str, Any] | None) 
             errors.append(f"Falta configuración obligatoria: {field.key}.")
         if value is not None:
             normalized[field.key] = value
-    if definition.key == "sage_200_es" and normalized.get("real_http_enabled") is True:
-        errors.append("HTTP real de Sage 200 ES está bloqueado durante el PoC.")
+    if definition.mock_only and normalized.get("real_http_enabled") is True:
+        errors.append(f"HTTP real de {definition.display_name} está bloqueado durante el PoC.")
     return normalized, list(dict.fromkeys(errors))
 
 
@@ -159,9 +159,11 @@ def connection_config_errors(connection: IntegrationConnection, *, registry: Int
     definition = registry.definition(connection.connector_key)
     _, errors = normalize_and_validate_config(definition, _json_config(connection.config_json))
     if connection.requires_credentials and not connection.credentials_configured:
-        is_mock = connection.connector_key == "sage_200_es" and _environment() in {"development", "test"}
+        is_mock = definition.mock_only and _environment() in {"development", "test"}
         if not is_mock:
             errors.append("Faltan credenciales configuradas fuera de config_json.")
+    if definition.mock_only and _environment() not in {"development", "test"}:
+        errors.append("El connector mock-only solo puede activarse en development/test.")
     return list(dict.fromkeys(errors))
 
 
@@ -258,8 +260,8 @@ def activate_connection(db: Session, *, company_id: int, connection_id: int, reg
         connection.credentials_configured = True
     errors = connection_config_errors(connection, registry=registry)
     config = _json_config(connection.config_json)
-    if definition.key == "sage_200_es" and bool(config.get("real_http_enabled")):
-        errors.append("Sage 200 ES no puede activar HTTP real.")
+    if definition.mock_only and bool(config.get("real_http_enabled")):
+        errors.append(f"{definition.display_name} no puede activar HTTP real.")
     if errors:
         connection.state = IntegrationState.MISCONFIGURED.value
         connection.updated_at = _now()

@@ -48,6 +48,16 @@ __all__ = [
     "Sage200ESSalesOrderDTO",
     "Sage200ESSalesOrderMapper",
     "Sage200ESTransportError",
+    "MockOdooJSON2Transport",
+    "OdooClient",
+    "OdooConnector",
+    "OdooExternalIdentity",
+    "OdooJSON2Config",
+    "OdooJSON2Request",
+    "OdooPriceResolution",
+    "OdooSalesOrderDTO",
+    "OdooSalesOrderMapper",
+    "OdooTransportError",
     "ConnectionRuntimeRegistry",
     "ConnectorConfigField",
     "ConnectorDefinition",
@@ -81,4 +91,20 @@ def __getattr__(name: str):
         from app.connectors import sage200es
 
         return getattr(sage200es, name)
+    odoo_names = {
+        "MockOdooJSON2Transport",
+        "OdooClient",
+        "OdooConnector",
+        "OdooExternalIdentity",
+        "OdooJSON2Config",
+        "OdooJSON2Request",
+        "OdooPriceResolution",
+        "OdooSalesOrderDTO",
+        "OdooSalesOrderMapper",
+        "OdooTransportError",
+    }
+    if name in odoo_names:
+        from app.connectors import odoo
+
+        return getattr(odoo, name)
     raise AttributeError(name)
