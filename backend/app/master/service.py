@@ -146,7 +146,7 @@ def _platform_user_to_context(user: MasterUser) -> TenantUser:
         company_id=None,
         company_name="Plataforma Anchi",
         company_slug="platform",
-        role=TenantRole(name="Superadmin", permissions="manage_tenants,manage_users,view_logs"),
+        role=TenantRole(name="Superadmin", permissions="manage_tenants,manage_users,view_technical_logs"),
         membership_id=None,
         platform_role_key=user.platform_role_key or "superadmin",
         session_version=int(user.session_version or 1),

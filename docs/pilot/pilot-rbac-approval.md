@@ -74,3 +74,10 @@ La matriz se basa en `DEFAULT_ROLE_PERMISSIONS` y en la dependencia de permisos 
 ## Condición de salida
 
 La aprobación humana está concedida para el alcance Catalog-only, pero no cierra el gate global: la discrepancia técnica de logs, la validación de cuentas en runtime final y los demás gates de runtime permanecen abiertos.
+
+## Validación técnica Block 13.1
+
+`TECHNICAL VALIDATION: PASS (local)`
+`HUMAN APPROVAL: APPROVED`
+
+La remediación excluye `view_technical_logs` y `manage_tenants` del Administrador, restringe lectura/configuración de `/integrations` al Administrador, deniega el borrado de AuditLog, limita el AuditLog tenant a Administrador/Supervisor, asigna logs técnicos/gestión de tenants a la identidad Superadmin de plataforma y deniega a esa identidad operar como usuario tenant. Los tests cubren roles, retry, tenant isolation y guards. Runtime final, MFA/cuentas reales y browser siguen OPEN; el PASS no cierra el GO/NO GO global.

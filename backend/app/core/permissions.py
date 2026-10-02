@@ -30,7 +30,7 @@ PERMISSIONS = {
 }
 
 DEFAULT_ROLE_PERMISSIONS = {
-    "Administrador": ",".join(PERMISSIONS.keys()),
+    "Administrador": ",".join(key for key in PERMISSIONS if key not in {"view_technical_logs", "manage_tenants"}),
     "Supervisor": "view_inbox,manage_inbox,view_agent_workbench,review_orders,manage_orders,confirm_orders,export_orders,edit_customers,edit_products,approve_learning,view_logs,manage_whatsapp",
     "Operador": "view_inbox,manage_inbox,view_agent_workbench,review_orders,confirm_orders,discard_messages,manage_whatsapp",
     "Solo lectura": "view_inbox,view_agent_workbench",
@@ -48,14 +48,16 @@ def has_permission(user, permission: str) -> bool:
 def permission_for_request(method: str, path: str) -> str | None:
     """Map mutating tenant routes to capabilities.
 
-    Read requests remain available to every authenticated tenant member. The
-    mapping keeps authorization in one place while individual handlers retain
-    their domain-level ownership checks.
+    Read requests remain available to authenticated tenant members except
+    integration configuration, which is restricted to tenant administrators.
+    Individual handlers still retain their domain-level ownership checks.
     """
 
+    normalized = "/" + (path or "").strip("/")
+    if method.upper() in {"GET", "HEAD"}:
+        return "configure_integrations" if normalized.startswith("/integrations") else None
     if method.upper() not in {"POST", "PUT", "PATCH", "DELETE"}:
         return None
-    normalized = "/" + (path or "").strip("/")
 
     if normalized.startswith("/superadmin") or normalized in {"/login", "/logout"}:
         return None
@@ -102,8 +104,6 @@ def permission_for_request(method: str, path: str) -> str | None:
             return "configure_integrations"
     if normalized.startswith("/imports"):
         return "manage_inbox"
-    if normalized == "/logs/delete":
-        return "view_logs"
     if normalized.startswith("/settings/channels"):
         return "configure_channels"
     if normalized.startswith("/settings/agent") or "/prompts" in normalized or "/llm" in normalized:

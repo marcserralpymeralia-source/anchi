@@ -443,6 +443,7 @@ def offboard_company(
 
     company.active = False
     company.status = "offboarded"
+    company.offboarded_at = company.offboarded_at or _utcnow()
     company.suspended_reason = reason_text
     tenant_row.is_active = False
     for membership in master_db.scalars(select(CompanyMembership).where(CompanyMembership.company_id == company_id)).all():

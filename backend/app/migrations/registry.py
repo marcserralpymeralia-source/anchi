@@ -956,6 +956,12 @@ def _apply_master_operational_heartbeats(engine, dry_run: bool) -> list[str]:  #
     return ["CREATE TABLE operational_heartbeats (...)"]
 
 
+def _apply_master_offboarded_at(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Persist the tenant offboarding anchor required by the approved retention policy."""
+
+    return ensure_columns(engine, "companies", {"offboarded_at": "DATETIME"}, dry_run=dry_run)
+
+
 def _apply_tenant_ai_learning(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
     from app.db.models import LearningProposal, PromptExecution
 
@@ -1570,6 +1576,12 @@ MASTER_SCHEMA_MIGRATIONS = [
         name="master operational heartbeats",
         checksum=checksum_text("master", "operational_heartbeats", "worker", "scheduler", "last_success_at"),
         upgrade=_apply_master_operational_heartbeats,
+    ),
+    MigrationSpec(
+        version="2026.10.02.1",
+        name="master tenant offboarding retention anchor",
+        checksum=checksum_text("master", "company_offboarded_at", "retention_anchor"),
+        upgrade=_apply_master_offboarded_at,
     ),
 ]
 

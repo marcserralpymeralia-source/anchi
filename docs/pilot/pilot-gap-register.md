@@ -136,3 +136,17 @@ Marc Serral aprobó expresamente RBAC y retention el 2026-10-01. La aprobación 
 |---|---|---|---|
 | RBAC | `APPROVED FOR PILOT` | **OPEN** | `Administrador` hereda `view_technical_logs` y la cadena de permisos de Superadmin no contiene esa clave; la separación técnica no es limpia |
 | Retention | `APPROVED FOR PILOT` | **OPEN** | No hay enforcement automático/runtime final de plazos, storage durable, backup gestionado o revocación externa |
+
+## Addendum Block 13.1 — policy enforcement y configuration baseline
+
+Fecha de implementación local: 2026-10-02. Detalle y evidencia: [block-13-1-policy-enforcement-configuration-baseline.md](./block-13-1-policy-enforcement-configuration-baseline.md).
+
+| Gate | Estado local | Estado de piloto | Evidencia / límite |
+|---|---|---|---|
+| G-17 RBAC | **CERRADO LOCAL** | Runtime pendiente | Permisos tenant/platform separados; Administrador no recibe `view_technical_logs` ni `manage_tenants`; Superadmin no opera como usuario tenant; Supervisor conserva trazabilidad y retry; borrado de AuditLog denegado. |
+| G-16 Retention | **RESUELTO LOCAL** | Runtime pendiente | Servicio tenant-scoped, expiración, dry-run, holds, gates y auditoría probados; `offboarded_at` usa migración aditiva. Scheduler/SecretProvider/storage/backup gestionados siguen pendientes del runtime. |
+| G-13 Configuration drift | **RESUELTO LOCAL** | Baseline/runtime pendiente | Manifest hash, MATCH/DRIFT, campos críticos y readiness integrados. Sin baseline aprobado ni runtime final no se declara MATCH operativo. |
+| Confirmación | **GUARD LOCAL** | Runtime pendiente | Revisión, cliente, productos, cantidad y blockers se validan en backend; sin aceptación browser final. |
+| G-26 | Email: confirm/retry tras revisión | P2, fuera de Catalog-only | El guard bloquea dos regresiones de email que intentaban confirmar en `pedido_pendiente_revision`; el flujo de retry email termina con export no confirmado. Reproducido en 3 pruebas aisladas; Email necesita registrar transición explícita de revisión antes de habilitarse. No afecta Catalog-only. |
+
+La decisión global permanece **NO GO**. No se cierran gaps de storage durable, Postgres/backup gestionado, cron/proveedor, alertas externas, Generic REST/SecretProvider real ni browser final. El informe Block 13.1 recoge los resultados finales de las pruebas.

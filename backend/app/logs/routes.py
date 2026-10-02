@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import json
-import logging
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse
-from sqlalchemy import delete, or_, select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import require_tenant_role
@@ -17,12 +16,9 @@ from app.logs.service import audit_log_text, parse_audit_log_message
 from app.master.service import TenantUser
 from app.tenancy.database import get_tenant_db
 
-logger = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/logs", tags=["logs"])
 
-VIEW_LOG_ROLES = ("Administrador", "Superadmin", "Supervisor")
-DELETE_LOG_ROLES = ("Administrador", "Superadmin")
+VIEW_LOG_ROLES = ("Administrador", "Supervisor")
 LOG_PAGE_LIMIT = 200
 LOG_DOWNLOAD_LIMIT = 50_000
 
@@ -190,22 +186,8 @@ def logs_download(
 
 
 @router.post("/delete")
-def delete_logs(
-    db: Session = Depends(get_tenant_db),
-    user: TenantUser = Depends(require_tenant_role(*DELETE_LOG_ROLES)),
-):
-    result = db.execute(delete(AuditLog).where(AuditLog.company_id == user.company_id))
-    db.commit()
-    logger.warning(
-        "audit_logs.deleted",
-        extra={
-            "event": "audit_logs.deleted",
-            "company_id": user.company_id,
-            "user_id": user.id,
-            "deleted_count": result.rowcount,
-        },
-    )
-    return RedirectResponse("/logs?deleted=1", status_code=303)
+def delete_logs(user: TenantUser = Depends(require_tenant_role("Administrador"))):
+    raise HTTPException(status_code=403, detail="El AuditLog del tenant no puede borrarse desde la aplicación")
 
 
 @router.get("")
@@ -243,7 +225,7 @@ def logs_page(
             "logs": items,
             "filters": filters,
             "download_url": _download_url(filters),
-            "can_delete_logs": user.role.name in DELETE_LOG_ROLES,
+            "can_delete_logs": False,
             "deleted": request.query_params.get("deleted") == "1",
         },
     )

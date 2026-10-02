@@ -98,3 +98,10 @@ La política está **APPROVED FOR PILOT** por Marc Serral. Su enforcement autom�
 ## Condición de salida
 
 La aprobación humana no cierra el gate global: el enforcement técnico de retención, storage durable, backups gestionados y revocación externa deben validarse en el runtime final.
+
+## Validación técnica Block 13.1
+
+`TECHNICAL VALIDATION: PASS (local)`
+`HUMAN APPROVAL: APPROVED`
+
+`RetentionPolicyService` implementa expiración, estados, dry-run, tenant isolation, legal hold, auditoría previa/posterior y cleanup técnico separado. `MasterCompany.offboarded_at` proporciona el ancla durable +90 días mediante migración aditiva. Las pruebas cubren Orders/offboarding, mensajes, deliveries, AuditLog, temporales, backups, secret revocation, safe default y aislamiento. Scheduler/cleanup del runtime, SecretProvider, storage durable y rotación real de backups siguen OPEN; este PASS acredita únicamente la implementación local.

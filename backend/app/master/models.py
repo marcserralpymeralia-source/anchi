@@ -45,6 +45,7 @@ class MasterCompany(MasterBase):
     default_timezone: Mapped[str] = mapped_column(String(80), default="Europe/Madrid")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    offboarded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     memberships: Mapped[list["CompanyMembership"]] = relationship(back_populates="company")
     tenant_databases: Mapped[list["MasterTenantDatabase"]] = relationship(back_populates="company")

@@ -25,6 +25,8 @@ def _has_complete_session_identity(session: dict) -> bool:
 def current_tenant_user(request: Request, master_db: Session = Depends(get_master_db)) -> TenantUser:
     tenant = getattr(request.state, "tenant", None)
     if tenant and tenant.user and tenant.user.is_active:
+        if tenant.user.platform_role_key == "superadmin":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="La identidad de plataforma no opera como usuario tenant")
         required_permission = permission_for_request(request.method, request.url.path)
         if required_permission and not has_permission(tenant.user, required_permission):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tienes permisos para esta acción")
@@ -46,6 +48,8 @@ def current_tenant_user(request: Request, master_db: Session = Depends(get_maste
             request.session.clear()
         raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": login_location_for_request(request)}) from exc
     if tenant and tenant.user and tenant.user.is_active:
+        if tenant.user.platform_role_key == "superadmin":
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="La identidad de plataforma no opera como usuario tenant")
         request.state.tenant = tenant
         required_permission = permission_for_request(request.method, request.url.path)
         if required_permission and not has_permission(tenant.user, required_permission):

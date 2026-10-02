@@ -190,6 +190,7 @@ class PilotClosureTests(unittest.TestCase):
                 self.assertEqual(result["status"], "offboarded")
                 self.assertTrue(result["external_secret_revocation_required"])
                 self.assertEqual(db.get(MasterCompany, 1).status, "offboarded")
+                self.assertIsNotNone(db.get(MasterCompany, 1).offboarded_at)
                 self.assertFalse(db.get(MasterTenantDatabase, 1).is_active)
                 self.assertFalse(db.get(CompanyMembership, 1).is_active)
             with TenantSession() as db:
