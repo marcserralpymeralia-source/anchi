@@ -9,7 +9,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.core.backup import backup_database, restore_sqlite, verify_sqlite_backup  # noqa: E402
+from app.core.backup import backup_database, pg_restore, restore_sqlite, verify_sqlite_backup  # noqa: E402
 
 
 def main() -> int:
@@ -26,6 +26,11 @@ def main() -> int:
     restore.add_argument("--input", required=True)
     restore.add_argument("--database-url", required=True)
 
+    restore_pg = subparsers.add_parser("restore-postgres", help="Restaurar PostgreSQL en una base vacía distinta y validar conexión")
+    restore_pg.add_argument("--input", required=True)
+    restore_pg.add_argument("--database-url", required=True)
+    restore_pg.add_argument("--target-identity", required=True, help="Identidad operativa distinta de la identidad fuente del sidecar")
+
     verify = subparsers.add_parser("verify-sqlite", help="Validar checksum e integridad de un backup SQLite")
     verify.add_argument("--input", required=True)
 
@@ -39,6 +44,8 @@ def main() -> int:
         )
     elif args.command == "restore-sqlite":
         result = restore_sqlite(args.input, args.database_url)
+    elif args.command == "restore-postgres":
+        result = pg_restore(args.input, args.database_url, target_identity=args.target_identity)
     else:
         result = verify_sqlite_backup(args.input)
     print(json.dumps(result, ensure_ascii=False, indent=2, default=str))

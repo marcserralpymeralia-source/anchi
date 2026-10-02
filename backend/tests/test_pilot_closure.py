@@ -110,7 +110,7 @@ class PilotClosureTests(unittest.TestCase):
             )
             storage_ref = save.stdout.strip()
             read = subprocess.run(
-                [sys.executable, "-c", "import sys; from app.core.attachment_storage import read_attachment; assert read_attachment(sys.argv[1]) == b'persisted'; print('restored')", storage_ref],
+                [sys.executable, "-c", "import sys; from app.core.attachment_storage import read_attachment; assert read_attachment(sys.argv[1], company_id=1) == b'persisted'; print('restored')", storage_ref],
                 env=env,
                 check=True,
                 capture_output=True,

@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import get_settings
+from app.core.pilot_configuration import pilot_profile_state
 from app.master.database import MasterSessionLocal, engine as master_engine, init_master_db
 from app.master.bootstrap import ensure_platform_admin
 from app.master.migrations import upgrade_master_schema
@@ -97,12 +98,13 @@ async def app_lifespan(app: FastAPI):
     if running_on_vercel or not master_db_ready:
         logger.info("Workers disabled in this process: serverless=%s master_db_ready=%s", running_on_vercel, master_db_ready)
     else:
-        if settings.run_internal_email_worker:
+        disable_internal_workers = pilot_profile_state() != "legacy"
+        if settings.run_internal_email_worker and not disable_internal_workers:
             start_email_sync_worker()
         else:
-            logger.info("Email worker disabled by RUN_INTERNAL_EMAIL_WORKER")
-        if settings.run_internal_job_worker:
+            logger.info("Email worker disabled by pilot profile or RUN_INTERNAL_EMAIL_WORKER")
+        if settings.run_internal_job_worker and not disable_internal_workers:
             start_job_worker()
         else:
-            logger.info("Job worker disabled by RUN_INTERNAL_JOB_WORKER")
+            logger.info("Job worker disabled by pilot profile or RUN_INTERNAL_JOB_WORKER")
     yield

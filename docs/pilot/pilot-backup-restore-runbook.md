@@ -45,13 +45,25 @@ Repetir con cada `TENANT_DATABASE_URL` y `--identity tenant:<company_id>/<slug>`
 
 ## Restore PostgreSQL
 
-El restore se hace siempre en una base nueva o aislada, nunca sobre la base del piloto activo.
+El restore se hace siempre en una base nueva/vacía de recuperación, nunca sobre la base activa. El sidecar debe corresponder a un backup CLI de PostgreSQL; el comando compara checksum, identity y ubicación de la DB fuente frente al destino y valida conexión al terminar.
 
-1. Provisionar una base destino vacía con el mismo major de PostgreSQL o una versión compatible aprobada.
-2. Usar `pg_restore --exit-on-error --no-owner --dbname <destino> <artefacto>` mediante la función `pg_restore` de `app.core.backup` o el comando estándar equivalente.
-3. Comparar el SHA-256 del artefacto con su sidecar antes de restaurar.
-4. Ejecutar migraciones de lectura/validación sólo si el procedimiento de la versión lo exige; no hacer downgrade automático.
-5. Validar los invariantes:
+```bash
+PYTHONPATH=backend python3 backend/scripts/pilot_backup_restore.py restore-postgres \
+  --input <BACKUP.dump> \
+  --database-url "$RESTORE_DATABASE_URL" \
+  --target-identity <IDENTIDAD_RESTORE_DISTINTA>
+```
+
+El destino debe existir, estar vacío y tener versión PostgreSQL compatible; no usar `--clean`, no sobrescribir la DB activa y no poner URL/credenciales en el repo. El comando usa `pg_restore --exit-on-error --no-owner --single-transaction`, entrega password por `PGPASSWORD` al proceso y ejecuta `SELECT 1` tras restaurar. Si falla, conservar artefacto y aislar destino. `SELECT 1` acredita conectividad, no que el esquema/datos estén correctos.
+
+Después del restore, ejecutar los informes en un proceso aislado cuya configuración apunte al master restaurado y al tenant restaurado. `schema_migrations.py` obtiene esas conexiones de la configuración normal de la aplicación y del mapping tenant del master; no acepta un `--database-url` para estos informes. No ejecutar estos comandos con la configuración del entorno activo:
+
+```bash
+PYTHONPATH=backend python3 backend/scripts/schema_migrations.py report-master
+PYTHONPATH=backend python3 backend/scripts/schema_migrations.py report-tenant --company-id <PILOT_COMPANY_ID>
+```
+
+No ejecutar `upgrade-*` durante la validación salvo que el procedimiento de la versión lo exija y esté aprobado; nunca hacer downgrade automático. Validar los invariantes:
    - todas las filas de `orders`, `inbound_messages`, `order_deliveries`, `background_jobs` y `audit_logs` esperadas existen;
    - `external_id`/`ExternalIdentity` y `idempotency_key` no cambian;
    - una entrega `exported` no vuelve a exportarse;

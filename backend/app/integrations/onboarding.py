@@ -166,7 +166,12 @@ def test_onboarding_connection(db: Session, *, company_id: int, connection_id: i
         result = {"status": "FAILED", "message": "; ".join(config_errors)}
     elif connection.connector_key in {"sage_200_es", "odoo"}:
         result = {"status": "BLOCKED", "message": "Connector contract verification required; el runtime real permanece bloqueado."}
-    elif definition.mock_only or connection.connector_key == "fake_erp":
+    elif connection.connector_key == "generic_rest" and bool(json.loads(connection.config_json or "{}").get("real_http_enabled")):
+        connection.health_status = "UNKNOWN"
+        connection.health_message = "No hay una operación health segura configurada; no se envió HTTP ni se declara la conexión verificada."
+        connection.health_checked_at = _now()
+        result = {"status": "BLOCKED", "message": connection.health_message}
+    elif (definition.mock_only and not (connection.connector_key == "generic_rest" and bool(json.loads(connection.config_json or "{}").get("real_http_enabled")))) or connection.connector_key == "fake_erp":
         connection.health_status = "HEALTHY"
         connection.health_message = "Mock connection test correcto; no se envió HTTP externo."
         connection.health_checked_at = _now()

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import logging
+import os
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.channels.service import is_channel_enabled
 from app.core.config import get_settings
 from app.core.operational import record_heartbeat
+from app.core.pilot_configuration import pilot_profile_state
 from app.db.models import EmailSettings
 from app.master.database import MasterSessionLocal, get_master_db
 from app.master.models import EmailSyncState, MasterCompany, MasterTenantDatabase
@@ -70,17 +72,30 @@ def _cron_authorized(request: Request) -> None:
     raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Cron no autorizado.")
 
 
+def _reject_excluded_pilot_cron() -> None:
+    if pilot_profile_state() != "legacy":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Cron fuera del perfil Catalog-only.")
+
+
 @router.api_route("/jobs", methods=["GET", "POST"])
 def jobs_cron(request: Request):
     _cron_authorized(request)
     settings = get_settings()
     batch_size = max(1, min(int(getattr(settings, "cron_job_batch_size", 5) or 5), 20))
     started = time.perf_counter()
+    if pilot_profile_state() == "invalid":
+        error = RuntimeError("Cron jobs profile is missing or inconsistent")
+        _record_scheduler_event("jobs", success=False, error=error, duration_ms=int((time.perf_counter() - started) * 1000))
+        return JSONResponse({"ok": False, "error": "pilot_profile_invalid"}, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
     try:
         result = run_worker_cycle(max_jobs=batch_size)
     except Exception as exc:  # noqa: BLE001
         _record_scheduler_event("jobs", success=False, error=exc, duration_ms=int((time.perf_counter() - started) * 1000))
         raise
+    if int(result.get("blocked", 0) or 0) > 0:
+        error = RuntimeError(f"Cron jobs cycle blocked={int(result['blocked'])}")
+        _record_scheduler_event("jobs", success=False, error=error, duration_ms=int((time.perf_counter() - started) * 1000))
+        return JSONResponse({"ok": False, **result}, status_code=status.HTTP_503_SERVICE_UNAVAILABLE)
     _record_scheduler_event("jobs", success=True, duration_ms=int((time.perf_counter() - started) * 1000))
     return JSONResponse({"ok": True, **result})
 
@@ -90,6 +105,7 @@ def platform_snapshots_cron(request: Request, master_db: Session = Depends(get_m
     """Refresh platform health/usage outside Superadmin page requests."""
 
     _cron_authorized(request)
+    _reject_excluded_pilot_cron()
     started = time.perf_counter()
     try:
         result = collect_platform_snapshots(master_db)
@@ -103,6 +119,7 @@ def platform_snapshots_cron(request: Request, master_db: Session = Depends(get_m
 @router.api_route("/email-sync", methods=["GET", "POST"])
 def email_sync_cron(request: Request, master_db: Session = Depends(get_master_db)):
     _cron_authorized(request)
+    _reject_excluded_pilot_cron()
     now = datetime.now(timezone.utc)
     due_states = master_db.scalars(
         select(EmailSyncState)

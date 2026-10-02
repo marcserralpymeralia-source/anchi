@@ -37,6 +37,7 @@ from app.connectors.whatsapp_catalog import WhatsAppCatalogInboundConnector  # n
 from app.db.database import Base  # noqa: E402
 from app.db.models import Company, Customer, ExternalIdentity, IntegrationConnection, Order, OrderLine, OrderRoute, Product  # noqa: E402
 from app.integrations.service import IntegrationConfigurationError, activate_connection, create_connection  # noqa: E402
+from app.integrations.onboarding import test_onboarding_connection  # noqa: E402
 from app.orders.delivery import DeliveryProcessingError, enqueue_order_delivery, process_order_delivery  # noqa: E402
 from app.orders.modular import process_inbound_order_event  # noqa: E402
 
@@ -265,6 +266,80 @@ class GenericRESTConnectorTests(unittest.TestCase):
         self.assertEqual(definition.mock_capabilities, frozenset())
         self.assertTrue(definition.mock_only)
         self.assertEqual(definition.factory_path, "app.connectors.registry:build_generic_rest_mock_connector")
+
+    def test_real_mode_fails_closed_instead_of_falling_back_to_mock(self):
+        db = self.Session()
+        connection = db.get(IntegrationConnection, self.first_connection.id)
+        config = json.loads(connection.config_json)
+        config["real_http_enabled"] = True
+        connection.config_json = json.dumps(config)
+        connection.secret_provider_ref = f"secret://tenant-1/connection-{connection.id}/api_key"
+        connection.credentials_configured = True
+        db.commit()
+        registry = IntegrationRegistry()
+        with patch.dict(os.environ, {"APP_ENV": "test", "PILOT_PROFILE": "", "PILOT_GENERIC_REST_RUNTIME_ENABLED": "false", "EXTERNAL_CONNECTOR_HTTP_ENABLED": "false"}, clear=False), patch.object(registry, "_factory", wraps=registry._factory) as mock_factory:
+            with self.assertRaisesRegex(RuntimeError, "faltan gates"):
+                registry.resolve(db, company_id=1, connection_id=connection.id)
+            mock_factory.assert_not_called()
+        db.close()
+
+    def test_real_mapping_requires_an_idempotency_key_for_order_create(self):
+        config = _config()
+        config["real_http_enabled"] = True
+        config["operations"]["orders.create"].pop("idempotency")
+        errors = validate_generic_rest_config(config)
+        self.assertTrue(any("idempotency en operations.orders.create" in error for error in errors))
+
+    def test_real_connector_does_not_claim_healthy_without_remote_probe(self):
+        config = _config()
+        config["real_http_enabled"] = True
+        connector = GenericRESTConnector(
+            config=GenericRESTConfig(
+                tenant_id=1,
+                connection_id=1,
+                base_url=config["base_url"],
+                operations=config["operations"],
+                auth=config.get("auth"),
+                real_http_enabled=True,
+            ),
+            transport=MockGenericRESTTransport(),
+        )
+        self.assertEqual(connector.health.status.value, "unavailable")
+        self.assertIn("probe remoto", connector.health.message)
+
+    def test_real_onboarding_connection_test_is_blocked_without_safe_probe(self):
+        db = self.Session()
+        connection = db.get(IntegrationConnection, self.first_connection.id)
+        config = json.loads(connection.config_json)
+        config["real_http_enabled"] = True
+        connection.config_json = json.dumps(config)
+        db.commit()
+        with patch("app.integrations.service.connection_config_errors", return_value=[]), patch(
+            "app.integrations.onboarding.health_check_connection"
+        ) as health_check:
+            result = test_onboarding_connection(db, company_id=1, connection_id=connection.id)
+        self.assertEqual(result["status"], "BLOCKED")
+        self.assertIn("No hay una operación health segura", result["message"])
+        health_check.assert_not_called()
+        db.close()
+
+    def test_real_mode_selects_secure_factory_only_when_all_runtime_gates_are_enabled(self):
+        db = self.Session()
+        connection = db.get(IntegrationConnection, self.first_connection.id)
+        config = json.loads(connection.config_json)
+        config["real_http_enabled"] = True
+        connection.config_json = json.dumps(config)
+        connection.secret_provider_ref = f"secret://tenant-1/connection-{connection.id}/api_key"
+        connection.credentials_configured = True
+        db.commit()
+        sentinel = object()
+        registry = IntegrationRegistry()
+        with patch.dict(os.environ, {"APP_ENV": "test", "PILOT_PROFILE": "CATALOG_ONLY_PILOT", "PILOT_SCHEDULED_JOB_PROFILE": "CATALOG_ONLY_PILOT", "PILOT_GENERIC_REST_RUNTIME_ENABLED": "true", "EXTERNAL_CONNECTOR_HTTP_ENABLED": "true"}, clear=False), patch("app.connectors.generic_rest.build_generic_rest_real_connector", return_value=sentinel) as real_factory, patch.object(registry, "_factory", wraps=registry._factory) as mock_factory:
+            resolved = registry.resolve(db, company_id=1, connection_id=connection.id)
+        self.assertIs(resolved, sentinel)
+        self.assertTrue(real_factory.call_args.args[0]["_connection_enabled"])
+        mock_factory.assert_not_called()
+        db.close()
 
     def test_registry_listing_is_lazy(self):
         code = """

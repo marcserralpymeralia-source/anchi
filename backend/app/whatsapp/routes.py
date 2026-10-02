@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.auth.dependencies import current_user
 from app.core.config import get_settings
+from app.core.pilot_configuration import pilot_profile_state
 from app.master.database import get_master_db
 from app.master.service import TenantUser
 from app.tenancy.database import tenant_db_session
@@ -74,6 +75,16 @@ def _webhook_error_metadata(exc: Exception) -> dict[str, str]:
     """Keep exception diagnostics useful while never copying provider error text."""
 
     return {"error_type": exc.__class__.__name__}
+
+
+def _handle_media_download_for_profile(db: Session, company_id: int, message) -> bool:  # noqa: ANN001
+    if pilot_profile_state() != "legacy":
+        message.status = "doubtful"
+        message.processing_step = "catalog_media_excluded"
+        message.processing_error = "Los mensajes con media están fuera del perfil Catalog-only."
+        return False
+    enqueue_whatsapp_media_download(db, company_id, message.id)
+    return True
 
 
 def _webhook_event_metadata(event: dict) -> dict[str, object]:
@@ -372,9 +383,12 @@ async def _receive_default_webhook_request(
                         message.processing_step = "catalog_order_review"
                         message.processing_error = "El catálogo WhatsApp no está autorizado para este tenant."
                     elif whatsapp_event_requires_media_download(event):
-                        enqueue_whatsapp_media_download(config_db, company.id, message.id)
-                        queued_media += 1
-                        queue_action = "download_whatsapp_media"
+                        if not _handle_media_download_for_profile(config_db, company.id, message):
+                            not_processable += 1
+                            queue_action = "media_excluded_by_catalog_profile"
+                        else:
+                            queued_media += 1
+                            queue_action = "download_whatsapp_media"
                     elif whatsapp_event_has_processable_content(event):
                         enqueue_whatsapp_processing(config_db, company.id, message.id)
                         queued_processing += 1
@@ -703,9 +717,12 @@ async def _receive_tenant_webhook_request(
                         message.processing_step = "catalog_order_review"
                         message.processing_error = "El catálogo WhatsApp no está autorizado para este tenant."
                     elif whatsapp_event_requires_media_download(event):
-                        enqueue_whatsapp_media_download(config_db, company.id, message.id)
-                        queued_media += 1
-                        queue_action = "download_whatsapp_media"
+                        if not _handle_media_download_for_profile(config_db, company.id, message):
+                            not_processable += 1
+                            queue_action = "media_excluded_by_catalog_profile"
+                        else:
+                            queued_media += 1
+                            queue_action = "download_whatsapp_media"
                     elif whatsapp_event_has_processable_content(event):
                         enqueue_whatsapp_processing(config_db, company.id, message.id)
                         queued_processing += 1

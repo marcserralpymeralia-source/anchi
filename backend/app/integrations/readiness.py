@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -18,6 +19,7 @@ from app.integrations.service import (
     ROLE_CAPABILITIES,
     ROLE_LABELS,
     _legacy_credentials_configured,
+    _legacy_credentials_configured_for_ref,
     connection_config_errors,
     get_connection,
 )
@@ -93,12 +95,23 @@ class IntegrationReadinessService:
 
     def _contract_verified(self, connection: IntegrationConnection) -> bool:
         definition = self.registry.definition(connection.connector_key)
+        if connection.connector_key == "generic_rest":
+            config = json.loads(connection.config_json or "{}")
+            truthy = {"1", "true", "yes", "on"}
+            return bool(
+                config.get("real_http_enabled")
+                and os.getenv("PILOT_GENERIC_REST_RUNTIME_ENABLED", "").strip().lower() in truthy
+                and os.getenv("EXTERNAL_CONNECTOR_HTTP_ENABLED", "").strip().lower() in truthy
+                and os.getenv("PILOT_PROFILE", "").strip().upper() == "CATALOG_ONLY_PILOT"
+            )
         return bool(definition.runtime_enabled and not definition.mock_only)
 
     def _mock_activation_allowed(self, connection: IntegrationConnection) -> bool:
         return connection.connector_key in {"generic_rest", "fake_erp"} and self.environment in {"development", "test"}
 
     def _credentials_ready(self, connection: IntegrationConnection) -> bool:
+        if connection.connector_key == "generic_rest" and bool(json.loads(connection.config_json or "{}").get("real_http_enabled")):
+            return _legacy_credentials_configured_for_ref(connection, json.loads(connection.config_json or "{}"))
         return not connection.requires_credentials or bool(connection.credentials_configured or _legacy_credentials_configured(self.db, connection))
 
     def _mapping_system(self, connection: IntegrationConnection) -> str:
@@ -149,9 +162,28 @@ class IntegrationReadinessService:
                 return True
         return False
 
+    def _latest_connection_test_outcome(self, connection_id: int) -> str | None:
+        self.db.flush()
+        logs = self.db.scalars(
+            select(AuditLog).where(
+                AuditLog.company_id == self.company_id,
+                AuditLog.action == "connection.tested",
+            ).order_by(AuditLog.created_at.desc(), AuditLog.id.desc()).limit(50)
+        ).all()
+        for log in logs:
+            details = decode_structured_message(log.message).get("metadata") or {}
+            if str(details.get("connection_id")) == str(connection_id):
+                return str(details.get("outcome") or details.get("test_status") or "").strip().lower()
+        return None
+
     def connection_test_status(self, connection: IntegrationConnection) -> dict[str, Any]:
-        if self._audit_exists(action="connection.tested", connection_id=connection.id):
+        test_outcome = self._latest_connection_test_outcome(connection.id)
+        if test_outcome == "success":
             return {"status": "SUCCESS", "message": "Connection test completado."}
+        if test_outcome == "failed":
+            return {"status": "FAILED", "message": "El último connection test falló."}
+        if test_outcome == "blocked":
+            return {"status": "BLOCKED", "message": "El último connection test está bloqueado por falta de un probe seguro."}
         if connection.health_checked_at and connection.health_status == IntegrationHealth.HEALTHY.value:
             return {"status": "SUCCESS", "message": connection.health_message or "Health check correcto."}
         if connection.health_checked_at and connection.health_status in {IntegrationHealth.UNAVAILABLE.value, IntegrationHealth.MISCONFIGURED.value}:
@@ -181,11 +213,11 @@ class IntegrationReadinessService:
             "capabilities": sorted(capability.value for capability in self.registry.capabilities_for(connection, environment=self.environment)),
             "contract_verified": self._contract_verified(connection),
             "mock_activation_allowed": self._mock_activation_allowed(connection),
-            "connector_runtime_enabled": bool(definition.runtime_enabled or self._mock_activation_allowed(connection)),
+            "connector_runtime_enabled": bool(self._contract_verified(connection) or (definition.mock_only and self._mock_activation_allowed(connection))),
             "health": {"status": connection.health_status, "message": connection.health_message, "checked_at": connection.health_checked_at.isoformat() if connection.health_checked_at else None},
             "test": self.connection_test_status(connection),
             "mapping": mapping,
-            "external_http": external_http_gate_status(connection, connector_runtime_enabled=bool(definition.runtime_enabled)),
+            "external_http": external_http_gate_status(connection, connector_runtime_enabled=bool(self._contract_verified(connection))),
         }
 
     def tenant_readiness(self) -> dict[str, Any]:
@@ -213,7 +245,7 @@ class IntegrationReadinessService:
                 blockers.append(_issue("destination_not_outbound", "La connection seleccionada no es un connector outbound.", connection_id=destination.id))
             if destination.connector_key in {"sage_200_es", "odoo"}:
                 blockers.append(_issue("contract_unverified", "Connector contract verification required antes de activar en producción.", connection_id=destination.id))
-            elif destination.connector_key == "generic_rest":
+            elif destination.connector_key == "generic_rest" and not self._contract_verified(destination):
                 warnings.append(_issue("mock_only", "Generic REST está disponible como mock; producción requiere una habilitación contractual explícita.", connection_id=destination.id))
 
         for label, connection in (("source", source), ("destination", destination)):

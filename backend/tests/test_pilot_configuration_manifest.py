@@ -64,6 +64,28 @@ class PilotConfigurationManifestTests(unittest.TestCase):
         self.assertEqual(runtime["runtime_gates"]["secret_provider_kind"], "environment")
         self.assertNotIn("sensitive-cron-value", str(runtime))
 
+    def test_runtime_storage_connector_cron_gates_are_manifested_and_critical(self):
+        with patch.dict("os.environ", {
+            "APP_ENV": "test",
+            "ATTACHMENT_STORAGE_BACKEND": "vercel_blob",
+            "PILOT_GENERIC_REST_RUNTIME_ENABLED": "true",
+            "EXTERNAL_CONNECTOR_HTTP_ENABLED": "true",
+            "PILOT_SCHEDULED_JOB_PROFILE": "CATALOG_ONLY_PILOT",
+            "PILOT_CRON_ENDPOINT_URL": "https://pilot.example/cron/jobs",
+            "PILOT_CRON_ALLOWED_HOST": "pilot.example",
+            "BLOB_STORE_HOST": "anchi.private.blob.vercel-storage.com",
+        }, clear=False):
+            runtime = PilotConfigurationManifest.from_runtime()
+        self.assertEqual(runtime["storage_backend"], "vercel_blob")
+        self.assertTrue(runtime["runtime_gates"]["PILOT_GENERIC_REST_RUNTIME_ENABLED"])
+        self.assertTrue(runtime["runtime_gates"]["EXTERNAL_CONNECTOR_HTTP_ENABLED"])
+        self.assertEqual(runtime["runtime_gates"]["scheduled_job_profile"], "CATALOG_ONLY_PILOT")
+        self.assertTrue(runtime["runtime_gates"]["cron_endpoint_configured"])
+        prior = PilotConfigurationManifest().build(storage_backend="filesystem")
+        current = PilotConfigurationManifest().build(storage_backend="vercel_blob")
+        drift = PilotConfigurationManifest().compare(current, prior)
+        self.assertIn("storage_backend", {item["field"] for item in drift["critical"]})
+
 
 if __name__ == "__main__":
     unittest.main()

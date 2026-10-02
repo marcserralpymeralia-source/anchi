@@ -16,7 +16,8 @@ from app.connectors.registry import (
     IntegrationRegistry,
     IntegrationState,
 )
-from app.connectors.security import external_http_gate_status
+from app.connectors.security import EnvironmentSecretProvider, SecretProviderError, external_http_gate_status
+from app.core.pilot_configuration import pilot_profile_state
 from app.db.models import IntegrationConnection, OrderRoute, TenantIntegrationRole
 from app.integrations.audit import append_integration_audit
 
@@ -149,7 +150,7 @@ def normalize_and_validate_config(definition, config: Mapping[str, Any] | None) 
             errors.append(f"Falta configuración obligatoria: {field.key}.")
         if value is not None:
             normalized[field.key] = value
-    if definition.mock_only and normalized.get("real_http_enabled") is True:
+    if definition.mock_only and definition.key != "generic_rest" and normalized.get("real_http_enabled") is True:
         errors.append(f"HTTP real de {definition.display_name} está bloqueado durante el PoC.")
     if definition.key == "generic_rest":
         from app.connectors.generic_rest_mapping import validate_generic_rest_config
@@ -179,13 +180,46 @@ def connection_config_errors(connection: IntegrationConnection, *, registry: Int
     registry = registry or IntegrationRegistry()
     definition = registry.definition(connection.connector_key)
     _, errors = normalize_and_validate_config(definition, _json_config(connection.config_json))
-    if connection.requires_credentials and not connection.credentials_configured:
+    config = _json_config(connection.config_json)
+    generic_real = connection.connector_key == "generic_rest" and bool(config.get("real_http_enabled"))
+    secret_ready = (
+        _legacy_credentials_configured_for_ref(connection, config)
+        if generic_real
+        else bool(connection.credentials_configured)
+    )
+    if connection.requires_credentials and not secret_ready:
         is_mock = definition.mock_only and _environment() in {"development", "test"}
         if not is_mock:
             errors.append("Faltan credenciales configuradas fuera de config_json.")
-    if definition.mock_only and _environment() not in {"development", "test"}:
+    if definition.mock_only and _environment() not in {"development", "test"} and not generic_real:
         errors.append("El connector mock-only solo puede activarse en development/test.")
+    if generic_real:
+        truthy = {"1", "true", "yes", "on"}
+        if os.getenv("PILOT_GENERIC_REST_RUNTIME_ENABLED", "").strip().lower() not in truthy:
+            errors.append("PILOT_GENERIC_REST_RUNTIME_ENABLED debe habilitarse para Generic REST real.")
+        if os.getenv("EXTERNAL_CONNECTOR_HTTP_ENABLED", "").strip().lower() not in truthy:
+            errors.append("EXTERNAL_CONNECTOR_HTTP_ENABLED debe habilitarse para Generic REST real.")
+        if pilot_profile_state() != "catalog":
+            errors.append("Generic REST real sólo puede ejecutarse en el perfil CATALOG_ONLY_PILOT.")
     return list(dict.fromkeys(errors))
+
+
+def _legacy_credentials_configured_for_ref(connection: IntegrationConnection, config: Mapping[str, Any]) -> bool:
+    """Check a referenced runtime secret without ever copying it into DB/config."""
+    if not connection.secret_provider_ref:
+        return False
+    auth = config.get("auth") if isinstance(config.get("auth"), Mapping) else {}
+    credential_name = str(auth.get("credential_name") or "api_key")
+    try:
+        EnvironmentSecretProvider().resolve(
+            tenant_id=int(connection.company_id),
+            connection_id=int(connection.id),
+            credential_ref=str(connection.secret_provider_ref),
+            credential_name=credential_name,
+        )
+    except SecretProviderError:
+        return False
+    return True
 
 
 def _legacy_credentials_configured(db: Session, connection: IntegrationConnection) -> bool:
@@ -296,11 +330,14 @@ def activate_connection(db: Session, *, company_id: int, connection_id: int, reg
         raise KeyError(f"Conexión de integración no encontrada: {connection_id}")
     registry = registry or IntegrationRegistry()
     definition = registry.definition(connection.connector_key)
+    config = _json_config(connection.config_json)
+    if not connection.credentials_configured and connection.connector_key == "generic_rest" and bool(config.get("real_http_enabled")) and _legacy_credentials_configured_for_ref(connection, config):
+        connection.credentials_configured = True
     if not connection.credentials_configured and _legacy_credentials_configured(db, connection):
         connection.credentials_configured = True
     errors = connection_config_errors(connection, registry=registry)
     config = _json_config(connection.config_json)
-    if definition.mock_only and bool(config.get("real_http_enabled")):
+    if definition.mock_only and definition.key != "generic_rest" and bool(config.get("real_http_enabled")):
         errors.append(f"{definition.display_name} no puede activar HTTP real.")
     if errors:
         connection.state = IntegrationState.MISCONFIGURED.value
@@ -534,9 +571,14 @@ def connection_to_dict(connection: IntegrationConnection, *, registry: Integrati
     definition = registry.definition(connection.connector_key)
     config = _json_config(connection.config_json)
     _, config_errors = normalize_and_validate_config(definition, config)
+    generic_rest_runtime = (
+        connection.connector_key == "generic_rest"
+        and bool(config.get("real_http_enabled"))
+        and os.getenv("PILOT_GENERIC_REST_RUNTIME_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+    )
     external_http = external_http_gate_status(
         connection,
-        connector_runtime_enabled=bool(definition.runtime_enabled and not definition.mock_only and config.get("real_http_enabled")),
+        connector_runtime_enabled=bool((definition.runtime_enabled and not definition.mock_only) or generic_rest_runtime),
     )
     return {
         "id": connection.id,

@@ -19,6 +19,7 @@ from app.channels.service import is_channel_enabled
 from app.agent.platform import LearningService
 from app.agent.services import AgentProcessingService, ScoringService
 from app.core.config import get_settings
+from app.core.pilot_configuration import pilot_profile_state
 from app.core.logging import configure_logging
 from app.core.metrics import record_job
 from app.core.operational import record_heartbeat
@@ -67,6 +68,16 @@ JOB_TYPES = {
     "index_product_embeddings",
     "index_knowledge_entries",
 }
+CATALOG_ONLY_JOB_TYPES = frozenset({"process_inbound_message", "deliver_order"})
+
+
+def scheduled_job_types() -> set[str]:
+    profile_state = pilot_profile_state()
+    if profile_state == "catalog":
+        return set(CATALOG_ONLY_JOB_TYPES)
+    if profile_state == "invalid":
+        return set()
+    return set(JOB_TYPES)
 
 
 def _now():
@@ -832,6 +843,7 @@ def _handle_tenant_jobs(
     owner: str,
     *,
     max_jobs: int | None = None,
+    job_types: set[str] | None = None,
 ) -> dict[str, int]:
     if not tenant.database_url:
         return {"recovered": 0, "attempted": 0, "processed": 0, "blocked": 0}
@@ -852,14 +864,15 @@ def _handle_tenant_jobs(
                 schema_report.get("checksum"),
             )
             return {"recovered": 0, "attempted": 0, "processed": 0, "blocked": 1}
-        recovered = recover_stale_jobs(db, owner=owner, company_id=tenant.company_id, job_types=JOB_TYPES)
+        allowed_job_types = job_types if job_types is not None else JOB_TYPES
+        recovered = recover_stale_jobs(db, owner=owner, company_id=tenant.company_id, job_types=allowed_job_types)
         recovered_jobs += len(recovered)
         while max_jobs is None or attempted_jobs < max_jobs:
             job = claim_next_job(
                 db,
                 owner=owner,
                 company_id=tenant.company_id,
-                job_types=JOB_TYPES,
+                job_types=allowed_job_types,
             )
             if not job:
                 break
@@ -993,7 +1006,11 @@ def _handle_tenant_jobs(
 def run_worker_cycle(*, max_jobs: int | None = None, include_provisioning: bool = False) -> dict[str, int]:
     configure_logging()
     cycle_started = time.perf_counter()
-    if include_provisioning:
+    profile_state = pilot_profile_state()
+    catalog_pilot = profile_state == "catalog"
+    allowed_job_types = scheduled_job_types()
+    profile_fail_closed = profile_state == "invalid"
+    if include_provisioning and not catalog_pilot and not profile_fail_closed:
         from app.workers.provisioning_worker import run_provisioning_cycle
 
         run_provisioning_cycle(max_runs=1)
@@ -1026,7 +1043,7 @@ def run_worker_cycle(*, max_jobs: int | None = None, include_provisioning: bool 
                 if max_jobs is not None and summary["attempted"] >= max_jobs:
                     break
                 try:
-                    tenant_summary = _handle_tenant_jobs(tenant, owner=_identity(), max_jobs=1)
+                    tenant_summary = _handle_tenant_jobs(tenant, owner=_identity(), max_jobs=1, job_types=allowed_job_types)
                 except Exception:  # noqa: BLE001
                     logger.exception("Job worker tenant cycle failed company=%s", tenant.company_id)
                     summary["blocked"] += 1
@@ -1071,15 +1088,16 @@ def run_worker_cycle(*, max_jobs: int | None = None, include_provisioning: bool 
     return summary
 
 
-def _worker_loop() -> None:
+def _worker_loop(stop_event: threading.Event | None = None) -> None:
+    stop_event = stop_event or threading.Event()
     settings = get_settings()
     poll_seconds = max(int(getattr(settings, "job_worker_poll_seconds", 10)), 5)
-    while True:
+    while not stop_event.is_set():
         try:
             run_worker_cycle(include_provisioning=True)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("Job worker error: %s", exc)
-        time.sleep(poll_seconds)
+            logger.error("Job worker cycle failed: %s", exc.__class__.__name__)
+        stop_event.wait(poll_seconds)
 
 
 def start_job_worker() -> None:
@@ -1097,7 +1115,17 @@ def is_job_worker_started() -> bool:
 
 def main() -> None:
     configure_logging()
-    _worker_loop()
+    stop_event = threading.Event()
+
+    def request_stop(signum, _frame):  # noqa: ANN001
+        logger.info("Worker shutdown requested signal=%s", signum)
+        stop_event.set()
+
+    import signal
+
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, request_stop)
+    _worker_loop(stop_event)
 
 
 if __name__ == "__main__":

@@ -645,7 +645,7 @@ async def download_whatsapp_media(
 
             if attachment.storage_path:
                 try:
-                    stored_content = read_attachment(attachment.storage_path)
+                    stored_content = read_attachment(attachment.storage_path, company_id=attachment.company_id)
                 except Exception:  # noqa: BLE001
                     stored_content = None
                 if stored_content is not None:

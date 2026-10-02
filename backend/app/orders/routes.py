@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, load_only, selectinload
 
 from app.agent.extraction.diagnostics import extraction_diagnostics_from_messages
 from app.core.templating import templates
+from app.core.pilot_configuration import pilot_profile_state
 from app.dashboard.service import load_order_view_data, order_sender, orders_workbench_summary
 from app.agent.platform import LearningService
 from app.agent.services import MockAgentService, ScoringService
@@ -927,6 +928,8 @@ def recalculate_score(order_id: int, db: Session = Depends(get_tenant_db), user:
 
 @router.post("/{order_id}/reprocess")
 def reprocess_order(order_id: int, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+    if pilot_profile_state() != "legacy":
+        raise HTTPException(status_code=404, detail="El reprocesamiento Email está fuera del perfil Catalog-only.")
     order = db.get(Order, order_id)
     if order and order.company_id == user.company_id:
         job = enqueue_job(db, company_id=user.company_id, job_type="process_order", payload={"order_id": order.id}, created_by_user_id=resolve_updated_by_id(db, user))
@@ -1190,7 +1193,7 @@ def view_attachment(order_id: int, attachment_id: int, db: Session = Depends(get
         return PlainTextResponse("No encontrado", status_code=404)
 
     try:
-        content = read_attachment(attachment.storage_path or "")
+        content = read_attachment(attachment.storage_path or "", company_id=attachment.company_id)
     except Exception:
         return PlainTextResponse("Archivo no disponible", status_code=404)
 
@@ -1212,7 +1215,7 @@ def preview_attachment(order_id: int, attachment_id: int, db: Session = Depends(
         return PlainTextResponse("No encontrado", status_code=404)
 
     try:
-        content = read_attachment(attachment.storage_path or "")
+        content = read_attachment(attachment.storage_path or "", company_id=attachment.company_id)
     except Exception:
         return PlainTextResponse("Archivo no disponible", status_code=404)
 

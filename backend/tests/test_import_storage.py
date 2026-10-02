@@ -50,9 +50,10 @@ class ImportStorageTests(unittest.TestCase):
             def __init__(self) -> None:
                 calls["init"] = True
 
-            def get(self, storage_ref: str, access: str | None = None):  # noqa: ANN001
+            def get(self, storage_ref: str, access: str | None = None, token: str | None = None):  # noqa: ANN001
                 calls["storage_ref"] = storage_ref
                 calls["access"] = access
+                calls["token"] = token
                 return SimpleNamespace(content=b"blob-bytes")
 
             def close(self) -> None:
@@ -63,13 +64,15 @@ class ImportStorageTests(unittest.TestCase):
         blob_module.BlobClient = FakeBlobClient
         vercel_module.blob = blob_module
 
-        with patch.dict(sys.modules, {"vercel": vercel_module, "vercel.blob": blob_module}):
-            content = read_attachment("https://blob.example.com/attachments/pedido.pdf")
+        reference = "https://anchi.private.blob.vercel-storage.com/tenants/7/attachments/pedido.pdf"
+        with patch.dict(os.environ, {"ATTACHMENT_STORAGE_BACKEND": "vercel_blob", "BLOB_READ_WRITE_TOKEN": "test-token", "BLOB_STORE_HOST": "anchi.private.blob.vercel-storage.com"}, clear=False), patch.dict(sys.modules, {"vercel": vercel_module, "vercel.blob": blob_module}):
+            content = read_attachment(reference, company_id=7)
 
         self.assertEqual(content, b"blob-bytes")
         self.assertTrue(calls["init"])
-        self.assertEqual(calls["storage_ref"], "https://blob.example.com/attachments/pedido.pdf")
+        self.assertEqual(calls["storage_ref"], reference)
         self.assertEqual(calls["access"], "private")
+        self.assertEqual(calls["token"], "test-token")
         self.assertTrue(calls["closed"])
 
     def test_save_attachment_rejects_ephemeral_vercel_storage(self):
@@ -77,10 +80,10 @@ class ImportStorageTests(unittest.TestCase):
 
         with patch.dict(
             os.environ,
-            {"VERCEL": "1", "BLOB_READ_WRITE_TOKEN": "", "BLOB_STORE_ID": ""},
+            {"VERCEL": "1", "APP_ENV": "production", "ATTACHMENT_STORAGE_BACKEND": "vercel_blob", "BLOB_READ_WRITE_TOKEN": "", "BLOB_STORE_ID": ""},
             clear=False,
         ):
-            with self.assertRaisesRegex(RuntimeError, "Persistent attachment storage"):
+            with self.assertRaisesRegex(RuntimeError, "falta su credencial"):
                 save_attachment(filename="pedido.txt", payload=b"pedido", content_type="text/plain")
 
     def test_save_attachment_namespaces_local_files_by_company(self):
@@ -102,7 +105,7 @@ class ImportStorageTests(unittest.TestCase):
             self.assertTrue(path.is_file())
             self.assertEqual(path.parent.parent.name, "7")
             self.assertEqual(path.parent.parent.parent.name, "tenants")
-            self.assertEqual(read_attachment(storage_ref), b"tenant-file")
+            self.assertEqual(read_attachment(storage_ref, company_id=7), b"tenant-file")
 
     def test_storage_readiness_probes_local_filesystem(self):
         from app.core.storage import check_storage_readiness
@@ -123,10 +126,10 @@ class ImportStorageTests(unittest.TestCase):
 
         with patch.dict(
             os.environ,
-            {"TEMP_STORAGE_DIR": "", "VERCEL": "1", "VERCEL_ENV": "production", "BLOB_READ_WRITE_TOKEN": ""},
+            {"TEMP_STORAGE_DIR": "", "APP_ENV": "production", "ATTACHMENT_STORAGE_BACKEND": "vercel_blob", "VERCEL": "1", "VERCEL_ENV": "production", "BLOB_READ_WRITE_TOKEN": ""},
             clear=False,
         ):
-            result = check_storage_readiness()
+            result = check_storage_readiness(force=True)
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["error_type"], "missing_configuration")

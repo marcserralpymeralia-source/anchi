@@ -9,6 +9,7 @@ is a future seam that refuses execution; all tests and demos use the determinist
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from uuid import uuid4
@@ -39,7 +40,13 @@ from app.connectors.generic_rest_mapping import (
     identity_namespace,
     validate_generic_rest_config,
 )
-from app.connectors.security import SecureHTTPTransport, SecureHTTPTransportError
+from app.connectors.security import (
+    EgressPolicy,
+    ExternalConnectorErrorCategory,
+    SecureHTTPTransport,
+    SecureHTTPTransportConfig,
+    SecureHTTPTransportError,
+)
 from app.core.observability import current_context
 from app.db.models import ExternalIdentity, Order
 
@@ -119,6 +126,11 @@ class HTTPGenericRESTTransport:
                 str(exc),
                 status_code=exc.status_code,
                 error_type=exc.category.value,
+                remote_commit_unknown=exc.category in {
+                    ExternalConnectorErrorCategory.TIMEOUT,
+                    ExternalConnectorErrorCategory.NETWORK,
+                    ExternalConnectorErrorCategory.REMOTE_TEMPORARY,
+                },
             ) from exc
         return GenericRESTResponse(
             status_code=response.status_code,
@@ -344,7 +356,11 @@ class GenericRESTConnector(DestinationConnector):
         self.client = GenericRESTClient(config, transport)
         self.transport = transport
         self.identity_system = identity_namespace(config.connection_id)
-        self._health = ConnectorHealth(ConnectorStatus.HEALTHY, "Generic REST PoC con MockTransport.")
+        self._health = (
+            ConnectorHealth(ConnectorStatus.UNAVAILABLE, "Generic REST real no tiene un probe remoto seguro configurado.")
+            if config.real_http_enabled
+            else ConnectorHealth(ConnectorStatus.HEALTHY, "Generic REST PoC con MockTransport.")
+        )
 
     @property
     def health(self) -> ConnectorHealth:
@@ -463,7 +479,7 @@ class GenericRESTConnector(DestinationConnector):
         elif exc.status_code == 429 or (exc.status_code is not None and 500 <= exc.status_code <= 599):
             error_type = "retryable_http"
             retryable = True
-        elif exc.error_type in {"timeout", "connection_error"}:
+        elif exc.error_type in {"timeout", "connection_error", "TIMEOUT", "NETWORK", "REMOTE_TEMPORARY"}:
             error_type = exc.error_type
             retryable = True
         else:
@@ -558,6 +574,50 @@ def build_generic_rest_mock_connector(config: Mapping[str, Any]) -> GenericRESTC
     return GenericRESTConnector(config=generic_config, transport=MockGenericRESTTransport(scenario=generic_config.mock_scenario))
 
 
+def build_generic_rest_real_connector(config: Mapping[str, Any], *, audit_sink=None) -> GenericRESTConnector:
+    """Build the gated real connector on the shared SecureHTTPTransport boundary."""
+    from app.connectors.security import EnvironmentSecretProvider
+
+    config_dict = dict(config)
+    config_dict["connection_id"] = int(config_dict.get("connection_id") or 0)
+    generic_config = _config_from_mapping(config_dict)
+    auth = generic_config.auth or {}
+    host = urlsplit(generic_config.base_url).hostname or ""
+    secret_ref = generic_config.credential_ref
+    secure_config = SecureHTTPTransportConfig(
+        tenant_id=generic_config.tenant_id,
+        connection_id=generic_config.connection_id,
+        connector_key=GENERIC_REST_IDENTIFIER,
+        base_url=generic_config.base_url,
+        credential_ref=secret_ref,
+        credential_name=str(auth.get("credential_name") or "api_key"),
+        auth_type=str(auth.get("type") or "bearer"),
+        auth_header=str(auth.get("header") or "X-API-Key"),
+        auth_username=str(auth.get("username") or ""),
+        connection_enabled=bool(config_dict.get("_connection_enabled")),
+        connector_enabled=(
+            bool(config_dict.get("real_http_enabled"))
+            and str(os.getenv("PILOT_GENERIC_REST_RUNTIME_ENABLED", "false")).strip().lower() in {"1", "true", "yes", "on"}
+        ),
+        global_enabled=None,
+        allow_http=False,
+        allowed_private_hosts=tuple(generic_config.private_network_allowlist),
+        allowed_hosts=(host,),
+        total_timeout_seconds=generic_config.timeout_seconds,
+        read_timeout_seconds=generic_config.timeout_seconds,
+        connect_timeout_seconds=min(generic_config.timeout_seconds, 5.0),
+        max_request_bytes=generic_config.max_request_bytes,
+        max_response_bytes=generic_config.max_response_bytes,
+    )
+    secure_transport = SecureHTTPTransport(
+        secure_config,
+        secret_provider=EnvironmentSecretProvider(),
+        egress_policy=EgressPolicy(allowed_hosts=(host,)),
+        audit_sink=audit_sink,
+    )
+    return GenericRESTConnector(config=generic_config, transport=HTTPGenericRESTTransport(secure_transport))
+
+
 __all__ = [
     "GENERIC_REST_IDENTIFIER",
     "GENERIC_REST_MOCK_CONTRACT",
@@ -571,4 +631,5 @@ __all__ = [
     "HTTPGenericRESTTransport",
     "MockGenericRESTTransport",
     "build_generic_rest_mock_connector",
+    "build_generic_rest_real_connector",
 ]

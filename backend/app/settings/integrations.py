@@ -1627,7 +1627,7 @@ def _save_attachments(
 
 def _extract_pdf_text(db: Session, attachment: EmailAttachment) -> None:
     try:
-        data = read_attachment(attachment.storage_path or "")
+        data = read_attachment(attachment.storage_path or "", company_id=attachment.company_id)
         text = _extract_text_from_pdf_bytes(data)
         if text.strip():
             attachment.extracted_text = text.strip()

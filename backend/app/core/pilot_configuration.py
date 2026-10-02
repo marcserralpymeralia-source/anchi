@@ -24,9 +24,28 @@ CRITICAL_FIELDS = frozenset({
     "routes",
     "master_roles",
     "runtime_gates",
+    "storage_backend",
     "retention_policy_version",
     "rbac_policy_version",
 })
+
+CATALOG_ONLY_PILOT_PROFILE = "CATALOG_ONLY_PILOT"
+
+
+def pilot_profile_state() -> str:
+    """Return catalog, legacy-local, or invalid; deployment profiles are explicit."""
+    pilot_profile = os.getenv("PILOT_PROFILE", "").strip().upper()
+    scheduled_profile = os.getenv("PILOT_SCHEDULED_JOB_PROFILE", "").strip().upper()
+    environment = os.getenv("APP_ENV", "development").strip().lower()
+    if pilot_profile == CATALOG_ONLY_PILOT_PROFILE and scheduled_profile == CATALOG_ONLY_PILOT_PROFILE:
+        return "catalog"
+    pilot_modules_configured = bool(
+        os.getenv("PILOT_ENABLED_MODULES", "").strip()
+        or os.getenv("PILOT_DISABLED_MODULES", "").strip()
+    )
+    if pilot_profile or scheduled_profile or pilot_modules_configured or environment not in {"development", "test", "demo"}:
+        return "invalid"
+    return "legacy"
 
 
 def _safe(value: Any, key: str = "") -> Any:
@@ -61,12 +80,13 @@ class PilotConfigurationManifest:
         commit_sha: str = "unknown",
         schema_version: str = "unknown",
         profile: str = "catalog-only",
-        enabled_modules: list[str] | tuple[str, ...] = ("whatsapp_catalog", "generic_rest_mock"),
+        enabled_modules: list[str] | tuple[str, ...] = ("whatsapp_catalog", "generic_rest"),
         disabled_modules: list[str] | tuple[str, ...] = ("email_autodiscovery", "audio", "sage_real", "odoo_real"),
         connectors: list[dict] | tuple[dict, ...] = (),
         connection_fingerprints: list[dict] | tuple[dict, ...] = (),
         routes: list[dict] | tuple[dict, ...] = (),
         runtime_gates: dict | None = None,
+        storage_backend: str = "unknown",
         retention_policy_version: str = RETENTION_POLICY_VERSION,
         rbac_policy_version: str = RBAC_POLICY_VERSION,
     ) -> dict:
@@ -81,6 +101,7 @@ class PilotConfigurationManifest:
             "connectors": list(connectors),
             "connection_fingerprints": list(connection_fingerprints),
             "routes": list(routes),
+            "storage_backend": storage_backend,
             "master_roles": {
                 role: sorted(permission for permission in permissions.split(",") if permission)
                 for role, permissions in sorted(DEFAULT_ROLE_PERMISSIONS.items())
@@ -112,15 +133,42 @@ class PilotConfigurationManifest:
     def from_runtime(cls, *, tenant_id: int | None = None) -> dict:
         from app.connectors.registry import IntegrationRegistry
 
-        enabled = os.getenv("PILOT_ENABLED_MODULES", "whatsapp_catalog,generic_rest_mock").split(",")
+        enabled = os.getenv("PILOT_ENABLED_MODULES", "whatsapp_catalog,generic_rest").split(",")
         disabled = os.getenv("PILOT_DISABLED_MODULES", "email_autodiscovery,audio,sage_real,odoo_real").split(",")
-        boolean_gates = ("PILOT_HTTP_CONNECTOR_ENABLED", "RUN_INTERNAL_JOB_WORKER", "PILOT_RETENTION_DESTRUCTIVE_ENABLED")
+        boolean_gates = (
+            "PILOT_HTTP_CONNECTOR_ENABLED",
+            "PILOT_GENERIC_REST_RUNTIME_ENABLED",
+            "EXTERNAL_CONNECTOR_HTTP_ENABLED",
+            "RUN_INTERNAL_JOB_WORKER",
+            "RUN_INTERNAL_EMAIL_WORKER",
+            "PILOT_RETENTION_DESTRUCTIVE_ENABLED",
+        )
         truthy = {"1", "true", "yes", "on"}
         gates = {name: os.getenv(name, "").strip().lower() in truthy for name in boolean_gates}
         gates.update({name: bool(os.getenv(name, "").strip()) for name in ("CRON_SECRET", "BLOB_READ_WRITE_TOKEN")})
+        gates["cron_secret_configured"] = bool(os.getenv("CRON_SECRET", "").strip())
+        gates["blob_token_configured"] = bool(os.getenv("BLOB_READ_WRITE_TOKEN", "").strip())
         gates["secret_provider_kind"] = os.getenv("PILOT_SECRET_PROVIDER", "environment")
+        gates["scheduled_job_profile"] = os.getenv("PILOT_SCHEDULED_JOB_PROFILE", "legacy")
+        gates["cron_endpoint_configured"] = bool(os.getenv("PILOT_CRON_ENDPOINT_URL", "").strip())
+        gates["cron_allowed_host_configured"] = bool(os.getenv("PILOT_CRON_ALLOWED_HOST", "").strip())
+        gates["cron_allowed_host"] = os.getenv("PILOT_CRON_ALLOWED_HOST", "").strip().lower()
+        gates["blob_store_host_configured"] = bool(os.getenv("BLOB_STORE_HOST", "").strip())
+        gates["blob_store_host"] = os.getenv("BLOB_STORE_HOST", "").strip().lower()
+        from app.core.storage import configured_storage_backend
+
+        storage_backend = configured_storage_backend()
         definitions = IntegrationRegistry().list_definitions(environment=os.getenv("APP_ENV", "development"))
-        connectors = [{"key": item.key, "version": getattr(item, "version", "connector-definition-v1"), "runtime_enabled": item.runtime_enabled, "mock_only": item.mock_only} for item in definitions]
+        generic_rest_enabled = gates["PILOT_GENERIC_REST_RUNTIME_ENABLED"]
+        connectors = [
+            {
+                "key": item.key,
+                "version": getattr(item, "version", "connector-definition-v1"),
+                "runtime_enabled": generic_rest_enabled if item.key == "generic_rest" else item.runtime_enabled,
+                "mock_only": not generic_rest_enabled if item.key == "generic_rest" else item.mock_only,
+            }
+            for item in definitions
+        ]
         return cls(tenant_id=tenant_id).build(
             commit_sha=os.getenv("PILOT_COMMIT_SHA") or os.getenv("VERCEL_GIT_COMMIT_SHA") or os.getenv("RENDER_GIT_COMMIT") or os.getenv("GITHUB_SHA", "unknown"),
             schema_version=os.getenv("PILOT_SCHEMA_VERSION", "unknown"),
@@ -129,6 +177,7 @@ class PilotConfigurationManifest:
             disabled_modules=[item.strip() for item in disabled if item.strip()],
             connectors=connectors,
             runtime_gates=gates,
+            storage_backend=storage_backend,
         )
 
 

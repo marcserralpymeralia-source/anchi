@@ -375,7 +375,9 @@ def validate_generic_rest_config(config: Mapping[str, Any] | None) -> list[str]:
             if name in GENERIC_REST_OPERATION_KEYS:
                 errors.extend(_validate_operation(str(name), operation))
     if raw.get("real_http_enabled") is True:
-        errors.append("HTTP real de Generic REST está bloqueado durante el PoC.")
+        create_operation = operations.get("orders.create") if isinstance(operations, Mapping) else None
+        if not isinstance(create_operation, Mapping) or not isinstance(create_operation.get("idempotency"), Mapping):
+            errors.append("Generic REST real requiere idempotency en operations.orders.create.")
     timeout = raw.get("timeout_seconds", 10)
     try:
         if float(timeout) <= 0 or float(timeout) > GENERIC_REST_MAX_TIMEOUT_SECONDS:

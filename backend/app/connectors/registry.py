@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.connectors.contracts import BaseConnector, ConnectorCapability, ConnectorRegistry
+from app.core.pilot_configuration import pilot_profile_state
 from app.db.models import IntegrationConnection
 
 
@@ -317,16 +318,32 @@ class IntegrationRegistry:
             raise RuntimeError("La conexión de integración no está activa.")
         definition = self.definition(connection.connector_key)
         environment = os.getenv("APP_ENV", "development").strip().lower()
-        if definition.mock_only and environment not in {"development", "test"}:
-            raise RuntimeError(f"El connector mock-only {definition.key} solo está disponible en development/test.")
-        if not definition.runtime_enabled and not definition.mock_only:
-            raise RuntimeError(f"El runtime del connector {definition.key} está bloqueado.")
         config = json.loads(connection.config_json or "{}")
         if not isinstance(config, dict):
             raise ValueError("La configuración de integración no es un objeto JSON.")
         config["tenant_id"] = company_id
         config["connection_id"] = connection.id
         config["secret_provider_ref"] = connection.secret_provider_ref
+        if definition.key == "generic_rest":
+            if bool(config.get("real_http_enabled")):
+                truthy = {"1", "true", "yes", "on"}
+                runtime_enabled = os.getenv("PILOT_GENERIC_REST_RUNTIME_ENABLED", "").strip().lower() in truthy
+                external_enabled = os.getenv("EXTERNAL_CONNECTOR_HTTP_ENABLED", "").strip().lower() in truthy
+                pilot_profile = pilot_profile_state() == "catalog"
+                if not (runtime_enabled and external_enabled and pilot_profile and connection.secret_provider_ref):
+                    raise RuntimeError("Generic REST real bloqueado: faltan gates de runtime, HTTP externo, perfil piloto o SecretProvider.")
+                config["_connection_enabled"] = True
+                from app.connectors.generic_rest import build_generic_rest_real_connector
+                from app.integrations.audit import append_secure_http_audit
+
+                return build_generic_rest_real_connector(config, audit_sink=lambda event: append_secure_http_audit(db, event))
+            if environment not in {"development", "test"}:
+                raise RuntimeError("Generic REST mock no puede usarse fuera de development/test; no hay fallback desde modo real.")
+            return self._factory(definition)(config)
+        if definition.mock_only and environment not in {"development", "test"}:
+            raise RuntimeError(f"El connector mock-only {definition.key} solo está disponible en development/test.")
+        if not definition.runtime_enabled and not definition.mock_only:
+            raise RuntimeError(f"El runtime del connector {definition.key} está bloqueado.")
         return self._factory(definition)(config)
 
     def capabilities_for(self, connection: IntegrationConnection, *, environment: str | None = None) -> frozenset[ConnectorCapability]:

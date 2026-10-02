@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import create_engine, text
 from sqlalchemy.engine import make_url
 
 
@@ -144,6 +145,7 @@ def pg_dump(database_url: str, destination: str | Path, *, environment: str, dat
     artifact.parent.mkdir(parents=True, exist_ok=True)
     args, env = _postgres_args(database_url, command="pg_dump", output=artifact)
     subprocess.run(args, env=env, check=True, capture_output=True, text=True)
+    database_target = make_url(database_url)
     metadata = {
         "created_at": _now(),
         "environment": environment,
@@ -151,18 +153,65 @@ def pg_dump(database_url: str, destination: str | Path, *, environment: str, dat
         "engine": "postgresql",
         "artifact": artifact.name,
         "sha256": _sha256(artifact),
+        "source_database_target": {"host": database_target.host, "port": database_target.port, "database": database_target.database},
     }
     metadata["metadata_file"] = _write_metadata(artifact, metadata).name
     return metadata
 
 
-def pg_restore(source: str | Path, database_url: str) -> dict[str, Any]:
+def pg_restore(source: str | Path, database_url: str, *, target_identity: str) -> dict[str, Any]:
     artifact = Path(source).expanduser()
     if not artifact.is_file():
         raise FileNotFoundError(f"No existe el artefacto PostgreSQL: {artifact}")
+    metadata_path = Path(f"{artifact}.json")
+    if not metadata_path.is_file():
+        raise ValueError("Falta metadata sidecar para verificar el backup PostgreSQL.")
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if metadata.get("sha256") != _sha256(artifact):
+        raise ValueError("El checksum del backup PostgreSQL no coincide con su metadata.")
+    target_identity = str(target_identity or "").strip()
+    if not target_identity or target_identity == str(metadata.get("database_identity") or ""):
+        raise ValueError("Restore PostgreSQL requiere una identidad destino distinta de la fuente.")
+    source_target = metadata.get("source_database_target")
+    target = make_url(database_url)
+    if isinstance(source_target, dict) and source_target == {"host": target.host, "port": target.port, "database": target.database}:
+        raise ValueError("Restore PostgreSQL no puede usar la misma base que el backup de origen.")
     args, env = _postgres_args(database_url, command="pg_restore")
-    subprocess.run(args + [str(artifact)], env=env, check=True, capture_output=True, text=True)
-    return {"restored_at": _now(), "engine": "postgresql", "artifact": artifact.name, "sha256": _sha256(artifact)}
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            has_user_relations = bool(connection.execute(text(
+                "SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%')"
+            )).scalar())
+            has_custom_schemas = bool(connection.execute(text(
+                "SELECT EXISTS (SELECT 1 FROM pg_namespace WHERE nspname NOT IN "
+                "('pg_catalog', 'information_schema', 'public') AND nspname NOT LIKE 'pg_toast%')"
+            )).scalar())
+            has_public_routines = bool(connection.execute(text(
+                "SELECT EXISTS (SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+                "WHERE n.nspname = 'public')"
+            )).scalar())
+            has_public_types = bool(connection.execute(text(
+                "SELECT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace "
+                "WHERE n.nspname = 'public' AND t.typrelid = 0)"
+            )).scalar())
+            if has_user_relations or has_custom_schemas or has_public_routines or has_public_types:
+                raise ValueError("La base destino PostgreSQL no está vacía; restore abortado.")
+        subprocess.run(args + ["--single-transaction", str(artifact)], env=env, check=True, capture_output=True, text=True)
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    finally:
+        engine.dispose()
+    return {
+        "restored_at": _now(),
+        "engine": "postgresql",
+        "artifact": artifact.name,
+        "sha256": _sha256(artifact),
+        "source_identity": metadata.get("database_identity"),
+        "target_identity": target_identity,
+        "post_restore_validation": "SELECT 1 passed",
+    }
 
 
 def backup_database(database_url: str, destination: str | Path, *, environment: str, database_identity: str) -> dict[str, Any]:
