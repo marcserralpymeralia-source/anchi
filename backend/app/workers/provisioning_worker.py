@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.schema_readiness import RuntimeSchemaError
 from app.master.database import MasterSessionLocal
 from app.master.models import (
     CompanyMembership,
@@ -83,10 +84,10 @@ def _provision_run(run_id: int) -> bool:
             raise ValueError("tenant_configuration_missing")
 
         # Private helpers are imported lazily to avoid a service/worker import cycle.
-        from app.superadmin.service import _engine_for, _ensure_local_actor, _provision_tenant_schema
+        from app.superadmin.service import _engine_for, _ensure_local_actor, _initialize_tenant_records
 
         _set_step(master_db, run_id, "schema")
-        _provision_tenant_schema(company, tenant_row.database_url, display_name=company.name)
+        _initialize_tenant_records(company, tenant_row.database_url, display_name=company.name)
 
         _set_step(master_db, run_id, "actors")
         memberships = master_db.scalars(
@@ -134,6 +135,26 @@ def _provision_run(run_id: int) -> bool:
         return True
     except Exception as exc:  # noqa: BLE001
         master_db.rollback()
+        if isinstance(exc, RuntimeSchemaError):
+            # Keep the queued operation recoverable until an operator applies
+            # the explicit tenant migration; never attempt schema DDL here.
+            waiting_db = MasterSessionLocal()
+            try:
+                run = waiting_db.get(TenantProvisioningRun, run_id)
+                if run is not None:
+                    run.status = "retry"
+                    run.current_step = "schema"
+                    run.error_message = "tenant_schema_not_current"
+                    company = waiting_db.get(MasterCompany, run.company_id)
+                    if company is not None:
+                        company.active = False
+                        company.status = "provisioning"
+                        company.provisioning_status = "provisioning"
+                    waiting_db.commit()
+            finally:
+                waiting_db.close()
+            logger.info("company.provisioning.waiting_for_migration run_id=%s", run_id)
+            return False
         logger.exception("company.provisioning.failed run_id=%s", run_id)
         # Never persist provider URLs, passwords, or exception messages: the
         # platform only needs a stable error class and the current step.

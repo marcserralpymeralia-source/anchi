@@ -324,7 +324,9 @@ class PilotRuntimeAdaptationTests(unittest.TestCase):
             stop_event.set()
             return {"processed": 1}
 
-        with patch("app.workers.jobs_worker.get_settings", return_value=types.SimpleNamespace(job_worker_poll_seconds=600)), patch("app.workers.jobs_worker.run_worker_cycle", side_effect=one_cycle):
+        with patch("app.workers.jobs_worker.get_settings", return_value=types.SimpleNamespace(job_worker_poll_seconds=600)), patch(
+            "app.workers.jobs_worker.validate_runtime_schema", return_value={"master": "current", "tenants": {}}
+        ), patch("app.workers.jobs_worker.run_worker_cycle", side_effect=one_cycle):
             jobs_worker._worker_loop(stop_event)
         self.assertEqual(len(calls), 1)
         self.assertTrue(stop_event.is_set())

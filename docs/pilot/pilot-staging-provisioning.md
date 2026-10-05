@@ -252,6 +252,25 @@ No se implementa ninguno en esta tarea. Los puntos 2–7 y Generic REST son bloq
 
 Fecha: 2026-10-02. Este addendum sustituye las referencias anteriores a adaptaciones todavía pendientes en §§2, 4–10 y 16. Sólo se cambiaron código, tests y documentación local: no hubo provisioning, deploy, push, conexión a Neon/Blob ni petición al destino Generic REST.
 
+### Separación local de migraciones y runtime (2026-10-05)
+
+El runtime Web/Worker ahora valida los ledgers master y de cada tenant activo mediante `master_migration_report(..., persist=False)` y `tenant_migration_report(..., persist=False)`. No llama `create_all`, `upgrade_*`, ni bootstrap de administrador, sincronización de actores o creación de estado Email al arrancar. Si master/tenant no tiene el checksum y versión actuales, el arranque falla cerrado; `/health/ready` conserva su comprobación read-only. Worker standalone ejecuta el mismo gate antes de entrar al loop y no procesa `TenantProvisioningRun` ni migra durante un ciclo. Los flujos Web/Worker de provisionamiento de tenant sólo inicializan datos si un operador ya migró su schema; si no, fallan sin crear tablas. La sincronización legacy también exige schema actual antes de escribir.
+
+Orden requerido al desplegar una nueva versión:
+
+1. Con el CLI y credenciales migrator limitadas al destino staging, aplicar `upgrade-master`; verificar `report-master`.
+2. Aplicar `upgrade-tenant --company-id <PILOT_COMPANY_ID>` para el tenant sintético; verificar `report-tenant` y `status-all-tenants --summary`.
+3. Retirar las credenciales migrator del contexto temporal y arrancar Web y Worker con roles runtime DML-only.
+4. Confirmar readiness y sólo entonces habilitar Cron/rehearsal. Un schema missing/stale debe dejar Web/Worker sin servir ni procesar jobs.
+
+El CLI acepta `MASTER_MIGRATION_DATABASE_URL` y `TENANT_MIGRATION_DATABASE_URL` para separar credenciales; compara host/puerto/database con la identidad runtime y no imprime la URL. La URL tenant override sólo aplica a una migración con `company-id` explícito. `upgrade-all-tenants` rechaza un override tenant singular. En local, sin overrides, mantiene compatibilidad con URLs configuradas/runtime; staging requiere credenciales separadas antes de provisioning. Los nombres de variables no contienen valores.
+
+Defaults conservadores de pool para PostgreSQL runtime: `DATABASE_POOL_SIZE=3`, `DATABASE_MAX_OVERFLOW=1`, `DATABASE_POOL_TIMEOUT_SECONDS=10`, con `pool_pre_ping`; SQLite conserva configuración propia del dialecto. Para 1 Web + 1 Worker y una master + una tenant DB por proceso, el límite teórico es 16 conexiones (`2 × 2 × (3+1)`), inferior a 112. Recalcular al añadir réplicas/tenants; no se habilita pooler de Neon por código.
+
+La propuesta de roles y grants está en [docs/schema-migrations.md](../schema-migrations.md). Es sólo documentación técnica: no se han creado roles, grants, branches ni bases Neon. Backup/restore conserva URLs directas y herramientas one-shot (`pg_dump`/`pg_restore`); no se cambiaron scripts ni parámetros de restore. No se probó contra proveedor y no se declara Neon readiness.
+
+El contrato anterior que describía DDL “al arrancar/provisionar” ya no aplica a Web/Worker. Los scripts operatorios (`scripts.schema_migrations`, provisioning/demo/offline tools y backups) siguen teniendo escrituras explícitas; deben ejecutarse manualmente con destino verificado y autoridad correspondiente. Este cambio no autoriza provisioning cloud ni cierra staging: baseline, readiness real, backup/restore, alertas y rehearsal siguen abiertos.
+
 | Gate | Estado de código | Evidencia/límite para el siguiente gate |
 |---|---|---|
 | Blob explícito/fail-closed | **READY FOR PROVISIONING** | `ATTACHMENT_STORAGE_BACKEND=vercel_blob`; token pasado explícitamente a `put/get/delete`; `BLOB_STORE_HOST` fija el hostname privado exacto para lecturas, escrituras y probe; lecturas requieren `company_id` y prefijo `tenants/<id>/attachments/`; filesystem sólo se usa si está elegido. Probe write/read/verify/delete cacheado 60 s por host/token. Sigue pendiente validar store/credencial real y `write → restart → read` entre procesos. |
@@ -298,3 +317,13 @@ El comando consulta master y la DB tenant, exige el perfil Catalog-only válido,
 El flujo de aprobación es: desplegar el commit aprobado; configurar recursos y gates; ejecutar el comando para el ID sintético; revisar y aprobar el JSON completo como artefacto de configuración; cargar ese JSON sin modificar en `PILOT_CONFIGURATION_BASELINE_JSON`; reiniciar con esa configuración y comprobar `configuration_drift.status == "MATCH"` y el mismo `configuration_manifest_hash` en `/health/ready` con contexto autenticado del tenant/company seleccionado. La llamada sin contexto tenant calcula el manifest de servicio y no equivale a comparar el baseline tenant-specific. Repetir la exportación si cambia commit, schema, conexiones, rutas, gates, storage o políticas. No se añade endpoint HTTP para exportar el manifest ni opción para imprimir secretos.
 
 El JSON incluye el identificador de tenant, commit, versiones de schema, configuración de módulos/conectores/rutas/gates, fingerprints unidireccionales y hash. No incluye URLs DB, valores de secretos, credenciales resueltas ni nombre/email del tenant. Los fingerprints no son credenciales; representan una huella de la configuración no secreta tras la redacción por clave.
+
+### Separación de runtime y migraciones — 2026-10-05
+
+Web y Background Worker validan master y los tenants activos al arrancar; sólo ejecutan informes read-only con `persist=False`. Schema ausente, stale o inaccesible en una compañía activa impide startup. Cron sólo llama el endpoint protegido; no ejecuta DDL. Pool runtime configurable (`DATABASE_POOL_SIZE`, `DATABASE_MAX_OVERFLOW`, `DATABASE_POOL_TIMEOUT_SECONDS`) con defaults 3/1/10, `pool_pre_ping`; para una instancia Web y una Worker, master+un tenant, techo estimado 16 conexiones.
+
+El job de alta de compañía crea el registro y la cola master, pero no crea database/archivo ni esquema. En runtime normal, el Worker puede reintentar la fase de datos y dejarla en `retry/schema` hasta que un operador aplique la migración explícita; al quedar current, completa roles/actores y activa. Una compañía inactiva/provisioning aún sin migrar no bloquea startup; un tenant activo sin ledger actual sí. En Catalog-only el provisioning worker sigue excluido por perfil.
+
+El runtime de pilot-staging usa `APP_ENV=production` (el modelo `Settings` no admite `APP_ENV=staging`). En ese entorno, `upgrade-master` requiere `MASTER_MIGRATION_DATABASE_URL` y `upgrade-tenant --company-id` requiere `TENANT_MIGRATION_DATABASE_URL`; el CLI valida mismo destino y usuario DB distinto al runtime. `upgrade-all-tenants` está deshabilitado para evitar DDL accidental con credenciales runtime. La creación de proyecto/DB/roles y sus grants requiere autorización separada; este cambio sólo implementa el guard del CLI y documenta privilegios propuestos.
+
+Tests de adecuación usan `upgrade_tenant_schema` antes del provisioning de datos; no se restaura `create_all` en startup ni en el worker. Los fallos de Email, audio/transcripción y las incidencias baseline documentadas permanecen fuera del perfil y sin cambios.

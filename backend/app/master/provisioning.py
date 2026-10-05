@@ -6,13 +6,15 @@ from sqlalchemy import create_engine, func, select, text
 from sqlalchemy.orm import Session, selectinload, sessionmaker
 
 from app.core.permissions import DEFAULT_ROLE_PERMISSIONS
+from app.core.schema_readiness import assert_existing_database
+from app.db.pool import runtime_pool_options
 from app.core.security import hash_password
 from app.db.database import Base
 from app.db.models import Company as TenantCompany
 from app.db import models as operational_models  # noqa: F401
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser, utcnow
 from app.master.service import slugify
-from app.tenancy.migrations import ensure_tenant_migration_record, ensure_tenant_schema
+from app.tenancy.migrations import tenant_migration_report
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -101,7 +103,12 @@ def _ensure_tenant_database_row(master_db: Session, company: MasterCompany, data
 
 
 def _session_factory(database_url: str) -> tuple[object, sessionmaker[Session]]:
-    engine = create_engine(database_url, connect_args={"check_same_thread": False} if database_url.startswith("sqlite") else {})
+    assert_existing_database(database_url, scope="tenant")
+    engine = create_engine(
+        database_url,
+        connect_args={"check_same_thread": False} if database_url.startswith("sqlite") else {},
+        **runtime_pool_options(database_url),
+    )
     return engine, sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
@@ -125,10 +132,12 @@ def synchronize_tenant_actors(master_db: Session, tenant: MasterTenantDatabase) 
         return 0
 
     engine, session_factory = _session_factory(database_url)
-    Base.metadata.create_all(bind=engine)
     tenant_db = session_factory()
     updated = 0
     try:
+        report = tenant_migration_report(tenant_db, tenant.company_id, persist=False)
+        if not report.get("is_current"):
+            raise RuntimeError(f"tenant_schema_not_current:{report.get('status', 'unknown')}")
         roles = {
             role.name: role
             for role in tenant_db.scalars(select(operational_models.Role).where(operational_models.Role.company_id == tenant.company_id)).all()
@@ -269,9 +278,11 @@ def provision_company_database(master_db: Session, legacy_db: Session, company: 
 
     target_path = tenant_database_path(company)
     engine, session_factory = _session_factory(database_url)
-    Base.metadata.create_all(bind=engine)
     target_db = session_factory()
     try:
+        report = tenant_migration_report(target_db, company.id, persist=False)
+        if not report.get("is_current"):
+            raise RuntimeError(f"tenant_schema_not_current:{report.get('status', 'unknown')}")
         companies_table = Base.metadata.tables["companies"]
         count = target_db.scalar(select(func.count()).select_from(companies_table))
         if not count:
@@ -282,12 +293,6 @@ def provision_company_database(master_db: Session, legacy_db: Session, company: 
             was_provisioned = True
         else:
             tenant_db.health_status = "ok"
-        ensure_tenant_schema(database_url, company_id=company.id)
-        ensure_tenant_migration_record(
-            target_db,
-            company.id,
-            notes="Provisioned tenant schema" if was_provisioned else "Tenant schema verified during provisioning",
-        )
     finally:
         target_db.close()
         engine.dispose()
@@ -313,9 +318,11 @@ def provision_local_tenant(
     database_url = tenant_database_url(company)
     tenant_db = _ensure_tenant_database_row(master_db, company, database_url)
     engine, session_factory = _session_factory(database_url)
-    Base.metadata.create_all(bind=engine)
     tenant_session = session_factory()
     try:
+        report = tenant_migration_report(tenant_session, company.id, persist=False)
+        if not report.get("is_current"):
+            raise RuntimeError(f"tenant_schema_not_current:{report.get('status', 'unknown')}")
         tenant_company = tenant_session.get(TenantCompany, company.id)
         if tenant_company is None:
             tenant_company = TenantCompany(
@@ -365,7 +372,6 @@ def provision_local_tenant(
             local_user.is_active = admin_user.is_active
             local_user.master_user_id = admin_user.id
         tenant_session.commit()
-        ensure_tenant_schema(database_url, company_id=company.id)
         tenant_db.health_status = "ok"
         tenant_db.provisioned_at = tenant_db.provisioned_at or utcnow()
         tenant_db.notes = "Provisioned by Superadmin"
@@ -401,10 +407,11 @@ def provision_external_tenant(
     tenant = _ensure_tenant_database_row(master_db, company, database_url)
 
     engine, tenant_session_factory = _session_factory(database_url)
-    Base.metadata.create_all(bind=engine)
-
     tenant_session = tenant_session_factory()
     try:
+        report = tenant_migration_report(tenant_session, company.id, persist=False)
+        if not report.get("is_current"):
+            raise RuntimeError(f"tenant_schema_not_current:{report.get('status', 'unknown')}")
         tenant_company = tenant_session.get(TenantCompany, company.id)
         if tenant_company is None:
             tenant_company = TenantCompany(
@@ -422,8 +429,6 @@ def provision_external_tenant(
     finally:
         tenant_session.close()
         engine.dispose()
-
-    ensure_tenant_schema(database_url, company_id=company.id)
 
     session_engine, session_factory = _session_factory(database_url)
     tenant_db = session_factory()

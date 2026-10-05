@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -10,10 +11,11 @@ from sqlalchemy.orm import sessionmaker
 from app.core.security import hash_password
 from app.auth.lifecycle import accept_invitation, create_invitation, create_password_reset_token, reset_password
 from app.master.database import MasterBase
-from app.master.models import CompanyMembership, MasterUser
+from app.master.models import CompanyMembership, MasterUser, TenantProvisioningRun
 from app.master.service import authenticate_master_user
 from app.superadmin.service import create_company
-from app.tenancy.database import clear_tenant_engine_cache, clear_tenant_schema_cache
+from app.tenancy.database import clear_tenant_engine_cache, clear_tenant_schema_cache, get_tenant_engine
+from app.tenancy.migrations import upgrade_tenant_schema
 
 
 class AccountLifecycleTests(unittest.TestCase):
@@ -33,15 +35,28 @@ class AccountLifecycleTests(unittest.TestCase):
         self.master_engine.dispose()
         self.temp_dir.cleanup()
 
+    def _create_provisioned_company(self, db):
+        company = create_company(
+            db,
+            name="Lifecycle Co",
+            slug="lifecycle-co",
+            database_url=self.tenant_url,
+            actor_user_id=1,
+            provision_async=True,
+        )
+        tenant_engine = get_tenant_engine(self.tenant_url)
+        upgrade_tenant_schema(tenant_engine, company_id=company.id, application_version="test")
+        run = db.scalar(select(TenantProvisioningRun).where(TenantProvisioningRun.company_id == company.id))
+        from app.workers.provisioning_worker import _provision_run
+
+        with patch("app.workers.provisioning_worker.MasterSessionLocal", side_effect=self.Session):
+            self.assertTrue(_provision_run(run.id))
+        db.expire_all()
+        return db.get(type(company), company.id)
+
     def test_invitation_acceptance_and_password_reset_revoke_sessions(self):
         with self.Session() as db:
-            company = create_company(
-                db,
-                name="Lifecycle Co",
-                slug="lifecycle-co",
-                database_url=self.tenant_url,
-                actor_user_id=1,
-            )
+            company = self._create_provisioned_company(db)
             self.assertEqual(db.scalar(select(CompanyMembership).where(CompanyMembership.company_id == company.id)), None)
             invitation, raw_token = create_invitation(
                 db,

@@ -997,21 +997,14 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         self.assertEqual(error_response.headers.get("X-Correlation-ID"), request_id)
         self.assertIn(request_id, error_response.body.decode("utf-8"))
 
-    def test_app_still_serves_login_when_master_db_is_unavailable(self):
-        op_error = OperationalError("INIT", {}, Exception("boom"))
+    def test_app_fails_startup_when_master_schema_is_unavailable(self):
+        from app.core.schema_readiness import RuntimeSchemaError
+        from fastapi.testclient import TestClient
 
-        with patch("app.core.lifespan.init_master_db", side_effect=op_error), patch(
-            "app.core.middleware.MasterSessionLocal",
-            side_effect=op_error,
-        ):
-            app = create_app()
-            from fastapi.testclient import TestClient
-
-            with TestClient(app, raise_server_exceptions=False) as client:
-                response = client.get("/login")
-
-        self.assertEqual(response.status_code, 200)
-        self.assertNotIn("internal_error", response.text.lower())
+        with patch("app.core.lifespan.validate_runtime_schema", side_effect=RuntimeSchemaError("master schema check unavailable")):
+            with self.assertRaisesRegex(RuntimeSchemaError, "master schema check unavailable"):
+                with TestClient(create_app()):
+                    self.fail("Web must not serve requests when runtime schema validation fails")
 
     def test_login_redirects_to_dashboard_after_success(self):
         request = FakeRequest(session={})
@@ -1029,8 +1022,11 @@ class CoreSecurityAndJobsTests(unittest.TestCase):
         app = create_app()
         from fastapi.testclient import TestClient
 
-        with TestClient(app, raise_server_exceptions=False) as client:
-            response = client.get("/", follow_redirects=False)
+        with patch("app.core.lifespan.validate_runtime_schema", return_value={"master": "current", "tenants": {}}), patch(
+            "app.core.lifespan.start_email_sync_worker"
+        ), patch("app.core.lifespan.start_job_worker"):
+            with TestClient(app, raise_server_exceptions=False) as client:
+                response = client.get("/", follow_redirects=False)
 
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers.get("location"), "/login?next=%2F")

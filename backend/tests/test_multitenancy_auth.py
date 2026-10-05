@@ -25,6 +25,7 @@ from app.core.security import hash_password  # noqa: E402
 from app.db.database import Base  # noqa: E402
 from app.db.models import Company, Email  # noqa: E402
 from app.master.database import MasterBase, get_master_db  # noqa: E402
+from app.master.migrations import upgrade_master_schema  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
 from app.master.provisioning import synchronize_tenant_actors  # noqa: E402
 from app.tenancy import database as tenancy_database_module  # noqa: E402
@@ -50,6 +51,7 @@ class MultiTenancyAuthenticationTests(unittest.TestCase):
             2: create_engine(f"sqlite:///{(root / 'tenant-beta.sqlite').as_posix()}", connect_args={"check_same_thread": False}),
         }
         MasterBase.metadata.create_all(self.master_engine)
+        upgrade_master_schema(self.master_engine, application_version="test")
         for engine in self.tenant_engines.values():
             Base.metadata.create_all(engine)
 

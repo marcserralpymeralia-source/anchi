@@ -20,6 +20,7 @@ from app.agent.platform import LearningService
 from app.agent.services import AgentProcessingService, ScoringService
 from app.core.config import get_settings
 from app.core.pilot_configuration import pilot_profile_state
+from app.core.schema_readiness import validate_runtime_schema
 from app.core.logging import configure_logging
 from app.core.metrics import record_job
 from app.core.operational import record_heartbeat
@@ -1010,10 +1011,8 @@ def run_worker_cycle(*, max_jobs: int | None = None, include_provisioning: bool 
     catalog_pilot = profile_state == "catalog"
     allowed_job_types = scheduled_job_types()
     profile_fail_closed = profile_state == "invalid"
-    if include_provisioning and not catalog_pilot and not profile_fail_closed:
-        from app.workers.provisioning_worker import run_provisioning_cycle
-
-        run_provisioning_cycle(max_runs=1)
+    # Tenant provisioning is data-plane work only after an operator has
+    # applied the tenant schema through the explicit migration command.
     summary = {
         "tenants": 0,
         "recovered": 0,
@@ -1061,6 +1060,10 @@ def run_worker_cycle(*, max_jobs: int | None = None, include_provisioning: bool 
             pending = next_round
     finally:
         master_db.close()
+    if include_provisioning and not catalog_pilot and not profile_fail_closed:
+        from app.workers.provisioning_worker import run_provisioning_cycle
+
+        run_provisioning_cycle(max_runs=1)
     logger.info(
         "Job worker cycle completed tenants=%s recovered=%s processed=%s owner=%s",
         summary["tenants"],
@@ -1092,6 +1095,7 @@ def _worker_loop(stop_event: threading.Event | None = None) -> None:
     stop_event = stop_event or threading.Event()
     settings = get_settings()
     poll_seconds = max(int(getattr(settings, "job_worker_poll_seconds", 10)), 5)
+    validate_runtime_schema()
     while not stop_event.is_set():
         try:
             run_worker_cycle(include_provisioning=True)

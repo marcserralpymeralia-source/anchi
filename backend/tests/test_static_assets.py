@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -17,8 +18,12 @@ class StaticAssetTests(unittest.TestCase):
             versioned_asset_url("../secrets.txt")
 
     def test_bundled_css_is_cacheable(self):
-        with TestClient(create_app(), raise_server_exceptions=False) as client:
-            response = client.get("/static/styles.css?v=test")
+        settings = type("Settings", (), {"environment": "test", "run_internal_email_worker": False, "run_internal_job_worker": False})()
+        with patch("app.core.lifespan.validate_runtime_schema", return_value={"master": "current", "tenants": {}}), patch(
+            "app.core.lifespan.get_settings", return_value=settings
+        ):
+            with TestClient(create_app(), raise_server_exceptions=False) as client:
+                response = client.get("/static/styles.css?v=test")
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["cache-control"], "public, max-age=31536000, immutable")

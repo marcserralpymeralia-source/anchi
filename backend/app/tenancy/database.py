@@ -14,6 +14,7 @@ from app.auth.redirects import login_location_for_request
 from app.master.database import get_master_db
 from app.master.service import load_tenant_context
 from app.db.database import Base
+from app.db.pool import runtime_pool_options
 from app.tenancy.migrations import tenant_migration_report, upgrade_tenant_schema
 
 
@@ -36,7 +37,7 @@ def get_tenant_engine(database_url: str) -> Engine:
     with _tenant_engine_cache_lock:
         engine = _tenant_engine_cache.get(database_url)
         if engine is None:
-            engine = create_engine(database_url, connect_args=_connect_args(database_url), pool_pre_ping=True)
+            engine = create_engine(database_url, connect_args=_connect_args(database_url), **runtime_pool_options(database_url))
             _tenant_engine_cache[database_url] = engine
         return engine
 

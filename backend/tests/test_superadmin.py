@@ -14,10 +14,11 @@ from app.core.security import hash_password
 from app.db.models import User
 from app.master.database import MasterBase
 from app.master.bootstrap import ensure_platform_admin
-from app.master.models import CompanyMembership, MasterTenantDatabase, MasterUser
+from app.master.models import CompanyMembership, MasterTenantDatabase, MasterUser, TenantProvisioningRun
 from app.master.service import authenticate_master_user
 from app.superadmin.service import create_company, create_company_user, platform_stats, toggle_user
-from app.tenancy.database import clear_tenant_engine_cache, tenant_db_session
+from app.tenancy.database import clear_tenant_engine_cache, get_tenant_engine, tenant_db_session
+from app.tenancy.migrations import upgrade_tenant_schema
 from app.whatsapp.service import resolve_company_from_whatsapp_identifiers, upsert_master_whatsapp_endpoint
 
 
@@ -49,14 +50,31 @@ class SuperadminProvisioningTests(unittest.TestCase):
         clear_tenant_engine_cache()
         self.temp_dir.cleanup()
 
-    def test_company_and_user_are_provisioned_and_login_uses_master_identity(self):
-        tenant_url = f"sqlite:///{Path(self.temp_dir.name, 'tenant.db').as_posix()}"
+    def _create_provisioned_company(self, *, name: str, slug: str, database_url: str):
         company = create_company(
             self.db,
-            name="Acme Test",
-            slug="acme-test",
-            database_url=tenant_url,
+            name=name,
+            slug=slug,
+            database_url=database_url,
             actor_user_id=1,
+            provision_async=True,
+        )
+        tenant_engine = get_tenant_engine(database_url)
+        upgrade_tenant_schema(tenant_engine, company_id=company.id, application_version="test")
+        run = self.db.scalar(
+            select(TenantProvisioningRun).where(TenantProvisioningRun.company_id == company.id)
+        )
+        from app.workers.provisioning_worker import _provision_run
+
+        with patch("app.workers.provisioning_worker.MasterSessionLocal", side_effect=self.MasterSession):
+            self.assertTrue(_provision_run(run.id))
+        self.db.expire_all()
+        return self.db.get(type(company), company.id)
+
+    def test_company_and_user_are_provisioned_and_login_uses_master_identity(self):
+        tenant_url = f"sqlite:///{Path(self.temp_dir.name, 'tenant.db').as_posix()}"
+        company = self._create_provisioned_company(
+            name="Acme Test", slug="acme-test", database_url=tenant_url
         )
 
         membership = create_company_user(
@@ -91,12 +109,8 @@ class SuperadminProvisioningTests(unittest.TestCase):
 
     def test_company_creation_does_not_create_a_login_or_membership(self):
         tenant_url = f"sqlite:///{Path(self.temp_dir.name, 'company-only.db').as_posix()}"
-        company = create_company(
-            self.db,
-            name="Company Without Login",
-            slug="company-without-login",
-            database_url=tenant_url,
-            actor_user_id=1,
+        company = self._create_provisioned_company(
+            name="Company Without Login", slug="company-without-login", database_url=tenant_url
         )
 
         self.assertIsNone(
@@ -112,12 +126,8 @@ class SuperadminProvisioningTests(unittest.TestCase):
 
     def test_platform_owner_cannot_be_assigned_as_a_company_user(self):
         tenant_url = f"sqlite:///{Path(self.temp_dir.name, 'platform-owner.db').as_posix()}"
-        company = create_company(
-            self.db,
-            name="Tenant Without Platform Owner",
-            slug="tenant-without-platform-owner",
-            database_url=tenant_url,
-            actor_user_id=1,
+        company = self._create_provisioned_company(
+            name="Tenant Without Platform Owner", slug="tenant-without-platform-owner", database_url=tenant_url
         )
 
         with self.assertRaisesRegex(ValueError, "identidad global"):
@@ -133,12 +143,8 @@ class SuperadminProvisioningTests(unittest.TestCase):
 
     def test_global_superadmin_role_cannot_be_assigned_to_a_company_user(self):
         tenant_url = f"sqlite:///{Path(self.temp_dir.name, 'tenant-role-guard.db').as_posix()}"
-        company = create_company(
-            self.db,
-            name="Tenant Role Guard",
-            slug="tenant-role-guard",
-            database_url=tenant_url,
-            actor_user_id=1,
+        company = self._create_provisioned_company(
+            name="Tenant Role Guard", slug="tenant-role-guard", database_url=tenant_url
         )
 
         with self.assertRaisesRegex(ValueError, "Rol no válido"):
@@ -171,12 +177,8 @@ class SuperadminProvisioningTests(unittest.TestCase):
 
     def test_last_active_owner_cannot_be_suspended(self):
         tenant_url = f"sqlite:///{Path(self.temp_dir.name, 'owner-guard.db').as_posix()}"
-        company = create_company(
-            self.db,
-            name="Owner Guard",
-            slug="owner-guard",
-            database_url=tenant_url,
-            actor_user_id=1,
+        company = self._create_provisioned_company(
+            name="Owner Guard", slug="owner-guard", database_url=tenant_url
         )
         create_company_user(
             self.db,
@@ -214,12 +216,8 @@ class SuperadminProvisioningTests(unittest.TestCase):
 
     def test_whatsapp_endpoint_index_routes_without_scanning_tenant_databases(self):
         tenant_url = f"sqlite:///{Path(self.temp_dir.name, 'tenant-whatsapp.db').as_posix()}"
-        company = create_company(
-            self.db,
-            name="WhatsApp Tenant",
-            slug="whatsapp-tenant",
-            database_url=tenant_url,
-            actor_user_id=1,
+        company = self._create_provisioned_company(
+            name="WhatsApp Tenant", slug="whatsapp-tenant", database_url=tenant_url
         )
         upsert_master_whatsapp_endpoint(
             self.db,

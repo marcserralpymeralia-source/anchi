@@ -195,7 +195,7 @@ def _engine_for(connection: ExternalDatabaseConnection, password: str | None) ->
         connect_args["ssl"] = {}
         if connection.ssl_mode == "verify-full":
             connect_args.update(ssl_verify_cert=True, ssl_verify_identity=True)
-    return create_engine(url, connect_args=connect_args, pool_pre_ping=True, pool_size=1, max_overflow=0)
+    return create_engine(url, connect_args=connect_args, pool_pre_ping=True, pool_size=1, max_overflow=0, pool_timeout=5)
 
 
 def _run_read_only_probe(engine: Engine) -> None:

@@ -102,6 +102,9 @@ class Settings(BaseSettings):
     app_slug: str = "anchi"
     database_url: str = "sqlite:///./anchi_demo.db"
     master_database_url: str = "sqlite:///./master.db"
+    database_pool_size: int = Field(default=3, ge=1, le=10, validation_alias="DATABASE_POOL_SIZE")
+    database_max_overflow: int = Field(default=1, ge=0, le=10, validation_alias="DATABASE_MAX_OVERFLOW")
+    database_pool_timeout_seconds: int = Field(default=10, ge=1, le=60, validation_alias="DATABASE_POOL_TIMEOUT_SECONDS")
     tenant_db_mode: str = Field(default="sqlite", validation_alias=AliasChoices("TENANT_DB_MODE"))
     tenant_database_url: str | None = Field(default=None, validation_alias=AliasChoices("TENANT_DATABASE_URL"))
     app_secret_key: str = Field(default=DEV_SECRET_KEY, validation_alias=AliasChoices("SECRET_KEY", "APP_SECRET_KEY"))

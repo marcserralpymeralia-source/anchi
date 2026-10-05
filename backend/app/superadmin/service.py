@@ -10,6 +10,8 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
+from app.core.schema_readiness import TenantSchemaNotCurrent, assert_existing_database
+from app.db.pool import runtime_pool_options
 from app.core.permissions import DEFAULT_ROLE_PERMISSIONS
 from app.core.security import hash_password
 from app.db.database import Base
@@ -36,7 +38,7 @@ from app.master.models import (
 )
 from app.master.provisioning import tenant_database_path
 from app.master.service import configured_platform_admin_email, slugify
-from app.tenancy.migrations import ensure_tenant_schema
+from app.tenancy.migrations import tenant_migration_report
 
 
 TENANT_ROLES = ("Administrador", "Supervisor", "Operador", "Solo lectura")
@@ -62,10 +64,11 @@ def _database_url_for_company(company: MasterCompany, requested_url: str | None)
 
 
 def _engine_for(database_url: str):
+    assert_existing_database(database_url, scope="tenant")
     return create_engine(
         database_url,
         connect_args={"check_same_thread": False} if database_url.startswith("sqlite") else {},
-        pool_pre_ping=True,
+        **runtime_pool_options(database_url),
     )
 
 
@@ -169,13 +172,15 @@ def _ensure_tenant_database(master_db: Session, company: MasterCompany, database
     return tenant_db
 
 
-def _provision_tenant_schema(company: MasterCompany, database_url: str, *, display_name: str) -> None:
+def _initialize_tenant_records(company: MasterCompany, database_url: str, *, display_name: str) -> None:
     engine = _engine_for(database_url)
     try:
-        Base.metadata.create_all(bind=engine)
         factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
         tenant_db = factory()
         try:
+            report = tenant_migration_report(tenant_db, company.id, persist=False)
+            if not report.get("is_current"):
+                raise TenantSchemaNotCurrent(f"tenant_schema_not_current:{report.get('status', 'unknown')}")
             tenant_company = tenant_db.get(TenantCompany, company.id)
             if tenant_company is None:
                 tenant_db.add(TenantCompany(id=company.id, name=display_name, legal_name=company.legal_name or display_name, active=True))
@@ -186,7 +191,6 @@ def _provision_tenant_schema(company: MasterCompany, database_url: str, *, displ
             tenant_db.commit()
         finally:
             tenant_db.close()
-        ensure_tenant_schema(database_url, company_id=company.id)
     finally:
         engine.dispose()
 
@@ -276,7 +280,7 @@ def create_company(
             )
             master_db.commit()
             return company
-        _provision_tenant_schema(company, resolved_url, display_name=name)
+        _initialize_tenant_records(company, resolved_url, display_name=name)
         tenant_row.health_status = "ok"
         tenant_row.provisioned_at = tenant_row.provisioned_at or _utcnow()
         company.active = True

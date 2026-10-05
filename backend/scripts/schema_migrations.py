@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import create_engine, select
+from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.orm import selectinload
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -15,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from app.master.database import MasterSessionLocal, engine as master_engine  # noqa: E402
 from app.master.models import MasterCompany, MasterTenantDatabase  # noqa: E402
 from app.master.migrations import master_migration_report, upgrade_master_schema  # noqa: E402
+from app.db.pool import runtime_pool_options  # noqa: E402
 from app.migrations.inspection import discover_sqlite_files, inspect_database_url, inventory_records, render_markdown_table, simulate_sqlite_reference  # noqa: E402
 from app.tenancy.database import get_tenant_engine  # noqa: E402
 from app.tenancy.database import tenant_db_session  # noqa: E402
@@ -46,6 +49,38 @@ def _master_session():
     return MasterSessionLocal()
 
 
+def _same_database_target(runtime_url: str, migration_url: str) -> bool:
+    runtime = make_url(runtime_url)
+    migration = make_url(migration_url)
+    return (runtime.drivername.split("+", 1)[0], runtime.host, runtime.port, runtime.database) == (
+        migration.drivername.split("+", 1)[0],
+        migration.host,
+        migration.port,
+        migration.database,
+    )
+
+
+def _requires_dedicated_migrator() -> bool:
+    environment = (os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "").strip().lower()
+    return environment in {"staging", "production"}
+
+
+def _migration_engine(env_name: str, runtime_url: str, fallback: Engine) -> tuple[Engine, bool]:
+    migration_url = os.getenv(env_name, "").strip()
+    if not migration_url:
+        if _requires_dedicated_migrator():
+            raise ValueError(f"{env_name} is required in staging and production")
+        return fallback, False
+    if not _same_database_target(runtime_url, migration_url):
+        raise ValueError(f"{env_name} debe apuntar al mismo host y database que el destino runtime")
+    if _requires_dedicated_migrator():
+        runtime_identity = make_url(runtime_url).username
+        migration_identity = make_url(migration_url).username
+        if not runtime_identity or not migration_identity or runtime_identity == migration_identity:
+            raise ValueError(f"{env_name} must use a different database identity from runtime")
+    return create_engine(migration_url, **runtime_pool_options(migration_url)), True
+
+
 def _resolve_master_tenant_refs():
     db = _master_session()
     try:
@@ -72,7 +107,13 @@ def _resolve_master_tenant_refs():
 
 
 def cmd_upgrade_master(args) -> int:
-    result = upgrade_master_schema(master_engine, application_version=args.application_version, dry_run=args.dry_run, baseline=args.baseline)
+    runtime_url = os.getenv("MASTER_DATABASE_URL", "").strip() or str(master_engine.url)
+    target_engine, dispose_engine = _migration_engine("MASTER_MIGRATION_DATABASE_URL", runtime_url, master_engine)
+    try:
+        result = upgrade_master_schema(target_engine, application_version=args.application_version, dry_run=args.dry_run, baseline=args.baseline)
+    finally:
+        if dispose_engine:
+            target_engine.dispose()
     _json({"scope": "master", **result})
     return 0
 
@@ -85,18 +126,32 @@ def cmd_upgrade_tenant(args) -> int:
         database_key = tenant.database_key
     finally:
         db.close()
-    result = upgrade_tenant_schema(
-        get_tenant_engine(tenant.database_url),
-        company_id=tenant.company_id,
-        application_version=args.application_version,
-        dry_run=args.dry_run,
-        baseline=args.baseline,
+    tenant_runtime_url = tenant.database_url
+    tenant_engine, dispose_engine = _migration_engine(
+        "TENANT_MIGRATION_DATABASE_URL",
+        tenant_runtime_url,
+        get_tenant_engine(tenant_runtime_url),
     )
+    try:
+        result = upgrade_tenant_schema(
+            tenant_engine,
+            company_id=tenant.company_id,
+            application_version=args.application_version,
+            dry_run=args.dry_run,
+            baseline=args.baseline,
+        )
+    finally:
+        if dispose_engine:
+            tenant_engine.dispose()
     _json({"scope": "tenant", "company_id": tenant.company_id, "company_slug": company_slug, "database_key": database_key, **result})
     return 0
 
 
 def cmd_upgrade_all_tenants(args) -> int:
+    if _requires_dedicated_migrator():
+        raise ValueError("upgrade-all-tenants is disabled in staging and production; migrate each tenant explicitly")
+    if os.getenv("TENANT_MIGRATION_DATABASE_URL", "").strip():
+        raise ValueError("TENANT_MIGRATION_DATABASE_URL sólo admite upgrade-tenant con company_id/company_slug explícito")
     db = _master_session()
     try:
         tenants = db.scalars(
