@@ -181,6 +181,51 @@ class PilotConfigurationManifest:
         )
 
 
+def build_tenant_configuration_manifest(
+    *,
+    company_id: int,
+    master_schema_report: dict,
+    tenant_schema_report: dict,
+    connections,
+    routes,
+) -> dict:
+    """Build the canonical tenant manifest used by readiness and operators."""
+    runtime = PilotConfigurationManifest.from_runtime(tenant_id=company_id)
+    return PilotConfigurationManifest(tenant_id=company_id).build(
+        commit_sha=runtime["commit_sha"],
+        schema_version=(
+            f"master:{master_schema_report.get('current_version', 'unknown')};"
+            f"tenant:{tenant_schema_report.get('current_version', 'unknown')}"
+        ),
+        profile=runtime["profile"],
+        enabled_modules=runtime["enabled_modules"],
+        disabled_modules=runtime["disabled_modules"],
+        connectors=runtime["connectors"],
+        storage_backend=runtime["storage_backend"],
+        connection_fingerprints=[
+            {
+                "connection_id": item.id,
+                "connector_key": item.connector_key,
+                "state": item.state,
+                "fingerprint": safe_configuration_fingerprint(item.config_json),
+            }
+            for item in connections
+        ],
+        routes=[
+            {
+                "route_id": item.id,
+                "order_type": item.order_type,
+                "source_connection_id": item.source_connection_id,
+                "destination_connection_id": item.destination_connection_id,
+                "destination_connector_key": item.destination_connector_key,
+                "is_active": item.is_active,
+            }
+            for item in routes
+        ],
+        runtime_gates=runtime["runtime_gates"],
+    )
+
+
 def compare_runtime_to_approved(current: dict, raw_approved: str | None) -> dict:
     if not raw_approved:
         return PilotConfigurationManifest().compare(current, None)

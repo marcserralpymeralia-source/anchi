@@ -12,7 +12,12 @@ from app.auth.dependencies import current_tenant_user, require_master_admin
 from app.admin.diagnostics import company_diagnostics, company_diagnostics_overview
 from app.core.metrics import snapshot_metrics
 from app.core.operational import operational_status
-from app.core.pilot_configuration import PilotConfigurationManifest, compare_runtime_to_approved, pilot_profile_state
+from app.core.pilot_configuration import (
+    PilotConfigurationManifest,
+    build_tenant_configuration_manifest,
+    compare_runtime_to_approved,
+    pilot_profile_state,
+)
 from app.db.models import IntegrationConnection, OrderRoute
 from app.core.storage import check_storage_readiness, configured_storage_backend
 from app.master.database import get_master_db
@@ -100,19 +105,12 @@ def health_ready(request: Request, master_db: Session = Depends(get_master_db), 
             payload["tenant_schema_report"] = tenant_migration_report(tenant_db, tenant.company.id, persist=False)
             connections = tenant_db.scalars(select(IntegrationConnection).where(IntegrationConnection.company_id == tenant.company.id).order_by(IntegrationConnection.id)).all()
             routes = tenant_db.scalars(select(OrderRoute).where(OrderRoute.company_id == tenant.company.id).order_by(OrderRoute.id)).all()
-            from app.core.pilot_configuration import safe_configuration_fingerprint
-
-            configuration_manifest = PilotConfigurationManifest(tenant_id=tenant.company.id).build(
-                commit_sha=configuration_manifest["commit_sha"],
-                schema_version=f"master:{master_schema.get('current_version', 'unknown')};tenant:{payload['tenant_schema_report'].get('current_version', 'unknown')}",
-                profile=configuration_manifest["profile"],
-                enabled_modules=configuration_manifest["enabled_modules"],
-                disabled_modules=configuration_manifest["disabled_modules"],
-                connectors=configuration_manifest["connectors"],
-                storage_backend=configuration_manifest["storage_backend"],
-                connection_fingerprints=[{"connection_id": item.id, "connector_key": item.connector_key, "state": item.state, "fingerprint": safe_configuration_fingerprint(item.config_json)} for item in connections],
-                routes=[{"route_id": item.id, "order_type": item.order_type, "source_connection_id": item.source_connection_id, "destination_connection_id": item.destination_connection_id, "destination_connector_key": item.destination_connector_key, "is_active": item.is_active} for item in routes],
-                runtime_gates=configuration_manifest["runtime_gates"],
+            configuration_manifest = build_tenant_configuration_manifest(
+                company_id=tenant.company.id,
+                master_schema_report=master_schema,
+                tenant_schema_report=payload["tenant_schema_report"],
+                connections=connections,
+                routes=routes,
             )
             configuration_drift = compare_runtime_to_approved(configuration_manifest, os.getenv("PILOT_CONFIGURATION_BASELINE_JSON"))
             payload["configuration_manifest_hash"] = configuration_manifest["hash"]

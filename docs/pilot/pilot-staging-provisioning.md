@@ -284,3 +284,17 @@ PYTHONPATH=backend python3 backend/scripts/pilot_backup_restore.py restore-postg
 - Mantener RBAC/retención según sus aprobaciones humanas existentes y realizar la revisión final de código. Esto no es `GO PILOT` ni autorización automática para provisionar.
 
 **Estado Block 13.2:** código local **READY FOR PROVISIONING** tras tests/review; validación proveedor/browser/alertas y rehearsal siguen **OPEN**. Decisión de go-live: **NO GO** hasta cerrar esos gates.
+
+### Export y aprobación del baseline completo
+
+Desde `/app/backend` en el runtime staging (o desde el mismo commit y con acceso únicamente a las URLs de Neon staging), generar el manifiesto del tenant sintético seleccionado explícitamente:
+
+```bash
+python -m scripts.pilot_configuration_manifest --company-id <PILOT_COMPANY_ID>
+```
+
+El comando consulta master y la DB tenant, exige el perfil Catalog-only válido, módulos permitidos exactos, `TENANT_DB_MODE=external`, commit SHA completo, Blob configurado explícitamente, Cron protegido configurado, SecretProvider `environment`, workers internos apagados y ambos esquemas `current`; no escribe en esas bases y no ejecuta el probe Blob. Rechaza tenant/company inexistente o inactivo. Utiliza `build_tenant_configuration_manifest`, compartido con `/health/ready`, y `PilotConfigurationManifest` para producir JSON ordenado con el mismo `hash` de drift/readiness. Los fallos de drivers se resumen por tipo y nunca incluyen URL, credenciales ni traceback.
+
+El flujo de aprobación es: desplegar el commit aprobado; configurar recursos y gates; ejecutar el comando para el ID sintético; revisar y aprobar el JSON completo como artefacto de configuración; cargar ese JSON sin modificar en `PILOT_CONFIGURATION_BASELINE_JSON`; reiniciar con esa configuración y comprobar `configuration_drift.status == "MATCH"` y el mismo `configuration_manifest_hash` en `/health/ready` con contexto autenticado del tenant/company seleccionado. La llamada sin contexto tenant calcula el manifest de servicio y no equivale a comparar el baseline tenant-specific. Repetir la exportación si cambia commit, schema, conexiones, rutas, gates, storage o políticas. No se añade endpoint HTTP para exportar el manifest ni opción para imprimir secretos.
+
+El JSON incluye el identificador de tenant, commit, versiones de schema, configuración de módulos/conectores/rutas/gates, fingerprints unidireccionales y hash. No incluye URLs DB, valores de secretos, credenciales resueltas ni nombre/email del tenant. Los fingerprints no son credenciales; representan una huella de la configuración no secreta tras la redacción por clave.
