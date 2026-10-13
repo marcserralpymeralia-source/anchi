@@ -1181,7 +1181,9 @@ def _apply_tenant_whatsapp_read_state(engine, dry_run: bool) -> list[str]:  # no
     return ensure_columns(
         engine,
         "inbound_messages",
-        {"read_at": "DATETIME"},
+        # Use a PostgreSQL-compatible type because production tenants run on
+        # Neon.  SQLite accepts this declaration as well for local fixtures.
+        {"read_at": "TIMESTAMP WITH TIME ZONE"},
         dry_run=dry_run,
     )
 
