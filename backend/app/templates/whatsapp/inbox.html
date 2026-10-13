@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_send, icon_check, icon_check_check, icon_clock, icon_alert_triangle, icon_user, icon_download, icon_eye, icon_image, icon_file_text, icon_play, icon_pause, icon_badge_check, icon_refresh %}
+{% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_send, icon_check, icon_check_check, icon_clock, icon_alert_triangle, icon_user, icon_download, icon_eye, icon_image, icon_file_text, icon_play, icon_badge_check, icon_refresh %}
 {% set title = "Buzón de WhatsApp" %}
 {% block content %}
 <div class="channel-inbox-shell whatsapp-inbox-shell" data-whatsapp-live data-live-revision="{{ live_revision }}">
@@ -36,6 +36,28 @@
   </main>
 </div>
 <script>
+  window.initWhatsAppMediaDownloads = function(container = document) {
+    const pendingSyncs = window.__whatsappPendingMediaSyncs || new Set();
+    window.__whatsappPendingMediaSyncs = pendingSyncs;
+
+    container.querySelectorAll("[data-wa-auto-sync-href]").forEach((placeholder) => {
+      const syncUrl = placeholder.dataset.waAutoSyncHref;
+      if (!syncUrl || pendingSyncs.has(syncUrl)) return;
+      pendingSyncs.add(syncUrl);
+
+      fetch(syncUrl, {
+        method: "GET",
+        credentials: "same-origin",
+        cache: "no-store",
+        headers: { "Accept": "text/html" },
+      }).catch((error) => {
+        console.debug("WhatsApp media auto-download unavailable", error);
+      }).finally(() => {
+        pendingSyncs.delete(syncUrl);
+      });
+    });
+  };
+
   (() => {
     const liveRoot = document.querySelector("[data-whatsapp-live]");
     if (!liveRoot) return;
@@ -105,9 +127,7 @@
         currentContacts.replaceWith(nextContacts);
         currentChat.replaceWith(nextChat);
         currentCompose.replaceWith(nextCompose);
-        if (typeof window.initWhatsAppAudioPlayers === "function") {
-          window.initWhatsAppAudioPlayers(nextChat);
-        }
+        window.initWhatsAppMediaDownloads(nextChat);
         if (typeof window.initWhatsAppComposer === "function") {
           window.initWhatsAppComposer(nextCompose);
         }
@@ -189,6 +209,7 @@
   };
 
   window.initWhatsAppComposer();
+  window.initWhatsAppMediaDownloads();
 
   window.handleFileSelection = function(input) {
     const bar = document.getElementById("wa-selected-files");
@@ -267,163 +288,6 @@
     }
   });
 
-  window.initWhatsAppAudioPlayers = function(container = document) {
-    const players = container.querySelectorAll("[data-wa-audio-player]");
-    players.forEach((player) => {
-      if (player._waAudioInitialized) return;
-      player._waAudioInitialized = true;
-
-      const audio = player.querySelector("[data-wa-audio-element]");
-      const playBtn = player.querySelector("[data-wa-audio-play-btn]");
-      const progressFill = player.querySelector("[data-wa-audio-progress]");
-      const thumb = player.querySelector("[data-wa-audio-thumb]");
-      const rangeInput = player.querySelector("[data-wa-audio-range]");
-      const timer = player.querySelector("[data-wa-audio-timer]");
-      const durationLabel = player.querySelector("[data-wa-audio-duration]");
-
-      if (!audio || !playBtn) return;
-
-      let animationFrame = 0;
-      let isSeeking = false;
-
-      const formatTime = (secs) => {
-        if (!isFinite(secs) || isNaN(secs) || secs < 0) return "0:00";
-        const m = Math.floor(secs / 60);
-        const s = Math.floor(secs % 60);
-        return `${m}:${s < 10 ? "0" : ""}${s}`;
-      };
-
-      const updateDuration = () => {
-        if (durationLabel) durationLabel.textContent = formatTime(audio.duration);
-      };
-
-      const updateProgress = (curr = audio.currentTime, dur = audio.duration) => {
-        if (!dur || dur <= 0) return;
-        const pct = Math.min(Math.max((curr / dur) * 100, 0), 100);
-        if (timer) timer.textContent = formatTime(curr);
-        if (progressFill) {
-          progressFill.style.transform = `scaleX(${pct / 100})`;
-        }
-        if (thumb) thumb.style.left = `${pct}%`;
-        if (rangeInput && !isSeeking) rangeInput.value = pct;
-      };
-
-      const stopAnimation = () => {
-        if (animationFrame) window.cancelAnimationFrame(animationFrame);
-        animationFrame = 0;
-      };
-
-      const renderPlayback = () => {
-        updateProgress();
-        if (!audio.paused && !audio.ended) {
-          animationFrame = window.requestAnimationFrame(renderPlayback);
-        } else {
-          animationFrame = 0;
-        }
-      };
-
-      const startAnimation = () => {
-        if (!animationFrame) animationFrame = window.requestAnimationFrame(renderPlayback);
-      };
-
-      const setLoading = (loading) => {
-        player.classList.toggle("is-loading", loading);
-        playBtn.disabled = loading;
-      };
-
-      playBtn.addEventListener("click", () => {
-        if (audio.paused) {
-          document.querySelectorAll("[data-wa-audio-element]").forEach((other) => {
-            if (other !== audio && !other.paused) {
-              other.pause();
-            }
-          });
-          setLoading(true);
-          if (audio.readyState === 0) audio.load();
-          audio.play().catch(() => {
-            setLoading(false);
-            player.classList.add("has-error");
-          });
-        } else {
-          audio.pause();
-        }
-      });
-
-      audio.addEventListener("play", () => {
-        setLoading(false);
-        player.classList.remove("has-error");
-        playBtn.classList.add("is-playing");
-        playBtn.setAttribute("aria-label", "Pausar");
-        playBtn.setAttribute("title", "Pausar");
-        startAnimation();
-      });
-
-      audio.addEventListener("pause", () => {
-        stopAnimation();
-        playBtn.classList.remove("is-playing");
-        playBtn.setAttribute("aria-label", "Reproducir");
-        playBtn.setAttribute("title", "Reproducir");
-      });
-
-      audio.addEventListener("timeupdate", () => {
-        if (audio.paused || isSeeking) updateProgress();
-      });
-
-      audio.addEventListener("loadedmetadata", () => {
-        updateDuration();
-        updateProgress();
-      });
-
-      audio.addEventListener("durationchange", updateDuration);
-
-      audio.addEventListener("error", () => {
-        setLoading(false);
-        player.classList.add("has-error");
-      });
-
-      audio.addEventListener("ended", () => {
-        stopAnimation();
-        playBtn.classList.remove("is-playing");
-        audio.currentTime = 0;
-        updateProgress(0, audio.duration);
-        if (timer) timer.textContent = "0:00";
-        playBtn.setAttribute("aria-label", "Reproducir");
-        playBtn.setAttribute("title", "Reproducir");
-      });
-
-      updateDuration();
-      updateProgress();
-
-      if (rangeInput) {
-        rangeInput.addEventListener("pointerdown", () => { isSeeking = true; });
-
-        rangeInput.addEventListener("input", () => {
-          const val = parseFloat(rangeInput.value);
-          if (progressFill) progressFill.style.transform = `scaleX(${val / 100})`;
-          if (thumb) thumb.style.left = `${val}%`;
-          if (audio.duration) {
-            const seekTime = (val / 100) * audio.duration;
-            if (timer) timer.textContent = formatTime(seekTime);
-          }
-        });
-
-        const finishDrag = () => {
-          if (!isSeeking) return;
-          isSeeking = false;
-          if (audio.duration) {
-            audio.currentTime = (parseFloat(rangeInput.value) / 100) * audio.duration;
-          }
-          updateProgress();
-        };
-
-        rangeInput.addEventListener("pointerup", finishDrag);
-        rangeInput.addEventListener("pointercancel", finishDrag);
-        rangeInput.addEventListener("change", finishDrag);
-      }
-    });
-  };
-
-  initWhatsAppAudioPlayers();
 </script>
 
 <div id="wa-image-lightbox" class="wa-lightbox-overlay" onclick="handleLightboxBackdrop(event)">

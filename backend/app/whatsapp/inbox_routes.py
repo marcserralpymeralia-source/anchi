@@ -333,9 +333,13 @@ def _inbox_live_revision(db: Session, conditions: list) -> str:
             func.max(InboundMessage.updated_at),
             func.max(InboundMessage.last_processed_at),
             func.max(InboundMessage.id),
+            func.max(MessageAttachment.created_at),
+            func.max(MessageAttachment.storage_path),
+            func.max(MessageAttachment.extraction_status),
         )
         .select_from(Conversation)
         .outerjoin(InboundMessage, InboundMessage.conversation_id == Conversation.id)
+        .outerjoin(MessageAttachment, MessageAttachment.inbound_message_id == InboundMessage.id)
         .where(*conditions)
     ).one()
     source = "|".join(str(value or "") for value in row)

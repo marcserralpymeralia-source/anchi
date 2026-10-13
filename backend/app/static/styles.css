@@ -13088,12 +13088,6 @@ table.logs-table tr:hover td {
   box-shadow: none !important;
 }
 
-.whatsapp-inbox-shell .wa-compose-window-status {
-  padding-left: 52px !important;
-  color: #667781 !important;
-  font-size: 11px !important;
-}
-
 .whatsapp-inbox-shell .wa-compose-locked {
   min-height: 58px !important;
   flex-direction: row !important;
@@ -14359,6 +14353,38 @@ table.logs-table tr:hover td {
   color: var(--danger, #b91c1c) !important;
 }
 
+.whatsapp-inbox-shell .wa-audio-native-row {
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-native-control {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  height: 36px !important;
+  accent-color: var(--wa-accent) !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-footer {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  min-width: 0 !important;
+  margin-top: 5px !important;
+  padding: 0 2px !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-filename {
+  min-width: 0 !important;
+  overflow: hidden !important;
+  color: var(--wa-muted) !important;
+  font-size: 10px !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
 .whatsapp-inbox-shell .whatsapp-verified-badge {
   color: #1877f2 !important;
 }
@@ -14386,16 +14412,6 @@ table.logs-table tr:hover td {
   border-color: color-mix(in srgb, var(--wa-accent) 24%, var(--wa-line)) !important;
 }
 
-.whatsapp-inbox-shell .wa-media-placeholder.is-downloading::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: linear-gradient(105deg, transparent 25%, color-mix(in srgb, var(--wa-panel) 72%, transparent) 48%, transparent 70%);
-  transform: translateX(-100%);
-  animation: wa-media-shimmer 1.5s ease-in-out infinite;
-}
-
 .whatsapp-inbox-shell .wa-media-placeholder .wa-pending-icon-box {
   position: relative !important;
   background: color-mix(in srgb, var(--wa-accent) 11%, var(--wa-panel)) !important;
@@ -14405,10 +14421,6 @@ table.logs-table tr:hover td {
 .whatsapp-inbox-shell .wa-media-placeholder .wa-pending-icon {
   display: inline-flex !important;
   opacity: .72;
-}
-
-.whatsapp-inbox-shell .wa-media-placeholder.is-downloading .wa-pending-icon {
-  opacity: .22;
 }
 
 .whatsapp-inbox-shell .wa-media-loading-ring {
@@ -14438,10 +14450,6 @@ table.logs-table tr:hover td {
 .whatsapp-inbox-shell .wa-media-placeholder .wa-pending-retry-btn:hover {
   background: var(--wa-accent) !important;
   color: var(--button-primary-text, #ffffff) !important;
-}
-
-@keyframes wa-media-shimmer {
-  to { transform: translateX(100%); }
 }
 
 @keyframes wa-media-spin {

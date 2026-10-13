@@ -134,6 +134,7 @@ class WhatsAppInboxTests(unittest.TestCase):
         self.assertIn("Buzón de WhatsApp", response.text)
         self.assertIn("Contactos", response.text)
         self.assertIn("Necesitamos confirmar la entrega.", response.text)
+        self.assertNotIn("Ventana de atención abierta", response.text)
         self.assertIn('data-whatsapp-live', response.text)
         self.assertIn('id="whatsapp-chat-live-content"', response.text)
         self.assertIn('/whatsapp/inbox/updates', response.text)
@@ -669,9 +670,14 @@ class WhatsAppInboxTests(unittest.TestCase):
             self.assertIn("wa-doc-meta-time", response.text)
             # Audio player card
             self.assertIn("wa-bubble-audio-card", response.text)
-            self.assertIn("wa-audio-control", response.text)
+            self.assertIn("wa-audio-native-control", response.text)
             # Pending media card
             self.assertIn("wa-bubble-pending-card", response.text)
+            self.assertIn(
+                f'data-wa-auto-sync-href="/whatsapp/inbox/{conversation_id}/sync-media/{pending_att_id}"',
+                response.text,
+            )
+            self.assertNotIn('class="wa-pending-retry-btn"', response.text)
 
             # Test sync media endpoint
             sync_resp = client.get(f"/whatsapp/inbox/{conversation_id}/sync-media/{pending_att_id}", follow_redirects=False)

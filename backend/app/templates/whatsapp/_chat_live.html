@@ -1,4 +1,4 @@
-{% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_check, icon_check_check, icon_clock, icon_alert_triangle, icon_user, icon_download, icon_eye, icon_image, icon_file_text, icon_play, icon_pause, icon_badge_check, icon_refresh %}
+{% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_check, icon_check_check, icon_clock, icon_alert_triangle, icon_user, icon_download, icon_eye, icon_image, icon_file_text, icon_play, icon_badge_check, icon_refresh %}
 
 {% macro message_meta_time(msg) %}
   <time datetime="{{ msg.date.isoformat() if msg.date else '' }}">{{ msg.date|local_dt(tenant_timezone, "%H:%M", "--") }}</time>
@@ -97,48 +97,20 @@
                     </div>
                   </div>
                 {% elif attachment.kind == "audio" %}
-                  <div class="wa-bubble-audio-card" data-wa-audio-player>
-                    <audio preload="none" class="wa-audio-control" data-wa-audio-element>
-                      <source src="{{ attachment.href }}" type="{{ attachment.content_type }}">
-                      Tu navegador no soporta reproducción de audio.
-                    </audio>
-
-                    <div class="wa-audio-player-layout">
-                      <button type="button" class="wa-audio-play-btn" data-wa-audio-play-btn title="Reproducir" aria-label="Reproducir">
-                        <span class="wa-audio-play-icon">{{ icon_play(16) }}</span>
-                        <span class="wa-audio-pause-icon">{{ icon_pause(16) }}</span>
-                      </button>
-
-                      <div class="wa-audio-body">
-                        <div class="wa-audio-waveform-container" data-wa-audio-scrubber>
-                          <div class="wa-audio-waveform-bars wa-waveform-bg" aria-hidden="true">
-                            {% for h in [4, 8, 14, 18, 12, 6, 16, 22, 18, 10, 14, 20, 16, 8, 12, 18, 14, 6, 10, 16, 20, 14, 8, 14, 18, 12, 6, 12, 16, 8] %}
-                              <span class="wa-audio-bar" style="height: {{ h }}px;"></span>
-                            {% endfor %}
-                          </div>
-                          <div class="wa-audio-waveform-progress" data-wa-audio-progress>
-                            <div class="wa-audio-waveform-bars wa-waveform-fg" aria-hidden="true">
-                              {% for h in [4, 8, 14, 18, 12, 6, 16, 22, 18, 10, 14, 20, 16, 8, 12, 18, 14, 6, 10, 16, 20, 14, 8, 14, 18, 12, 6, 12, 16, 8] %}
-                                <span class="wa-audio-bar" style="height: {{ h }}px;"></span>
-                              {% endfor %}
-                            </div>
-                          </div>
-                          <span class="wa-audio-thumb" data-wa-audio-thumb style="left: 0%;"></span>
-                          <input type="range" class="wa-audio-range-slider" data-wa-audio-range min="0" max="100" value="0" step="0.1" aria-label="Control de reproducción">
+                  <div class="wa-bubble-audio-card">
+                    <div class="wa-audio-native-row">
+                      <audio preload="metadata" controls class="wa-audio-native-control">
+                        <source src="{{ attachment.href }}" type="{{ attachment.content_type }}">
+                        Tu navegador no soporta reproducción de audio.
+                      </audio>
+                    </div>
+                    <div class="wa-audio-footer">
+                      <span class="wa-audio-filename" title="{{ attachment.filename }}">{{ attachment.filename }}</span>
+                      {% if is_audio_card %}
+                        <div class="wa-audio-meta-time">
+                          {{ message_meta_time(message) }}
                         </div>
-                        <div class="wa-audio-details">
-                          <span class="wa-audio-time" aria-live="off">
-                            <span class="wa-audio-timer" data-wa-audio-timer>0:00</span>
-                            <span class="wa-audio-time-separator" aria-hidden="true">/</span>
-                            <span class="wa-audio-duration" data-wa-audio-duration>0:00</span>
-                          </span>
-                          {% if is_audio_card %}
-                            <div class="wa-audio-meta-time">
-                              {{ message_meta_time(message) }}
-                            </div>
-                          {% endif %}
-                        </div>
-                      </div>
+                      {% endif %}
                     </div>
                   </div>
                 {% else %}
@@ -165,20 +137,23 @@
                   </div>
                 {% endif %}
               {% else %}
-                <div class="channel-chat-attachment is-pending wa-bubble-pending-card wa-media-placeholder{% if attachment.status == "pending" %} is-downloading{% endif %}" data-wa-media-placeholder data-media-kind="{{ attachment.kind }}" aria-live="polite">
+                <div class="channel-chat-attachment is-pending wa-bubble-pending-card wa-media-placeholder{% if attachment.status == "pending" %} is-downloading{% endif %}" data-wa-media-placeholder data-media-kind="{{ attachment.kind }}"{% if attachment.status == "pending" and selected %} data-wa-auto-sync-href="/whatsapp/inbox/{{ selected.id }}/sync-media/{{ attachment.id }}"{% endif %} aria-live="polite">
                   <div class="wa-pending-icon-box" aria-hidden="true">
-                    <span class="wa-media-loading-ring"></span>
-                    <span class="wa-pending-icon">
-                    {% if attachment.kind == "image" %}
-                      {{ icon_image(18) }}
-                    {% elif attachment.kind == "audio" %}
-                      {{ icon_play(16) }}
-                    {% elif attachment.kind == "pdf" %}
-                      {{ icon_file_text(18) }}
+                    {% if attachment.status == "pending" %}
+                      <span class="wa-media-loading-ring"></span>
                     {% else %}
-                      {{ icon_paperclip(16) }}
+                      <span class="wa-pending-icon">
+                      {% if attachment.kind == "image" %}
+                        {{ icon_image(18) }}
+                      {% elif attachment.kind == "audio" %}
+                        {{ icon_play(16) }}
+                      {% elif attachment.kind == "pdf" %}
+                        {{ icon_file_text(18) }}
+                      {% else %}
+                        {{ icon_paperclip(16) }}
+                      {% endif %}
+                      </span>
                     {% endif %}
-                    </span>
                   </div>
                   <div class="wa-pending-content">
                     <strong class="wa-pending-filename">{{ attachment.filename }}</strong>
@@ -194,7 +169,7 @@
                       <small class="wa-pending-error">{{ attachment.error }}</small>
                     {% endif %}
                   </div>
-                  {% if attachment.status != "unsupported" and selected %}
+                  {% if attachment.status in ["extraction_error", "storage_error"] and selected %}
                     <a href="/whatsapp/inbox/{{ selected.id }}/sync-media/{{ attachment.id }}" class="wa-pending-retry-btn" title="Reintentar descarga de Meta">
                       {{ icon_refresh(13) }}
                     </a>
