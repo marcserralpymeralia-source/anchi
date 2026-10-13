@@ -12306,7 +12306,8 @@ table.logs-table tr:hover td {
 
 .whatsapp-inbox-shell .wa-message-more-panel {
   position: absolute !important;
-  top: calc(100% + 5px) !important;
+  top: auto !important;
+  bottom: calc(100% + 5px) !important;
   right: 0 !important;
   z-index: 12 !important;
   display: grid !important;
@@ -13255,18 +13256,23 @@ table.logs-table tr:hover td {
   z-index: 4 !important;
   align-items: center !important;
   justify-content: center !important;
-  gap: 7px !important;
+  gap: 6px !important;
   flex-direction: column !important;
-  border: 2px dashed #00a884 !important;
-  border-radius: 16px !important;
-  background: rgba(240, 255, 249, .96) !important;
-  color: #075e54 !important;
+  border: 1px dashed var(--wa-accent) !important;
+  border-radius: 8px !important;
+  background: color-mix(in srgb, var(--wa-panel) 94%, var(--wa-soft)) !important;
+  color: var(--wa-accent-dark) !important;
   pointer-events: none !important;
   text-align: center !important;
 }
 
 .whatsapp-inbox-shell .channel-chat-compose.is-dragging-files .wa-drop-overlay {
   display: flex !important;
+}
+
+.whatsapp-inbox-shell .channel-chat-compose.is-dragging-files {
+  min-height: 112px !important;
+  padding-block: 12px !important;
 }
 
 .whatsapp-inbox-shell .wa-drop-overlay-icon {
@@ -13276,8 +13282,8 @@ table.logs-table tr:hover td {
   width: 32px !important;
   height: 32px !important;
   border-radius: 50% !important;
-  background: #d9fdd3 !important;
-  color: #00a884 !important;
+  background: color-mix(in srgb, var(--wa-accent) 10%, var(--wa-panel)) !important;
+  color: var(--wa-accent) !important;
 }
 
 .whatsapp-inbox-shell .wa-drop-overlay strong {
@@ -13285,7 +13291,7 @@ table.logs-table tr:hover td {
 }
 
 .whatsapp-inbox-shell .wa-drop-overlay span:last-child {
-  color: #667781 !important;
+  color: var(--wa-muted) !important;
   font-size: 11px !important;
 }
 
@@ -15011,17 +15017,17 @@ table.logs-table tr:hover td {
   max-width: 100% !important;
   min-width: 0 !important;
   margin: 0 0 6px !important;
-  padding: 6px 9px 6px 0 !important;
+  padding: 5px 8px 5px 0 !important;
   box-sizing: border-box !important;
-  border: 1px solid rgba(84, 101, 111, .12) !important;
-  border-radius: 8px !important;
-  background: rgba(239, 246, 244, .9) !important;
+  border: 1px solid var(--wa-line) !important;
+  border-radius: 7px !important;
+  background: color-mix(in srgb, var(--wa-softer) 58%, var(--wa-panel)) !important;
   overflow: hidden !important;
 }
 
 .whatsapp-inbox-shell .channel-chat-message.outbound .wa-message-quoted {
-  border-color: rgba(0, 111, 91, .14) !important;
-  background: rgba(215, 253, 208, .92) !important;
+  border-color: #c8e6c2 !important;
+  background: color-mix(in srgb, var(--wa-outbound) 58%, var(--wa-panel)) !important;
 }
 
 .whatsapp-inbox-shell .wa-message-quoted-bar {
@@ -15040,7 +15046,7 @@ table.logs-table tr:hover td {
 
 .whatsapp-inbox-shell .wa-message-quoted-copy strong,
 .whatsapp-inbox-shell .wa-reply-compose-copy strong {
-  color: #008f6f !important;
+  color: var(--wa-accent-dark) !important;
   font-size: 11px !important;
   font-weight: 700 !important;
   line-height: 1.2 !important;
@@ -15050,7 +15056,7 @@ table.logs-table tr:hover td {
 .whatsapp-inbox-shell .wa-reply-compose-copy span {
   display: -webkit-box !important;
   overflow: hidden !important;
-  color: #54656f !important;
+  color: var(--wa-muted) !important;
   font-size: 11px !important;
   line-height: 1.3 !important;
   text-overflow: ellipsis !important;
@@ -15060,29 +15066,29 @@ table.logs-table tr:hover td {
 
 .whatsapp-inbox-shell .wa-reply-compose {
   display: grid !important;
-  grid-template-columns: 26px minmax(0, 1fr) 28px !important;
+  grid-template-columns: 24px minmax(0, 1fr) 24px !important;
   align-items: center !important;
   gap: 8px !important;
-  min-height: 46px !important;
-  margin: 0 0 1px !important;
-  padding: 6px 6px 6px 8px !important;
+  min-height: 42px !important;
+  margin: 0 0 4px !important;
+  padding: 5px 6px 5px 8px !important;
   box-sizing: border-box !important;
-  border: 1px solid #c9e5dc !important;
-  border-left: 4px solid #00a884 !important;
-  border-radius: 10px !important;
-  background: #e7f8f1 !important;
-  box-shadow: 0 1px 2px rgba(17, 27, 33, .06) !important;
+  border: 1px solid var(--wa-line) !important;
+  border-left: 3px solid var(--wa-accent) !important;
+  border-radius: 7px !important;
+  background: var(--wa-panel) !important;
+  box-shadow: none !important;
 }
 
 .whatsapp-inbox-shell .wa-reply-compose-icon {
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
-  width: 26px !important;
-  height: 26px !important;
+  width: 24px !important;
+  height: 24px !important;
   border-radius: 50% !important;
-  color: #008f6f !important;
-  background: rgba(0, 168, 132, .12) !important;
+  color: var(--wa-accent-dark) !important;
+  background: color-mix(in srgb, var(--wa-accent) 10%, var(--wa-panel)) !important;
 }
 
 .whatsapp-inbox-shell .wa-reply-compose-copy {
@@ -15102,19 +15108,19 @@ table.logs-table tr:hover td {
   display: inline-flex !important;
   align-items: center !important;
   justify-content: center !important;
-  width: 28px !important;
-  height: 28px !important;
+  width: 24px !important;
+  height: 24px !important;
   padding: 0 !important;
   border: 0 !important;
   border-radius: 50% !important;
-  color: #54656f !important;
+  color: var(--wa-muted) !important;
   background: transparent !important;
   cursor: pointer !important;
 }
 
 .whatsapp-inbox-shell .wa-reply-compose-close:hover,
 .whatsapp-inbox-shell .wa-reply-compose-close:focus-visible {
-  color: #111b21 !important;
-  background: rgba(84, 101, 111, .12) !important;
+  color: var(--wa-text) !important;
+  background: var(--wa-softer) !important;
   outline: none !important;
 }
