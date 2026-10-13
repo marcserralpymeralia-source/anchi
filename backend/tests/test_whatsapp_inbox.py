@@ -670,7 +670,10 @@ class WhatsAppInboxTests(unittest.TestCase):
             self.assertIn("wa-doc-meta-time", response.text)
             # Audio player card
             self.assertIn("wa-bubble-audio-card", response.text)
-            self.assertIn("wa-audio-native-control", response.text)
+            self.assertIn("wa-audio-custom-card", response.text)
+            self.assertIn("wa-audio-custom-range", response.text)
+            self.assertIn("wa-audio-file-label", response.text)
+            self.assertNotIn("data-wa-audio-volume", response.text)
             # Pending media card
             self.assertIn("wa-bubble-pending-card", response.text)
             self.assertIn(

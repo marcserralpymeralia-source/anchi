@@ -128,6 +128,7 @@
         currentChat.replaceWith(nextChat);
         currentCompose.replaceWith(nextCompose);
         window.initWhatsAppMediaDownloads(nextChat);
+        window.initWhatsAppAudioPlayers(nextChat);
         if (typeof window.initWhatsAppComposer === "function") {
           window.initWhatsAppComposer(nextCompose);
         }
@@ -210,6 +211,82 @@
 
   window.initWhatsAppComposer();
   window.initWhatsAppMediaDownloads();
+
+  window.initWhatsAppAudioPlayers = function(container = document) {
+    const players = container.querySelectorAll("[data-wa-audio-player]");
+    players.forEach((player) => {
+      if (player.dataset.waAudioInitialized === "true") return;
+      player.dataset.waAudioInitialized = "true";
+
+      const audio = player.querySelector("[data-wa-audio-element]");
+      const playButton = player.querySelector("[data-wa-audio-play-btn]");
+      const range = player.querySelector("[data-wa-audio-range]");
+      const timer = player.querySelector("[data-wa-audio-timer]");
+      const duration = player.querySelector("[data-wa-audio-duration]");
+      if (!audio || !playButton || !range) return;
+
+      const formatTime = (value) => {
+        if (!Number.isFinite(value) || value < 0) return "0:00";
+        const minutes = Math.floor(value / 60);
+        const seconds = Math.floor(value % 60);
+        return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+      };
+
+      const updateProgress = () => {
+        const total = Number.isFinite(audio.duration) ? audio.duration : 0;
+        const current = Number.isFinite(audio.currentTime) ? audio.currentTime : 0;
+        const progress = total > 0 ? Math.min(100, Math.max(0, current / total * 100)) : 0;
+        range.max = total;
+        range.value = current;
+        range.style.setProperty("--wa-audio-progress", `${progress}%`);
+        if (timer) timer.textContent = formatTime(current);
+        if (duration) duration.textContent = formatTime(total);
+      };
+
+      const updatePlaybackState = () => {
+        const playing = !audio.paused && !audio.ended;
+        player.classList.toggle("is-playing", playing);
+        playButton.setAttribute("aria-label", playing ? "Pausar" : "Reproducir");
+        playButton.title = playing ? "Pausar" : "Reproducir";
+      };
+
+      playButton.addEventListener("click", async () => {
+        if (audio.paused) {
+          document.querySelectorAll("[data-wa-audio-element]").forEach((other) => {
+            if (other !== audio && !other.paused) other.pause();
+          });
+          try {
+            await audio.play();
+            player.classList.remove("has-error");
+          } catch (error) {
+            player.classList.add("has-error");
+            console.debug("WhatsApp audio playback unavailable", error);
+          }
+        } else {
+          audio.pause();
+        }
+      });
+
+      range.addEventListener("input", () => {
+        if (Number.isFinite(audio.duration)) {
+          audio.currentTime = Number(range.value);
+          updateProgress();
+        }
+      });
+
+      ["loadedmetadata", "durationchange", "timeupdate", "progress"].forEach((eventName) => {
+        audio.addEventListener(eventName, updateProgress);
+      });
+      ["play", "pause", "ended"].forEach((eventName) => {
+        audio.addEventListener(eventName, updatePlaybackState);
+      });
+      audio.addEventListener("error", () => player.classList.add("has-error"));
+      updateProgress();
+      updatePlaybackState();
+    });
+  };
+
+  window.initWhatsAppAudioPlayers();
 
   window.handleFileSelection = function(input) {
     const bar = document.getElementById("wa-selected-files");

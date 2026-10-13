@@ -14459,3 +14459,179 @@ table.logs-table tr:hover td {
 @keyframes wa-audio-spin {
   to { transform: rotate(360deg); }
 }
+
+/* WhatsApp audio player: simple native playback with a branded UI. */
+.whatsapp-inbox-shell .wa-audio-custom-card {
+  width: min(292px, 100%) !important;
+  min-width: 0 !important;
+  padding: 10px 12px 8px !important;
+  border: 1px solid #e3e8eb !important;
+  border-radius: 12px !important;
+  background: #ffffff !important;
+  box-shadow: 0 1px 2px rgba(17, 27, 33, .08) !important;
+}
+
+.whatsapp-inbox-shell .channel-chat-message.outbound .wa-audio-custom-card {
+  border-color: #c9efc5 !important;
+  background: #d9fdd3 !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-custom-card .wa-audio-control {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  clip-path: inset(50%) !important;
+  white-space: nowrap !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-custom-main {
+  display: flex !important;
+  align-items: center !important;
+  gap: 9px !important;
+  min-width: 0 !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-custom-play {
+  display: inline-flex !important;
+  flex: 0 0 36px !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 36px !important;
+  height: 36px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 50% !important;
+  background: #00a884 !important;
+  color: #ffffff !important;
+  cursor: pointer !important;
+  box-shadow: 0 1px 2px rgba(0, 128, 105, .24) !important;
+  transition: background .15s ease, transform .15s ease !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-custom-play:hover {
+  background: #008f72 !important;
+  transform: scale(1.04) !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-custom-play:active {
+  transform: scale(.96) !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-custom-play:focus-visible,
+.whatsapp-inbox-shell .wa-audio-custom-range:focus-visible {
+  outline: 2px solid #00a884 !important;
+  outline-offset: 2px !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-custom-play-icon,
+.whatsapp-inbox-shell .wa-audio-custom-pause-icon {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-custom-pause-icon {
+  display: none !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-custom-card.is-playing .wa-audio-custom-play-icon {
+  display: none !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-custom-card.is-playing .wa-audio-custom-pause-icon {
+  display: inline-flex !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-custom-body {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-custom-time-row {
+  display: flex !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  margin-bottom: 5px !important;
+  color: #667781 !important;
+  font-size: 10px !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-custom-range {
+  display: block !important;
+  width: 100% !important;
+  height: 16px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  border: 0 !important;
+  background: transparent !important;
+  cursor: pointer !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-custom-range::-webkit-slider-runnable-track {
+  height: 4px !important;
+  border-radius: 4px !important;
+  background: linear-gradient(to right, #00a884 var(--wa-audio-progress, 0%), #d9e1e5 var(--wa-audio-progress, 0%)) !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-custom-range::-moz-range-track {
+  height: 4px !important;
+  border-radius: 4px !important;
+  background: #d9e1e5 !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-custom-range::-moz-range-progress {
+  height: 4px !important;
+  border-radius: 4px !important;
+  background: #00a884 !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-custom-range::-webkit-slider-thumb {
+  width: 10px !important;
+  height: 10px !important;
+  margin-top: -3px !important;
+  appearance: none !important;
+  -webkit-appearance: none !important;
+  border: 2px solid #ffffff !important;
+  border-radius: 50% !important;
+  background: #00a884 !important;
+  box-shadow: 0 1px 3px rgba(17, 27, 33, .28) !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-custom-range::-moz-range-thumb {
+  width: 8px !important;
+  height: 8px !important;
+  border: 2px solid #ffffff !important;
+  border-radius: 50% !important;
+  background: #00a884 !important;
+  box-shadow: 0 1px 3px rgba(17, 27, 33, .28) !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-file-label {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 8px !important;
+  min-width: 0 !important;
+  margin: 3px 3px 0 !important;
+  color: #667781 !important;
+  font-size: 10px !important;
+  line-height: 1.2 !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-file-label > span {
+  min-width: 0 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  white-space: nowrap !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-file-label time {
+  flex: 0 0 auto !important;
+  color: #667781 !important;
+  font-size: 10px !important;
+}
