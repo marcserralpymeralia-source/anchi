@@ -142,6 +142,8 @@ class WhatsAppInboxTests(unittest.TestCase):
         self.assertIn("Buzón de correo", response.text)
         self.assertIn('name="files"', response.text)
         self.assertIn('data-wa-dropzone', response.text)
+        self.assertIn('const dropTarget = composeForm.closest(".channel-inbox-chat")', response.text)
+        self.assertIn('dropTarget.addEventListener("drop"', response.text)
         self.assertIn('data-wa-upload-status', response.text)
         self.assertIn('data-wa-send-button', response.text)
         self.assertEqual(response.text.count('href="/mail"'), 1)
@@ -271,6 +273,23 @@ class WhatsAppInboxTests(unittest.TestCase):
                 content_type="text",
             )
             quoted.status = "received"
+            outbound, _ = upsert_inbound_message(
+                db,
+                company_id=1,
+                channel_key="whatsapp",
+                provider="meta",
+                external_id="wamid.outbound-reply-1",
+                sender=None,
+                recipients=["+34600000000"],
+                subject="Respuesta de Anchi",
+                text_content="Te confirmo la entrega.",
+                external_thread_id="+34600000000",
+                metadata={"manual_response": True, "context": {"message_id": original.source_external_id}},
+                direction="outbound",
+                sent_at=utcnow(),
+                content_type="text",
+            )
+            outbound.status = "accepted"
             db.commit()
             original_id = original.id
             quoted_id = quoted.id
@@ -295,8 +314,13 @@ class WhatsAppInboxTests(unittest.TestCase):
 
         self.assertEqual(page.status_code, 200)
         self.assertIn(f'data-wa-reply-message="{quoted_id}"', page.text)
+        self.assertIn("wa-message-more-menu", page.text)
+        self.assertIn(">Citar</span>", page.text)
+        self.assertNotIn("wa-message-reply-button", page.text)
         self.assertIn("wa-message-quoted", page.text)
         self.assertIn("Esta es la respuesta del cliente.", page.text)
+        self.assertIn(f'data-wa-quoted-message="{original_id}"', page.text)
+        self.assertIn("Te confirmo la entrega.", page.text)
         self.assertEqual(response.status_code, 303)
         self.assertEqual(send_response.await_args.kwargs["reply_to_message_id"], original_id)
 
@@ -782,7 +806,9 @@ class WhatsAppInboxTests(unittest.TestCase):
             self.assertIn("openMediaLightbox", response.text)
             # PDF preview card and action buttons
             self.assertIn("wa-bubble-doc-card", response.text)
-            self.assertIn("wa-doc-iframe", response.text)
+            self.assertIn("wa-doc-preview-area", response.text)
+            self.assertIn("wa-doc-preview-icon", response.text)
+            self.assertNotIn("wa-doc-iframe", response.text)
             self.assertIn("wa-doc-btn", response.text)
             self.assertNotIn("Guardar como…", response.text)
             # Document single card full bleed layout without double border

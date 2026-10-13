@@ -191,13 +191,25 @@
     if (!msgInput || !composeForm || composeForm.dataset.initialized === "true") return;
     composeForm.dataset.initialized = "true";
 
-    const dropZone = composeForm.querySelector("[data-wa-dropzone]");
-    if (dropZone) {
+    // Listen on the whole chat, not on the hidden overlay. The overlay is
+    // only visual feedback, while the chat is the actual drop target.
+    const dropTarget = composeForm.closest(".channel-inbox-chat") || composeForm;
+    if (dropTarget && dropTarget.dataset.waDropInitialized !== "true") {
+      dropTarget.dataset.waDropInitialized = "true";
       let dragDepth = 0;
-      const isFileDrag = (event) => event.dataTransfer?.types?.includes("Files");
+      const getActiveComposeForm = () => (
+        dropTarget.querySelector(".channel-chat-compose")
+        || (composeForm.isConnected ? composeForm : null)
+      );
+      const isFileDrag = (event) => {
+        const types = event.dataTransfer?.types;
+        return types
+          ? Array.from(types).includes("Files")
+          : Boolean(event.dataTransfer?.files?.length);
+      };
       const stopDragging = () => {
         dragDepth = 0;
-        composeForm.classList.remove("is-dragging-files");
+        getActiveComposeForm()?.classList.remove("is-dragging-files");
       };
       const allowedExtensions = new Set([".pdf", ".docx", ".txt", ".jpeg", ".jpg", ".png", ".amr", ".m4a", ".mp3", ".ogg", ".wav", ".webm"]);
       const allowedMimeTypes = new Set([
@@ -221,9 +233,10 @@
         return allowedExtensions.has(extension) || allowedMimeTypes.has(mime);
       };
       const showDropNotice = (message, kind = "warning") => {
-        const bar = composeForm.querySelector("#wa-selected-files");
-        const label = composeForm.querySelector("#wa-files-names");
-        const status = composeForm.querySelector("[data-wa-upload-status]");
+        const activeComposeForm = getActiveComposeForm();
+        const bar = activeComposeForm?.querySelector("#wa-selected-files");
+        const label = activeComposeForm?.querySelector("#wa-files-names");
+        const status = activeComposeForm?.querySelector("[data-wa-upload-status]");
         if (!bar || !label || !status) return;
         label.textContent = "Archivo no adjuntado";
         status.className = `wa-files-status ${kind}`;
@@ -233,29 +246,31 @@
         bar.style.display = "flex";
       };
 
-      dropZone.addEventListener("dragenter", (event) => {
+      dropTarget.addEventListener("dragenter", (event) => {
         if (!isFileDrag(event)) return;
         event.preventDefault();
         dragDepth += 1;
-        composeForm.classList.add("is-dragging-files");
+        getActiveComposeForm()?.classList.add("is-dragging-files");
       });
-      dropZone.addEventListener("dragover", (event) => {
+      dropTarget.addEventListener("dragover", (event) => {
         if (!isFileDrag(event)) return;
         event.preventDefault();
         event.dataTransfer.dropEffect = "copy";
-        composeForm.classList.add("is-dragging-files");
+        getActiveComposeForm()?.classList.add("is-dragging-files");
       });
-      dropZone.addEventListener("dragleave", (event) => {
+      dropTarget.addEventListener("dragleave", (event) => {
         if (!isFileDrag(event)) return;
         event.preventDefault();
         dragDepth -= 1;
         if (dragDepth <= 0) stopDragging();
       });
-      dropZone.addEventListener("drop", async (event) => {
+      dropTarget.addEventListener("drop", async (event) => {
         if (!isFileDrag(event)) return;
         event.preventDefault();
+        event.stopPropagation();
         stopDragging();
-        const input = composeForm.querySelector("#wa-file-input");
+        const activeComposeForm = getActiveComposeForm();
+        const input = activeComposeForm?.querySelector("#wa-file-input");
         const droppedFiles = Array.from(event.dataTransfer.files || []);
         const validFiles = droppedFiles.filter(isAllowedFile);
         const rejectedCount = droppedFiles.length - validFiles.length;
@@ -358,6 +373,7 @@
       replyLabel.textContent = button.dataset.waReplyLabel || "Responder";
       replyText.textContent = button.dataset.waReplyPreview || "Mensaje sin texto";
       replyPreview.hidden = !replyInput.value;
+      button.closest("details")?.removeAttribute("open");
       composeForm.querySelector("#wa-message-input")?.focus();
     };
 

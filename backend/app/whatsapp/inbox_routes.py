@@ -153,6 +153,7 @@ def _message_matches_search(message: InboundMessage, search: str) -> bool:
 def _message_payload(message: InboundMessage, *, search: str = "") -> dict:
     outbound = message.direction == "outbound"
     search_match = _message_matches_search(message, search)
+    reply_context = _whatsapp_message_context(message)
     attachments = []
     for attachment in message.attachments or []:
         available = bool(attachment.storage_path)
@@ -180,7 +181,12 @@ def _message_payload(message: InboundMessage, *, search: str = "") -> dict:
         "status": str(message.status or "").lower(),
         "search_match": search_match,
         "text_html": _highlight_search_text(message.original_content, search) if search_match else "",
-        "reply_to_external_id": str(_whatsapp_message_context(message).get("id") or "").strip() or None,
+        # Incoming Meta webhooks use ``id`` while locally persisted outbound
+        # replies use the Graph API's ``message_id`` key. Accept both shapes
+        # so a reply remains visible after the page is reloaded.
+        "reply_to_external_id": str(
+            reply_context.get("id") or reply_context.get("message_id") or ""
+        ).strip() or None,
         "reply_preview": _message_preview(message),
         "attachments": attachments,
     }
