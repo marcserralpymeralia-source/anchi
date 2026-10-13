@@ -66,7 +66,7 @@
               {% if attachment.available %}
                 {% if attachment.kind == "image" %}
                   <div class="wa-bubble-media-image" onclick="openMediaLightbox('{{ attachment.href }}', '{{ attachment.filename }}', '{{ attachment.download_href }}')" title="Ampliar imagen">
-                    <img src="{{ attachment.href }}" alt="{{ attachment.filename }}" class="wa-bubble-img" loading="lazy">
+                    <img src="{{ attachment.href }}" alt="{{ attachment.filename }}" class="wa-bubble-img" loading="lazy" decoding="async">
                     <div class="wa-bubble-img-overlay">
                       <span class="wa-img-zoom-hint">{{ icon_search(15) }} Ampliar</span>
                     </div>
@@ -98,7 +98,7 @@
                   </div>
                 {% elif attachment.kind == "audio" %}
                   <div class="wa-bubble-audio-card" data-wa-audio-player>
-                    <audio preload="metadata" class="wa-audio-control" data-wa-audio-element>
+                    <audio preload="none" class="wa-audio-control" data-wa-audio-element>
                       <source src="{{ attachment.href }}" type="{{ attachment.content_type }}">
                       Tu navegador no soporta reproducción de audio.
                     </audio>
@@ -127,7 +127,11 @@
                           <input type="range" class="wa-audio-range-slider" data-wa-audio-range min="0" max="100" value="0" step="0.1" aria-label="Control de reproducción">
                         </div>
                         <div class="wa-audio-details">
-                          <span class="wa-audio-timer" data-wa-audio-timer>0:00</span>
+                          <span class="wa-audio-time" aria-live="off">
+                            <span class="wa-audio-timer" data-wa-audio-timer>0:00</span>
+                            <span class="wa-audio-time-separator" aria-hidden="true">/</span>
+                            <span class="wa-audio-duration" data-wa-audio-duration>0:00</span>
+                          </span>
                           {% if is_audio_card %}
                             <div class="wa-audio-meta-time">
                               {{ message_meta_time(message) }}
@@ -161,8 +165,10 @@
                   </div>
                 {% endif %}
               {% else %}
-                <div class="channel-chat-attachment is-pending wa-bubble-pending-card">
-                  <div class="wa-pending-icon-box">
+                <div class="channel-chat-attachment is-pending wa-bubble-pending-card wa-media-placeholder{% if attachment.status == "pending" %} is-downloading{% endif %}" data-wa-media-placeholder data-media-kind="{{ attachment.kind }}" aria-live="polite">
+                  <div class="wa-pending-icon-box" aria-hidden="true">
+                    <span class="wa-media-loading-ring"></span>
+                    <span class="wa-pending-icon">
                     {% if attachment.kind == "image" %}
                       {{ icon_image(18) }}
                     {% elif attachment.kind == "audio" %}
@@ -172,10 +178,18 @@
                     {% else %}
                       {{ icon_paperclip(16) }}
                     {% endif %}
+                    </span>
                   </div>
                   <div class="wa-pending-content">
                     <strong class="wa-pending-filename">{{ attachment.filename }}</strong>
-                    <small class="wa-pending-sub">{{ attachment.status_label }} · {{ attachment.size }}</small>
+                    <small class="wa-pending-sub">
+                      {% if attachment.status == "pending" %}
+                        Descargando {{ "imagen" if attachment.kind == "image" else "audio" if attachment.kind == "audio" else "archivo" }}…
+                      {% else %}
+                        {{ attachment.status_label }}
+                      {% endif %}
+                      · {{ attachment.size }}
+                    </small>
                     {% if attachment.error and attachment.status in ["extraction_error", "storage_error"] %}
                       <small class="wa-pending-error">{{ attachment.error }}</small>
                     {% endif %}

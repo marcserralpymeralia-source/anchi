@@ -221,12 +221,32 @@ def _load_inbox_data(
     page_size: int,
 ) -> dict:
     conditions = _inbox_conditions(company_id=company_id, channel_id=channel_id, search=search)
-    conversations = db.scalars(
+    page, page_size = normalize_page(page, page_size)
+    total_items = int(db.scalar(select(func.count(Conversation.id)).where(*conditions)) or 0)
+    total_pages = (total_items + page_size - 1) // page_size if total_items else 0
+    start = (page - 1) * page_size
+
+    page_conversations = db.scalars(
         select(Conversation)
         .where(*conditions)
         .options(selectinload(Conversation.messages).selectinload(InboundMessage.attachments))
         .order_by(Conversation.last_activity_at.desc(), Conversation.id.desc())
+        .offset(start)
+        .limit(page_size)
     ).unique().all()
+
+    selected_conversation = None
+    if conversation_id is not None:
+        selected_conversation = db.scalar(
+            select(Conversation)
+            .where(*conditions, Conversation.id == conversation_id)
+            .options(selectinload(Conversation.messages).selectinload(InboundMessage.attachments))
+        )
+
+    conversations = list(page_conversations)
+    if selected_conversation is not None and all(item.id != selected_conversation.id for item in conversations):
+        conversations.insert(0, selected_conversation)
+
     phone_index = build_customer_phone_index(db, company_id) if conversations else {}
     customer_ids = {conversation.customer_id for conversation in conversations if conversation.customer_id}
     customer_ids.update(
@@ -245,20 +265,30 @@ def _load_inbox_data(
             ).all()
         }
     cards = [_conversation_card(conversation, customers, phone_index) for conversation in conversations]
-    page, page_size = normalize_page(page, page_size)
-    total_items = len(cards)
-    total_pages = (total_items + page_size - 1) // page_size if total_items else 0
-    start = (page - 1) * page_size
-    page_cards = cards[start : start + page_size]
+    page_card_ids = {conversation.id for conversation in page_conversations}
+    page_cards = [card for card in cards if card["id"] in page_card_ids]
 
     selected = next((card for card in cards if card["id"] == conversation_id), None)
     if selected is None and page_cards:
         selected = page_cards[0]
-    if selected is not None and selected not in page_cards:
+    if selected is not None and selected["id"] not in page_card_ids:
         page_cards = [selected, *page_cards]
+
+    unread_count = int(
+        db.scalar(
+            select(func.count(func.distinct(InboundMessage.conversation_id)))
+            .join(Conversation, InboundMessage.conversation_id == Conversation.id)
+            .where(
+                *conditions,
+                InboundMessage.direction == "inbound",
+                InboundMessage.status.in_(("received", "queued", "processing")),
+            )
+        )
+        or 0
+    )
     return {
         "conditions": conditions,
-        "cards": cards,
+        "cards": page_cards,
         "page_cards": page_cards,
         "selected": selected,
         "customers": customers,
@@ -268,6 +298,7 @@ def _load_inbox_data(
         "total_items": total_items,
         "total_pages": total_pages,
         "start": start,
+        "unread_count": unread_count,
         "normalized_search": search,
     }
 
@@ -299,7 +330,7 @@ def _inbox_partial_context(request: Request, user: TenantUser, channel: InputCha
         "search": data["normalized_search"],
         "summary": {
             "conversations": data["total_items"],
-            "unread": sum(1 for card in data["cards"] if card["unread"]),
+            "unread": data["unread_count"],
         },
         "pagination": {
             "page": data["page"],
@@ -341,36 +372,8 @@ async def whatsapp_inbox(
         page=page,
         page_size=page_size,
     )
-    cards = data["cards"]
     page_cards = data["page_cards"]
     selected = data["selected"]
-    customers = data["customers"]
-
-    if selected is not None and config.access_token and config.phone_number_id:
-        selected_conv = db.get(Conversation, selected["id"])
-        if selected_conv and selected_conv.messages:
-            needs_refresh = False
-            for msg in selected_conv.messages:
-                has_pending = any(
-                    not att.storage_path and (att.extraction_status or "pending") == "pending"
-                    for att in (msg.attachments or [])
-                )
-                if has_pending:
-                    try:
-                        await download_whatsapp_media(db, company_id=user.company_id, inbound_message_id=msg.id)
-                        needs_refresh = True
-                    except Exception as exc:
-                        logger.warning("Auto-downloading media for message %s failed: %s", msg.id, exc)
-            if needs_refresh:
-                db.expire_all()
-                refreshed_conv = db.scalar(
-                    select(Conversation)
-                    .where(Conversation.id == selected["id"])
-                    .options(selectinload(Conversation.messages).selectinload(InboundMessage.attachments))
-                )
-                if refreshed_conv:
-                    selected = _conversation_card(refreshed_conv, customers, data.get("phone_index", {}))
-                    page_cards = [selected if c["id"] == selected["id"] else c for c in page_cards]
 
     ready_to_send = whatsapp_outbound_is_ready(db, user.company_id, config=config)
     live_revision = _inbox_live_revision(db, data["conditions"])
@@ -388,7 +391,7 @@ async def whatsapp_inbox(
             "search": normalized_search,
             "summary": {
                 "conversations": data["total_items"],
-                "unread": sum(1 for card in cards if card["unread"]),
+                "unread": data["unread_count"],
             },
             "pagination": {
                 "page": data["page"],

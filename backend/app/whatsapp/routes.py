@@ -4,7 +4,8 @@ from collections import Counter
 import hmac
 import json
 import logging
-from fastapi import APIRouter, Depends, Header, Request
+import httpx
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from sqlalchemy.orm import Session
 
@@ -18,6 +19,7 @@ from app.logs.service import log_action
 from app.whatsapp.service import (
     enqueue_whatsapp_media_download,
     enqueue_whatsapp_processing,
+    download_whatsapp_media,
     parse_payload_events,
     persist_event,
     resolve_company_from_slug,
@@ -34,6 +36,42 @@ from app.whatsapp.service import (
 
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["whatsapp"])
 logger = logging.getLogger(__name__)
+
+
+async def _download_whatsapp_media_in_background(
+    database_url: str,
+    company_id: int,
+    message_ids: list[int],
+) -> None:
+    """Best-effort media delivery immediately after accepting a webhook.
+
+    The durable job remains queued as a fallback for cron or a dedicated worker.
+    This task only removes the usual serverless wait for the next worker tick.
+    """
+
+    if not database_url or not message_ids:
+        return
+    db = tenant_db_session(database_url)()
+    try:
+        async with httpx.AsyncClient(timeout=get_settings().meta_request_timeout_seconds) as client:
+            for message_id in dict.fromkeys(message_ids):
+                try:
+                    result = await download_whatsapp_media(
+                        db,
+                        company_id=company_id,
+                        inbound_message_id=message_id,
+                        client=client,
+                    )
+                    if result.get("ready_for_processing"):
+                        enqueue_whatsapp_processing(db, company_id, message_id)
+                except Exception:  # noqa: BLE001
+                    logger.exception(
+                        "whatsapp.media_background_download_failed company=%s message=%s",
+                        company_id,
+                        message_id,
+                    )
+    finally:
+        db.close()
 
 
 def _webhook_payload_summary(
@@ -199,6 +237,7 @@ async def _receive_default_webhook_request(
     request: Request,
     x_hub_signature_256: str | None,
     master_db: Session,
+    background_tasks: BackgroundTasks,
 ):
     raw_body = await request.body()
     summary = {
@@ -272,6 +311,7 @@ async def _receive_default_webhook_request(
     handled = 0
     queued_processing = 0
     queued_media = 0
+    background_media: dict[tuple[str, int], list[int]] = {}
     not_processable = 0
     ignored_reasons: Counter[str] = Counter()
     for event in events:
@@ -355,6 +395,7 @@ async def _receive_default_webhook_request(
                 if event.get("kind") == "message":
                     if whatsapp_event_requires_media_download(event):
                         enqueue_whatsapp_media_download(config_db, company.id, message.id)
+                        background_media.setdefault((tenant_db.database_url, company.id), []).append(message.id)
                         queued_media += 1
                         queue_action = "download_whatsapp_media"
                     elif whatsapp_event_has_processable_content(event):
@@ -400,6 +441,14 @@ async def _receive_default_webhook_request(
             raise
         finally:
             config_db.close()
+    for (database_url, company_id), message_ids in background_media.items():
+        background_tasks.add_task(
+            _download_whatsapp_media_in_background,
+            database_url,
+            company_id,
+            message_ids,
+        )
+
     result_metadata = {
         **_webhook_payload_summary(
             payload,
@@ -447,19 +496,21 @@ def verify_default_webhook_with_trailing_slash(request: Request):
 @router.post("")
 async def receive_default_webhook(
     request: Request,
+    background_tasks: BackgroundTasks,
     x_hub_signature_256: str | None = Header(default=None, alias="X-Hub-Signature-256"),
     master_db: Session = Depends(get_master_db),
 ):
-    return await _receive_default_webhook_request(request, x_hub_signature_256, master_db)
+    return await _receive_default_webhook_request(request, x_hub_signature_256, master_db, background_tasks)
 
 
 @router.post("/")
 async def receive_default_webhook_with_trailing_slash(
     request: Request,
+    background_tasks: BackgroundTasks,
     x_hub_signature_256: str | None = Header(default=None, alias="X-Hub-Signature-256"),
     master_db: Session = Depends(get_master_db),
 ):
-    return await _receive_default_webhook_request(request, x_hub_signature_256, master_db)
+    return await _receive_default_webhook_request(request, x_hub_signature_256, master_db, background_tasks)
 
 
 def _verify_tenant_webhook_request(company_slug: str, request: Request, master_db: Session):
@@ -536,6 +587,7 @@ async def _receive_tenant_webhook_request(
     request: Request,
     x_hub_signature_256: str | None,
     master_db: Session,
+    background_tasks: BackgroundTasks,
 ):
     company, tenant_db = resolve_company_from_slug(master_db, company_slug)
     if not company or not tenant_db:
@@ -617,6 +669,7 @@ async def _receive_tenant_webhook_request(
         handled = 0
         queued_processing = 0
         queued_media = 0
+        background_media: list[int] = []
         not_processable = 0
         ignored_reasons: Counter[str] = Counter()
         ingress_ready = whatsapp_ingress_is_ready(config_db, company.id, config=config)
@@ -664,6 +717,7 @@ async def _receive_tenant_webhook_request(
                 if event.get("kind") == "message":
                     if whatsapp_event_requires_media_download(event):
                         enqueue_whatsapp_media_download(config_db, company.id, message.id)
+                        background_media.append(message.id)
                         queued_media += 1
                         queue_action = "download_whatsapp_media"
                     elif whatsapp_event_has_processable_content(event):
@@ -690,6 +744,14 @@ async def _receive_tenant_webhook_request(
                 company_id=company.id,
             )
         config_db.commit()
+        if background_media:
+            background_tasks.add_task(
+                _download_whatsapp_media_in_background,
+                tenant_db.database_url,
+                company.id,
+                background_media,
+            )
+
         result_metadata = {
             **_webhook_payload_summary(
                 payload,
@@ -757,20 +819,22 @@ async def _receive_tenant_webhook_request(
 async def receive_webhook(
     company_slug: str,
     request: Request,
+    background_tasks: BackgroundTasks,
     x_hub_signature_256: str | None = Header(default=None, alias="X-Hub-Signature-256"),
     master_db: Session = Depends(get_master_db),
 ):
-    return await _receive_tenant_webhook_request(company_slug, request, x_hub_signature_256, master_db)
+    return await _receive_tenant_webhook_request(company_slug, request, x_hub_signature_256, master_db, background_tasks)
 
 
 @router.post("/{company_slug}/")
 async def receive_webhook_with_trailing_slash(
     company_slug: str,
     request: Request,
+    background_tasks: BackgroundTasks,
     x_hub_signature_256: str | None = Header(default=None, alias="X-Hub-Signature-256"),
     master_db: Session = Depends(get_master_db),
 ):
-    return await _receive_tenant_webhook_request(company_slug, request, x_hub_signature_256, master_db)
+    return await _receive_tenant_webhook_request(company_slug, request, x_hub_signature_256, master_db, background_tasks)
 
 
 @router.post("/{company_slug}/respond")

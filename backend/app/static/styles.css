@@ -14060,3 +14060,341 @@ table.logs-table tr:hover td {
   font-size: 13px;
   font-style: italic;
 }
+
+/* WhatsApp inbox: keep the channel's own WhatsApp palette, independently of tenant identity. */
+.whatsapp-inbox-shell {
+  --wa-accent: #00a884;
+  --wa-accent-dark: #008069;
+  --wa-panel: #ffffff;
+  --wa-line: #d1d7db;
+  --wa-text: #111b21;
+  --wa-muted: #667781;
+  --wa-soft: #d9fdd3;
+  --wa-softer: #f0f2f5;
+  --wa-chat-background: #efeae2;
+  --wa-outbound: #d9fdd3;
+  --wa-waveform: #aebac1;
+}
+
+.whatsapp-inbox-shell .channel-inbox-workspace {
+  border-color: var(--wa-line) !important;
+  background: var(--wa-panel) !important;
+  box-shadow: 0 4px 20px color-mix(in srgb, var(--wa-accent) 7%, transparent) !important;
+}
+
+.whatsapp-inbox-shell .channel-inbox-contacts,
+.whatsapp-inbox-shell .channel-contact {
+  background: var(--wa-panel) !important;
+}
+
+.whatsapp-inbox-shell .channel-inbox-contacts {
+  border-right-color: var(--wa-line) !important;
+}
+
+.whatsapp-inbox-shell .channel-inbox-pane-header,
+.whatsapp-inbox-shell .channel-chat-header {
+  background: var(--wa-softer) !important;
+  border-color: var(--wa-line) !important;
+}
+
+.whatsapp-inbox-shell .channel-inbox-search {
+  background: var(--wa-softer) !important;
+  border-color: transparent !important;
+}
+
+.whatsapp-inbox-shell .channel-inbox-search:focus-within {
+  background: var(--wa-panel) !important;
+  border-color: var(--wa-accent) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--wa-accent) 16%, transparent) !important;
+}
+
+.whatsapp-inbox-shell .channel-contact {
+  border-bottom-color: var(--wa-line) !important;
+}
+
+.whatsapp-inbox-shell .channel-contact:hover {
+  background: var(--wa-softer) !important;
+}
+
+.whatsapp-inbox-shell .channel-contact.is-selected {
+  background: var(--wa-soft) !important;
+  box-shadow: inset 3px 0 0 var(--wa-accent) !important;
+}
+
+.whatsapp-inbox-shell .channel-contact-avatar,
+.whatsapp-inbox-shell .channel-chat-header-avatar {
+  background: color-mix(in srgb, var(--wa-accent) 9%, var(--wa-panel)) !important;
+  color: var(--wa-accent-dark) !important;
+}
+
+.whatsapp-inbox-shell .channel-contact.is-selected .channel-contact-avatar {
+  background: color-mix(in srgb, var(--wa-accent) 17%, var(--wa-panel)) !important;
+  color: var(--wa-accent-dark) !important;
+}
+
+.whatsapp-inbox-shell .channel-contact-name,
+.whatsapp-inbox-shell .channel-contact.is-unread .channel-contact-name,
+.whatsapp-inbox-shell .channel-chat-header-info h3,
+.whatsapp-inbox-shell .channel-chat-message-text {
+  color: var(--wa-text) !important;
+}
+
+.whatsapp-inbox-shell .channel-contact-time,
+.whatsapp-inbox-shell .channel-contact-detail,
+.whatsapp-inbox-shell .channel-contact-preview,
+.whatsapp-inbox-shell .channel-chat-header-info .muted,
+.whatsapp-inbox-shell .channel-chat-message-meta-inline time {
+  color: var(--wa-muted) !important;
+}
+
+.whatsapp-inbox-shell .channel-contact-unread-badge {
+  background: var(--wa-accent) !important;
+}
+
+.whatsapp-inbox-shell .channel-chat-messages {
+  background-color: var(--wa-chat-background) !important;
+  background-image: radial-gradient(rgba(174, 164, 151, .28) 1px, transparent 1px) !important;
+}
+
+.whatsapp-inbox-shell .channel-chat-date-separator span {
+  background: var(--wa-panel) !important;
+  color: var(--wa-muted) !important;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--wa-accent) 9%, transparent) !important;
+}
+
+.whatsapp-inbox-shell .channel-chat-message {
+  color: var(--wa-text) !important;
+  border-color: var(--wa-line) !important;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--wa-accent) 12%, transparent) !important;
+}
+
+.whatsapp-inbox-shell .channel-chat-message.inbound {
+  background-color: var(--wa-panel) !important;
+}
+
+.whatsapp-inbox-shell .channel-chat-message.outbound {
+  background-color: var(--wa-outbound) !important;
+  border-color: #c8e6c2 !important;
+}
+
+.whatsapp-inbox-shell .channel-chat-message.wa-msg-audio-card,
+.whatsapp-inbox-shell .channel-chat-message:not(:has(.channel-chat-message-text)):has(.wa-bubble-audio-card) {
+  width: min(320px, 88%) !important;
+  max-width: min(88%, 340px) !important;
+  padding: 10px 12px 8px !important;
+  border-radius: 12px !important;
+}
+
+.whatsapp-inbox-shell .channel-chat-message.outbound.wa-msg-audio-card,
+.whatsapp-inbox-shell .channel-chat-message.outbound:not(:has(.channel-chat-message-text)):has(.wa-bubble-audio-card) {
+  background: var(--wa-outbound) !important;
+  border: 1px solid #c8e6c2 !important;
+  color: var(--wa-text) !important;
+}
+
+.whatsapp-inbox-shell .wa-bubble-audio-card {
+  width: 100% !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-player-layout {
+  gap: 10px !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-play-btn {
+  flex-basis: 40px !important;
+  width: 40px !important;
+  height: 40px !important;
+  min-height: 40px !important;
+  background: var(--wa-accent) !important;
+  color: var(--button-primary-text, #ffffff) !important;
+  box-shadow: 0 3px 8px color-mix(in srgb, var(--wa-accent) 25%, transparent) !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-play-btn:hover {
+  background: var(--wa-accent-dark) !important;
+  transform: translateY(-1px) !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-play-btn:active {
+  transform: translateY(0) scale(.96) !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-body {
+  gap: 5px !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-waveform-container {
+  height: 30px !important;
+  padding: 0 3px !important;
+  border-radius: 8px !important;
+  background: color-mix(in srgb, var(--wa-accent) 5%, var(--wa-panel)) !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-bar {
+  width: 3px !important;
+  border-radius: 3px !important;
+}
+
+.whatsapp-inbox-shell .channel-chat-message.inbound .wa-waveform-bg .wa-audio-bar,
+.whatsapp-inbox-shell .channel-chat-message.outbound .wa-waveform-bg .wa-audio-bar {
+  background: var(--wa-waveform) !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-waveform-progress {
+  clip-path: none !important;
+  -webkit-clip-path: none !important;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: none !important;
+}
+
+.whatsapp-inbox-shell .channel-chat-message.inbound .wa-waveform-fg .wa-audio-bar,
+.whatsapp-inbox-shell .channel-chat-message.outbound .wa-waveform-fg .wa-audio-bar {
+  background: var(--wa-accent) !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-thumb {
+  width: 9px !important;
+  height: 9px !important;
+  background: var(--wa-accent) !important;
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--wa-accent) 36%, transparent) !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-details {
+  padding: 0 2px !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-time,
+.whatsapp-inbox-shell .wa-audio-meta-time,
+.whatsapp-inbox-shell .wa-audio-meta-time time {
+  color: var(--wa-muted) !important;
+  font-size: 11px !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-time {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 3px !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-time-separator {
+  opacity: .55;
+}
+
+.whatsapp-inbox-shell .wa-audio-play-btn:disabled {
+  opacity: .72 !important;
+  cursor: wait !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-play-btn:disabled .wa-audio-play-icon,
+.whatsapp-inbox-shell .wa-audio-play-btn:disabled .wa-audio-pause-icon {
+  visibility: hidden !important;
+}
+
+.whatsapp-inbox-shell .wa-audio-play-btn:disabled::after {
+  content: "";
+  width: 13px;
+  height: 13px;
+  border: 2px solid color-mix(in srgb, var(--button-primary-text, #ffffff) 42%, transparent);
+  border-top-color: var(--button-primary-text, #ffffff);
+  border-radius: 50%;
+  animation: wa-audio-spin .7s linear infinite;
+}
+
+.whatsapp-inbox-shell .wa-bubble-audio-card.has-error .wa-audio-time {
+  color: var(--danger, #b91c1c) !important;
+}
+
+.whatsapp-inbox-shell .whatsapp-verified-badge {
+  color: #1877f2 !important;
+}
+
+.whatsapp-inbox-shell .channel-chat-send-btn {
+  background: var(--wa-accent) !important;
+  color: var(--button-primary-text, #ffffff) !important;
+}
+
+.whatsapp-inbox-shell .channel-chat-send-btn:hover:not(:disabled) {
+  background: var(--wa-accent-dark) !important;
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--wa-accent) 30%, transparent) !important;
+}
+
+.whatsapp-inbox-shell .channel-chat-input-pill:focus-within {
+  border-color: var(--wa-accent) !important;
+  box-shadow: 0 0 0 1px var(--wa-accent), 0 1px 2px color-mix(in srgb, var(--wa-accent) 10%, transparent) !important;
+}
+
+.whatsapp-inbox-shell .wa-media-placeholder {
+  position: relative !important;
+  min-width: min(260px, 80%) !important;
+  overflow: hidden !important;
+  background: color-mix(in srgb, var(--wa-accent) 4%, var(--wa-panel)) !important;
+  border-color: color-mix(in srgb, var(--wa-accent) 24%, var(--wa-line)) !important;
+}
+
+.whatsapp-inbox-shell .wa-media-placeholder.is-downloading::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(105deg, transparent 25%, color-mix(in srgb, var(--wa-panel) 72%, transparent) 48%, transparent 70%);
+  transform: translateX(-100%);
+  animation: wa-media-shimmer 1.5s ease-in-out infinite;
+}
+
+.whatsapp-inbox-shell .wa-media-placeholder .wa-pending-icon-box {
+  position: relative !important;
+  background: color-mix(in srgb, var(--wa-accent) 11%, var(--wa-panel)) !important;
+  color: var(--wa-accent-dark) !important;
+}
+
+.whatsapp-inbox-shell .wa-media-placeholder .wa-pending-icon {
+  display: inline-flex !important;
+  opacity: .72;
+}
+
+.whatsapp-inbox-shell .wa-media-placeholder.is-downloading .wa-pending-icon {
+  opacity: .22;
+}
+
+.whatsapp-inbox-shell .wa-media-loading-ring {
+  display: none;
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border: 2px solid color-mix(in srgb, var(--wa-accent) 22%, transparent);
+  border-top-color: var(--wa-accent);
+  border-radius: 50%;
+  animation: wa-media-spin .75s linear infinite;
+}
+
+.whatsapp-inbox-shell .wa-media-placeholder.is-downloading .wa-media-loading-ring {
+  display: block;
+}
+
+.whatsapp-inbox-shell .wa-media-placeholder .wa-pending-sub {
+  color: var(--wa-muted) !important;
+}
+
+.whatsapp-inbox-shell .wa-media-placeholder .wa-pending-retry-btn {
+  color: var(--wa-accent) !important;
+  border-color: color-mix(in srgb, var(--wa-accent) 22%, var(--wa-line)) !important;
+}
+
+.whatsapp-inbox-shell .wa-media-placeholder .wa-pending-retry-btn:hover {
+  background: var(--wa-accent) !important;
+  color: var(--button-primary-text, #ffffff) !important;
+}
+
+@keyframes wa-media-shimmer {
+  to { transform: translateX(100%); }
+}
+
+@keyframes wa-media-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes wa-audio-spin {
+  to { transform: rotate(360deg); }
+}
