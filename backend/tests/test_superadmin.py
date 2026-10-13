@@ -110,6 +110,30 @@ class SuperadminProvisioningTests(unittest.TestCase):
             )
         )
 
+    def test_company_without_database_url_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "base de datos externa propia"):
+            create_company(
+                self.db,
+                name="Configured Tenant",
+                slug="configured-tenant",
+                database_url="",
+                actor_user_id=1,
+                provision_async=True,
+            )
+        self.assertEqual(self.db.scalar(select(MasterTenantDatabase.id)), None)
+
+    def test_company_without_database_url_is_rejected_on_serverless(self):
+        with patch.dict(os.environ, {"VERCEL": "1"}, clear=False):
+            with self.assertRaisesRegex(ValueError, "base de datos externa"):
+                create_company(
+                    self.db,
+                    name="Missing Database Tenant",
+                    slug="missing-database-tenant",
+                    database_url="",
+                    actor_user_id=1,
+                    provision_async=True,
+                )
+
     def test_platform_owner_cannot_be_assigned_as_a_company_user(self):
         tenant_url = f"sqlite:///{Path(self.temp_dir.name, 'platform-owner.db').as_posix()}"
         company = create_company(

@@ -53,6 +53,16 @@ def jobs_cron(request: Request):
     return JSONResponse({"ok": True, **result})
 
 
+@router.api_route("/provisioning", methods=["GET", "POST"])
+def provisioning_cron(request: Request):
+    """Complete one queued company provisioning run in serverless deployments."""
+
+    _cron_authorized(request)
+    from app.workers.provisioning_worker import run_provisioning_cycle
+
+    return JSONResponse({"ok": True, **run_provisioning_cycle(max_runs=1)})
+
+
 @router.api_route("/platform-snapshots", methods=["GET", "POST"])
 def platform_snapshots_cron(request: Request, master_db: Session = Depends(get_master_db)):
     """Refresh platform health/usage outside Superadmin page requests."""

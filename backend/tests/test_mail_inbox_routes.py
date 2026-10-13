@@ -49,6 +49,7 @@ class MailInboxRoutesTests(unittest.TestCase):
             ("/mail/{email_id}/process", ("POST",)),
             ("/cron/email-sync", ("GET", "POST")),
             ("/cron/jobs", ("GET", "POST")),
+            ("/cron/provisioning", ("GET", "POST")),
         }
         for item in expected:
             self.assertIn(item, routes)

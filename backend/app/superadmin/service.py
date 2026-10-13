@@ -3,13 +3,11 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from datetime import date
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.config import get_settings
 from app.core.permissions import DEFAULT_ROLE_PERMISSIONS
 from app.core.security import hash_password
 from app.db.database import Base
@@ -25,7 +23,6 @@ from app.master.models import (
     TenantHealthSnapshot,
     TenantUsageDaily,
 )
-from app.master.provisioning import tenant_database_path
 from app.master.service import configured_platform_admin_email, slugify
 from app.tenancy.migrations import ensure_tenant_schema
 
@@ -45,11 +42,7 @@ def _database_url_for_company(company: MasterCompany, requested_url: str | None)
     requested_url = (requested_url or "").strip()
     if requested_url:
         return requested_url
-    settings = get_settings()
-    if settings.environment == "production":
-        raise ValueError("En producción debes indicar la URL de la base de datos de la empresa")
-    path: Path = tenant_database_path(company)
-    return f"sqlite:///{path.as_posix()}"
+    raise ValueError("Indica una base de datos externa propia para esta empresa")
 
 
 def _engine_for(database_url: str):
@@ -228,6 +221,8 @@ def create_company(
     company_slug = slugify(slug or name)
     if not name:
         raise ValueError("El nombre de la empresa es obligatorio")
+    if not (database_url or "").strip():
+        raise ValueError("Indica una base de datos externa propia para esta empresa")
     if master_db.scalar(select(MasterCompany).where((MasterCompany.name == name) | (MasterCompany.slug == company_slug))):
         raise ValueError("Ya existe una empresa con ese nombre o slug")
 
