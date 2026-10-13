@@ -806,6 +806,7 @@ class InboundMessage(Base):
     has_audio: Mapped[bool] = mapped_column(Boolean, default=False)
     processing_error: Mapped[str | None] = mapped_column(Text)
     last_processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

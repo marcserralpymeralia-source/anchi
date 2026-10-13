@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_send, icon_check, icon_check_check, icon_clock, icon_alert_triangle, icon_user, icon_download, icon_eye, icon_image, icon_file_text, icon_play, icon_badge_check, icon_refresh %}
+{% from "components/icons.html" import icon_whatsapp, icon_search, icon_paperclip, icon_send, icon_check, icon_check_check, icon_clock, icon_alert_triangle, icon_user, icon_download, icon_eye, icon_image, icon_file_text, icon_play, icon_badge_check, icon_refresh, icon_chevron_left, icon_chevron_right, icon_close %}
 {% set title = "Buzón de WhatsApp" %}
 {% block content %}
 <div class="channel-inbox-shell whatsapp-inbox-shell" data-whatsapp-live data-live-revision="{{ live_revision }}">
@@ -64,7 +64,7 @@
 
     const pageUrl = new URL(window.location.href);
     const updateUrl = new URL("/whatsapp/inbox/updates", window.location.origin);
-    ["conversation_id", "search", "page", "page_size"].forEach((name) => {
+    ["conversation_id", "search", "search_index", "page", "page_size"].forEach((name) => {
       const value = pageUrl.searchParams.get(name);
       if (value !== null) updateUrl.searchParams.set(name, value);
     });
@@ -126,11 +126,22 @@
 
         currentContacts.replaceWith(nextContacts);
         currentChat.replaceWith(nextChat);
-        currentCompose.replaceWith(nextCompose);
+        const currentComposeForm = currentCompose.querySelector(".channel-chat-compose");
+        const currentFileInput = currentCompose.querySelector("#wa-file-input");
+        const currentMessageInput = currentCompose.querySelector("#wa-message-input");
+        const currentReplyInput = currentCompose.querySelector("[name='reply_to_message_id']");
+        const hasLocalComposeState = Boolean(
+          currentFileInput?.files?.length || currentMessageInput?.value.trim() || currentReplyInput?.value || currentComposeForm?.dataset.waUploading === "true"
+        );
+        if (!hasLocalComposeState) currentCompose.replaceWith(nextCompose);
         window.initWhatsAppMediaDownloads(nextChat);
         window.initWhatsAppAudioPlayers(nextChat);
-        if (typeof window.initWhatsAppComposer === "function") {
+        window.initWhatsAppSearchNavigation(nextChat);
+        if (!hasLocalComposeState && typeof window.initWhatsAppComposer === "function") {
           window.initWhatsAppComposer(nextCompose);
+        }
+        if (typeof window.initWhatsAppReplyControls === "function") {
+          window.initWhatsAppReplyControls(nextChat);
         }
         revision = nextRevisionRoot.dataset.liveRevision || revision;
         liveRoot.dataset.liveRevision = revision;
@@ -180,6 +191,101 @@
     if (!msgInput || !composeForm || composeForm.dataset.initialized === "true") return;
     composeForm.dataset.initialized = "true";
 
+    const dropZone = composeForm.querySelector("[data-wa-dropzone]");
+    if (dropZone) {
+      let dragDepth = 0;
+      const isFileDrag = (event) => event.dataTransfer?.types?.includes("Files");
+      const stopDragging = () => {
+        dragDepth = 0;
+        composeForm.classList.remove("is-dragging-files");
+      };
+      const allowedExtensions = new Set([".pdf", ".docx", ".txt", ".jpeg", ".jpg", ".png", ".amr", ".m4a", ".mp3", ".ogg", ".wav", ".webm"]);
+      const allowedMimeTypes = new Set([
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "text/plain",
+        "image/jpeg",
+        "image/png",
+        "audio/ogg",
+        "audio/mpeg",
+        "audio/mp4",
+        "audio/wav",
+        "audio/x-m4a",
+        "audio/webm",
+        "audio/amr",
+      ]);
+      const isAllowedFile = (file) => {
+        const filename = String(file.name || "").toLowerCase();
+        const extension = filename.includes(".") ? filename.slice(filename.lastIndexOf(".")) : "";
+        const mime = String(file.type || "").toLowerCase();
+        return allowedExtensions.has(extension) || allowedMimeTypes.has(mime);
+      };
+      const showDropNotice = (message, kind = "warning") => {
+        const bar = composeForm.querySelector("#wa-selected-files");
+        const label = composeForm.querySelector("#wa-files-names");
+        const status = composeForm.querySelector("[data-wa-upload-status]");
+        if (!bar || !label || !status) return;
+        label.textContent = "Archivo no adjuntado";
+        status.className = `wa-files-status ${kind}`;
+        status.hidden = false;
+        status.textContent = message;
+        bar.hidden = false;
+        bar.style.display = "flex";
+      };
+
+      dropZone.addEventListener("dragenter", (event) => {
+        if (!isFileDrag(event)) return;
+        event.preventDefault();
+        dragDepth += 1;
+        composeForm.classList.add("is-dragging-files");
+      });
+      dropZone.addEventListener("dragover", (event) => {
+        if (!isFileDrag(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        composeForm.classList.add("is-dragging-files");
+      });
+      dropZone.addEventListener("dragleave", (event) => {
+        if (!isFileDrag(event)) return;
+        event.preventDefault();
+        dragDepth -= 1;
+        if (dragDepth <= 0) stopDragging();
+      });
+      dropZone.addEventListener("drop", async (event) => {
+        if (!isFileDrag(event)) return;
+        event.preventDefault();
+        stopDragging();
+        const input = composeForm.querySelector("#wa-file-input");
+        const droppedFiles = Array.from(event.dataTransfer.files || []);
+        const validFiles = droppedFiles.filter(isAllowedFile);
+        const rejectedCount = droppedFiles.length - validFiles.length;
+        if (!input || !validFiles.length) {
+          showDropNotice("Solo se admiten PDF, DOCX, TXT, imágenes JPG/PNG y audio.");
+          return;
+        }
+
+        try {
+          const transfer = new DataTransfer();
+          const seen = new Set();
+          [...Array.from(input.files || []), ...validFiles].forEach((file) => {
+            const key = `${file.name}:${file.size}:${file.lastModified}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              transfer.items.add(file);
+            }
+          });
+          input.files = transfer.files;
+          await window.handleFileSelection(input);
+          if (rejectedCount) {
+            showDropNotice(`${rejectedCount} archivo(s) omitido(s) por formato no permitido.`, "warning");
+          }
+        } catch (error) {
+          showDropNotice("No se pudo adjuntar el archivo. Inténtalo de nuevo.", "error");
+          console.debug("WhatsApp drag and drop unavailable", error);
+        }
+      });
+    }
+
     msgInput.addEventListener("input", function() {
       this.style.height = "auto";
       const nextHeight = Math.min(this.scrollHeight, 120);
@@ -203,14 +309,71 @@
       }
     });
 
-    composeForm.addEventListener("submit", () => {
+    composeForm.addEventListener("submit", (event) => {
+      if (composeForm.dataset.attachmentsReady === "false") {
+        event.preventDefault();
+        return;
+      }
       const key = composeForm.querySelector("[name='idempotency_key']");
       if (key && !key.value) key.value = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    }, { once: true });
+      const fileInput = composeForm.querySelector("#wa-file-input");
+      if (fileInput?.files?.length) {
+        composeForm.dataset.waUploading = "true";
+        const sendButton = composeForm.querySelector("[data-wa-send-button]");
+        const status = composeForm.querySelector("[data-wa-upload-status]");
+        if (sendButton) {
+          sendButton.disabled = true;
+          sendButton.setAttribute("aria-busy", "true");
+          sendButton.title = "Subiendo recurso…";
+        }
+        if (status) {
+          status.className = "wa-files-status";
+          status.hidden = false;
+          status.innerHTML = '<span class="wa-upload-spinner" aria-hidden="true"></span>Subiendo recurso…';
+        }
+      }
+    });
   };
 
   window.initWhatsAppComposer();
   window.initWhatsAppMediaDownloads();
+
+  window.initWhatsAppReplyControls = function(container = document) {
+    const composeForm = document.querySelector(".channel-chat-compose");
+    if (!composeForm) return;
+    const replyInput = composeForm.querySelector("[name='reply_to_message_id']");
+    const replyPreview = composeForm.querySelector("[data-wa-reply-preview]");
+    const replyLabel = composeForm.querySelector("[data-wa-reply-label]");
+    const replyText = composeForm.querySelector("[data-wa-reply-text]");
+    if (!replyInput || !replyPreview || !replyLabel || !replyText) return;
+
+    const clearReply = () => {
+      replyInput.value = "";
+      replyPreview.hidden = true;
+      replyLabel.textContent = "Responder";
+      replyText.textContent = "";
+    };
+    const selectReply = (button) => {
+      replyInput.value = button.dataset.waReplyMessage || "";
+      replyLabel.textContent = button.dataset.waReplyLabel || "Responder";
+      replyText.textContent = button.dataset.waReplyPreview || "Mensaje sin texto";
+      replyPreview.hidden = !replyInput.value;
+      composeForm.querySelector("#wa-message-input")?.focus();
+    };
+
+    container.querySelectorAll("[data-wa-reply-message]").forEach((button) => {
+      if (button.dataset.waReplyInitialized === "true") return;
+      button.dataset.waReplyInitialized = "true";
+      button.addEventListener("click", () => selectReply(button));
+    });
+    const clearButton = composeForm.querySelector("[data-wa-clear-reply]");
+    if (clearButton && clearButton.dataset.waReplyInitialized !== "true") {
+      clearButton.dataset.waReplyInitialized = "true";
+      clearButton.addEventListener("click", clearReply);
+    }
+  };
+
+  window.initWhatsAppReplyControls();
 
   window.initWhatsAppAudioPlayers = function(container = document) {
     const players = container.querySelectorAll("[data-wa-audio-player]");
@@ -288,32 +451,103 @@
 
   window.initWhatsAppAudioPlayers();
 
-  window.handleFileSelection = function(input) {
-    const bar = document.getElementById("wa-selected-files");
-    const label = document.getElementById("wa-files-names");
-    if (!bar || !label) return;
-    if (input.files && input.files.length > 0) {
-      const names = Array.from(input.files).map(f => f.name).join(", ");
-      label.textContent = names;
-      bar.hidden = false;
-      bar.style.display = "flex";
-    } else {
-      bar.hidden = true;
-      bar.style.display = "none";
-      label.textContent = "";
+  window.initWhatsAppSearchNavigation = function(container = document) {
+    const currentMatch = container.querySelector("[data-wa-search-current='true']");
+    if (!currentMatch) return;
+    window.requestAnimationFrame(() => currentMatch.scrollIntoView({ block: "center", behavior: "smooth" }));
+  };
+
+  window.initWhatsAppSearchNavigation();
+
+  window.handleFileSelection = async function(input) {
+    const composeForm = input.closest("form");
+    const bar = composeForm?.querySelector("#wa-selected-files");
+    const label = composeForm?.querySelector("#wa-files-names");
+    const status = composeForm?.querySelector("[data-wa-upload-status]");
+    const sendButton = composeForm?.querySelector("[data-wa-send-button]");
+    if (!composeForm || !bar || !label) return;
+    const files = Array.from(input.files || []);
+    if (!files.length) {
+      window.clearSelectedFiles(input);
+      return;
+    }
+
+    composeForm.dataset.attachmentsReady = "false";
+    composeForm.dataset.waUploading = "true";
+    label.textContent = files.map((file) => file.name).join(", ");
+    bar.hidden = false;
+    bar.style.display = "flex";
+    if (sendButton) {
+      sendButton.disabled = true;
+      sendButton.setAttribute("aria-busy", "true");
+      sendButton.title = "Preparando recurso…";
+    }
+    if (status) {
+      status.hidden = false;
+      status.innerHTML = '<span class="wa-upload-spinner" aria-hidden="true"></span>Preparando recurso…';
+    }
+
+    try {
+      await Promise.all(files.map((file) => {
+        if (!file.type.startsWith("image/")) return new Promise((resolve) => window.requestAnimationFrame(resolve));
+        return new Promise((resolve, reject) => {
+          const url = URL.createObjectURL(file);
+          const image = new Image();
+          image.onload = () => { URL.revokeObjectURL(url); resolve(); };
+          image.onerror = () => { URL.revokeObjectURL(url); reject(new Error("No se pudo preparar la imagen")); };
+          image.src = url;
+        });
+      }));
+      composeForm.dataset.attachmentsReady = "true";
+      composeForm.dataset.waUploading = "false";
+      if (sendButton) {
+        sendButton.disabled = false;
+        sendButton.removeAttribute("aria-busy");
+        sendButton.title = "Enviar mensaje";
+      }
+      if (status) {
+        status.className = "wa-files-status";
+        status.hidden = false;
+        status.innerHTML = '<span class="wa-upload-ready" aria-hidden="true">✓</span>Recurso listo';
+      }
+    } catch (error) {
+      composeForm.dataset.attachmentsReady = "false";
+      if (sendButton) sendButton.disabled = true;
+      if (status) {
+        status.className = "wa-files-status error";
+        status.textContent = "No se pudo preparar el recurso";
+      }
+      console.debug("WhatsApp attachment preparation unavailable", error);
     }
   };
 
-  window.clearSelectedFiles = function() {
-    const input = document.getElementById("wa-file-input");
+  window.clearSelectedFiles = function(source) {
+    const composeForm = source?.closest?.("form") || document.querySelector(".channel-chat-compose");
+    const input = composeForm?.querySelector("#wa-file-input");
     if (input) input.value = "";
-    const bar = document.getElementById("wa-selected-files");
-    const label = document.getElementById("wa-files-names");
+    const bar = composeForm?.querySelector("#wa-selected-files");
+    const label = composeForm?.querySelector("#wa-files-names");
+    const status = composeForm?.querySelector("[data-wa-upload-status]");
+    const sendButton = composeForm?.querySelector("[data-wa-send-button]");
+    if (composeForm) {
+      composeForm.dataset.attachmentsReady = "true";
+      composeForm.dataset.waUploading = "false";
+    }
     if (bar) {
       bar.hidden = true;
       bar.style.display = "none";
     }
     if (label) label.textContent = "";
+    if (status) {
+      status.className = "wa-files-status";
+      status.hidden = true;
+      status.textContent = "";
+    }
+    if (sendButton) {
+      sendButton.disabled = false;
+      sendButton.removeAttribute("aria-busy");
+      sendButton.title = "Enviar mensaje";
+    }
   };
 
   let currentLightboxZoom = 1;

@@ -141,6 +141,9 @@ class WhatsAppInboxTests(unittest.TestCase):
         self.assertIn('href="/whatsapp/inbox"', response.text)
         self.assertIn("Buzón de correo", response.text)
         self.assertIn('name="files"', response.text)
+        self.assertIn('data-wa-dropzone', response.text)
+        self.assertIn('data-wa-upload-status', response.text)
+        self.assertIn('data-wa-send-button', response.text)
         self.assertEqual(response.text.count('href="/mail"'), 1)
         self.assertEqual(response.text.count('class="nav-label">WhatsApp</span>'), 1)
 
@@ -171,14 +174,131 @@ class WhatsAppInboxTests(unittest.TestCase):
         client, cleanup = self._client_for(fixture)
         try:
             self._login(client, fixture)
+            unread_response = client.get("/whatsapp/inbox")
             response = client.get(f"/whatsapp/inbox?conversation_id={conversation_id}")
         finally:
             cleanup()
             fixture.cleanup()
 
+        self.assertEqual(unread_response.status_code, 200)
+        self.assertIn('aria-label="2 mensajes sin leer">2</span>', unread_response.text)
+        self.assertIn("2 pendientes", unread_response.text)
         self.assertEqual(response.status_code, 200)
-        self.assertIn('aria-label="2 mensajes sin leer">2</span>', response.text)
-        self.assertIn("2 pendientes", response.text)
+        self.assertNotIn("channel-contact-unread-badge", response.text)
+        self.assertIn("0 pendientes", response.text)
+
+    def test_search_filters_chats_and_navigates_message_matches(self):
+        fixture = build_performance_fixture("small")
+        conversation_id = self._seed_whatsapp(fixture)
+        engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        with session() as db:
+            for external_id, text_content in (
+                ("wamid.inbox-test-search-1", "Pedido confirmado por el cliente."),
+                ("wamid.inbox-test-search-2", "Seguimiento del pedido confirmado."),
+            ):
+                message, _ = upsert_inbound_message(
+                    db,
+                    company_id=1,
+                    channel_key="whatsapp",
+                    provider="meta",
+                    external_id=external_id,
+                    sender="+34600000000",
+                    recipients=["+34910000000"],
+                    subject="Seguimiento",
+                    text_content=text_content,
+                    external_thread_id="+34600000000",
+                    received_at=utcnow(),
+                    content_type="text",
+                )
+                message.status = "received"
+            message, _ = upsert_inbound_message(
+                db,
+                company_id=1,
+                channel_key="whatsapp",
+                provider="meta",
+                external_id="wamid.inbox-test-search-other",
+                sender="+34600000001",
+                recipients=["+34910000000"],
+                subject="Otra conversación",
+                text_content="Consulta sin coincidencia.",
+                external_thread_id="+34600000001",
+                received_at=utcnow(),
+                content_type="text",
+            )
+            message.status = "received"
+            db.commit()
+        engine.dispose()
+
+        client, cleanup = self._client_for(fixture)
+        try:
+            self._login(client, fixture)
+            response = client.get("/whatsapp/inbox?search=pedido")
+            previous = client.get(f"/whatsapp/inbox?conversation_id={conversation_id}&search=pedido&search_index=0")
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Resultado 2 de 2", response.text)
+        self.assertIn('class="wa-search-highlight">pedido</mark>', response.text.lower())
+        self.assertIn("search_index=0", response.text)
+        self.assertNotIn("Consulta sin coincidencia", response.text)
+        self.assertEqual(previous.status_code, 200)
+        self.assertIn("Resultado 1 de 2", previous.text)
+        self.assertIn("Salir", previous.text)
+
+    def test_reply_selection_is_rendered_and_sent_with_message_reference(self):
+        fixture = build_performance_fixture("small")
+        conversation_id = self._seed_whatsapp(fixture)
+        engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        with session() as db:
+            original = db.scalar(select(InboundMessage).where(InboundMessage.conversation_id == conversation_id))
+            quoted, _ = upsert_inbound_message(
+                db,
+                company_id=1,
+                channel_key="whatsapp",
+                provider="meta",
+                external_id="wamid.inbox-reply-1",
+                sender="+34600000000",
+                recipients=["+34910000000"],
+                subject="Respuesta citada",
+                text_content="Esta es la respuesta del cliente.",
+                external_thread_id="+34600000000",
+                metadata={"payload": {"context": {"id": original.source_external_id}}},
+                received_at=utcnow(),
+                content_type="text",
+            )
+            quoted.status = "received"
+            db.commit()
+            original_id = original.id
+            quoted_id = quoted.id
+        engine.dispose()
+
+        client, cleanup = self._client_for(fixture)
+        try:
+            self._login(client, fixture)
+            page = client.get(f"/whatsapp/inbox?conversation_id={conversation_id}")
+            with patch(
+                "app.whatsapp.inbox_routes.send_manual_response",
+                new=AsyncMock(return_value=InboundMessage(id=99)),
+            ) as send_response:
+                response = client.post(
+                    f"/whatsapp/inbox/{conversation_id}/reply",
+                    data={"body": "Te confirmo la entrega.", "reply_to_message_id": str(original_id)},
+                    follow_redirects=False,
+                )
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+        self.assertEqual(page.status_code, 200)
+        self.assertIn(f'data-wa-reply-message="{quoted_id}"', page.text)
+        self.assertIn("wa-message-quoted", page.text)
+        self.assertIn("Esta es la respuesta del cliente.", page.text)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(send_response.await_args.kwargs["reply_to_message_id"], original_id)
 
     def test_replied_conversation_has_no_unread_badge_for_old_messages(self):
         fixture = build_performance_fixture("small")
@@ -672,7 +792,8 @@ class WhatsAppInboxTests(unittest.TestCase):
             self.assertIn("wa-bubble-audio-card", response.text)
             self.assertIn("wa-audio-custom-card", response.text)
             self.assertIn("wa-audio-custom-range", response.text)
-            self.assertIn("wa-audio-file-label", response.text)
+            self.assertIn("wa-audio-custom-footer", response.text)
+            self.assertNotIn("nota-voz.ogg", response.text)
             self.assertNotIn("data-wa-audio-volume", response.text)
             # Pending media card
             self.assertIn("wa-bubble-pending-card", response.text)

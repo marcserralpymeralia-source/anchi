@@ -1,18 +1,21 @@
 import hashlib
+import json
 import logging
+import re
 from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile
 from fastapi.responses import PlainTextResponse, RedirectResponse, Response
-from sqlalchemy import exists, func, or_, select
+from markupsafe import Markup, escape
+from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.auth.dependencies import current_user
 from app.core.pagination import normalize_page
 from app.core.templating import templates
 from app.customers.matching import build_customer_phone_index, customer_id_from_phone
-from app.db.models import Conversation, Customer, InboundMessage, InputChannel, MessageAttachment
+from app.db.models import Conversation, Customer, InboundMessage, InputChannel, MessageAttachment, utcnow
 from app.master.service import TenantUser
 from app.tenancy.database import get_tenant_db
 from app.whatsapp.service import (
@@ -102,8 +105,54 @@ def _conversation_remote_phone(conversation: Conversation, messages: list[Inboun
     return conversation.external_thread_id
 
 
-def _message_payload(message: InboundMessage) -> dict:
+def _whatsapp_message_context(message: InboundMessage) -> dict:
+    try:
+        metadata = json.loads(message.raw_payload_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return {}
+    if not isinstance(metadata, dict):
+        return {}
+    payload = metadata.get("payload") if isinstance(metadata.get("payload"), dict) else {}
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else metadata.get("context")
+    return context if isinstance(context, dict) else {}
+
+
+def _message_preview(message: InboundMessage) -> str:
+    text = " ".join(str(message.original_content or "").split())
+    if text:
+        return text[:180] + ("…" if len(text) > 180 else "")
+    attachment = next(iter(message.attachments or []), None)
+    if attachment:
+        return str(attachment.filename or "Archivo adjunto")
+    return "Mensaje sin texto"
+
+
+def _highlight_search_text(text: str | None, search: str) -> Markup:
+    value = str(text or "")
+    term = search.strip()
+    if not term:
+        return Markup(escape(value))
+
+    parts: list[Markup] = []
+    cursor = 0
+    for match in re.finditer(re.escape(term), value, flags=re.IGNORECASE):
+        parts.append(Markup(escape(value[cursor:match.start()])))
+        parts.append(Markup(f'<mark class="wa-search-highlight">{escape(match.group(0))}</mark>'))
+        cursor = match.end()
+    parts.append(Markup(escape(value[cursor:])))
+    return Markup("").join(parts)
+
+
+def _message_matches_search(message: InboundMessage, search: str) -> bool:
+    term = search.strip().casefold()
+    if not term:
+        return False
+    return term in str(message.original_content or "").casefold()
+
+
+def _message_payload(message: InboundMessage, *, search: str = "") -> dict:
     outbound = message.direction == "outbound"
+    search_match = _message_matches_search(message, search)
     attachments = []
     for attachment in message.attachments or []:
         available = bool(attachment.storage_path)
@@ -129,6 +178,10 @@ def _message_payload(message: InboundMessage) -> dict:
         "text": message.original_content or "",
         "date": _message_date(message),
         "status": str(message.status or "").lower(),
+        "search_match": search_match,
+        "text_html": _highlight_search_text(message.original_content, search) if search_match else "",
+        "reply_to_external_id": str(_whatsapp_message_context(message).get("id") or "").strip() or None,
+        "reply_preview": _message_preview(message),
         "attachments": attachments,
     }
 
@@ -137,6 +190,9 @@ def _conversation_card(
     conversation: Conversation,
     customers: dict[int, Customer],
     phone_index: dict[str, int | None] | None = None,
+    *,
+    search: str = "",
+    search_index: int | None = None,
 ) -> dict:
     messages = sorted(
         conversation.messages or [],
@@ -169,10 +225,44 @@ def _conversation_card(
         if index > latest_outbound_index
         and message.direction == "inbound"
         and message.status in {"received", "queued", "processing"}
+        and message.read_at is None
     )
     unread = unread_count > 0
     latest_outbound = (latest.direction == "outbound") if latest else False
     latest_status = str(latest.status or "").lower() if latest and latest_outbound else ""
+    message_payloads = [_message_payload(message, search=search) for message in messages]
+    messages_by_external_id = {
+        str(message.source_external_id).strip(): message
+        for message in messages
+        if str(message.source_external_id or "").strip()
+    }
+    for message, payload in zip(messages, message_payloads):
+        reply_to_external_id = payload["reply_to_external_id"]
+        if not reply_to_external_id:
+            payload["reply_to"] = None
+            continue
+        quoted = messages_by_external_id.get(reply_to_external_id)
+        if quoted:
+            payload["reply_to"] = {
+                "id": quoted.id,
+                "speaker": "Anchi" if quoted.direction == "outbound" else (quoted.sender or "Cliente"),
+                "text": _message_preview(quoted),
+                "direction": quoted.direction,
+            }
+        else:
+            payload["reply_to"] = {
+                "id": None,
+                "speaker": "WhatsApp",
+                "text": "Mensaje citado no disponible",
+                "direction": "inbound",
+            }
+    search_matches = [payload for payload in message_payloads if payload["search_match"]]
+    if search_matches:
+        active_search_index = len(search_matches) - 1 if search_index is None else min(max(search_index, 0), len(search_matches) - 1)
+        for match_index, payload in enumerate(search_matches):
+            payload["search_match_index"] = match_index
+    else:
+        active_search_index = -1
     return {
         "id": conversation.id,
         "name": contact_name,
@@ -185,7 +275,9 @@ def _conversation_card(
         "latest_status": latest_status,
         "customer_id": customer.id if customer else None,
         "customer_verified": bool(customer),
-        "messages": [_message_payload(message) for message in messages],
+        "messages": message_payloads,
+        "search_match_count": len(search_matches),
+        "search_match_index": active_search_index,
     }
 
 
@@ -210,11 +302,14 @@ def _inbox_conditions(*, company_id: int, channel_id: int, search: str) -> list:
                 Conversation.subject.ilike(like),
                 Conversation.external_thread_id.ilike(like),
                 exists(
-                    select(1).where(
+                    select(1)
+                    .select_from(InboundMessage)
+                    .where(
                         InboundMessage.conversation_id == Conversation.id,
                         InboundMessage.company_id == company_id,
                         or_(InboundMessage.sender.ilike(like), InboundMessage.original_content.ilike(like)),
                     )
+                    .correlate(Conversation)
                 ),
             )
         )
@@ -230,6 +325,7 @@ def _load_inbox_data(
     search: str,
     page: int,
     page_size: int,
+    search_index: int | None,
 ) -> dict:
     conditions = _inbox_conditions(company_id=company_id, channel_id=channel_id, search=search)
     page, page_size = normalize_page(page, page_size)
@@ -275,7 +371,16 @@ def _load_inbox_data(
                 select(Customer).where(Customer.company_id == company_id, Customer.id.in_(customer_ids))
             ).all()
         }
-    cards = [_conversation_card(conversation, customers, phone_index) for conversation in conversations]
+    cards = [
+        _conversation_card(
+            conversation,
+            customers,
+            phone_index,
+            search=search,
+            search_index=search_index,
+        )
+        for conversation in conversations
+    ]
     page_card_ids = {conversation.id for conversation in page_conversations}
     page_cards = [card for card in cards if card["id"] in page_card_ids]
 
@@ -303,6 +408,7 @@ def _load_inbox_data(
                 *conditions,
                 InboundMessage.direction == "inbound",
                 InboundMessage.status.in_(("received", "queued", "processing")),
+                InboundMessage.read_at.is_(None),
                 or_(latest_outbound_at.is_(None), InboundMessage.received_at > latest_outbound_at),
             )
         )
@@ -325,6 +431,32 @@ def _load_inbox_data(
     }
 
 
+def _mark_conversation_as_read(
+    db: Session,
+    *,
+    company_id: int,
+    channel_id: int,
+    conversation_id: int,
+) -> bool:
+    """Mark visible inbound WhatsApp messages as read without changing processing state."""
+
+    result = db.execute(
+        update(InboundMessage)
+        .where(
+            InboundMessage.company_id == company_id,
+            InboundMessage.channel_id == channel_id,
+            InboundMessage.conversation_id == conversation_id,
+            InboundMessage.direction == "inbound",
+            InboundMessage.read_at.is_(None),
+        )
+        .values(read_at=utcnow())
+    )
+    if not result.rowcount:
+        return False
+    db.commit()
+    return True
+
+
 def _inbox_live_revision(db: Session, conditions: list) -> str:
     row = db.execute(
         select(
@@ -332,6 +464,7 @@ def _inbox_live_revision(db: Session, conditions: list) -> str:
             func.max(Conversation.updated_at),
             func.max(InboundMessage.updated_at),
             func.max(InboundMessage.last_processed_at),
+            func.max(InboundMessage.read_at),
             func.max(InboundMessage.id),
             func.max(MessageAttachment.created_at),
             func.max(MessageAttachment.storage_path),
@@ -412,6 +545,7 @@ async def whatsapp_inbox(
     search: str = "",
     page: int = 1,
     page_size: int = 30,
+    search_index: int | None = None,
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
@@ -421,6 +555,13 @@ async def whatsapp_inbox(
 
     config = whatsapp_config(db, user.company_id)
     normalized_search = search.strip()
+    if conversation_id is not None:
+        _mark_conversation_as_read(
+            db,
+            company_id=user.company_id,
+            channel_id=channel.id,
+            conversation_id=conversation_id,
+        )
     data = _load_inbox_data(
         db,
         company_id=user.company_id,
@@ -429,6 +570,7 @@ async def whatsapp_inbox(
         search=normalized_search,
         page=page,
         page_size=page_size,
+        search_index=search_index,
     )
     page_cards = data["page_cards"]
     selected = data["selected"]
@@ -476,6 +618,7 @@ async def whatsapp_inbox_updates(
     search: str = "",
     page: int = 1,
     page_size: int = 30,
+    search_index: int | None = None,
     since: str = "",
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
@@ -484,6 +627,13 @@ async def whatsapp_inbox_updates(
     if not channel:
         return PlainTextResponse("El canal WhatsApp no está activo para este tenant.", status_code=404)
 
+    if conversation_id is not None:
+        _mark_conversation_as_read(
+            db,
+            company_id=user.company_id,
+            channel_id=channel.id,
+            conversation_id=conversation_id,
+        )
     normalized_search = search.strip()
     conditions = _inbox_conditions(company_id=user.company_id, channel_id=channel.id, search=normalized_search)
     revision = _inbox_live_revision(db, conditions)
@@ -499,6 +649,7 @@ async def whatsapp_inbox_updates(
         search=normalized_search,
         page=page,
         page_size=page_size,
+        search_index=search_index,
     )
 
     config = whatsapp_config(db, user.company_id)
@@ -513,6 +664,7 @@ async def whatsapp_inbox_updates(
 async def whatsapp_inbox_reply(
     conversation_id: int,
     body: str = Form(""),
+    reply_to_message_id: str = Form(""),
     form_idempotency_key: str = Form("", alias="idempotency_key"),
     header_idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     files: list[UploadFile] | None = File(default=None),
@@ -574,6 +726,10 @@ async def whatsapp_inbox_reply(
     if not clean_body and not attachment_payloads:
         return _redirect_to_conversation(conversation_id, error="empty_message")
     try:
+        parsed_reply_to_message_id = int(reply_to_message_id) if str(reply_to_message_id or "").strip() else None
+    except (TypeError, ValueError):
+        return _redirect_to_conversation(conversation_id, error="invalid_reply")
+    try:
         await send_manual_response(
             db,
             company_id=user.company_id,
@@ -582,10 +738,11 @@ async def whatsapp_inbox_reply(
             user_id=user.actor_id,
             attachments=attachment_payloads,
             idempotency_key=header_idempotency_key or form_idempotency_key,
+            reply_to_message_id=parsed_reply_to_message_id,
         )
     except WhatsAppEmbeddedSignupError as exc:
         error_type = getattr(exc, "error_type", "send_failed")
-        if error_type in {"customer_has_not_replied", "response_window_expired", "response_window_unknown", "recipient_not_found"}:
+        if error_type in {"customer_has_not_replied", "response_window_expired", "response_window_unknown", "recipient_not_found", "invalid_reply"}:
             return _redirect_to_conversation(conversation_id, error=error_type)
         return _redirect_to_conversation(conversation_id, error="send_failed")
     except Exception:  # noqa: BLE001

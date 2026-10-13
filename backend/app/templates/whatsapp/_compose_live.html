@@ -1,11 +1,28 @@
-{% from "components/icons.html" import icon_paperclip, icon_send %}
+{% from "components/icons.html" import icon_paperclip, icon_send, icon_reply, icon_close %}
 
 <form class="channel-chat-compose" method="post" action="/whatsapp/inbox/{{ selected.id }}/reply" enctype="multipart/form-data" data-whatsapp-compose>
   <input type="hidden" name="idempotency_key" value="">
+  <input type="hidden" name="reply_to_message_id" value="">
+
+  <div class="wa-reply-compose" data-wa-reply-preview hidden>
+    <span class="wa-reply-compose-icon" aria-hidden="true">{{ icon_reply(16) }}</span>
+    <div class="wa-reply-compose-copy">
+      <strong data-wa-reply-label>Responder</strong>
+      <span data-wa-reply-text></span>
+    </div>
+    <button type="button" class="wa-reply-compose-close" data-wa-clear-reply title="Cancelar respuesta" aria-label="Cancelar respuesta">{{ icon_close(14) }}</button>
+  </div>
+
+  <div class="wa-drop-overlay" data-wa-dropzone aria-hidden="true">
+    <span class="wa-drop-overlay-icon">{{ icon_paperclip(20) }}</span>
+    <strong>Suelta el archivo para adjuntarlo</strong>
+    <span>PDF, DOCX, TXT, imágenes o audio</span>
+  </div>
 
   <div id="wa-selected-files" class="wa-selected-files-bar" style="display: none;" hidden>
     <span class="wa-files-icon">{{ icon_paperclip(14) }}</span>
     <span id="wa-files-names" class="wa-files-text"></span>
+    <span id="wa-files-status" class="wa-files-status" data-wa-upload-status role="status" aria-live="polite" hidden></span>
     <button type="button" class="wa-files-clear" onclick="clearSelectedFiles()" title="Quitar archivos">×</button>
   </div>
 
@@ -26,7 +43,7 @@
       ></textarea>
     </div>
 
-    <button class="channel-chat-send-btn" type="submit" title="Enviar mensaje">
+    <button class="channel-chat-send-btn" type="submit" title="Enviar mensaje" data-wa-send-button>
       {{ icon_send(18) }}
     </button>
   </div>

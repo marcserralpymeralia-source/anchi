@@ -1175,6 +1175,17 @@ def _apply_tenant_actor_bridge(engine, dry_run: bool) -> list[str]:  # noqa: ANN
     return ensure_columns(engine, "users", TENANT_COMPAT_COLUMNS["users"], dry_run=dry_run)
 
 
+def _apply_tenant_whatsapp_read_state(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Add a read marker independent from inbound-message processing status."""
+
+    return ensure_columns(
+        engine,
+        "inbound_messages",
+        {"read_at": "DATETIME"},
+        dry_run=dry_run,
+    )
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -1283,6 +1294,12 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant actor identity bridge",
         checksum=checksum_text("tenant", "actor_identity_bridge", "users", "master_user_id", "actor_type"),
         upgrade=_apply_tenant_actor_bridge,
+    ),
+    MigrationSpec(
+        version="2026.10.13.1",
+        name="tenant WhatsApp read state",
+        checksum=checksum_text("tenant", "whatsapp_read_state", "inbound_messages", "read_at"),
+        upgrade=_apply_tenant_whatsapp_read_state,
     ),
 ]
 

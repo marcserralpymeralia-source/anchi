@@ -165,6 +165,13 @@
 </svg>
 {%- endmacro %}
 
+{% macro icon_reply(size=16, class="") -%}
+<svg class="ui-icon {{ class }}" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+  <polyline points="9 17 4 12 9 7"></polyline>
+  <path d="M20 18v-1a5 5 0 0 0-5-5H4"></path>
+</svg>
+{%- endmacro %}
+
 {% macro icon_arrow_right(size=16, class="") -%}
 <svg class="ui-icon {{ class }}" width="{{ size }}" height="{{ size }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
   <path d="M5 12h14"></path>

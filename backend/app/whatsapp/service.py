@@ -759,6 +759,7 @@ async def send_whatsapp_text(
     template_name: str | None = None,
     template_language: str | None = None,
     template_components: list[dict[str, Any]] | None = None,
+    reply_to_external_id: str | None = None,
 ) -> dict[str, Any]:
     config, recipient, body, clean_template_name = _prepare_whatsapp_text_send(
         db,
@@ -769,6 +770,24 @@ async def send_whatsapp_text(
     )
     owns_client = client is None
     graph_client = client or httpx.AsyncClient(timeout=get_settings().meta_request_timeout_seconds)
+    message_payload: dict[str, Any] = {
+        "messaging_product": "whatsapp",
+        "to": recipient,
+        "type": "template" if clean_template_name else "text",
+        **(
+            {
+                "template": {
+                    "name": clean_template_name,
+                    "language": {"code": template_language or config.default_language or "es"},
+                    **({"components": template_components} if template_components else {}),
+                }
+            }
+            if clean_template_name
+            else {"text": {"preview_url": False, "body": body}}
+        ),
+    }
+    if reply_to_external_id:
+        message_payload["context"] = {"message_id": reply_to_external_id}
     try:
         response = await _meta_request(
             graph_client,
@@ -776,22 +795,7 @@ async def send_whatsapp_text(
             "POST",
             f"{config.phone_number_id}/messages",
             access_token=config.access_token,
-            json_body={
-                "messaging_product": "whatsapp",
-                "to": recipient,
-                "type": "template" if clean_template_name else "text",
-                **(
-                    {
-                        "template": {
-                            "name": clean_template_name,
-                            "language": {"code": template_language or config.default_language or "es"},
-                            **({"components": template_components} if template_components else {}),
-                        }
-                    }
-                    if clean_template_name
-                    else {"text": {"preview_url": False, "body": body}}
-                ),
-            },
+            json_body=message_payload,
         )
     finally:
         if owns_client:
@@ -936,6 +940,7 @@ async def send_whatsapp_media(
     is_audio: bool = False,
     is_image: bool = False,
     client: httpx.AsyncClient | None = None,
+    reply_to_external_id: str | None = None,
 ) -> dict[str, Any]:
     config, recipient = _prepare_whatsapp_media_send(
         db,
@@ -966,18 +971,21 @@ async def send_whatsapp_media(
         media_body: dict[str, str] = {"id": media_id}
         if not is_audio and not is_image:
             media_body["filename"] = filename
+        message_payload: dict[str, Any] = {
+            "messaging_product": "whatsapp",
+            "to": recipient,
+            "type": message_type,
+            message_type: media_body,
+        }
+        if reply_to_external_id:
+            message_payload["context"] = {"message_id": reply_to_external_id}
         response = await _meta_request(
             graph_client,
             get_settings(),
             "POST",
             f"{config.phone_number_id}/messages",
             access_token=config.access_token,
-            json_body={
-                "messaging_product": "whatsapp",
-                "to": recipient,
-                "type": message_type,
-                message_type: media_body,
-            },
+            json_body=message_payload,
         )
     finally:
         if owns_client:
@@ -1847,6 +1855,32 @@ def _pending_outbound_external_id(company_id: int, conversation_id: int, idempot
     return f"{_PENDING_OUTBOUND_EXTERNAL_ID_PREFIX}{digest}"
 
 
+def _resolve_reply_to_external_id(
+    db: Session,
+    *,
+    company_id: int,
+    conversation_id: int,
+    reply_to_message_id: int | None,
+) -> str | None:
+    if reply_to_message_id is None:
+        return None
+    message = db.scalar(
+        select(InboundMessage).where(
+            InboundMessage.id == reply_to_message_id,
+            InboundMessage.company_id == company_id,
+            InboundMessage.conversation_id == conversation_id,
+            InboundMessage.provider == WHATSAPP_PROVIDER,
+        )
+    )
+    external_id = str(message.source_external_id or "").strip() if message else ""
+    if not external_id or external_id.startswith(_PENDING_OUTBOUND_EXTERNAL_ID_PREFIX):
+        raise WhatsAppEmbeddedSignupError(
+            "El mensaje seleccionado ya no está disponible para responder.",
+            error_type="invalid_reply",
+        )
+    return external_id
+
+
 def _reuse_or_reject_outbound(existing: InboundMessage) -> InboundMessage:
     status = str(existing.status or "").strip().lower()
     if status == "send_unknown":
@@ -1871,6 +1905,7 @@ def _reserve_manual_response(
     user_id: int | None,
     template_name: str | None,
     idempotency_key: str,
+    reply_to_external_id: str | None = None,
 ) -> tuple[InboundMessage, bool]:
     existing = _find_idempotent_outbound(
         db,
@@ -1892,6 +1927,7 @@ def _reserve_manual_response(
             status="sending",
             processing_step="outbound_sending",
             idempotency_key=idempotency_key,
+            reply_to_external_id=reply_to_external_id,
         )
     except IntegrityError:
         db.rollback()
@@ -2247,6 +2283,7 @@ def record_manual_response(
     processing_step: str = "outbound_recorded",
     attachments: list[dict[str, Any]] | None = None,
     idempotency_key: str | None = None,
+    reply_to_external_id: str | None = None,
 ) -> InboundMessage:
     conversation = db.get(Conversation, conversation_id)
     if not conversation or conversation.company_id != company_id:
@@ -2269,6 +2306,8 @@ def record_manual_response(
     has_pdf = any(str(item.get("filename") or "").lower().endswith(".pdf") for item in attachment_payloads)
     has_audio = any(bool(item.get("is_audio")) for item in attachment_payloads)
     metadata = {"manual_response": True, "template_name": template_name, "idempotency_key": idempotency_key}
+    if reply_to_external_id:
+        metadata["context"] = {"message_id": reply_to_external_id}
     if is_pending_existing:
         message = existing
         message.source_external_id = external_id
@@ -2375,12 +2414,19 @@ async def send_manual_response(
     template_name: str | None = None,
     template_language: str | None = None,
     template_components: list[dict[str, Any]] | None = None,
+    reply_to_message_id: int | None = None,
 ) -> InboundMessage:
     clean_body = str(body or "").strip()
     attachment_payloads = attachments or []
     if not clean_body and not attachment_payloads and not template_name:
         raise WhatsAppEmbeddedSignupError("El mensaje debe incluir texto o un archivo.", error_type="invalid_message")
     idempotency_key = _normalize_idempotency_key(idempotency_key)
+    reply_to_external_id = _resolve_reply_to_external_id(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+        reply_to_message_id=reply_to_message_id,
+    )
     text_key = f"{idempotency_key}:text" if idempotency_key and attachment_payloads else idempotency_key
     text_existing = _find_idempotent_outbound(
         db,
@@ -2429,6 +2475,7 @@ async def send_manual_response(
                 user_id=user_id,
                 template_name=template_name,
                 idempotency_key=text_key,
+                reply_to_external_id=reply_to_external_id,
             )
         if not owns_send:
             sent_messages.append(reservation)
@@ -2443,6 +2490,7 @@ async def send_manual_response(
                     template_name=template_name,
                     template_language=template_language,
                     template_components=template_components,
+                    reply_to_external_id=reply_to_external_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 if reservation:
@@ -2460,6 +2508,7 @@ async def send_manual_response(
                     processing_step="outbound_accepted",
                     idempotency_key=text_key,
                     template_name=template_name,
+                    reply_to_external_id=reply_to_external_id,
                 )
             except Exception as exc:  # noqa: BLE001
                 if reservation:
@@ -2479,6 +2528,7 @@ async def send_manual_response(
                 user_id=user_id,
                 template_name=None,
                 idempotency_key=media_key,
+                reply_to_external_id=reply_to_external_id,
             )
         if not owns_send:
             sent_messages.append(reservation)
@@ -2494,6 +2544,7 @@ async def send_manual_response(
                 is_audio=bool(attachment.get("is_audio")),
                 is_image=bool(attachment.get("is_image")),
                 client=client,
+                reply_to_external_id=reply_to_external_id,
             )
         except Exception as exc:  # noqa: BLE001
             if reservation:
@@ -2511,6 +2562,7 @@ async def send_manual_response(
                 processing_step="outbound_accepted",
                 attachments=[attachment],
                 idempotency_key=media_key,
+                reply_to_external_id=reply_to_external_id,
             )
         except Exception as exc:  # noqa: BLE001
             if reservation:
