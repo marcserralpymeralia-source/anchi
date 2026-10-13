@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile
 from fastapi.responses import PlainTextResponse, RedirectResponse, Response
 from sqlalchemy import exists, func, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.auth.dependencies import current_user
 from app.core.pagination import normalize_page
@@ -26,6 +26,8 @@ from app.whatsapp.service import (
     send_manual_response,
     whatsapp_config,
     whatsapp_outbound_is_ready,
+    whatsapp_response_window_status,
+    WhatsAppEmbeddedSignupError,
 )
 
 logger = logging.getLogger(__name__)
@@ -157,10 +159,18 @@ def _conversation_card(
     preview = (latest.original_content or "") if latest else "Sin mensajes todavía"
     if not preview and latest and latest.attachments:
         preview = latest.attachments[0].filename or "Archivo adjunto"
-    unread = any(
-        message.direction == "inbound" and message.status in {"received", "queued", "processing"}
-        for message in messages
+    latest_outbound_index = max(
+        (index for index, message in enumerate(messages) if message.direction == "outbound"),
+        default=-1,
     )
+    unread_count = sum(
+        1
+        for index, message in enumerate(messages)
+        if index > latest_outbound_index
+        and message.direction == "inbound"
+        and message.status in {"received", "queued", "processing"}
+    )
+    unread = unread_count > 0
     latest_outbound = (latest.direction == "outbound") if latest else False
     latest_status = str(latest.status or "").lower() if latest and latest_outbound else ""
     return {
@@ -170,6 +180,7 @@ def _conversation_card(
         "preview": preview,
         "date": _message_date(latest) if latest else conversation.last_activity_at,
         "unread": unread,
+        "unread_count": unread_count,
         "latest_outbound": latest_outbound,
         "latest_status": latest_status,
         "customer_id": customer.id if customer else None,
@@ -274,14 +285,25 @@ def _load_inbox_data(
     if selected is not None and selected["id"] not in page_card_ids:
         page_cards = [selected, *page_cards]
 
+    latest_outbound = aliased(InboundMessage)
+    latest_outbound_at = (
+        select(func.max(latest_outbound.received_at))
+        .where(
+            latest_outbound.conversation_id == Conversation.id,
+            latest_outbound.direction == "outbound",
+        )
+        .correlate(Conversation)
+        .scalar_subquery()
+    )
     unread_count = int(
         db.scalar(
-            select(func.count(func.distinct(InboundMessage.conversation_id)))
+            select(func.count(InboundMessage.id))
             .join(Conversation, InboundMessage.conversation_id == Conversation.id)
             .where(
                 *conditions,
                 InboundMessage.direction == "inbound",
                 InboundMessage.status.in_(("received", "queued", "processing")),
+                or_(latest_outbound_at.is_(None), InboundMessage.received_at > latest_outbound_at),
             )
         )
         or 0
@@ -320,11 +342,43 @@ def _inbox_live_revision(db: Session, conditions: list) -> str:
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
-def _inbox_partial_context(request: Request, user: TenantUser, channel: InputChannel, data: dict, revision: str) -> dict:
+def _whatsapp_compose_context(
+    db: Session,
+    user: TenantUser,
+    selected: dict | None,
+    config,
+) -> dict:
+    ready_to_send = whatsapp_outbound_is_ready(db, user.company_id, config=config)
+    response_window = (
+        whatsapp_response_window_status(
+            db,
+            company_id=user.company_id,
+            conversation_id=selected["id"],
+            response_window_minutes=config.response_window_minutes,
+        )
+        if selected
+        else {"is_open": False, "reason": "no_conversation", "remaining_seconds": 0}
+    )
+    return {
+        "ready_to_send": ready_to_send,
+        "response_window": response_window,
+        "can_send": ready_to_send and response_window["is_open"],
+    }
+
+
+def _inbox_partial_context(
+    request: Request,
+    user: TenantUser,
+    channel: InputChannel,
+    data: dict,
+    revision: str,
+    compose_context: dict,
+) -> dict:
     return {
         "request": request,
         "user": user,
         "channel": channel,
+        **compose_context,
         "conversations": data["page_cards"],
         "selected": data["selected"],
         "search": data["normalized_search"],
@@ -375,7 +429,7 @@ async def whatsapp_inbox(
     page_cards = data["page_cards"]
     selected = data["selected"]
 
-    ready_to_send = whatsapp_outbound_is_ready(db, user.company_id, config=config)
+    compose_context = _whatsapp_compose_context(db, user, selected, config)
     live_revision = _inbox_live_revision(db, data["conditions"])
     return templates.TemplateResponse(
         "whatsapp/inbox.html",
@@ -385,7 +439,7 @@ async def whatsapp_inbox(
             "title": "Buzón de WhatsApp",
             "channel": channel,
             "config": config,
-            "ready_to_send": ready_to_send,
+            **compose_context,
             "conversations": page_cards,
             "selected": selected,
             "search": normalized_search,
@@ -443,7 +497,9 @@ async def whatsapp_inbox_updates(
         page_size=page_size,
     )
 
-    context = _inbox_partial_context(request, user, channel, data, revision)
+    config = whatsapp_config(db, user.company_id)
+    compose_context = _whatsapp_compose_context(db, user, data["selected"], config)
+    context = _inbox_partial_context(request, user, channel, data, revision, compose_context)
     response = templates.TemplateResponse("whatsapp/_inbox_live.html", context)
     response.headers.update(headers)
     return response
@@ -475,6 +531,14 @@ async def whatsapp_inbox_reply(
     config = whatsapp_config(db, user.company_id)
     if not whatsapp_outbound_is_ready(db, user.company_id, config=config):
         return _redirect_to_conversation(conversation_id, error="whatsapp_not_ready")
+    response_window = whatsapp_response_window_status(
+        db,
+        company_id=user.company_id,
+        conversation_id=conversation_id,
+        response_window_minutes=config.response_window_minutes,
+    )
+    if not response_window["is_open"]:
+        return _redirect_to_conversation(conversation_id, error=response_window["reason"])
 
     attachment_payloads = []
     total_bytes = 0
@@ -515,6 +579,11 @@ async def whatsapp_inbox_reply(
             attachments=attachment_payloads,
             idempotency_key=header_idempotency_key or form_idempotency_key,
         )
+    except WhatsAppEmbeddedSignupError as exc:
+        error_type = getattr(exc, "error_type", "send_failed")
+        if error_type in {"customer_has_not_replied", "response_window_expired", "response_window_unknown", "recipient_not_found"}:
+            return _redirect_to_conversation(conversation_id, error=error_type)
+        return _redirect_to_conversation(conversation_id, error="send_failed")
     except Exception:  # noqa: BLE001
         return _redirect_to_conversation(conversation_id, error="send_failed")
     return _redirect_to_conversation(conversation_id, notice="sent")

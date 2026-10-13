@@ -1,0 +1,29 @@
+{% from "components/icons.html" import icon_clock, icon_alert_triangle %}
+
+<div class="channel-chat-compose wa-compose-locked" role="status" aria-live="polite">
+  <span class="wa-compose-lock-icon" aria-hidden="true">
+    {% if not ready_to_send or response_window.reason in ["response_window_unknown", "response_window_expired"] %}
+      {{ icon_clock(18) }}
+    {% else %}
+      {{ icon_alert_triangle(18) }}
+    {% endif %}
+  </span>
+  <span class="wa-compose-lock-copy">
+    <strong>Respuestas desactivadas</strong>
+    <span>
+      {% if not ready_to_send %}
+        WhatsApp no está conectado para enviar mensajes.
+      {% elif response_window.reason == "customer_has_not_replied" %}
+        El cliente todavía no ha iniciado esta conversación. Solo podrás responder cuando te escriba.
+      {% elif response_window.reason == "response_window_expired" %}
+        La ventana de atención de 24 horas ha terminado. Para iniciar una nueva conversación necesitarás una plantilla aprobada.
+      {% elif response_window.reason == "response_window_unknown" %}
+        No se puede verificar la ventana de atención de esta conversación.
+      {% elif response_window.reason == "recipient_not_found" %}
+        No se ha podido identificar el número del cliente para responder.
+      {% else %}
+        Esta conversación no permite respuestas libres en este momento.
+      {% endif %}
+    </span>
+  </span>
+</div>

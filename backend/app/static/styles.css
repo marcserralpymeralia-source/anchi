@@ -12113,11 +12113,20 @@ table.logs-table tr:hover td {
 }
 
 .whatsapp-inbox-shell .channel-contact-unread-badge {
-  width: 8px !important;
-  height: 8px !important;
-  border-radius: 50% !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  min-width: 18px !important;
+  height: 18px !important;
+  padding: 0 5px !important;
+  border-radius: 999px !important;
   background: #22c55e !important;
-  flex-shrink: 0 !important;
+  color: #fff !important;
+  font-size: 10px !important;
+  font-weight: 800 !important;
+  line-height: 1 !important;
+  box-sizing: border-box !important;
+  flex: 0 0 auto !important;
 }
 
 .whatsapp-inbox-shell .channel-chat-header {
@@ -13077,6 +13086,50 @@ table.logs-table tr:hover td {
   color: #94a3b8 !important;
   cursor: not-allowed !important;
   box-shadow: none !important;
+}
+
+.whatsapp-inbox-shell .wa-compose-window-status {
+  padding-left: 52px !important;
+  color: #667781 !important;
+  font-size: 11px !important;
+}
+
+.whatsapp-inbox-shell .wa-compose-locked {
+  min-height: 58px !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 10px !important;
+  color: #667781 !important;
+}
+
+.whatsapp-inbox-shell .wa-compose-lock-icon {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex: 0 0 34px !important;
+  width: 34px !important;
+  height: 34px !important;
+  border-radius: 50% !important;
+  background: #e2e8f0 !important;
+  color: #667781 !important;
+}
+
+.whatsapp-inbox-shell .wa-compose-lock-copy {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 2px !important;
+  min-width: 0 !important;
+  font-size: 12px !important;
+  line-height: 1.35 !important;
+}
+
+.whatsapp-inbox-shell .wa-compose-lock-copy strong {
+  color: #111b21 !important;
+  font-size: 13px !important;
+}
+
+.whatsapp-inbox-shell .wa-compose-lock-copy span {
+  color: #667781 !important;
 }
 
 

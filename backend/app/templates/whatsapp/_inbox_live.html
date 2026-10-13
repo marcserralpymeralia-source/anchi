@@ -4,4 +4,11 @@
   <div id="whatsapp-chat-live-content">
     {% include "whatsapp/_chat_live.html" %}
   </div>
+  <div id="whatsapp-compose-live-content">
+    {% if selected and can_send %}
+      {% include "whatsapp/_compose_live.html" %}
+    {% elif selected %}
+      {% include "whatsapp/_compose_locked.html" %}
+    {% endif %}
+  </div>
 </div>

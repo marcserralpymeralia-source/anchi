@@ -8,7 +8,7 @@ import secrets
 from pathlib import Path
 from uuid import uuid4
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
@@ -811,7 +811,38 @@ def _whatsapp_reply_recipient(
     response_window_minutes: int,
     enforce_window: bool = True,
 ) -> str:
-    latest_inbound = db.scalar(
+    latest_inbound = _latest_whatsapp_inbound(db, company_id=company_id, conversation_id=conversation_id)
+    recipient = str(latest_inbound.sender or "").strip() if latest_inbound else ""
+    if not recipient:
+        error_type = "customer_has_not_replied" if latest_inbound is None else "recipient_not_found"
+        message = (
+            "El cliente todavía no ha iniciado la conversación."
+            if error_type == "customer_has_not_replied"
+            else "No se encontró el número del cliente para responder."
+        )
+        raise WhatsAppEmbeddedSignupError(message, error_type=error_type)
+    if enforce_window:
+        window = whatsapp_response_window_status(
+            db,
+            company_id=company_id,
+            conversation_id=conversation_id,
+            response_window_minutes=response_window_minutes,
+        )
+        if not window["is_open"]:
+            raise WhatsAppEmbeddedSignupError(
+                "La ventana de respuesta de WhatsApp ha caducado; usa una plantilla aprobada.",
+                error_type=window["reason"],
+            )
+    return recipient
+
+
+def _latest_whatsapp_inbound(
+    db: Session,
+    *,
+    company_id: int,
+    conversation_id: int,
+) -> InboundMessage | None:
+    return db.scalar(
         select(InboundMessage)
         .where(
             InboundMessage.company_id == company_id,
@@ -820,17 +851,48 @@ def _whatsapp_reply_recipient(
         )
         .order_by(InboundMessage.received_at.desc(), InboundMessage.id.desc())
     )
-    recipient = str(latest_inbound.sender or "").strip() if latest_inbound else ""
-    if not recipient:
-        raise WhatsAppEmbeddedSignupError("No se encontró el número del cliente para responder.", error_type="recipient_not_found")
-    if enforce_window and latest_inbound and latest_inbound.received_at:
-        received_at = latest_inbound.received_at
-        if received_at.tzinfo is None:
-            received_at = received_at.replace(tzinfo=timezone.utc)
-        age_seconds = (datetime.now(timezone.utc) - received_at).total_seconds()
-        if age_seconds > max(response_window_minutes, 1) * 60:
-            raise WhatsAppEmbeddedSignupError("La ventana de respuesta de WhatsApp ha caducado; usa una plantilla aprobada.", error_type="response_window_expired")
-    return recipient
+
+
+def whatsapp_response_window_status(
+    db: Session,
+    *,
+    company_id: int,
+    conversation_id: int,
+    response_window_minutes: int = 24 * 60,
+) -> dict[str, Any]:
+    """Return the customer-service window used by the WhatsApp composer."""
+
+    latest_inbound = _latest_whatsapp_inbound(db, company_id=company_id, conversation_id=conversation_id)
+    if latest_inbound is None:
+        return {
+            "is_open": False,
+            "reason": "customer_has_not_replied",
+            "last_inbound_at": None,
+            "expires_at": None,
+            "remaining_seconds": 0,
+        }
+
+    received_at = latest_inbound.received_at or latest_inbound.sent_at or latest_inbound.created_at
+    if received_at is None:
+        return {
+            "is_open": False,
+            "reason": "response_window_unknown",
+            "last_inbound_at": None,
+            "expires_at": None,
+            "remaining_seconds": 0,
+        }
+    if received_at.tzinfo is None:
+        received_at = received_at.replace(tzinfo=timezone.utc)
+    expires_at = received_at + timedelta(minutes=max(int(response_window_minutes or 0), 1))
+    remaining_seconds = max(0, int((expires_at - datetime.now(timezone.utc)).total_seconds()))
+    has_recipient = bool(str(latest_inbound.sender or "").strip())
+    return {
+        "is_open": remaining_seconds > 0 and has_recipient,
+        "reason": "recipient_not_found" if not has_recipient else "open" if remaining_seconds > 0 else "response_window_expired",
+        "last_inbound_at": received_at,
+        "expires_at": expires_at,
+        "remaining_seconds": remaining_seconds,
+    }
 
 
 def _prepare_whatsapp_media_send(

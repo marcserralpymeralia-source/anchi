@@ -44,7 +44,7 @@
               {% endif %}
               {{ conversation.preview }}
             </span>
-            {% if conversation.unread %}<span class="channel-contact-unread-badge" aria-label="Mensajes pendientes"></span>{% endif %}
+            {% if conversation.unread_count %}<span class="channel-contact-unread-badge" aria-label="{{ conversation.unread_count }} mensajes sin leer">{{ conversation.unread_count if conversation.unread_count < 100 else "99+" }}</span>{% endif %}
           </div>
         </div>
       </a>

@@ -8,7 +8,7 @@
     <div class="channel-inbox-notice success" role="status">Mensaje enviado a Meta correctamente.</div>
   {% elif error %}
     <div class="channel-inbox-notice error" role="alert">
-      {% if error == "whatsapp_not_ready" %}WhatsApp todavía no está listo para enviar mensajes.{% elif error == "attachment_too_large" %}El tamaño total de los archivos supera el límite configurado.{% elif error == "attachment_type_not_supported" %}Solo se admiten PDF, DOC, DOCX, TXT, imágenes y audio.{% elif error == "empty_message" %}Escribe un mensaje o adjunta un archivo.{% else %}No se pudo enviar el mensaje. Revisa la conexión de WhatsApp e inténtalo de nuevo.{% endif %}
+      {% if error == "whatsapp_not_ready" %}WhatsApp todavía no está listo para enviar mensajes.{% elif error == "customer_has_not_replied" %}El cliente todavía no ha iniciado esta conversación. Solo podrás responder cuando te escriba.{% elif error == "response_window_expired" %}La ventana de atención de 24 horas ha terminado. Para iniciar una nueva conversación necesitarás una plantilla aprobada.{% elif error == "response_window_unknown" %}No se puede verificar la ventana de atención de esta conversación.{% elif error == "recipient_not_found" %}No se ha podido identificar el número del cliente para responder.{% elif error == "attachment_too_large" %}El tamaño total de los archivos supera el límite configurado.{% elif error == "attachment_type_not_supported" %}Solo se admiten PDF, DOC, DOCX, TXT, imágenes y audio.{% elif error == "empty_message" %}Escribe un mensaje o adjunta un archivo.{% else %}No se pudo enviar el mensaje. Revisa la conexión de WhatsApp e inténtalo de nuevo.{% endif %}
     </div>
   {% endif %}
 
@@ -25,40 +25,13 @@
       <div id="whatsapp-chat-live-content">
         {% include "whatsapp/_chat_live.html" %}
       </div>
-      {% if selected %}
-        <form class="channel-chat-compose" method="post" action="/whatsapp/inbox/{{ selected.id }}/reply" enctype="multipart/form-data">
-          <input type="hidden" name="idempotency_key" value="">
-
-          <div id="wa-selected-files" class="wa-selected-files-bar" style="display: none;" hidden>
-            <span class="wa-files-icon">{{ icon_paperclip(14) }}</span>
-            <span id="wa-files-names" class="wa-files-text"></span>
-            <button type="button" class="wa-files-clear" onclick="clearSelectedFiles()" title="Quitar archivos">×</button>
-          </div>
-
-          <div class="channel-chat-compose-main-row">
-            <div class="channel-chat-input-pill">
-              <label class="channel-chat-attach-btn" title="Adjuntar archivo (PDF, DOC, DOCX, TXT, imágenes, audio)">
-                <input type="file" name="files" id="wa-file-input" multiple accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,image/jpeg,image/png,audio/*" onchange="handleFileSelection(this)">
-                <span class="attach-btn-inner">{{ icon_paperclip(18) }}</span>
-              </label>
-
-              <textarea
-                name="body"
-                id="wa-message-input"
-                rows="1"
-                maxlength="4096"
-                placeholder="Escribe un mensaje…"
-                style="overflow: hidden; height: 22px;"
-                {% if not ready_to_send %}disabled{% endif %}
-              ></textarea>
-            </div>
-
-            <button class="channel-chat-send-btn" type="submit" title="Enviar mensaje" {% if not ready_to_send %}disabled{% endif %}>
-              {{ icon_send(18) }}
-            </button>
-          </div>
-        </form>
-      {% endif %}
+      <div id="whatsapp-compose-live-content">
+        {% if selected and can_send %}
+          {% include "whatsapp/_compose_live.html" %}
+        {% elif selected %}
+          {% include "whatsapp/_compose_locked.html" %}
+        {% endif %}
+      </div>
     </section>
   </main>
 </div>
@@ -114,10 +87,12 @@
         const nextRevisionRoot = documentFragment.querySelector("#whatsapp-live-update");
         const nextContacts = documentFragment.querySelector("#whatsapp-contacts-live-content");
         const nextChat = documentFragment.querySelector("#whatsapp-chat-live-content");
+        const nextCompose = documentFragment.querySelector("#whatsapp-compose-live-content");
         const currentContacts = document.getElementById("whatsapp-contacts-live-content");
         const currentChat = document.getElementById("whatsapp-chat-live-content");
+        const currentCompose = document.getElementById("whatsapp-compose-live-content");
 
-        if (!nextRevisionRoot || !nextContacts || !nextChat || !currentContacts || !currentChat) {
+        if (!nextRevisionRoot || !nextContacts || !nextChat || !nextCompose || !currentContacts || !currentChat || !currentCompose) {
           throw new Error("WhatsApp live update response is incomplete");
         }
 
@@ -129,8 +104,12 @@
 
         currentContacts.replaceWith(nextContacts);
         currentChat.replaceWith(nextChat);
+        currentCompose.replaceWith(nextCompose);
         if (typeof window.initWhatsAppAudioPlayers === "function") {
           window.initWhatsAppAudioPlayers(nextChat);
+        }
+        if (typeof window.initWhatsAppComposer === "function") {
+          window.initWhatsAppComposer(nextCompose);
         }
         revision = nextRevisionRoot.dataset.liveRevision || revision;
         liveRoot.dataset.liveRevision = revision;
@@ -174,10 +153,12 @@
   const chat = document.getElementById("whatsapp-chat-messages");
   if (chat) chat.scrollTop = chat.scrollHeight;
 
-  const msgInput = document.getElementById("wa-message-input");
-  const composeForm = document.querySelector(".channel-chat-compose");
+  window.initWhatsAppComposer = function(container = document) {
+    const msgInput = container.querySelector("#wa-message-input");
+    const composeForm = container.querySelector(".channel-chat-compose");
+    if (!msgInput || !composeForm || composeForm.dataset.initialized === "true") return;
+    composeForm.dataset.initialized = "true";
 
-  if (msgInput) {
     msgInput.addEventListener("input", function() {
       this.style.height = "auto";
       const nextHeight = Math.min(this.scrollHeight, 120);
@@ -189,27 +170,25 @@
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         const hasText = this.value.trim().length > 0;
-        const fileInput = document.getElementById("wa-file-input");
+        const fileInput = composeForm.querySelector("#wa-file-input");
         const hasFiles = fileInput && fileInput.files && fileInput.files.length > 0;
         if (hasText || hasFiles) {
-          if (composeForm) {
-            if (typeof composeForm.requestSubmit === "function") {
-              composeForm.requestSubmit();
-            } else {
-              composeForm.submit();
-            }
+          if (typeof composeForm.requestSubmit === "function") {
+            composeForm.requestSubmit();
+          } else {
+            composeForm.submit();
           }
         }
       }
     });
-  }
 
-  if (composeForm) {
     composeForm.addEventListener("submit", () => {
       const key = composeForm.querySelector("[name='idempotency_key']");
       if (key && !key.value) key.value = window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
     }, { once: true });
-  }
+  };
+
+  window.initWhatsAppComposer();
 
   window.handleFileSelection = function(input) {
     const bar = document.getElementById("wa-selected-files");

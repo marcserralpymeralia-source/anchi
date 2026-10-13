@@ -143,6 +143,79 @@ class WhatsAppInboxTests(unittest.TestCase):
         self.assertEqual(response.text.count('href="/mail"'), 1)
         self.assertEqual(response.text.count('class="nav-label">WhatsApp</span>'), 1)
 
+    def test_contact_shows_the_number_of_unread_messages(self):
+        fixture = build_performance_fixture("small")
+        conversation_id = self._seed_whatsapp(fixture)
+        engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        with session() as db:
+            message, _ = upsert_inbound_message(
+                db,
+                company_id=1,
+                channel_key="whatsapp",
+                provider="meta",
+                external_id="wamid.inbox-test-unread-2",
+                sender="+34600000000",
+                recipients=["+34910000000"],
+                subject="Segunda consulta de WhatsApp",
+                text_content="Este mensaje también está sin leer.",
+                external_thread_id="+34600000000",
+                received_at=utcnow() - timedelta(minutes=1),
+                content_type="text",
+            )
+            message.status = "received"
+            db.commit()
+        engine.dispose()
+
+        client, cleanup = self._client_for(fixture)
+        try:
+            self._login(client, fixture)
+            response = client.get(f"/whatsapp/inbox?conversation_id={conversation_id}")
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('aria-label="2 mensajes sin leer">2</span>', response.text)
+        self.assertIn("2 pendientes", response.text)
+
+    def test_replied_conversation_has_no_unread_badge_for_old_messages(self):
+        fixture = build_performance_fixture("small")
+        conversation_id = self._seed_whatsapp(fixture)
+        engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        with session() as db:
+            message, _ = upsert_inbound_message(
+                db,
+                company_id=1,
+                channel_key="whatsapp",
+                provider="meta",
+                external_id="wamid.inbox-test-outbound",
+                sender="+34910000000",
+                recipients=["+34600000000"],
+                subject="Respuesta de Anchi",
+                text_content="Te confirmamos el pedido.",
+                direction="outbound",
+                external_thread_id="+34600000000",
+                received_at=utcnow(),
+                content_type="text",
+            )
+            message.status = "sent"
+            db.commit()
+        engine.dispose()
+
+        client, cleanup = self._client_for(fixture)
+        try:
+            self._login(client, fixture)
+            response = client.get(f"/whatsapp/inbox?conversation_id={conversation_id}")
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("channel-contact-unread-badge", response.text)
+        self.assertIn("0 pendientes", response.text)
+
     def test_whatsapp_matches_customer_by_phone_and_renders_verification_badge(self):
         fixture = build_performance_fixture("small")
         engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
@@ -265,6 +338,70 @@ class WhatsAppInboxTests(unittest.TestCase):
         payload = send_response.await_args.kwargs["attachments"]
         self.assertEqual(payload[0]["filename"], "confirmacion.pdf")
         self.assertEqual(payload[0]["content_type"], "application/pdf")
+
+    def test_reply_is_locked_until_customer_opens_the_whatsapp_window(self):
+        fixture = build_performance_fixture("small")
+        conversation_id = self._seed_whatsapp(fixture)
+        engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        with session() as db:
+            inbound = db.scalar(select(InboundMessage).where(InboundMessage.conversation_id == conversation_id))
+            self.assertIsNotNone(inbound)
+            db.delete(inbound)
+            db.commit()
+        engine.dispose()
+
+        client, cleanup = self._client_for(fixture)
+        try:
+            self._login(client, fixture)
+            page = client.get(f"/whatsapp/inbox?conversation_id={conversation_id}")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn("Respuestas desactivadas", page.text)
+            self.assertIn("El cliente todavía no ha iniciado esta conversación", page.text)
+            self.assertNotIn('name="body"', page.text)
+
+            response = client.post(
+                f"/whatsapp/inbox/{conversation_id}/reply",
+                data={"body": "No debería enviarse"},
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 303)
+            self.assertIn("error=customer_has_not_replied", response.headers["location"])
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+    def test_reply_is_locked_after_the_customer_window_expires(self):
+        fixture = build_performance_fixture("small")
+        conversation_id = self._seed_whatsapp(fixture)
+        engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        with session() as db:
+            inbound = db.scalar(select(InboundMessage).where(InboundMessage.conversation_id == conversation_id))
+            self.assertIsNotNone(inbound)
+            inbound.received_at = utcnow() - timedelta(hours=25)
+            db.commit()
+        engine.dispose()
+
+        client, cleanup = self._client_for(fixture)
+        try:
+            self._login(client, fixture)
+            page = client.get(f"/whatsapp/inbox?conversation_id={conversation_id}")
+            self.assertEqual(page.status_code, 200)
+            self.assertIn("Respuestas desactivadas", page.text)
+            self.assertIn("La ventana de atención de 24 horas ha terminado", page.text)
+            self.assertNotIn('name="body"', page.text)
+
+            response = client.post(
+                f"/whatsapp/inbox/{conversation_id}/reply",
+                data={"body": "No debería enviarse"},
+                follow_redirects=False,
+            )
+            self.assertEqual(response.status_code, 303)
+            self.assertIn("error=response_window_expired", response.headers["location"])
+        finally:
+            cleanup()
+            fixture.cleanup()
 
     def test_media_send_uploads_file_then_sends_document_message(self):
         fixture = build_performance_fixture("small")

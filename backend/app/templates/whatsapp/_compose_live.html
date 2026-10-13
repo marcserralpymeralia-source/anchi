@@ -1,0 +1,34 @@
+{% from "components/icons.html" import icon_paperclip, icon_send %}
+
+<form class="channel-chat-compose" method="post" action="/whatsapp/inbox/{{ selected.id }}/reply" enctype="multipart/form-data" data-whatsapp-compose>
+  <input type="hidden" name="idempotency_key" value="">
+
+  <div id="wa-selected-files" class="wa-selected-files-bar" style="display: none;" hidden>
+    <span class="wa-files-icon">{{ icon_paperclip(14) }}</span>
+    <span id="wa-files-names" class="wa-files-text"></span>
+    <button type="button" class="wa-files-clear" onclick="clearSelectedFiles()" title="Quitar archivos">×</button>
+  </div>
+
+  <div class="channel-chat-compose-main-row">
+    <div class="channel-chat-input-pill">
+      <label class="channel-chat-attach-btn" title="Adjuntar archivo (PDF, DOC, DOCX, TXT, imágenes, audio)">
+        <input type="file" name="files" id="wa-file-input" multiple accept=".pdf,.doc,.docx,.txt,.jpg,.jpeg,.png,image/jpeg,image/png,audio/*" onchange="handleFileSelection(this)">
+        <span class="attach-btn-inner">{{ icon_paperclip(18) }}</span>
+      </label>
+
+      <textarea
+        name="body"
+        id="wa-message-input"
+        rows="1"
+        maxlength="4096"
+        placeholder="Escribe un mensaje…"
+        style="overflow: hidden; height: 22px;"
+      ></textarea>
+    </div>
+
+    <button class="channel-chat-send-btn" type="submit" title="Enviar mensaje">
+      {{ icon_send(18) }}
+    </button>
+  </div>
+  <small class="wa-compose-window-status">Ventana de atención abierta · puedes responder al cliente</small>
+</form>
