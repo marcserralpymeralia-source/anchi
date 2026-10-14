@@ -23,6 +23,7 @@
 
   {% if whatsapp_connection_ready %}
     <div class="whatsapp-signup-summary">
+      <div><span>ID tecnico del numero</span><strong>{{ whatsapp.phone_number_id }}</strong></div>
       <div><span>Número</span><strong>{{ whatsapp.display_phone_number or whatsapp.phone_number_id }}</strong></div>
       <div><span>Nombre verificado</span><strong>{{ whatsapp.verified_name or "Pendiente en Meta" }}</strong></div>
       <div><span>WABA ID</span><strong>{{ whatsapp.business_account_id }}</strong></div>
@@ -49,6 +50,10 @@
         Falta preparar la aplicación de Meta en el servidor.
       {% endif %}
     </p>
+    {% if whatsapp_connection_ready %}
+      <button type="button" class="secondary compact-button" data-whatsapp-health-button data-whatsapp-health-url="/settings/channels/whatsapp/health" data-loading-text="Comprobando..."><span data-whatsapp-health-label>Comprobar conexion</span></button>
+      <p class="whatsapp-signup-status muted" role="status" aria-live="polite" data-whatsapp-health-status>Comprueba el numero, el WABA, el estado de Meta y el webhook sin enviar mensajes.</p>
+    {% endif %}
   </div>
 
   {% if not whatsapp_embedded_signup.configured %}

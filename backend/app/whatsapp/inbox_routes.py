@@ -1,12 +1,14 @@
 import hashlib
+import asyncio
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile
-from fastapi.responses import PlainTextResponse, RedirectResponse, Response
+from fastapi.responses import PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from markupsafe import Markup, escape
 from sqlalchemy import exists, func, or_, select, update
 from sqlalchemy.orm import Session, aliased, selectinload
@@ -26,6 +28,7 @@ from app.whatsapp.service import (
     WHATSAPP_SUPPORTED_IMAGE_EXTENSIONS,
     WHATSAPP_SUPPORTED_IMAGE_MIME_TYPES,
     download_whatsapp_media,
+    retry_failed_whatsapp_message,
     send_manual_response,
     whatsapp_config,
     whatsapp_outbound_is_ready,
@@ -179,6 +182,8 @@ def _message_payload(message: InboundMessage, *, search: str = "") -> dict:
         "text": message.original_content or "",
         "date": _message_date(message),
         "status": str(message.status or "").lower(),
+        "processing_error": (message.processing_error or "")[:240],
+        "can_retry": outbound and str(message.status or "").lower() in {"failed", "error"},
         "search_match": search_match,
         "text_html": _highlight_search_text(message.original_content, search) if search_match else "",
         # Incoming Meta webhooks use ``id`` while locally persisted outbound
@@ -666,6 +671,62 @@ async def whatsapp_inbox_updates(
     return response
 
 
+@router.get("/whatsapp/inbox/events", include_in_schema=False)
+async def whatsapp_inbox_events(
+    request: Request,
+    conversation_id: int | None = None,
+    search: str = "",
+    page: int = 1,
+    page_size: int = 30,
+    since: str = "",
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    """Hold a short-lived SSE request until the WhatsApp inbox changes.
+
+    The webhook writes the tenant database first; this endpoint only waits for
+    the revision to change and never carries message content. The short
+    lifetime is intentional for serverless deployments, where the browser can
+    reconnect without keeping a worker alive indefinitely.
+    """
+
+    channel = _channel(db, user.company_id)
+    if not channel:
+        return PlainTextResponse("El canal WhatsApp no estÃ¡ activo para este tenant.", status_code=404)
+    if conversation_id is not None:
+        _mark_conversation_as_read(
+            db,
+            company_id=user.company_id,
+            channel_id=channel.id,
+            conversation_id=conversation_id,
+        )
+    conditions = _inbox_conditions(company_id=user.company_id, channel_id=channel.id, search=search.strip())
+    initial_revision = str(since or "").strip()
+    deadline = time.monotonic() + 20
+
+    async def stream():
+        while not await request.is_disconnected():
+            revision = _inbox_live_revision(db, conditions)
+            if not initial_revision or revision != initial_revision:
+                yield f"event: update\ndata: {json.dumps({'revision': revision})}\n\n"
+                return
+            if time.monotonic() >= deadline:
+                yield "event: timeout\ndata: {}\n\n"
+                return
+            yield ": keep-alive\n\n"
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.post("/whatsapp/inbox/{conversation_id}/reply")
 async def whatsapp_inbox_reply(
     conversation_id: int,
@@ -750,9 +811,42 @@ async def whatsapp_inbox_reply(
         error_type = getattr(exc, "error_type", "send_failed")
         if error_type in {"customer_has_not_replied", "response_window_expired", "response_window_unknown", "recipient_not_found", "invalid_reply"}:
             return _redirect_to_conversation(conversation_id, error=error_type)
+        if error_type == "meta_api_error" and getattr(exc, "meta_error_code", None) == "131037":
+            return _redirect_to_conversation(conversation_id, error="display_name_pending")
         return _redirect_to_conversation(conversation_id, error="send_failed")
     except Exception:  # noqa: BLE001
         return _redirect_to_conversation(conversation_id, error="send_failed")
+    return _redirect_to_conversation(conversation_id, notice="sent")
+
+
+@router.post("/whatsapp/inbox/messages/{message_id}/retry")
+async def whatsapp_inbox_retry_message(
+    message_id: int,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    message = db.scalar(
+        select(InboundMessage).where(
+            InboundMessage.id == message_id,
+            InboundMessage.company_id == user.company_id,
+            InboundMessage.direction == "outbound",
+        )
+    )
+    conversation_id = message.conversation_id if message else None
+    if not conversation_id:
+        return PlainTextResponse("Envío de WhatsApp no encontrado.", status_code=404)
+    try:
+        await retry_failed_whatsapp_message(
+            db,
+            company_id=user.company_id,
+            message_id=message_id,
+            user_id=user.actor_id,
+        )
+    except WhatsAppEmbeddedSignupError as exc:
+        return _redirect_to_conversation(
+            conversation_id,
+            error=getattr(exc, "error_type", "retry_failed"),
+        )
     return _redirect_to_conversation(conversation_id, notice="sent")
 
 

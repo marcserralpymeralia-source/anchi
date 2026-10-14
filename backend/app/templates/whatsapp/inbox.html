@@ -8,7 +8,10 @@
     <div class="channel-inbox-notice success" role="status">Mensaje enviado a Meta correctamente.</div>
   {% elif error %}
     <div class="channel-inbox-notice error" role="alert">
+      {% if error == "display_name_pending" %}WhatsApp ha rechazado el env&iacute;o: el nombre visible de este n&uacute;mero a&uacute;n necesita aprobaci&oacute;n en Meta Business.
+      {% else %}
       {% if error == "whatsapp_not_ready" %}WhatsApp todavía no está listo para enviar mensajes.{% elif error == "customer_has_not_replied" %}El cliente todavía no ha iniciado esta conversación. Solo podrás responder cuando te escriba.{% elif error == "response_window_expired" %}La ventana de atención de 24 horas ha terminado. Para iniciar una nueva conversación necesitarás una plantilla aprobada.{% elif error == "response_window_unknown" %}No se puede verificar la ventana de atención de esta conversación.{% elif error == "recipient_not_found" %}No se ha podido identificar el número del cliente para responder.{% elif error == "attachment_too_large" %}El tamaño total de los archivos supera el límite configurado.{% elif error == "attachment_type_not_supported" %}Solo se admiten PDF, DOC, DOCX, TXT, imágenes y audio.{% elif error == "empty_message" %}Escribe un mensaje o adjunta un archivo.{% else %}No se pudo enviar el mensaje. Revisa la conexión de WhatsApp e inténtalo de nuevo.{% endif %}
+      {% endif %}
     </div>
   {% endif %}
 
@@ -69,17 +72,19 @@
       if (value !== null) updateUrl.searchParams.set(name, value);
     });
 
-    // Keep the inbox responsive without reloading the whole page. The endpoint
-    // returns 304 when nothing changed, so a short interval is cheap and makes
-    // webhook-delivered messages visible almost immediately.
+    // The webhook writes the database first. SSE wakes the browser as soon as
+    // the revision changes; polling remains a compatibility fallback for
+    // browsers/proxies that do not keep an event stream open.
     const intervalMs = 1500;
     let revision = liveRoot.dataset.liveRevision || "";
     let timerId = null;
     let activeController = null;
+    let eventSource = null;
+    let usePollingFallback = false;
     let stopped = false;
 
     const schedule = (delay = intervalMs) => {
-      if (stopped || document.hidden) return;
+      if (stopped || document.hidden || !usePollingFallback) return;
       if (timerId !== null) window.clearTimeout(timerId);
       timerId = window.setTimeout(poll, delay);
     };
@@ -164,22 +169,61 @@
       }
     };
 
+    const closeEventStream = () => {
+      if (eventSource) eventSource.close();
+      eventSource = null;
+    };
+
+    const openEventStream = () => {
+      if (stopped || document.hidden || !window.EventSource) {
+        usePollingFallback = true;
+        schedule(0);
+        return;
+      }
+      closeEventStream();
+      const eventsUrl = new URL("/whatsapp/inbox/events", window.location.origin);
+      ["conversation_id", "search", "page", "page_size"].forEach((name) => {
+        const value = pageUrl.searchParams.get(name);
+        if (value !== null) eventsUrl.searchParams.set(name, value);
+      });
+      eventsUrl.searchParams.set("since", revision);
+      eventSource = new EventSource(eventsUrl.toString(), { withCredentials: true });
+      eventSource.addEventListener("update", () => {
+        closeEventStream();
+        poll().finally(() => {
+          if (!stopped && !document.hidden) openEventStream();
+        });
+      });
+      eventSource.addEventListener("timeout", () => {
+        closeEventStream();
+        if (!stopped && !document.hidden) openEventStream();
+      });
+      eventSource.onerror = () => {
+        closeEventStream();
+        usePollingFallback = true;
+        schedule(0);
+      };
+    };
+
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
         if (timerId !== null) window.clearTimeout(timerId);
         timerId = null;
+        closeEventStream();
         return;
       }
-      schedule(0);
+      usePollingFallback = false;
+      openEventStream();
     });
 
     window.addEventListener("beforeunload", () => {
       stopped = true;
       if (timerId !== null) window.clearTimeout(timerId);
       if (activeController) activeController.abort();
+      closeEventStream();
     }, { once: true });
 
-    schedule();
+    openEventStream();
   })();
 
   const chat = document.getElementById("whatsapp-chat-messages");

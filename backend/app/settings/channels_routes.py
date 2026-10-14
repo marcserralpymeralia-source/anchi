@@ -23,6 +23,7 @@ from app.settings.service import get_or_create_settings
 from app.tenancy.database import get_tenant_db
 from app.whatsapp.service import (
     WhatsAppEmbeddedSignupError,
+    check_whatsapp_connection,
     complete_embedded_signup,
     embedded_signup_public_config,
     get_or_create_whatsapp_channel,
@@ -274,6 +275,39 @@ def channels_settings_page(request: Request, db: Session = Depends(get_tenant_db
             "focus_key": focus_key,
         },
     )
+
+
+@router.post("/settings/channels/whatsapp/health")
+async def whatsapp_connection_health(
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    if not has_admin_access(user):
+        return JSONResponse({"ok": False, "message": "Solo un administrador puede comprobar WhatsApp."}, status_code=403)
+    try:
+        result = await check_whatsapp_connection(db, user.company_id)
+    except Exception as exc:  # noqa: BLE001
+        log_action(
+            db,
+            company_id=user.company_id,
+            user=user,
+            action="whatsapp.healthcheck.failed",
+            entity_type="input_channel",
+            message=f"Comprobación de WhatsApp fallida: {exc.__class__.__name__}",
+        )
+        return JSONResponse(
+            {"ok": False, "status": "internal_error", "message": "No se pudo comprobar la conexión de WhatsApp."},
+            status_code=500,
+        )
+    log_action(
+        db,
+        company_id=user.company_id,
+        user=user,
+        action="whatsapp.healthcheck.completed",
+        entity_type="input_channel",
+        message=f"Comprobación de WhatsApp: {result.get('status', 'unknown')}",
+    )
+    return JSONResponse(result, status_code=200 if result.get("ok") else 502)
 
 
 @router.post("/settings/channels/whatsapp/embedded-signup/complete")

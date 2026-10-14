@@ -94,6 +94,11 @@
                 data-wa-reply-preview="{{ message.reply_preview }}"
                 role="menuitem"
               >{{ icon_reply(14) }}<span>Citar</span></button>
+              {% if message.can_retry %}
+                <form method="post" action="/whatsapp/inbox/messages/{{ message.id }}/retry" class="wa-message-retry-form">
+                  <button type="submit" class="wa-message-more-option" role="menuitem">{{ icon_refresh(14) }}<span>Reintentar envío</span></button>
+                </form>
+              {% endif %}
             </div>
           </details>
         </div>

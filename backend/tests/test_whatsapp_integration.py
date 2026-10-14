@@ -24,7 +24,7 @@ from app.agent.platform import UnifiedOrderPipelineService
 from app.core.attachment_extraction import extract_attachment_text
 from app.core.encryption import decrypt_secret, encrypt_secret
 from app.db.database import Base
-from app.db.models import BackgroundJob, ChannelSetting, Conversation, Customer, CustomerContactPoint, InboundMessage, InputChannel, LLMSettings, MessageAttachment, Order, Product, ProductAlias, ScoringSettings
+from app.db.models import Alert, BackgroundJob, ChannelSetting, Conversation, Customer, CustomerContactPoint, InboundMessage, InputChannel, LLMSettings, MessageAttachment, Order, Product, ProductAlias, ScoringSettings
 from app.jobs.service import enqueue_job
 from app.master.database import MasterBase
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser, MasterWhatsAppEndpoint
@@ -34,6 +34,7 @@ from app.tenancy.database import get_tenant_engine
 from app.tenancy.migrations import upgrade_tenant_schema
 from app.whatsapp.service import (
     WhatsAppEmbeddedSignupError,
+    check_whatsapp_connection,
     _download_meta_binary,
     complete_embedded_signup,
     download_whatsapp_media,
@@ -42,6 +43,7 @@ from app.whatsapp.service import (
     persist_event,
     redact_whatsapp_config,
     record_manual_response,
+    retry_failed_whatsapp_message,
     send_manual_response,
     resolve_company_from_slug,
     resolve_company_from_whatsapp_identifiers,
@@ -168,6 +170,71 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertEqual(redacted["access_token"], "••••••••")
         self.assertEqual(redacted["verify_token"], "••••••••")
         self.assertNotIn("app_secret", redacted)
+
+    def test_connection_health_validates_the_configured_meta_assets(self):
+        settings = SimpleNamespace(meta_graph_api_version="v24.0", meta_request_timeout_seconds=5)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            if path.endswith("/ba-123"):
+                return httpx.Response(200, json={"id": "ba-123", "name": "WhatsApp Demo", "business_verification_status": "verified"})
+            if path.endswith("/ba-123/phone_numbers"):
+                return httpx.Response(
+                    200,
+                    json={
+                        "data": [
+                            {
+                                "id": "pn-123",
+                                "display_phone_number": "+1 555 991 7479",
+                                "verified_name": "WhatsApp Demo",
+                                "quality_rating": "GREEN",
+                                "code_verification_status": "VERIFIED",
+                            }
+                        ]
+                    },
+                )
+            if path.endswith("/pn-123"):
+                return httpx.Response(200, json={"id": "pn-123", "status": "CONNECTED", "platform_type": "CLOUD_API", "name_status": "APPROVED"})
+            return httpx.Response(404, json={"error": {"message": "unexpected test request"}})
+
+        async def execute_check():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                with self.TenantSession() as db:
+                    return await check_whatsapp_connection(db, 1, client=client)
+
+        with patch("app.whatsapp.service.get_settings", return_value=settings):
+            result = asyncio.run(execute_check())
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["meta_phone_number_id"], "pn-123")
+        self.assertEqual(result["meta_display_phone_number"], "+1 555 991 7479")
+        self.assertEqual(result["display_name_status"], "APPROVED")
+        self.assertTrue(all(result["checks"].values()))
+
+    def test_connection_health_flags_a_pending_display_name(self):
+        settings = SimpleNamespace(meta_graph_api_version="v24.0", meta_request_timeout_seconds=5)
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            if path.endswith("/ba-123"):
+                return httpx.Response(200, json={"id": "ba-123", "name": "WhatsApp Demo"})
+            if path.endswith("/ba-123/phone_numbers"):
+                return httpx.Response(200, json={"data": [{"id": "pn-123", "display_phone_number": "+1 555 991 7479"}]})
+            if path.endswith("/pn-123"):
+                return httpx.Response(200, json={"id": "pn-123", "status": "CONNECTED", "name_status": "PENDING_REVIEW"})
+            return httpx.Response(404, json={"error": {"message": "unexpected test request"}})
+
+        async def execute_check():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                with self.TenantSession() as db:
+                    return await check_whatsapp_connection(db, 1, client=client)
+
+        with patch("app.whatsapp.service.get_settings", return_value=settings):
+            result = asyncio.run(execute_check())
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["display_name_status"], "PENDING_REVIEW")
+        self.assertIn("display_name", result["failed_checks"])
 
     def test_parser_ignores_message_events_without_provider_ids(self):
         payload = {
@@ -1281,6 +1348,7 @@ class WhatsAppIntegrationTests(unittest.TestCase):
 
         error = asyncio.run(run_send())
         self.assertEqual(error.error_type, "meta_api_error")
+        self.assertEqual(error.meta_error_code, "131000")
         message = db.scalar(
             select(InboundMessage).where(
                 InboundMessage.company_id == 1,
@@ -1290,6 +1358,79 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertEqual(message.status, "failed")
         self.assertEqual(message.processing_step, "outbound_send_failed")
         self.assertIn("Permission denied", message.processing_error)
+        db.close()
+
+    def test_definitive_outbound_failure_can_be_retried_and_resolves_alert(self):
+        db = self.TenantSession()
+        inbound = upsert_inbound_message(
+            db,
+            company_id=1,
+            channel_key="whatsapp",
+            provider="meta",
+            external_id="wa-inbound-retry-failed",
+            sender="+34600000000",
+            recipients=["+34910000000"],
+            text_content="Hola",
+            external_thread_id="+34600000000",
+            content_type="text",
+            received_at=datetime.now(timezone.utc),
+        )[0]
+        failed = record_manual_response(
+            db,
+            company_id=1,
+            conversation_id=inbound.conversation_id,
+            body="Reintentar este mensaje",
+            external_id="wa-pending-retry-failed",
+            status="failed",
+            processing_step="outbound_send_failed",
+            idempotency_key="retry-failed-original",
+        )
+        db.add(
+            Alert(
+                company_id=1,
+                inbound_message_id=failed.id,
+                alert_type="whatsapp_outbound_failed",
+                severity="high",
+                status="open",
+                title="Falló un envío de WhatsApp",
+                message="Revisar",
+            )
+        )
+        db.commit()
+
+        async def run_retry():
+            async def fake_send(*_args, **_kwargs):
+                return {"provider_message_id": "wamid.retry-success"}
+
+            with patch(
+                "app.whatsapp.service.send_whatsapp_text",
+                new=fake_send,
+            ):
+                return await retry_failed_whatsapp_message(
+                    db,
+                    company_id=1,
+                    message_id=failed.id,
+                    user_id=1,
+                )
+
+        result = asyncio.run(run_retry())
+        self.assertEqual(result.source_external_id, "wamid.retry-success")
+        self.assertEqual(result.status, "accepted")
+        alert = db.scalar(
+            select(Alert).where(
+                Alert.inbound_message_id == failed.id,
+                Alert.alert_type == "whatsapp_outbound_failed",
+            )
+        )
+        self.assertEqual(alert.status, "resolved")
+        outbound_count = db.scalar(
+            select(func.count(InboundMessage.id)).where(
+                InboundMessage.company_id == 1,
+                InboundMessage.conversation_id == inbound.conversation_id,
+                InboundMessage.direction == "outbound",
+            )
+        )
+        self.assertEqual(outbound_count, 2)
         db.close()
 
     def test_manual_response_idempotency_key_does_not_send_twice(self):
@@ -1449,6 +1590,14 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         )
         self.assertEqual(message.status, "send_unknown")
         self.assertEqual(message.processing_step, "outbound_send_unknown")
+        unknown_alert = db.scalar(
+            select(Alert).where(
+                Alert.company_id == 1,
+                Alert.inbound_message_id == message.id,
+                Alert.alert_type == "whatsapp_outbound_unknown",
+            )
+        )
+        self.assertIsNotNone(unknown_alert)
         db.close()
 
     def test_accepted_idempotent_replay_bypasses_expired_reply_window(self):

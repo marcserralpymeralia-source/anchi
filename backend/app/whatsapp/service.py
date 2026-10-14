@@ -14,7 +14,7 @@ from typing import Any, Iterable
 from urllib.parse import urlparse
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -22,7 +22,7 @@ from app.core.config import Settings, get_settings
 from app.core.encryption import decrypt_secret, encrypt_secret
 from app.core.attachment_extraction import extract_attachment_text
 from app.core.attachment_storage import read_attachment, save_attachment
-from app.db.models import ChannelSetting, Conversation, InboundMessage, InputChannel, MessageAttachment, Order, User
+from app.db.models import Alert, ChannelSetting, Conversation, InboundMessage, InputChannel, MessageAttachment, Order, User
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
 from app.messages.service import (
@@ -207,9 +207,16 @@ class WhatsAppEmbeddedSignupResult:
 
 
 class WhatsAppEmbeddedSignupError(RuntimeError):
-    def __init__(self, message: str, *, error_type: str = "meta_request_failed") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_type: str = "meta_request_failed",
+        meta_error_code: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.error_type = error_type
+        self.meta_error_code = str(meta_error_code or "").strip() or None
         self.retryable = error_type in {"timeout", "connection_failed", "media_download_failed", "meta_api_unavailable", "rate_limited"}
 
 
@@ -454,8 +461,135 @@ async def _meta_request(
         raise WhatsAppEmbeddedSignupError(
             f"Meta rechazó {method.upper()} /{path.lstrip('/')}: {detail}",
             error_type="rate_limited" if response.status_code == 429 else "meta_api_unavailable" if response.status_code >= 500 else "meta_api_error",
+            meta_error_code=error_code,
         )
     return payload if isinstance(payload, dict) else {}
+
+
+async def check_whatsapp_connection(
+    db: Session,
+    company_id: int,
+    *,
+    client: httpx.AsyncClient | None = None,
+) -> dict[str, Any]:
+    """Validate the configured WhatsApp assets with Meta without sending a message."""
+    config = whatsapp_config(db, company_id)
+    missing = [
+        label
+        for label, value in (
+            ("WABA ID", config.business_account_id),
+            ("Phone Number ID", config.phone_number_id),
+            ("token de acceso", config.access_token),
+        )
+        if not value
+    ]
+    if missing:
+        return {
+            "ok": False,
+            "status": "not_configured",
+            "message": f"Falta configurar: {', '.join(missing)}.",
+            "missing": missing,
+            "configured_phone_number_id": config.phone_number_id,
+            "configured_display_phone_number": config.display_phone_number,
+        }
+
+    settings = get_settings()
+    owns_client = client is None
+    graph_client = client or httpx.AsyncClient(timeout=settings.meta_request_timeout_seconds)
+    try:
+        waba_payload = await _meta_request(
+            graph_client,
+            settings,
+            "GET",
+            config.business_account_id,
+            access_token=config.access_token,
+            params={"fields": "id,name,business_verification_status"},
+        )
+        phone_list_payload = await _meta_request(
+            graph_client,
+            settings,
+            "GET",
+            f"{config.business_account_id}/phone_numbers",
+            access_token=config.access_token,
+            params={"fields": "id,display_phone_number,verified_name,quality_rating,code_verification_status"},
+        )
+        phones = phone_list_payload.get("data") if isinstance(phone_list_payload.get("data"), list) else []
+        phone = next(
+            (item for item in phones if isinstance(item, dict) and str(item.get("id") or "") == config.phone_number_id),
+            None,
+        )
+        if phone is None:
+            return {
+                "ok": False,
+                "status": "asset_mismatch",
+                "message": "El Phone Number ID configurado no pertenece al WABA conectado en Meta.",
+                "configured_phone_number_id": config.phone_number_id,
+                "configured_display_phone_number": config.display_phone_number,
+                "waba_id": config.business_account_id,
+                "waba_name": str(waba_payload.get("name") or ""),
+            }
+
+        phone_details = await _meta_request(
+            graph_client,
+            settings,
+            "GET",
+            config.phone_number_id,
+            access_token=config.access_token,
+            params={"fields": "status,platform_type,name_status"},
+        )
+        phone_status = str(phone_details.get("status") or config.phone_status or "").strip().upper()
+        display_name_status = str(phone_details.get("name_status") or phone.get("name_status") or "").strip().upper()
+        display_phone_number = str(phone.get("display_phone_number") or "").strip()
+        waba_id = str(waba_payload.get("id") or "").strip()
+        waba_matches = waba_id == config.business_account_id
+        phone_id_matches = str(phone.get("id") or "") == config.phone_number_id
+        number_matches = not config.display_phone_number or _normalize_whatsapp_address(display_phone_number) == _normalize_whatsapp_address(config.display_phone_number)
+        phone_ready = phone_status in {"CONNECTED", "ACTIVE"}
+        display_name_ready = not display_name_status or display_name_status in {"APPROVED", "AVAILABLE_WITHOUT_REVIEW"}
+        webhook_ready = bool(config.webhook_enabled)
+        checks = {
+            "waba": waba_matches,
+            "phone_number_id": phone_id_matches,
+            "display_phone_number": number_matches,
+            "phone_status": phone_ready,
+            "display_name": display_name_ready,
+            "webhook": webhook_ready,
+        }
+        failed_checks = [name for name, passed in checks.items() if not passed]
+        ok = not failed_checks
+        return {
+            "ok": ok,
+            "status": "connected" if ok else "attention_required",
+            "message": "Conexión verificada con Meta." if ok else "La conexión necesita atención.",
+            "checks": checks,
+            "failed_checks": failed_checks,
+            "waba_id": waba_id or config.business_account_id,
+            "waba_name": str(waba_payload.get("name") or ""),
+            "business_verification_status": str(waba_payload.get("business_verification_status") or ""),
+            "configured_phone_number_id": config.phone_number_id,
+            "meta_phone_number_id": str(phone.get("id") or ""),
+            "configured_display_phone_number": config.display_phone_number,
+            "meta_display_phone_number": display_phone_number,
+            "verified_name": str(phone.get("verified_name") or ""),
+            "display_name_status": display_name_status,
+            "phone_status": phone_status,
+            "code_verification_status": str(phone.get("code_verification_status") or config.code_verification_status),
+            "quality_rating": str(phone.get("quality_rating") or ""),
+            "webhook_enabled": webhook_ready,
+        }
+    except WhatsAppEmbeddedSignupError as exc:
+        return {
+            "ok": False,
+            "status": "provider_error",
+            "message": str(exc),
+            "error_type": exc.error_type,
+            "meta_error_code": exc.meta_error_code,
+            "configured_phone_number_id": config.phone_number_id,
+            "configured_display_phone_number": config.display_phone_number,
+        }
+    finally:
+        if owns_client:
+            await graph_client.aclose()
 
 
 def _meta_media_id(message: InboundMessage, attachment: MessageAttachment) -> str:
@@ -702,6 +836,16 @@ async def download_whatsapp_media(
                 )
             except WhatsAppEmbeddedSignupError as exc:
                 if exc.retryable:
+                    _upsert_whatsapp_alert(
+                        db,
+                        company_id=company_id,
+                        alert_type="whatsapp_media_download_failed",
+                        title="No se pudo descargar un archivo de WhatsApp",
+                        message="La descarga desde Meta falló temporalmente. Se reintentará desde la cola de trabajos.",
+                        severity="medium",
+                        inbound_message_id=message.id,
+                    )
+                    db.commit()
                     raise
                 _persist_media_failure(attachment, str(exc))
                 failed += 1
@@ -736,6 +880,17 @@ async def download_whatsapp_media(
     finally:
         if owns_client:
             await graph_client.aclose()
+    if failed:
+        _upsert_whatsapp_alert(
+            db,
+            company_id=company_id,
+            alert_type="whatsapp_media_processing_failed",
+            title="Un archivo de WhatsApp necesita revisión",
+            message="Uno o más archivos recibidos no se pudieron descargar o procesar. Puedes reintentar desde la conversación.",
+            severity="medium",
+            inbound_message_id=message.id,
+        )
+        db.commit()
     return {
         "ok": not retryable_failure,
         "downloaded": downloaded,
@@ -2016,6 +2171,15 @@ def _mark_outbound_send_unknown(db: Session, message: InboundMessage, *, user_id
     message.processing_step = "outbound_send_unknown"
     message.processing_error = str(error)[:2000]
     try:
+        _upsert_whatsapp_alert(
+            db,
+            company_id=message.company_id,
+            alert_type="whatsapp_outbound_unknown",
+            title="Envío de WhatsApp sin confirmar",
+            message="Meta no confirmó el último envío. No se reintentará automáticamente para evitar duplicados.",
+            severity="high",
+            inbound_message_id=message.id,
+        )
         db.commit()
         audit_user = db.get(User, user_id) if user_id else None
         log_action(
@@ -2037,6 +2201,20 @@ def _mark_outbound_send_failed(db: Session, message: InboundMessage, *, user_id:
     message.processing_step = "outbound_send_failed"
     message.processing_error = str(error)[:2000]
     try:
+        if isinstance(error, WhatsAppEmbeddedSignupError) and error.error_type in {
+            "meta_api_error",
+            "meta_api_unavailable",
+            "rate_limited",
+        }:
+            _upsert_whatsapp_alert(
+                db,
+                company_id=message.company_id,
+                alert_type="whatsapp_outbound_failed",
+                title="Falló un envío de WhatsApp",
+                message="Meta rechazó o no pudo completar un envío. Revisa el detalle del mensaje y la conexión de WhatsApp.",
+                severity="high",
+                inbound_message_id=message.id,
+            )
         db.commit()
         audit_user = db.get(User, user_id) if user_id else None
         log_action(
@@ -2058,6 +2236,48 @@ def _mark_outbound_send_error(db: Session, message: InboundMessage, *, user_id: 
         _mark_outbound_send_failed(db, message, user_id=user_id, error=error)
         return
     _mark_outbound_send_unknown(db, message, user_id=user_id, error=error)
+
+
+def _upsert_whatsapp_alert(
+    db: Session,
+    *,
+    company_id: int,
+    alert_type: str,
+    title: str,
+    message: str,
+    severity: str,
+    inbound_message_id: int | None = None,
+) -> Alert:
+    """Create one active alert per WhatsApp incident, without leaking provider data."""
+
+    active_statuses = ("open", "seen")
+    existing = db.scalar(
+        select(Alert)
+        .where(
+            Alert.company_id == company_id,
+            Alert.alert_type == alert_type,
+            Alert.inbound_message_id == inbound_message_id,
+            Alert.status.in_(active_statuses),
+        )
+        .order_by(Alert.id.desc())
+    )
+    if existing:
+        existing.title = title
+        existing.message = message
+        existing.severity = severity
+        return existing
+    alert = Alert(
+        company_id=company_id,
+        inbound_message_id=inbound_message_id,
+        alert_type=alert_type,
+        severity=severity,
+        status="open",
+        title=title,
+        message=message,
+    )
+    db.add(alert)
+    db.flush()
+    return alert
 
 
 def _last_conversation_order_created_at(
@@ -2667,6 +2887,93 @@ async def send_manual_response(
             raise
         sent_messages.append(sent_message)
     return sent_messages[-1]
+
+
+async def retry_failed_whatsapp_message(
+    db: Session,
+    *,
+    company_id: int,
+    message_id: int,
+    user_id: int | None = None,
+) -> InboundMessage:
+    """Retry only a definitive provider failure with a fresh idempotency key.
+
+    ``send_unknown`` is intentionally not retried: Meta may already have
+    accepted that request and the API has no safe way to prove otherwise.
+    """
+
+    message = db.scalar(
+        select(InboundMessage).where(
+            InboundMessage.id == message_id,
+            InboundMessage.company_id == company_id,
+            InboundMessage.provider == WHATSAPP_PROVIDER,
+            InboundMessage.direction == "outbound",
+        )
+    )
+    if not message:
+        raise WhatsAppEmbeddedSignupError("No se encontró el envío de WhatsApp.", error_type="retry_not_allowed")
+    status = str(message.status or "").strip().lower()
+    if status == "send_unknown":
+        raise WhatsAppEmbeddedSignupError(
+            "El envío anterior quedó sin confirmar; no se repetirá automáticamente para evitar duplicados.",
+            error_type="send_unknown",
+        )
+    if status not in {"failed", "error"}:
+        raise WhatsAppEmbeddedSignupError(
+            "Solo se pueden reintentar envíos rechazados definitivamente.",
+            error_type="retry_not_allowed",
+        )
+
+    metadata = _whatsapp_message_metadata(message)
+    original_key = str(metadata.get("idempotency_key") or message.source_message_id or message.id).strip()
+    retry_key = f"{original_key}:retry:{uuid4().hex[:16]}"
+    attachments: list[dict[str, Any]] = []
+    for attachment in message.attachments or []:
+        if not attachment.storage_path:
+            raise WhatsAppEmbeddedSignupError(
+                "No se puede reintentar porque falta la copia local del adjunto.",
+                error_type="retry_unavailable",
+            )
+        try:
+            content = read_attachment(attachment.storage_path)
+        except Exception as exc:  # noqa: BLE001
+            raise WhatsAppEmbeddedSignupError(
+                "No se puede leer la copia local del adjunto para reintentarlo.",
+                error_type="retry_unavailable",
+            ) from exc
+        attachments.append(
+            {
+                "filename": attachment.filename,
+                "content_type": attachment.content_type or "application/octet-stream",
+                "content": content,
+                "is_audio": bool(attachment.is_audio),
+                "is_image": bool(attachment.is_image),
+            }
+        )
+
+    template_name = str(metadata.get("template_name") or "").strip() or None
+    result = await send_manual_response(
+        db,
+        company_id=company_id,
+        conversation_id=message.conversation_id or 0,
+        body="" if template_name else str(message.original_content or ""),
+        user_id=user_id,
+        attachments=attachments,
+        idempotency_key=retry_key,
+        template_name=template_name,
+    )
+    db.execute(
+        update(Alert)
+        .where(
+            Alert.company_id == company_id,
+            Alert.inbound_message_id == message.id,
+            Alert.alert_type.in_(("whatsapp_outbound_failed", "whatsapp_outbound_unknown")),
+            Alert.status.in_(("open", "seen")),
+        )
+        .values(status="resolved", resolved_at=datetime.now(timezone.utc))
+    )
+    db.commit()
+    return result
 
 
 def _extract_message_text(message: dict[str, Any]) -> str | None:

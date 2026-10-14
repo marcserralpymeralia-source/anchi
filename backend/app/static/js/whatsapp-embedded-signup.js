@@ -3,6 +3,50 @@
 
   const roots = Array.from(document.querySelectorAll("[data-whatsapp-embedded-signup]"));
   if (!roots.length) return;
+
+  const setupHealthChecks = () => {
+    roots.forEach((root) => {
+      const button = root.querySelector("[data-whatsapp-health-button]");
+      const status = root.querySelector("[data-whatsapp-health-status]");
+      if (!button || !status) return;
+      button.addEventListener("click", async () => {
+        button.disabled = true;
+        button.setAttribute("aria-busy", "true");
+        status.dataset.state = "loading";
+        status.textContent = "Comprobando la conexion con Meta...";
+        try {
+          const response = await fetch(button.dataset.whatsappHealthUrl, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Accept": "application/json" },
+          });
+          const result = await response.json();
+          if (!response.ok && !result.message) throw new Error("No se pudo comprobar la conexion.");
+          const details = result.meta_display_phone_number || result.configured_display_phone_number || "";
+          const displayNameStatus = result.display_name_status ? ` · nombre visible: ${result.display_name_status}` : "";
+          const checkLabels = {
+            waba: "WABA",
+            phone_number_id: "Phone Number ID",
+            display_phone_number: "numero",
+            phone_status: "estado del numero",
+            display_name: "nombre visible",
+            webhook: "webhook",
+          };
+          const failedChecks = (result.failed_checks || []).map((key) => checkLabels[key] || key).join(", ");
+          status.dataset.state = result.ok ? "success" : "error";
+          status.textContent = result.message + (details ? ` · ${details}` : "") + displayNameStatus + (failedChecks ? ` · Revisar: ${failedChecks}` : "");
+        } catch (error) {
+          status.dataset.state = "error";
+          status.textContent = error instanceof Error ? error.message : "No se pudo comprobar la conexion.";
+        } finally {
+          button.disabled = false;
+          button.setAttribute("aria-busy", "false");
+        }
+      });
+    });
+  };
+
+  setupHealthChecks();
   const configuredRoots = roots.filter((root) => root.dataset.metaConfigured === "true");
   if (!configuredRoots.length) return;
 

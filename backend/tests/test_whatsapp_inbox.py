@@ -20,7 +20,7 @@ from app.core import lifespan as lifespan_module  # noqa: E402
 from app.core.app_factory import create_app  # noqa: E402
 from app.db.models import ChannelSetting, Conversation, Customer, InboundMessage, InputChannel, MessageAttachment, utcnow  # noqa: E402
 from app.messages.service import upsert_inbound_message  # noqa: E402
-from app.whatsapp.service import send_whatsapp_media  # noqa: E402
+from app.whatsapp.service import WhatsAppEmbeddedSignupError, send_whatsapp_media  # noqa: E402
 from scripts.performance_data import build_performance_fixture, temporary_performance_environment  # noqa: E402
 
 
@@ -485,6 +485,33 @@ class WhatsAppInboxTests(unittest.TestCase):
         payload = send_response.await_args.kwargs["attachments"]
         self.assertEqual(payload[0]["filename"], "confirmacion.pdf")
         self.assertEqual(payload[0]["content_type"], "application/pdf")
+
+    def test_reply_exposes_meta_display_name_approval_rejection(self):
+        fixture = build_performance_fixture("small")
+        conversation_id = self._seed_whatsapp(fixture)
+        client, cleanup = self._client_for(fixture)
+        try:
+            self._login(client, fixture)
+            error = WhatsAppEmbeddedSignupError(
+                "Meta rejected the send",
+                error_type="meta_api_error",
+                meta_error_code="131037",
+            )
+            with patch(
+                "app.whatsapp.inbox_routes.send_manual_response",
+                new=AsyncMock(side_effect=error),
+            ):
+                response = client.post(
+                    f"/whatsapp/inbox/{conversation_id}/reply",
+                    data={"body": "No deberia enviarse"},
+                    follow_redirects=False,
+                )
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("error=display_name_pending", response.headers["location"])
 
     def test_reply_is_locked_until_customer_opens_the_whatsapp_window(self):
         fixture = build_performance_fixture("small")
