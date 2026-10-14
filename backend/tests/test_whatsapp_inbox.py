@@ -145,6 +145,8 @@ class WhatsAppInboxTests(unittest.TestCase):
         self.assertIn('const dropTarget = composeForm.closest(".channel-inbox-chat")', response.text)
         self.assertIn('dropTarget.addEventListener("drop"', response.text)
         self.assertIn('data-wa-upload-status', response.text)
+        self.assertIn('Subiendo recurso', response.text)
+        self.assertNotIn('Recurso listo', response.text)
         self.assertIn('data-wa-send-button', response.text)
         self.assertEqual(response.text.count('href="/mail"'), 1)
         self.assertEqual(response.text.count('class="nav-label">WhatsApp</span>'), 1)

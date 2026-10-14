@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import re
 import secrets
 from pathlib import Path
@@ -61,6 +62,8 @@ WHATSAPP_SUPPORTED_AUDIO_EXTENSIONS = {".amr", ".m4a", ".mp3", ".ogg", ".wav", "
 WHATSAPP_SUPPORTED_DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".txt"}
 WHATSAPP_SUPPORTED_IMAGE_EXTENSIONS = {".jpeg", ".jpg", ".png"}
 _PENDING_OUTBOUND_EXTERNAL_ID_PREFIX = "wa-pending-"
+
+logger = logging.getLogger(__name__)
 
 @dataclass(slots=True)
 class WhatsAppTenantConfig:
@@ -389,6 +392,16 @@ def _meta_error_message(payload: Any, fallback: str) -> str:
     return fallback
 
 
+def _meta_error_code(payload: Any) -> str | None:
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            code = error.get("code") or error.get("error_subcode")
+            if code is not None:
+                return str(code)
+    return None
+
+
 async def _meta_request(
     client: httpx.AsyncClient,
     settings: Settings,
@@ -424,6 +437,17 @@ async def _meta_request(
         raise WhatsAppEmbeddedSignupError("Meta devolvió una respuesta no válida.", error_type="invalid_response") from exc
     if response.status_code >= 400 or (isinstance(payload, dict) and payload.get("error")):
         detail = _meta_error_message(payload, "Meta rechazó la operación.")
+        error_code = _meta_error_code(payload)
+        logger.warning(
+            "whatsapp.meta_request_rejected",
+            extra={
+                "method": method.upper(),
+                "path": f"/{path.lstrip('/')}",
+                "status_code": response.status_code,
+                "meta_error_code": error_code,
+                "meta_error_message": detail[:500],
+            },
+        )
         raise WhatsAppEmbeddedSignupError(
             f"Meta rechazó {method.upper()} /{path.lstrip('/')}: {detail}",
             error_type="rate_limited" if response.status_code == 429 else "meta_api_unavailable" if response.status_code >= 500 else "meta_api_error",
@@ -789,14 +813,31 @@ async def send_whatsapp_text(
     if reply_to_external_id:
         message_payload["context"] = {"message_id": reply_to_external_id}
     try:
-        response = await _meta_request(
-            graph_client,
-            get_settings(),
-            "POST",
-            f"{config.phone_number_id}/messages",
-            access_token=config.access_token,
-            json_body=message_payload,
-        )
+        try:
+            response = await _meta_request(
+                graph_client,
+                get_settings(),
+                "POST",
+                f"{config.phone_number_id}/messages",
+                access_token=config.access_token,
+                json_body=message_payload,
+            )
+        except WhatsAppEmbeddedSignupError as exc:
+            # Meta rejects a reply context when the quoted message is not
+            # addressable from the configured phone number. The text itself
+            # is still deliverable, so retry once without the optional quote.
+            if not reply_to_external_id or exc.error_type != "meta_api_error":
+                raise
+            message_without_context = dict(message_payload)
+            message_without_context.pop("context", None)
+            response = await _meta_request(
+                graph_client,
+                get_settings(),
+                "POST",
+                f"{config.phone_number_id}/messages",
+                access_token=config.access_token,
+                json_body=message_without_context,
+            )
     finally:
         if owns_client:
             await graph_client.aclose()
@@ -979,14 +1020,30 @@ async def send_whatsapp_media(
         }
         if reply_to_external_id:
             message_payload["context"] = {"message_id": reply_to_external_id}
-        response = await _meta_request(
-            graph_client,
-            get_settings(),
-            "POST",
-            f"{config.phone_number_id}/messages",
-            access_token=config.access_token,
-            json_body=message_payload,
-        )
+        try:
+            response = await _meta_request(
+                graph_client,
+                get_settings(),
+                "POST",
+                f"{config.phone_number_id}/messages",
+                access_token=config.access_token,
+                json_body=message_payload,
+            )
+        except WhatsAppEmbeddedSignupError as exc:
+            # Keep media sends usable if Meta rejects only the optional quote
+            # context. The media upload has already succeeded at this point.
+            if not reply_to_external_id or exc.error_type != "meta_api_error":
+                raise
+            message_without_context = dict(message_payload)
+            message_without_context.pop("context", None)
+            response = await _meta_request(
+                graph_client,
+                get_settings(),
+                "POST",
+                f"{config.phone_number_id}/messages",
+                access_token=config.access_token,
+                json_body=message_without_context,
+            )
     finally:
         if owns_client:
             await graph_client.aclose()

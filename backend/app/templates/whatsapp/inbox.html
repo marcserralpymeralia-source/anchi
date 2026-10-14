@@ -523,8 +523,8 @@
       }
       if (status) {
         status.className = "wa-files-status";
-        status.hidden = false;
-        status.innerHTML = '<span class="wa-upload-ready" aria-hidden="true">✓</span>Recurso listo';
+        status.hidden = true;
+        status.innerHTML = "";
       }
     } catch (error) {
       composeForm.dataset.attachmentsReady = "false";

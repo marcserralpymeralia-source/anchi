@@ -1194,6 +1194,53 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertEqual(json.loads(response.raw_payload_json)["context"], {"message_id": "wa-inbound-for-quoted-reply"})
         db.close()
 
+    def test_manual_response_retries_without_rejected_reply_context(self):
+        db = self.TenantSession()
+        inbound = upsert_inbound_message(
+            db,
+            company_id=1,
+            channel_key="whatsapp",
+            provider="meta",
+            external_id="wa-inbound-invalid-reply-context",
+            sender="+34600000000",
+            recipients=["+34910000000"],
+            text_content="Mensaje citado",
+            external_thread_id="+34600000000",
+            content_type="text",
+            received_at=datetime.now(timezone.utc),
+        )[0]
+        db.commit()
+        requests = []
+
+        def handler(request):
+            payload = json.loads(request.content)
+            requests.append(payload)
+            if "context" in payload:
+                return httpx.Response(
+                    400,
+                    json={"error": {"code": 100, "message": "Invalid reply context"}},
+                )
+            return httpx.Response(200, json={"messages": [{"id": "wamid.context-fallback-1"}]})
+
+        async def run_send():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                return await send_manual_response(
+                    db,
+                    company_id=1,
+                    conversation_id=inbound.conversation_id,
+                    body="Respuesta sin perder el mensaje",
+                    reply_to_message_id=inbound.id,
+                    client=client,
+                )
+
+        response = asyncio.run(run_send())
+        self.assertEqual(len(requests), 2)
+        self.assertEqual(requests[0]["context"], {"message_id": "wa-inbound-invalid-reply-context"})
+        self.assertNotIn("context", requests[1])
+        self.assertEqual(response.status, "accepted")
+        self.assertEqual(response.source_external_id, "wamid.context-fallback-1")
+        db.close()
+
     def test_manual_response_idempotency_key_does_not_send_twice(self):
         db = self.TenantSession()
         inbound = upsert_inbound_message(

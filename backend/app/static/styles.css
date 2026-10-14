@@ -13534,18 +13534,6 @@ table.logs-table tr:hover td {
   animation: wa-upload-spin .75s linear infinite !important;
 }
 
-.whatsapp-inbox-shell .wa-upload-ready {
-  display: inline-grid !important;
-  place-items: center !important;
-  width: 14px !important;
-  height: 14px !important;
-  border-radius: 50% !important;
-  background: #00a884 !important;
-  color: #fff !important;
-  font-size: 10px !important;
-  font-weight: 800 !important;
-}
-
 @keyframes wa-upload-spin {
   to { transform: rotate(360deg); }
 }
