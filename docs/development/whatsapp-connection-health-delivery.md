@@ -76,6 +76,10 @@ El incidente anterior correspondia al error Meta `131037`: el numero necesitaba 
 | `node --check app/static/js/whatsapp-embedded-signup.js` | Correcto |
 | `node --check app/static/js/security.js` | Correcto |
 | `$env:APP_ENV='test'; $env:DEBUG='false'; py -m unittest tests.test_whatsapp_integration tests.test_whatsapp_inbox` | 64 tests OK en 209.108 s |
+| `curl.exe -sS https://anchi-tan.vercel.app/login` | Produccion responde HTTP 200 |
+| `curl.exe -sS https://anchi-tan.vercel.app/static/js/whatsapp-embedded-signup.js` | Produccion contiene los marcadores del health check |
+| `curl.exe -sS https://anchi-tan.vercel.app/whatsapp/inbox/events` sin sesion | Produccion responde 303 a login; el endpoint ya esta publicado |
+| Comprobacion de estados del commit `f79755d` en GitHub | `Vercel - anchi: success`; `Vercel - anchi-gemavi: success` |
 | Tests focalizados de salud, nombre pendiente, rechazo Meta y clasificacion `131037` | 4 tests OK en la validacion previa |
 | Test de reintento definitivo y resolucion de alerta | 1 test OK |
 | `git diff --check` | Correcto; solo avisos LF/CRLF de Git |
@@ -97,6 +101,7 @@ El incidente anterior correspondia al error Meta `131037`: el numero necesitaba 
 | Un mensaje rechazado se puede reintentar sin reutilizar la clave | Cumplido | Test de reintento |
 | Un resultado incierto no se duplica automaticamente | Cumplido | Estado `send_unknown` y alerta |
 | Media con error queda en cola y visible | Cumplido | Job durable, placeholder y alerta |
+| La nueva version llega a las publicaciones de Vercel | Cumplido | Checks de Vercel OK y smoke HTTP en produccion |
 
 ## 12. Riesgos y observaciones pendientes
 
@@ -111,7 +116,7 @@ Se uso SSE corto en vez de WebSocket porque el despliegue es serverless y conser
 
 ## 14. Estado final de Git
 
-Pendiente de crear el commit y hacer push tras la revision final del diff. No se han incluido secretos ni datos de produccion.
+Commit publicado: `f79755d` (`feat: harden WhatsApp realtime delivery and retries`) en `chore/technical-improvement-plan`. El arbol quedo limpio despues del push. No se han incluido secretos ni datos de produccion.
 
 ## 15. Recomendacion para la siguiente fase
 
