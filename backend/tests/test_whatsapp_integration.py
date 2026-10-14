@@ -1136,7 +1136,7 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         def handler(request):
             request_payload = json.loads(request.content)
             self.assertEqual(request.url.path, "/v24.0/pn-123/messages")
-            self.assertEqual(request_payload["to"], "+34600000000")
+            self.assertEqual(request_payload["to"], "34600000000")
             self.assertEqual(request_payload["type"], "text")
             return httpx.Response(200, json={"messages": [{"id": "wamid.test-1"}]})
 
@@ -1239,6 +1239,57 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertNotIn("context", requests[1])
         self.assertEqual(response.status, "accepted")
         self.assertEqual(response.source_external_id, "wamid.context-fallback-1")
+        db.close()
+
+    def test_meta_rejection_marks_outbound_message_as_failed(self):
+        db = self.TenantSession()
+        inbound = upsert_inbound_message(
+            db,
+            company_id=1,
+            channel_key="whatsapp",
+            provider="meta",
+            external_id="wa-inbound-meta-rejection",
+            sender="+34600000000",
+            recipients=["+34910000000"],
+            text_content="Hola",
+            external_thread_id="+34600000000",
+            content_type="text",
+            received_at=datetime.now(timezone.utc),
+        )[0]
+        db.commit()
+
+        def handler(request):
+            payload = json.loads(request.content)
+            self.assertEqual(payload["to"], "34600000000")
+            return httpx.Response(
+                400,
+                json={"error": {"code": 131000, "message": "Permission denied"}},
+            )
+
+        async def run_send():
+            async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+                with self.assertRaises(WhatsAppEmbeddedSignupError) as context:
+                    await send_manual_response(
+                        db,
+                        company_id=1,
+                        conversation_id=inbound.conversation_id,
+                        body="Respuesta rechazada",
+                        client=client,
+                        idempotency_key="reply-meta-rejection-1",
+                    )
+                return context.exception
+
+        error = asyncio.run(run_send())
+        self.assertEqual(error.error_type, "meta_api_error")
+        message = db.scalar(
+            select(InboundMessage).where(
+                InboundMessage.company_id == 1,
+                InboundMessage.source_message_id == "reply-meta-rejection-1",
+            )
+        )
+        self.assertEqual(message.status, "failed")
+        self.assertEqual(message.processing_step, "outbound_send_failed")
+        self.assertIn("Permission denied", message.processing_error)
         db.close()
 
     def test_manual_response_idempotency_key_does_not_send_twice(self):

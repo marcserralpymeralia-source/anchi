@@ -439,7 +439,10 @@ async def _meta_request(
         detail = _meta_error_message(payload, "Meta rechazó la operación.")
         error_code = _meta_error_code(payload)
         logger.warning(
-            "whatsapp.meta_request_rejected",
+            "whatsapp.meta_request_rejected code=%s status=%s message=%s",
+            error_code or "unknown",
+            response.status_code,
+            detail[:500],
             extra={
                 "method": method.upper(),
                 "path": f"/{path.lstrip('/')}",
@@ -796,7 +799,7 @@ async def send_whatsapp_text(
     graph_client = client or httpx.AsyncClient(timeout=get_settings().meta_request_timeout_seconds)
     message_payload: dict[str, Any] = {
         "messaging_product": "whatsapp",
-        "to": recipient,
+        "to": _meta_recipient(recipient),
         "type": "template" if clean_template_name else "text",
         **(
             {
@@ -879,6 +882,14 @@ def _whatsapp_reply_recipient(
                 error_type=window["reason"],
             )
     return recipient
+
+
+def _meta_recipient(value: str) -> str:
+    """Send numeric WhatsApp IDs in the format expected by the Graph API."""
+    normalized = str(value or "").strip()
+    if re.fullmatch(r"\+\d{6,15}", normalized):
+        return normalized[1:]
+    return normalized
 
 
 def _latest_whatsapp_inbound(
@@ -1014,7 +1025,7 @@ async def send_whatsapp_media(
             media_body["filename"] = filename
         message_payload: dict[str, Any] = {
             "messaging_product": "whatsapp",
-            "to": recipient,
+            "to": _meta_recipient(recipient),
             "type": message_type,
             message_type: media_body,
         }
@@ -2020,6 +2031,35 @@ def _mark_outbound_send_unknown(db: Session, message: InboundMessage, *, user_id
         db.rollback()
 
 
+def _mark_outbound_send_failed(db: Session, message: InboundMessage, *, user_id: int | None, error: Exception) -> None:
+    """Persist a definitive provider rejection without presenting it as pending."""
+    message.status = "failed"
+    message.processing_step = "outbound_send_failed"
+    message.processing_error = str(error)[:2000]
+    try:
+        db.commit()
+        audit_user = db.get(User, user_id) if user_id else None
+        log_action(
+            db,
+            company_id=message.company_id,
+            user=audit_user,
+            action="whatsapp.outbound_send_failed",
+            entity_type="inbound_message",
+            entity_id=message.id,
+            message="Meta rechazó el envío de WhatsApp; el mensaje no fue enviado.",
+        )
+    except Exception:  # noqa: BLE001
+        db.rollback()
+
+
+def _mark_outbound_send_error(db: Session, message: InboundMessage, *, user_id: int | None, error: Exception) -> None:
+    """Choose failed vs unknown based on whether the provider response is definitive."""
+    if isinstance(error, WhatsAppEmbeddedSignupError) and error.error_type == "meta_api_error":
+        _mark_outbound_send_failed(db, message, user_id=user_id, error=error)
+        return
+    _mark_outbound_send_unknown(db, message, user_id=user_id, error=error)
+
+
 def _last_conversation_order_created_at(
     db: Session,
     *,
@@ -2313,7 +2353,7 @@ async def send_automatic_response(
             idempotency_key=idempotency_key,
         )
     except Exception as exc:  # noqa: BLE001
-        _mark_outbound_send_unknown(db, reservation, user_id=None, error=exc)
+        _mark_outbound_send_error(db, reservation, user_id=None, error=exc)
         raise
 
     return {
@@ -2551,7 +2591,7 @@ async def send_manual_response(
                 )
             except Exception as exc:  # noqa: BLE001
                 if reservation:
-                    _mark_outbound_send_unknown(db, reservation, user_id=user_id, error=exc)
+                    _mark_outbound_send_error(db, reservation, user_id=user_id, error=exc)
                 raise
             try:
                 sent_message = record_manual_response(
@@ -2605,7 +2645,7 @@ async def send_manual_response(
             )
         except Exception as exc:  # noqa: BLE001
             if reservation:
-                _mark_outbound_send_unknown(db, reservation, user_id=user_id, error=exc)
+                _mark_outbound_send_error(db, reservation, user_id=user_id, error=exc)
             raise
         try:
             sent_message = record_manual_response(
