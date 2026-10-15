@@ -121,8 +121,10 @@ La revisión adicional encontró que el alta aceptaba reutilizar una misma base 
 | `backend/app/templates/users/list.html` | Gestión de usuarios | Plantilla |
 | `backend/app/tenancy/database.py` | Provisionado cacheado, errores y sesión de soporte | Resolución tenant |
 | `backend/app/users/routes.py` | Gestión tenant, ocultación y protección de actores internos | Usuarios tenant |
+| `backend/app/superadmin/service.py` | Rechazar destinos de base tenant ya asignados a otra empresa | Validación de aprovisionamiento |
 | `backend/tests/test_multitenancy_auth.py` | Verificar acceso temporal, auditoría y ocultación de identidades globales | Tests E2E |
 | `backend/tests/test_schema_migrations.py` | Verificar creación idempotente del canal Email | Tests de migración |
+| `backend/tests/test_superadmin.py` | Verificar unicidad de destino de base de datos por empresa | Tests de aprovisionamiento |
 | `backend/app/whatsapp/inbox_routes.py` | Aislamiento WhatsApp | Rutas |
 | `backend/app/whatsapp/service.py` | Índice de endpoints | Resolución master |
 | `backend/app/workers/jobs_worker.py` | Worker por compañía | Aislamiento de ejecución |
@@ -137,7 +139,7 @@ La revisión adicional encontró que el alta aceptaba reutilizar una misma base 
 | `backend/app/auth/session_middleware.py` | Sesiones server-side con cookie opaca |
 | `backend/app/superadmin/__init__.py` | Paquete Superadmin |
 | `backend/app/superadmin/routes.py` | Endpoints del panel Superadmin |
-| `backend/app/superadmin/service.py` | Provisión, usuarios, estadísticas y auditoría | Servicio de dominio |
+| `backend/app/superadmin/service.py` | Provisión, usuarios, estadísticas, auditoría y validación de unicidad de base tenant | Servicio de dominio |
 | `backend/app/workers/provisioning_worker.py` | Aprovisionamiento asíncrono de empresas | Worker |
 | `backend/app/core/csrf.py` | Protección CSRF para formularios y peticiones AJAX |
 | `backend/app/static/js/security.js` | Envío automático del token CSRF |
@@ -193,13 +195,15 @@ La revisión adicional encontró que el alta aceptaba reutilizar una misma base 
 | `pytest tests/test_tenant_isolation.py -q` | 8 passed; aislamiento entre empresas e IDs coincidentes |
 | `pytest tests/test_account_lifecycle.py -q` | 1 passed; invitaciones y revocación de sesiones |
 | `pytest tests/test_worker_tenant_scope.py -q` | 1 passed; scope tenant de workers |
+| `APP_ENV=test; .venv\Scripts\python.exe -m unittest tests.test_multitenancy_auth tests.test_orders_detail_optimization -v` (desde `backend`) | 12 tests OK; selección multiempresa y detalle de pedidos pasan aislados |
+| `APP_ENV=test; .venv\Scripts\python.exe -m unittest discover -s tests` (desde `backend`) | 587 tests: 8 failures, 1 error, 5 skipped. En el resultado se observó un detalle de pedido con 16 consultas frente al máximo de 15; no se reprodujo al ejecutar esa suite aisladamente. No se obtuvo un diagnóstico completo de los otros fallos en esta ejecución |
 | `git diff --check` | OK; solo avisos de conversión LF/CRLF de Git |
 
 Las seis suites focalizadas posteriores suman 56 tests aprobados. Se ejecutaron con SQLite temporal sintético; no se consultaron bases ni datos de producción. Persisten avisos deprecados de FastAPI/Starlette y del adaptador datetime de SQLite, sin fallos asociados.
 
 La auditoría adicional aprobó `python -m unittest tests.test_superadmin -q` (13 tests), `tests.test_tenant_isolation` (8), `tests.test_multitenancy_auth` (7) y `tests.test_schema_migrations` (29). La última incluye una actualización desde `2026.10.15.1` que aplica `2026.10.15.2` y crea el canal Email que faltaba.
 
-La ejecución global `unittest discover` no se usa como criterio de esta fase porque mantiene workers de ciclo de vida y mezcla fixtures legacy. La batería relacionada con esta fase terminó correctamente con 64 tests, además de los smoke tests aislados indicados arriba.
+La ejecución global sí se realizó y no quedó verde: 8 fallos y 1 error entre 587 tests (5 omitidos). Un fallo visible fue el presupuesto de consultas del detalle de pedido (16 frente a 15), aunque al repetir la suite relacionada de forma aislada pasó. Las suites focalizadas de esta fase y los tests de detalle pasan por separado; el estado global queda pendiente de identificar y reproducir. No se han corregido fallos ajenos sin evidencia de que pertenezcan a esta fase.
 
 ## 10. Tests añadidos o modificados
 
@@ -264,9 +268,12 @@ Se añadió el índice de endpoints WhatsApp, el cifrado de URLs tenant, el aisl
 - Rama actual: `chore/technical-improvement-plan`.
 - Las correcciones de soporte temporal, canal Email, revocación de sesión y propiedad de la base tenant están registradas en commits locales separados.
 - Quedan cambios locales previos de WhatsApp/canales sin incluir; se conservaron intactos.
+- En la última revisión había 11 archivos locales modificados de WhatsApp/canales, fuera de la corrección de unicidad de bases tenant; se dejaron intactos y fuera de estos commits.
+- Commits locales de la comprobación adicional: `7990970 fix: prevent sharing tenant databases` y `3fd6b68 docs: record tenant database isolation guard`.
+- En la verificación previa a registrar este informe, la rama estaba 7 commits por delante de `origin/chore/technical-improvement-plan`; el commit de este informe añade uno más.
 - No se ha hecho push ni se ha desplegado esta corrección.
 - No se han descartado cambios locales ajenos.
-- La rama queda por delante de `origin/chore/technical-improvement-plan`; los cambios locales no publicados aún no han pasado CI remoto ni Vercel.
+- Los cambios locales no publicados aún no han pasado CI remoto ni Vercel.
 - Las validaciones automatizadas usaron bases SQLite temporales y `TestClient`; no se conectó directamente a una base de datos productiva.
 
 ## 15. Recomendacion para la siguiente fase
