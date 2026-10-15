@@ -3,11 +3,9 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from datetime import date
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import create_engine, func, select
-from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.permissions import DEFAULT_ROLE_PERMISSIONS
@@ -24,6 +22,10 @@ from app.master.models import (
     TenantProvisioningRun,
     TenantHealthSnapshot,
     TenantUsageDaily,
+)
+from app.master.database_identity import (
+    ensure_tenant_database_is_unassigned,
+    tenant_database_identity as _tenant_database_identity,
 )
 from app.master.service import configured_platform_admin_email, slugify
 from app.tenancy.migrations import ensure_tenant_schema
@@ -45,37 +47,6 @@ def _database_url_for_company(requested_url: str | None) -> str:
     if requested_url:
         return requested_url
     raise ValueError("Indica una base de datos externa propia para esta empresa")
-
-
-def _tenant_database_identity(database_url: str) -> tuple[str, str, int | None, str]:
-    """Return a credential-free identity for a tenant database destination."""
-
-    url = make_url(database_url)
-    backend = url.get_backend_name().lower()
-    database = url.database or ""
-    if backend == "sqlite":
-        if database and database != ":memory:":
-            database = str(Path(database).expanduser().resolve())
-        return backend, "", None, database
-
-    host = (url.host or "").strip().lower().rstrip(".")
-    # Neon exposes direct and pooled hostnames for the same endpoint.
-    host = host.replace("-pooler.", ".", 1)
-    default_ports = {"postgresql": 5432, "mysql": 3306, "mariadb": 3306, "mssql": 1433}
-    port = url.port or default_ports.get(backend)
-    return backend, host, port, database
-
-
-def _ensure_tenant_database_is_unassigned(master_db: Session, database_url: str) -> None:
-    """Keep the one-operational-database-per-company isolation boundary."""
-
-    requested_identity = _tenant_database_identity(database_url)
-    assigned_urls = master_db.scalars(select(MasterTenantDatabase.database_url)).all()
-    if any(
-        assigned_url and _tenant_database_identity(assigned_url) == requested_identity
-        for assigned_url in assigned_urls
-    ):
-        raise ValueError("Esta base de datos ya está asignada a otra empresa. Configura una base propia para cada empresa.")
 
 
 def _engine_for(database_url: str):
@@ -257,7 +228,7 @@ def create_company(
     if master_db.scalar(select(MasterCompany).where((MasterCompany.name == name) | (MasterCompany.slug == company_slug))):
         raise ValueError("Ya existe una empresa con ese nombre o slug")
     resolved_url = _database_url_for_company(database_url)
-    _ensure_tenant_database_is_unassigned(master_db, resolved_url)
+    ensure_tenant_database_is_unassigned(master_db, resolved_url)
 
     company = MasterCompany(
         name=name,

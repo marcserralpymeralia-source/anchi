@@ -11,6 +11,7 @@ from app.core.security import hash_password
 from app.db.database import Base
 from app.db.models import Company as TenantCompany
 from app.db import models as operational_models  # noqa: F401
+from app.master.database_identity import ensure_tenant_database_is_unassigned
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser, utcnow
 from app.master.service import slugify
 from app.tenancy.migrations import ensure_tenant_migration_record, ensure_tenant_schema
@@ -468,6 +469,12 @@ def provision_external_tenant(
     if database_url.startswith("sqlite"):
         raise ValueError("TENANT_DATABASE_URL cannot use sqlite in external tenant provisioning")
 
+    existing_company = master_db.scalar(select(MasterCompany).where(MasterCompany.slug == company_slug))
+    ensure_tenant_database_is_unassigned(
+        master_db,
+        database_url,
+        exclude_company_id=existing_company.id if existing_company else None,
+    )
     company = _ensure_master_company(master_db, company_name, company_slug)
     tenant = _ensure_tenant_database_row(master_db, company, database_url)
 

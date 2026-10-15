@@ -15,6 +15,7 @@ from app.db.models import User
 from app.master.database import MasterBase
 from app.master.bootstrap import ensure_platform_admin
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser
+from app.master.provisioning import provision_external_tenant
 from app.master.service import _membership_to_user, authenticate_master_user
 from app.superadmin.routes import _companies
 from app.superadmin.service import _tenant_database_identity, create_company, create_company_user, platform_stats, toggle_user
@@ -142,6 +143,36 @@ class SuperadminProvisioningTests(unittest.TestCase):
         pooler_url = "postgresql://tenant_b:secret-b@ep-demo-pooler.eu-central-1.aws.neon.tech/anchi"
 
         self.assertEqual(_tenant_database_identity(direct_url), _tenant_database_identity(pooler_url))
+
+    def test_external_provisioning_rejects_a_database_assigned_to_another_company(self):
+        existing_company = MasterCompany(name="Existing external company", slug="existing-external-company", active=True)
+        self.db.add(existing_company)
+        self.db.flush()
+        self.db.add(
+            MasterTenantDatabase(
+                company_id=existing_company.id,
+                database_key="existing-external-company",
+                database_url="postgresql+psycopg://ep-demo.eu-central-1.aws.neon.tech/anchi",
+                database_type="postgresql",
+                is_active=True,
+                health_status="ok",
+            )
+        )
+        self.db.commit()
+
+        with patch("app.master.provisioning._session_factory", side_effect=AssertionError("external connection attempted")):
+            with self.assertRaisesRegex(ValueError, "base de datos ya está asignada"):
+                provision_external_tenant(
+                    self.db,
+                    tenant_database_url="postgresql://ep-demo-pooler.eu-central-1.aws.neon.tech/anchi",
+                    company_name="Second external company",
+                    company_slug="second-external-company",
+                )
+
+        self.db.rollback()
+        self.assertIsNone(
+            self.db.scalar(select(MasterCompany).where(MasterCompany.slug == "second-external-company"))
+        )
 
     def test_platform_owner_gets_company_admin_access_without_changing_membership(self):
         company = MasterCompany(name="Owner access", slug="owner-access", active=True)
