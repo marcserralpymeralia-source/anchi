@@ -221,6 +221,7 @@ La revisión adicional encontró que el alta aceptaba reutilizar una misma base 
 | `APP_ENV=test RUN_INTERNAL_JOB_WORKER=false RUN_INTERNAL_EMAIL_WORKER=false .\.venv\Scripts\python.exe -m unittest tests.test_setup_onboarding tests.test_branding_cache -v` (desde `backend`) | 18 tests OK en 79.164 s; aparecieron avisos `ResourceWarning` al cerrar la suite, sin fallo de test |
 | `$env:APP_ENV='test'; $env:RUN_INTERNAL_JOB_WORKER='false'; $env:RUN_INTERNAL_EMAIL_WORKER='false'; .\.venv\Scripts\python.exe -m unittest tests.test_multitenancy_auth tests.test_superadmin tests.test_schema_migrations tests.test_tenant_isolation -v` (PowerShell, desde `backend`) | 59 tests OK en 134.837 s; incluye soporte del dueño, acceso tenant a Canales, bloqueo de `/superadmin`, Email en migraciones y aislamiento entre tenants. Al salir apareció un `ResourceWarning` de una conexión SQLite |
 | `$env:APP_ENV='test'; $env:RUN_INTERNAL_JOB_WORKER='false'; $env:RUN_INTERNAL_EMAIL_WORKER='false'; .\.venv\Scripts\python.exe -m unittest tests.test_multitenancy_auth.MultiTenancyAuthenticationTests.test_selecting_membership_uses_the_selected_tenant_database -v` (PowerShell, desde `backend`) | 1 test OK en 9.554 s; administrador tenant abre Configuración, Canales y el drawer de Email, ve ambos canales y no ve ni puede abrir Superadmin |
+| `$env:APP_ENV='test'; $env:RUN_INTERNAL_JOB_WORKER='false'; $env:RUN_INTERNAL_EMAIL_WORKER='false'; .\.venv\Scripts\python.exe -m unittest tests.test_multitenancy_auth.MultiTenancyAuthenticationTests.test_single_company_admin_can_open_email_settings_without_platform_access -v` (PowerShell, desde `backend`) | 1 test OK en 8.138 s; login directo del único tenant asignado, panel de Email disponible y Superadmin inaccesible |
 | Navegación local aislada con Playwright CLI en `http://127.0.0.1:8010` | Con datos sintéticos: el dueño global entró en una empresa recién creada, abrió Configuración y Canales y vio Email y WhatsApp; la cabecera identificó la empresa correcta. No se consultó producción |
 | `git diff --check` | OK; sin errores de whitespace; Git avisa de conversión LF/CRLF en Windows |
 
@@ -251,6 +252,7 @@ Los fallos globales previos quedaron diagnosticados y corregidos: contaminación
 - Test que comprueba la fecha del pedido en la zona tenant y no depende de que el reloj ejecute la prueba antes o después de medianoche UTC.
 - Test de que una fila de identidad nueva toma el nombre de la compañía tenant y conserva el nombre de aplicación Anchi.
 - Ampliado el test de selección de membresía para recorrer como administrador tenant `/settings` y `/settings/channels`, comprobar los dos canales y verificar que el acceso a `/superadmin` sigue denegado.
+- Añadido el recorrido de login de una membresía única, que reproduce el acceso directo del administrador empresarial sin selector de compañía y verifica el drawer de Email y la separación del Superadmin.
 
 ## 11. Criterios de aceptacion
 
@@ -277,7 +279,7 @@ Los fallos globales previos quedaron diagnosticados y corregidos: contaminación
 | La app arranca localmente con el estado actual | Cumplido | Uvicorn + `/login` 200 |
 | El panel Superadmin comparte el lenguaje visual de Anchi sin perder sus acciones | Cumplido | tests relacionados, AX tree y captura visual local |
 | Un tenant nuevo recibe como nombre comercial inicial el nombre de su propia empresa | Cumplido | `test_new_tenant_branding_defaults_to_its_company_name` y navegación local en una empresa sintética recién provisionada |
-| Un administrador tenant puede abrir el panel de Email y ver Email/WhatsApp sin acceder al Superadmin de plataforma | Cumplido | `test_selecting_membership_uses_the_selected_tenant_database`; `/settings`, `/settings/channels` y `/settings/module/email` devuelven 200, `/superadmin` devuelve 403 y no aparece el enlace global |
+| Un administrador tenant puede abrir el panel de Email y ver Email/WhatsApp sin acceder al Superadmin de plataforma | Cumplido | `test_selecting_membership_uses_the_selected_tenant_database` y `test_single_company_admin_can_open_email_settings_without_platform_access`; ambos flujos devuelven 200 en ajustes/canales/email, 403 en `/superadmin` y no muestran el enlace global |
 
 ## 12. Riesgos y observaciones pendientes
 
@@ -305,7 +307,7 @@ Se añadió el índice de endpoints WhatsApp, el cifrado de URLs tenant, el aisl
 - Permanecen 14 archivos locales previos de WhatsApp/canales/workers sin incluir; se conservaron intactos y fuera de esta corrección.
 - Commits locales de esta continuación: `7b25404 test: avoid leaking app environment between suites`, `96781ff perf: avoid duplicate tenant schema inspection`, `0342936 fix: guard external tenant database isolation`, `a3dbf7c test: compare order date in tenant timezone` y `1ad0c2f fix: serialize tenant database claims`.
 - También permanecen los commits previos de aislamiento `7990970 fix: prevent sharing tenant databases` y `3fd6b68 docs: record tenant database isolation guard`.
-- El arreglo de branding está en `a8c6b90`, la auditoría en `69e7594` y el acceso tenant a Canales en `59ecadc`; esta última comprobación del drawer de Email y su evidencia se registran juntas en este commit (19 commits por delante de `origin/chore/technical-improvement-plan`). No se hizo push ni despliegue.
+- El arreglo de branding está en `a8c6b90`, la auditoría en `69e7594`, el acceso de membresía múltiple en `59ecadc` y el drawer de Email en `4209d59`; el login directo de tenant único y esta evidencia se registran juntas en este commit (20 commits por delante de `origin/chore/technical-improvement-plan`). No se hizo push ni despliegue.
 - La rama permanece únicamente local; no se ha hecho push ni desplegado.
 - No se han descartado cambios locales ajenos.
 - Los cambios locales no publicados aún no han pasado CI remoto ni Vercel.

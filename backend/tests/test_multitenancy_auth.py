@@ -424,6 +424,36 @@ class MultiTenancyAuthenticationTests(unittest.TestCase):
         finally:
             client.close()
 
+    def test_single_company_admin_can_open_email_settings_without_platform_access(self):
+        with self.MasterSession() as db:
+            other_membership = db.get(CompanyMembership, 1)
+            other_membership.is_active = False
+            db.commit()
+
+        app, client = self._client()
+        try:
+            with patch.object(middleware_module, "MasterSessionLocal", self.MasterSession), patch.object(
+                tenancy_database_module, "ensure_tenant_schema_once", return_value={}
+            ):
+                login = self._login(client)
+                settings = client.get("/settings", follow_redirects=False)
+                channels = client.get("/settings/channels", follow_redirects=False)
+                email_configuration = client.get("/settings/module/email", follow_redirects=False)
+                superadmin = client.get("/superadmin", follow_redirects=False)
+
+            self.assertEqual(login.headers["location"], "/dashboard/summary")
+            self.assertEqual(settings.status_code, 200)
+            self.assertIn('title="Configuración"', settings.text)
+            self.assertEqual(channels.status_code, 200)
+            self.assertIn("Email", channels.text)
+            self.assertIn("WhatsApp", channels.text)
+            self.assertEqual(email_configuration.status_code, 200)
+            self.assertIn('<dialog id="settings-email"', email_configuration.text)
+            self.assertNotIn('class="superadmin-app-link', channels.text)
+            self.assertEqual(superadmin.status_code, 403)
+        finally:
+            client.close()
+
     def test_incrementing_session_version_invalidates_previous_session(self):
         app, client = self._client()
         try:
