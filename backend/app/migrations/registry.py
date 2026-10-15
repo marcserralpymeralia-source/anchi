@@ -1288,6 +1288,15 @@ def _apply_tenant_whatsapp_session_safety(engine, dry_run: bool) -> list[str]:  
     )
 
 
+def _apply_tenant_whatsapp_chat_bot_control(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    return ensure_columns(
+        engine,
+        "conversations",
+        {"whatsapp_bot_enabled": "BOOLEAN NOT NULL DEFAULT FALSE"},
+        dry_run=dry_run,
+    )
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -1414,6 +1423,12 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant WhatsApp pending media retries",
         checksum=checksum_text("tenant", "whatsapp_pending_media_retry_count", "whatsapp_session_message_cutoff", "whatsapp_agent_turn_count", "whatsapp_order_sessions"),
         upgrade=_apply_tenant_whatsapp_session_safety,
+    ),
+    MigrationSpec(
+        version="2026.10.15.1",
+        name="tenant WhatsApp per-conversation bot control",
+        checksum=checksum_text("tenant", "whatsapp_bot_enabled", "conversations"),
+        upgrade=_apply_tenant_whatsapp_chat_bot_control,
     ),
 ]
 

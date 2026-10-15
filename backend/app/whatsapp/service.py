@@ -82,8 +82,6 @@ class WhatsAppTenantConfig:
     access_token: str = ""
     verify_token: str = ""
     webhook_enabled: bool = False
-    bot_enabled: bool = False
-    bot_mode: str = "suggestions"
     idle_session_hours: int = 12
     bot_debounce_seconds: int = 3
     business_faq: str = ""
@@ -157,8 +155,6 @@ def whatsapp_config(db: Session, company_id: int) -> WhatsAppTenantConfig:
         access_token=_secret_value(settings_map.get("access_token")).strip(),
         verify_token=_secret_value(settings_map.get("verify_token")).strip(),
         webhook_enabled=_as_bool(settings_map.get("webhook_enabled")),
-        bot_enabled=_as_bool(settings_map.get("bot_enabled"), default=False),
-        bot_mode=(settings_map.get("bot_mode") or "suggestions").strip().lower(),
         idle_session_hours=max(1, min(_as_int(settings_map.get("idle_session_hours"), 12), 72)),
         bot_debounce_seconds=max(0, min(_as_int(settings_map.get("bot_debounce_seconds"), 3), 15)),
         business_faq=(settings_map.get("business_faq") or "").strip()[:12000],
@@ -191,8 +187,6 @@ def redact_whatsapp_config(config: WhatsAppTenantConfig) -> dict[str, Any]:
         "access_token": "••••••••" if config.access_token else "",
         "verify_token": "••••••••" if config.verify_token else "",
         "webhook_enabled": config.webhook_enabled,
-        "bot_enabled": config.bot_enabled,
-        "bot_mode": config.bot_mode,
         "idle_session_hours": config.idle_session_hours,
         "bot_debounce_seconds": config.bot_debounce_seconds,
         "business_faq": config.business_faq,
@@ -1302,8 +1296,6 @@ def _store_embedded_signup_state(
         "connection_status": connection_status,
         "connected_at": datetime.now(timezone.utc).isoformat() if connection_status == "connected" else "",
         "webhook_enabled": "true" if webhook_enabled else "false",
-        "bot_enabled": "false",
-        "bot_mode": "suggestions",
         "idle_session_hours": "12",
         "bot_debounce_seconds": "3",
         "business_faq": "",
@@ -2063,6 +2055,17 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
 
 def enqueue_whatsapp_processing(db: Session, company_id: int, inbound_message_id: int, user_id: int | None = None) -> object:
     config = whatsapp_config(db, company_id)
+    inbound = db.get(InboundMessage, inbound_message_id)
+    conversation_bot_enabled = bool(
+        inbound
+        and inbound.conversation_id
+        and db.scalar(
+            select(Conversation.whatsapp_bot_enabled).where(
+                Conversation.id == inbound.conversation_id,
+                Conversation.company_id == company_id,
+            )
+        )
+    )
     attachments = db.scalars(
         select(MessageAttachment)
         .where(
@@ -2095,7 +2098,7 @@ def enqueue_whatsapp_processing(db: Session, company_id: int, inbound_message_id
         payload={"inbound_message_id": inbound_message_id, "channel": WHATSAPP_CHANNEL_KEY},
         created_by_user_id=user_id,
         dedupe_key=dedupe_key,
-        delay_seconds=config.bot_debounce_seconds if config.bot_enabled else 0,
+        delay_seconds=config.bot_debounce_seconds if conversation_bot_enabled else 0,
     )
 
 
@@ -2380,14 +2383,6 @@ def automatic_response_status(
 ) -> dict[str, Any]:
     config = whatsapp_config(db, company_id)
 
-    if not config.bot_enabled:
-        return {
-            "allowed": False,
-            "reason": "bot_disabled",
-            "count": 0,
-            "limit": config.max_auto_messages,
-        }
-
     guard_reason, active_session = _automatic_response_guard(
         db,
         company_id=company_id,
@@ -2479,6 +2474,8 @@ def _automatic_response_guard(
         return "conversation_not_found", None
     if conversation.status == "human_owned":
         return "human_owned", None
+    if not conversation.whatsapp_bot_enabled:
+        return "bot_disabled", None
 
     sessions_query = (
         select(WhatsAppOrderSession)
@@ -2730,7 +2727,6 @@ async def send_automatic_response(
     # Recheck after reserving the idempotency key: the customer may have sent a
     # newer message or an agent may have taken over while this reply was being
     # prepared. This narrows the race window immediately before the Meta call.
-    latest_config = whatsapp_config(db, company_id)
     guard_reason, _ = _automatic_response_guard(
         db,
         company_id=company_id,
@@ -2738,8 +2734,6 @@ async def send_automatic_response(
         trigger_message_id=trigger_message_id,
         lock_rows=True,
     )
-    if not latest_config.bot_enabled:
-        guard_reason = "bot_disabled"
     if guard_reason:
         reservation.status = "cancelled"
         reservation.processing_step = "outbound_auto_cancelled"

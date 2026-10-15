@@ -881,9 +881,22 @@ def set_whatsapp_human_control(
     session = active_whatsapp_session(
         db, company_id=company_id, conversation_id=conversation_id
     )
-    if not conversation or not session:
+    if not conversation:
         return None
-    if active:
+    if not active:
+        set_whatsapp_bot_enabled(
+            db,
+            company_id=company_id,
+            conversation_id=conversation_id,
+            enabled=True,
+        )
+        return active_whatsapp_session(
+            db, company_id=company_id, conversation_id=conversation_id
+        )
+
+    conversation.whatsapp_bot_enabled = False
+    conversation.status = "human_owned"
+    if session:
         _set_handoff(
             db,
             session=session,
@@ -891,59 +904,65 @@ def set_whatsapp_human_control(
             reason="Atención asumida por un agente.",
             active=True,
         )
-        if user_id:
-            conversation.assigned_user_id = user_id
-    else:
-        session.human_active = False
-        session.handoff_reason = None
-        session.handoff_at = None
-        session.status = "ready_for_review" if _draft_is_complete(
-            _json_object(session.draft_json, {}),
-            _json_object(session.missing_fields_json, []),
-        ) else "collecting"
-        conversation.status = "open"
-        conversation.assigned_user_id = None
-        last_inbound = _latest_customer_message(
-            db, company_id=company_id, conversation_id=conversation_id
-        )
-        if last_inbound:
-            config = whatsapp_config(db, company_id)
-            session.last_customer_message_at = _aware(last_inbound.received_at) or _now()
-            session.due_at = session.last_customer_message_at + timedelta(hours=config.idle_session_hours)
-            session.revision = int(session.revision or 0) + 1
-    session.updated_at = _now()
+        session.updated_at = _now()
+    if user_id:
+        conversation.assigned_user_id = user_id
+    conversation.updated_at = _now()
     db.commit()
-    db.refresh(session)
+    if session:
+        db.refresh(session)
     return session
 
 
-def pause_whatsapp_bot(
+def set_whatsapp_bot_enabled(
     db: Session,
     *,
     company_id: int,
     conversation_id: int,
-) -> WhatsAppOrderSession | None:
+    enabled: bool,
+) -> Conversation | None:
     conversation = db.scalar(
         select(Conversation).where(
             Conversation.id == conversation_id,
             Conversation.company_id == company_id,
         )
     )
-    session = active_whatsapp_session(
-        db, company_id=company_id, conversation_id=conversation_id
-    )
-    if not conversation or not session:
+    if not conversation:
         return None
-    _set_handoff(
-        db,
-        session=session,
-        conversation=conversation,
-        reason="Bot pausado por un agente.",
-    )
-    session.updated_at = _now()
+    conversation.whatsapp_bot_enabled = bool(enabled)
+    if enabled:
+        if conversation.status == "human_owned":
+            conversation.status = "open"
+            conversation.assigned_user_id = None
+        session = active_whatsapp_session(
+            db,
+            company_id=company_id,
+            conversation_id=conversation_id,
+        )
+        if session and (session.human_active or session.status == "human_handoff"):
+            session.human_active = False
+            session.handoff_reason = None
+            session.handoff_at = None
+            session.status = "ready_for_review" if _draft_is_complete(
+                _json_object(session.draft_json, {}),
+                _json_object(session.missing_fields_json, []),
+            ) else "collecting"
+            last_inbound = _latest_customer_message(
+                db, company_id=company_id, conversation_id=conversation_id
+            )
+            if last_inbound:
+                config = whatsapp_config(db, company_id)
+                session.last_customer_message_at = _aware(last_inbound.received_at) or _now()
+                session.due_at = session.last_customer_message_at + timedelta(
+                    hours=config.idle_session_hours
+                )
+                session.revision = int(session.revision or 0) + 1
+                session.finalization_job_key = None
+            session.updated_at = _now()
+    conversation.updated_at = _now()
     db.commit()
-    db.refresh(session)
-    return session
+    db.refresh(conversation)
+    return conversation
 
 
 def enqueue_due_whatsapp_session_finalizations(
@@ -1415,11 +1434,14 @@ def process_whatsapp_agent_turn(
         return {"ok": True, "skipped": True, "reason": "conversation_not_found"}
 
     config = whatsapp_config(db, company_id)
-    if not config.bot_enabled:
+    if not conversation.whatsapp_bot_enabled:
         inbound_message.status = "received"
-        inbound_message.processing_step = "whatsapp_agent_disabled"
+        human_owned = conversation.status == "human_owned"
+        inbound_message.processing_step = (
+            "whatsapp_agent_handoff_waiting" if human_owned else "whatsapp_agent_disabled"
+        )
         db.commit()
-        return {"ok": True, "status": "bot_disabled"}
+        return {"ok": True, "status": "human_handoff" if human_owned else "bot_disabled"}
 
     latest_message = _latest_customer_message(
         db, company_id=company_id, conversation_id=conversation.id
@@ -1610,28 +1632,27 @@ def process_whatsapp_agent_turn(
         inbound_message.status = "received"
         inbound_message.processing_step = "whatsapp_agent_turn_limit"
         db.commit()
-        send_result: dict[str, Any] = {"sent": False, "reason": "suggestions_mode"}
-        if config.bot_mode == "automatic":
-            window = whatsapp_response_window_status(
-                db,
-                company_id=company_id,
-                conversation_id=conversation.id,
-                response_window_minutes=config.response_window_minutes,
-            )
-            if window.get("is_open"):
-                try:
-                    send_result = await_send_automatic_response(
-                        db,
-                        company_id=company_id,
-                        conversation_id=conversation.id,
-                        trigger_message_id=latest_message.id,
-                        body="Voy a pasar tu consulta a una persona del equipo para que pueda ayudarte.",
-                        semantic_state="human_handoff",
-                        assistant_session_id=session.id,
-                        draft_revision=session.revision,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    send_result = {"sent": False, "reason": type(exc).__name__}
+        send_result: dict[str, Any] = {"sent": False, "reason": "response_window_closed"}
+        window = whatsapp_response_window_status(
+            db,
+            company_id=company_id,
+            conversation_id=conversation.id,
+            response_window_minutes=config.response_window_minutes,
+        )
+        if window.get("is_open"):
+            try:
+                send_result = await_send_automatic_response(
+                    db,
+                    company_id=company_id,
+                    conversation_id=conversation.id,
+                    trigger_message_id=latest_message.id,
+                    body="Voy a pasar tu consulta a una persona del equipo para que pueda ayudarte.",
+                    semantic_state="human_handoff",
+                    assistant_session_id=session.id,
+                    draft_revision=session.revision,
+                )
+            except Exception as exc:  # noqa: BLE001
+                send_result = {"sent": False, "reason": type(exc).__name__}
         return {
             "ok": True,
             "status": "human_handoff",
@@ -1860,8 +1881,8 @@ def process_whatsapp_agent_turn(
             and evaluation.intent in {"order", "order_question"}
         )
     ):
-        send_result: dict[str, Any] = {"sent": False, "skipped": True, "reason": "suggestions_mode"}
-        if config.bot_mode == "automatic" and reply:
+        send_result: dict[str, Any] = {"sent": False, "skipped": True, "reason": "no_reply_needed"}
+        if reply:
             window = whatsapp_response_window_status(
                 db,
                 company_id=company_id,

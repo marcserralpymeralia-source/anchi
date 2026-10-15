@@ -15251,6 +15251,11 @@ table.logs-table tr:hover td {
   color: var(--wa-accent-dark);
 }
 
+.whatsapp-inbox-shell .wa-chat-bot-toggle {
+  flex: 0 0 auto;
+  margin: 0 0 0 auto;
+}
+
 @media (max-width: 680px) {
   .whatsapp-inbox-shell .wa-agent-session-topline {
     align-items: flex-start;

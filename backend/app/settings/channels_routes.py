@@ -507,9 +507,6 @@ async def update_whatsapp_assistant_settings(
         return RedirectResponse("/settings/channels", status_code=303)
 
     form = dict(await request.form())
-    mode = str(form.get("bot_mode") or "suggestions").strip().lower()
-    if mode not in {"suggestions", "automatic"}:
-        mode = "suggestions"
     try:
         idle_hours = max(1, min(int(form.get("idle_session_hours") or 12), 72))
     except (TypeError, ValueError):
@@ -528,8 +525,6 @@ async def update_whatsapp_assistant_settings(
         max_auto_messages = 20
     business_faq = str(form.get("business_faq") or "").strip()[:12000]
     values = (
-        ("bot_enabled", "true" if form.get("bot_enabled") == "on" else "false", "boolean"),
-        ("bot_mode", mode, "string"),
         ("idle_session_hours", str(idle_hours), "integer"),
         ("bot_debounce_seconds", str(debounce_seconds), "integer"),
         ("business_faq", business_faq, "string"),
@@ -554,9 +549,6 @@ async def update_whatsapp_assistant_settings(
         action="whatsapp.assistant.settings.update",
         entity_type="input_channel",
         entity_id=channel.id,
-        message=(
-            "Configuración del agente de WhatsApp actualizada "
-            f"(enabled={form.get('bot_enabled') == 'on'}, mode={mode}, idle_hours={idle_hours})."
-        ),
+        message=f"Configuración de respuestas del agente de WhatsApp actualizada (idle_hours={idle_hours}).",
     )
     return RedirectResponse("/settings/channels?focus=whatsapp&assistant=saved", status_code=303)

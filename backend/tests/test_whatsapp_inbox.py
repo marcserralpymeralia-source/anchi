@@ -151,7 +151,7 @@ class WhatsAppInboxTests(unittest.TestCase):
         self.assertEqual(response.text.count('href="/mail"'), 1)
         self.assertEqual(response.text.count('class="nav-label">WhatsApp</span>'), 1)
 
-    def test_assistant_session_is_visible_and_can_be_taken_by_a_human(self):
+    def test_agent_toggle_is_visible_per_chat_and_controls_existing_session(self):
         fixture = build_performance_fixture("small")
         conversation_id = self._seed_whatsapp(fixture)
         engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
@@ -188,20 +188,21 @@ class WhatsAppInboxTests(unittest.TestCase):
             page = client.get(f"/whatsapp/inbox?conversation_id={conversation_id}")
             csrf = re.search(r'<meta name="csrf-token" content="([^"]*)"', page.text)
             self.assertIn('role="switch" aria-checked="false"', page.text)
-            self.assertIn("Atención humana", page.text)
+            self.assertIn("Agente IA", page.text)
+            self.assertNotIn("Atención humana", page.text)
             response = client.post(
                 f"/whatsapp/inbox/{conversation_id}/assistant-control",
-                data={"action": "take", "_csrf_token": csrf.group(1) if csrf else ""},
+                data={"action": "enable", "_csrf_token": csrf.group(1) if csrf else ""},
                 follow_redirects=False,
             )
-            human_page = client.get(response.headers["location"])
-            human_csrf = re.search(r'<meta name="csrf-token" content="([^"]*)"', human_page.text)
-            resume = client.post(
+            enabled_page = client.get(response.headers["location"])
+            enabled_csrf = re.search(r'<meta name="csrf-token" content="([^"]*)"', enabled_page.text)
+            pause = client.post(
                 f"/whatsapp/inbox/{conversation_id}/assistant-control",
-                data={"action": "resume", "_csrf_token": human_csrf.group(1) if human_csrf else ""},
+                data={"action": "disable", "_csrf_token": enabled_csrf.group(1) if enabled_csrf else ""},
                 follow_redirects=False,
             )
-            bot_page = client.get(resume.headers["location"])
+            paused_page = client.get(pause.headers["location"])
         finally:
             cleanup()
             fixture.cleanup()
@@ -210,10 +211,25 @@ class WhatsAppInboxTests(unittest.TestCase):
         self.assertIn("Agente conversacional", page.text)
         self.assertIn("Esperando datos del cliente", page.text)
         self.assertIn("Indicar cantidad", page.text)
-        self.assertIn('role="switch" aria-checked="true"', human_page.text)
-        self.assertIn('role="switch" aria-checked="false"', bot_page.text)
+        self.assertIn('role="switch" aria-checked="true"', enabled_page.text)
+        self.assertIn('role="switch" aria-checked="false"', paused_page.text)
         self.assertEqual(response.status_code, 303)
-        self.assertEqual(resume.status_code, 303)
+        self.assertEqual(pause.status_code, 303)
+
+    def test_agent_toggle_is_available_before_a_session_exists(self):
+        fixture = build_performance_fixture("small")
+        conversation_id = self._seed_whatsapp(fixture)
+        client, cleanup = self._client_for(fixture)
+        try:
+            self._login(client, fixture)
+            page = client.get(f"/whatsapp/inbox?conversation_id={conversation_id}")
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+        self.assertEqual(page.status_code, 200)
+        self.assertIn('role="switch" aria-checked="false"', page.text)
+        self.assertIn("Agente IA", page.text)
 
     def test_manual_reply_takes_control_before_provider_send_finishes(self):
         fixture = build_performance_fixture("small")

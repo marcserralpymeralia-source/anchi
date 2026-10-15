@@ -42,6 +42,16 @@
         </span>
       </div>
     </div>
+    <form method="post" action="/whatsapp/inbox/{{ selected.id }}/assistant-control" class="wa-chat-bot-toggle">
+      <input type="hidden" name="action" value="{{ 'disable' if assistant_enabled else 'enable' }}">
+      <button type="submit" class="wa-agent-control-toggle" role="switch" aria-checked="{{ 'true' if assistant_enabled else 'false' }}" aria-label="Agente IA en esta conversación">
+        <span class="wa-agent-control-track" aria-hidden="true"><span></span></span>
+        <span class="wa-agent-control-copy">
+          <strong>Agente IA</strong>
+          <small>{{ "Activo" if assistant_enabled else "Pausado" }}</small>
+        </span>
+      </button>
+    </form>
   </header>
 
   {% if assistant_session %}
@@ -83,38 +93,12 @@
       {% if assistant_session.handoff_reason %}
         <p class="wa-agent-handoff-reason">{{ assistant_session.handoff_reason }}</p>
       {% endif %}
-      {% if assistant_session.active and assistant_session.suggested_reply and assistant_mode == 'suggestions' %}
-        <div class="wa-agent-suggestion">
-          <div><strong>Sugerencia de respuesta</strong><p>{{ assistant_session.suggested_reply }}</p></div>
-          <button type="button" class="button secondary compact-button" data-wa-use-suggestion="{{ assistant_session.suggested_reply }}" {% if not can_send %}disabled title="La ventana de respuesta de WhatsApp está cerrada"{% endif %}>Usar</button>
-        </div>
-      {% endif %}
-
       {% if assistant_session.active %}
         <div class="wa-agent-session-actions">
-          {% set human_controlled = assistant_session.human_active or assistant_session.status == 'human_handoff' %}
-          <form method="post" action="/whatsapp/inbox/{{ selected.id }}/assistant-control" class="wa-agent-control-form">
-            <input type="hidden" name="action" value="{{ 'resume' if human_controlled else 'take' }}">
-            <button type="submit" class="wa-agent-control-toggle" role="switch" aria-checked="{{ 'true' if human_controlled else 'false' }}" aria-label="Atención humana en esta conversación">
-              <span class="wa-agent-control-track" aria-hidden="true"><span></span></span>
-              <span class="wa-agent-control-copy">
-                <strong>Atención humana</strong>
-                <small>
-                  {% if assistant_session.human_active %}Activa · el bot está pausado
-                  {% elif assistant_session.status == 'human_handoff' %}Requerida · el bot está pausado
-                  {% elif assistant_enabled %}Desactivada · la IA atiende este chat
-                  {% else %}Desactivada · la IA está desactivada en la configuración{% endif %}
-                </small>
-              </span>
-            </button>
-          </form>
           <form method="post" action="/whatsapp/inbox/{{ selected.id }}/sessions/{{ assistant_session.id }}/close">
             <button class="button secondary compact-button">Cerrar y evaluar ahora</button>
           </form>
         </div>
-      {% endif %}
-      {% if not assistant_enabled and assistant_session.active %}
-        <small class="muted">El agente está desactivado globalmente; puedes revisar o cerrar esta sesión, pero no generará respuestas.</small>
       {% endif %}
     </section>
   {% endif %}

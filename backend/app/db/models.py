@@ -743,6 +743,7 @@ class Conversation(Base):
     customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"))
     assigned_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"))
     status: Mapped[str] = mapped_column(String(50), default="open")
+    whatsapp_bot_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     subject: Mapped[str | None] = mapped_column(String(500))
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

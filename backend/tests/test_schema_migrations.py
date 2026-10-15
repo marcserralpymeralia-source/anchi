@@ -25,7 +25,7 @@ from app.master.models import CompanyMembership, EmailSyncState, MasterCompany, 
 from app.master.provisioning import _ensure_master_user  # noqa: E402
 from app.migrations.inspection import discover_sqlite_files, inspect_database_url, inventory_records, simulate_sqlite_reference  # noqa: E402
 from app.migrations.helpers import table_exists  # noqa: E402
-from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, MASTER_EMAIL_SYNC_STATE_COLUMNS, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_master_email_sync_state_repair, _apply_tenant_email_favorites, _apply_tenant_external_database_schema_snapshot, _apply_tenant_ftp_connections, _apply_tenant_knowledge_entries, _apply_tenant_order_archiving, _apply_tenant_product_embeddings, _apply_tenant_proxy_connection_scope, _apply_tenant_proxy_connections, _apply_tenant_whatsapp_agent_sessions, _apply_tenant_whatsapp_read_state, _apply_tenant_whatsapp_session_safety  # noqa: E402
+from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, MASTER_EMAIL_SYNC_STATE_COLUMNS, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_master_email_sync_state_repair, _apply_tenant_email_favorites, _apply_tenant_external_database_schema_snapshot, _apply_tenant_ftp_connections, _apply_tenant_knowledge_entries, _apply_tenant_order_archiving, _apply_tenant_product_embeddings, _apply_tenant_proxy_connection_scope, _apply_tenant_proxy_connections, _apply_tenant_whatsapp_agent_sessions, _apply_tenant_whatsapp_chat_bot_control, _apply_tenant_whatsapp_read_state, _apply_tenant_whatsapp_session_safety  # noqa: E402
 from app.tenancy.database import get_tenant_engine  # noqa: E402
 from app.tenancy.migrations import tenant_migration_report, upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import run_worker_cycle  # noqa: E402
@@ -450,6 +450,27 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertEqual(actions, ["ALTER TABLE emails ADD COLUMN is_favorite BOOLEAN DEFAULT false"])
         columns = {column["name"] for column in inspect(self.tenant_engine).get_columns("emails")}
         self.assertIn("is_favorite", columns)
+
+    def test_whatsapp_bot_control_migration_defaults_existing_chats_to_off(self):
+        with self.tenant_engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE conversations (id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL)"
+                )
+            )
+            conn.execute(text("INSERT INTO conversations (id, company_id) VALUES (1, 1)"))
+
+        actions = _apply_tenant_whatsapp_chat_bot_control(self.tenant_engine, dry_run=False)
+
+        self.assertEqual(
+            actions,
+            ["ALTER TABLE conversations ADD COLUMN whatsapp_bot_enabled BOOLEAN NOT NULL DEFAULT FALSE"],
+        )
+        with self.tenant_engine.connect() as conn:
+            value = conn.execute(
+                text("SELECT whatsapp_bot_enabled FROM conversations WHERE id = 1")
+            ).scalar_one()
+        self.assertFalse(value)
 
     def test_proxy_migration_keeps_only_proxy_configuration_fields(self):
         with self.tenant_engine.begin() as conn:

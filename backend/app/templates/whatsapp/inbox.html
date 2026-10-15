@@ -451,16 +451,6 @@
     });
   };
 
-  document.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-wa-use-suggestion]");
-    if (!button || button.disabled) return;
-    const input = document.getElementById("wa-message-input");
-    if (!input) return;
-    input.value = button.dataset.waUseSuggestion || "";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.focus();
-  });
-
   window.updateWhatsAppAgentSessionTimer();
   window.setInterval(() => window.updateWhatsAppAgentSessionTimer(), 60000);
 

@@ -18,6 +18,7 @@ from app.core.pagination import normalize_page
 from app.core.templating import templates
 from app.customers.matching import build_customer_phone_index, customer_id_from_phone
 from app.db.models import Conversation, Customer, InboundMessage, InputChannel, MessageAttachment, WhatsAppOrderSession, utcnow
+from app.logs.service import log_action
 from app.master.service import TenantUser
 from app.tenancy.database import get_tenant_db
 from app.whatsapp.service import (
@@ -38,7 +39,7 @@ from app.whatsapp.service import (
 from app.whatsapp.agent import (
     active_whatsapp_session,
     enqueue_whatsapp_session_finalization,
-    pause_whatsapp_bot,
+    set_whatsapp_bot_enabled,
     set_whatsapp_human_control,
 )
 
@@ -579,6 +580,16 @@ def _whatsapp_compose_context(
         if selected
         else {"is_open": False, "reason": "no_conversation", "remaining_seconds": 0}
     )
+    assistant_enabled = False
+    if selected:
+        assistant_enabled = bool(
+            db.scalar(
+                select(Conversation.whatsapp_bot_enabled).where(
+                    Conversation.id == selected["id"],
+                    Conversation.company_id == user.company_id,
+                )
+            )
+        )
     return {
         "ready_to_send": ready_to_send,
         "response_window": response_window,
@@ -588,8 +599,7 @@ def _whatsapp_compose_context(
             company_id=user.company_id,
             selected=selected,
         ),
-        "assistant_enabled": bool(config.bot_enabled),
-        "assistant_mode": config.bot_mode,
+        "assistant_enabled": assistant_enabled,
     }
 
 
@@ -841,26 +851,25 @@ async def whatsapp_inbox_assistant_control(
     if not conversation:
         return PlainTextResponse("Conversación no encontrada.", status_code=404)
     normalized_action = str(action or "").strip().lower()
-    if normalized_action == "pause":
-        pause_whatsapp_bot(db, company_id=user.company_id, conversation_id=conversation_id)
-    elif normalized_action == "take":
-        set_whatsapp_human_control(
-            db,
-            company_id=user.company_id,
-            conversation_id=conversation_id,
-            active=True,
-            user_id=user.actor_id,
-        )
-    elif normalized_action == "resume":
-        set_whatsapp_human_control(
-            db,
-            company_id=user.company_id,
-            conversation_id=conversation_id,
-            active=False,
-            user_id=user.actor_id,
-        )
-    else:
+    if normalized_action not in {"enable", "disable"}:
         return _redirect_to_conversation(conversation_id, error="invalid_assistant_action")
+    updated = set_whatsapp_bot_enabled(
+        db,
+        company_id=user.company_id,
+        conversation_id=conversation_id,
+        enabled=normalized_action == "enable",
+    )
+    if not updated:
+        return _redirect_to_conversation(conversation_id, error="conversation_not_found")
+    log_action(
+        db,
+        company_id=user.company_id,
+        user=user,
+        action="whatsapp.assistant.enabled" if normalized_action == "enable" else "whatsapp.assistant.disabled",
+        entity_type="conversation",
+        entity_id=conversation_id,
+        message=f"Agente de WhatsApp {'activado' if normalized_action == 'enable' else 'pausado'} para la conversación.",
+    )
     return _redirect_to_conversation(conversation_id, notice="assistant_updated")
 
 

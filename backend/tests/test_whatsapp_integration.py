@@ -131,8 +131,6 @@ class WhatsAppIntegrationTests(unittest.TestCase):
             "verify_token": "verify-123",
             "connection_status": "connected",
             "webhook_enabled": "true",
-            "bot_enabled": "true",
-            "bot_mode": "automatic",
             "bot_debounce_seconds": "0",
             "default_language": "es",
             "timezone": "Europe/Madrid",
@@ -1900,6 +1898,7 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         inbound = persist_event(db, 1, parse_payload_events(text_payload)[0])
         duplicate = persist_event(db, 1, parse_payload_events(text_payload)[0])
         conversation_id = inbound.conversation_id
+        db.get(Conversation, conversation_id).whatsapp_bot_enabled = True
         enqueue_whatsapp_processing(db, 1, inbound.id)
         db.close()
 
@@ -2095,6 +2094,7 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         events = parse_payload_events(payload)
         db = self.TenantSession()
         message = persist_event(db, 1, events[0])
+        db.get(Conversation, message.conversation_id).whatsapp_bot_enabled = True
         enqueue_whatsapp_processing(db, 1, message.id)
         db.commit()
         self.assertEqual(db.scalar(select(func.count()).select_from(BackgroundJob)) or 0, 1)
@@ -2167,6 +2167,7 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         events = parse_payload_events(payload)
         db = self.TenantSession()
         message = persist_event(db, 1, events[0])
+        db.get(Conversation, message.conversation_id).whatsapp_bot_enabled = True
         db.commit()
 
         classification = json.dumps(
@@ -2252,6 +2253,7 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         }
         db = self.TenantSession()
         message = persist_event(db, 1, parse_payload_events(payload)[0])
+        db.get(Conversation, message.conversation_id).whatsapp_bot_enabled = True
         job = enqueue_whatsapp_processing(db, 1, message.id)
         db.close()
 

@@ -60,8 +60,6 @@ class WhatsAppAgentSessionTests(unittest.TestCase):
         db.add_all(
             [
                 ChannelSetting(company_id=1, channel_id=1, key="enabled", value="true"),
-                ChannelSetting(company_id=1, channel_id=1, key="bot_enabled", value="true"),
-                ChannelSetting(company_id=1, channel_id=1, key="bot_mode", value="suggestions"),
                 ChannelSetting(company_id=1, channel_id=1, key="idle_session_hours", value="12"),
             ]
         )
@@ -73,12 +71,19 @@ class WhatsAppAgentSessionTests(unittest.TestCase):
                 provider="meta",
                 external_thread_id="+34600000000",
                 status="open",
+                whatsapp_bot_enabled=True,
                 created_at=now - timedelta(minutes=20),
                 updated_at=now,
             )
         )
         db.commit()
         db.close()
+        self.auto_reply_patch = patch(
+            "app.whatsapp.agent.await_send_automatic_response",
+            return_value={"sent": True, "reason": "sent"},
+        )
+        self.auto_reply_sender = self.auto_reply_patch.start()
+        self.addCleanup(self.auto_reply_patch.stop)
 
     def _message(self, db, message_id: int, text: str, *, direction="inbound", at=None):
         message = InboundMessage(
@@ -120,6 +125,7 @@ class WhatsAppAgentSessionTests(unittest.TestCase):
 
     def test_turn_saves_missing_fields_and_does_not_finalize(self):
         db = self.Session()
+        db.add(ChannelSetting(company_id=1, channel_id=1, key="bot_enabled", value="false"))
         message = self._message(db, 1, "Quiero unas cajas")
         db.commit()
         result = WhatsAppAgentTurnResult(
@@ -148,6 +154,8 @@ class WhatsAppAgentSessionTests(unittest.TestCase):
         self.assertIn("Indicar la referencia exacta", session.suggested_reply)
         self.assertEqual(session.agent_turn_count, 1)
         self.assertNotEqual(session.suggested_reply, "¿Qué referencia necesitas?")
+        self.assertTrue(output["auto_response"]["sent"])
+        self.auto_reply_sender.assert_called_once()
         self.assertIsNone(session.order_id)
         db.close()
 
@@ -480,7 +488,7 @@ class WhatsAppAgentSessionTests(unittest.TestCase):
             created_by_user_id=None,
             payload_json=json.dumps({"inbound_message_id": message.id, "channel": "whatsapp"}),
         )
-        expected = {"ok": True, "status": "suggestions_mode"}
+        expected = {"ok": True, "status": "processed"}
         with patch("app.workers.jobs_worker.process_whatsapp_agent_turn", return_value=expected) as agent:
             result = _process_job(db, job)
 
@@ -488,15 +496,9 @@ class WhatsAppAgentSessionTests(unittest.TestCase):
         agent.assert_called_once_with(db, company_id=1, inbound_message=message)
         db.close()
 
-    def test_disabled_bot_does_not_call_the_model_or_create_a_session(self):
+    def test_disabled_chat_bot_does_not_call_the_model_or_create_a_session(self):
         db = self.Session()
-        setting = db.scalar(
-            select(ChannelSetting).where(
-                ChannelSetting.company_id == 1,
-                ChannelSetting.key == "bot_enabled",
-            )
-        )
-        setting.value = "false"
+        db.get(Conversation, 1).whatsapp_bot_enabled = False
         message = self._message(db, 12, "¿Tenéis caja eco?")
         db.commit()
 

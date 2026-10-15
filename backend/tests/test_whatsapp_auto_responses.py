@@ -46,8 +46,6 @@ class WhatsAppAutomaticResponseTests(unittest.IsolatedAsyncioTestCase):
         db.add_all(
             [
                 ChannelSetting(company_id=1, channel_id=1, key="enabled", value="true"),
-                ChannelSetting(company_id=1, channel_id=1, key="bot_enabled", value="true"),
-                ChannelSetting(company_id=1, channel_id=1, key="bot_mode", value="automatic"),
                 ChannelSetting(company_id=1, channel_id=1, key="max_auto_messages", value="3"),
                 ChannelSetting(company_id=1, channel_id=1, key="provider", value="meta"),
                 ChannelSetting(company_id=1, channel_id=1, key="phone_number_id", value="pn-123"),
@@ -62,6 +60,7 @@ class WhatsAppAutomaticResponseTests(unittest.IsolatedAsyncioTestCase):
                 channel_id=1,
                 provider="meta",
                 external_thread_id="+34600000000",
+                whatsapp_bot_enabled=True,
             )
         )
         db.add(
@@ -235,6 +234,22 @@ class WhatsAppAutomaticResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status["reason"], "human_owned")
         db.close()
 
+    def test_disabled_chat_bot_is_not_eligible_for_auto_response(self):
+        db = self.Session()
+        db.get(Conversation, 1).whatsapp_bot_enabled = False
+        db.commit()
+
+        status = automatic_response_status(
+            db,
+            company_id=1,
+            conversation_id=1,
+            trigger_message_id=1,
+        )
+
+        self.assertFalse(status["allowed"])
+        self.assertEqual(status["reason"], "bot_disabled")
+        db.close()
+
     def test_human_active_order_session_is_not_eligible_for_auto_response(self):
         db = self.Session()
         db.add(
@@ -375,6 +390,36 @@ class WhatsAppAutomaticResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result["sent"])
         self.assertTrue(result["skipped"])
         self.assertEqual(result["reason"], "human_active")
+        self.assertEqual(outbound.status, "cancelled")
+        self.assertEqual(outbound.processing_step, "outbound_auto_cancelled")
+        provider.assert_not_awaited()
+        db.close()
+
+    async def test_chat_bot_toggle_off_after_reservation_cancels_automatic_send(self):
+        db = self.Session()
+        guard_results = [(None, None), (None, None), ("bot_disabled", None)]
+        provider = AsyncMock()
+
+        with patch(
+            "app.whatsapp.service._automatic_response_guard",
+            side_effect=guard_results,
+        ), patch(
+            "app.whatsapp.service.send_whatsapp_text",
+            new=provider,
+        ):
+            result = await send_automatic_response(
+                db,
+                company_id=1,
+                conversation_id=1,
+                trigger_message_id=1,
+                body="¿Son cuatro cajas?",
+                semantic_state="needs_clarification",
+            )
+
+        outbound = db.query(InboundMessage).filter(InboundMessage.direction == "outbound").one()
+        self.assertFalse(result["sent"])
+        self.assertTrue(result["skipped"])
+        self.assertEqual(result["reason"], "bot_disabled")
         self.assertEqual(outbound.status, "cancelled")
         self.assertEqual(outbound.processing_step, "outbound_auto_cancelled")
         provider.assert_not_awaited()

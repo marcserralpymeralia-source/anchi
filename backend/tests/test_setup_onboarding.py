@@ -393,7 +393,6 @@ class SetupOnboardingTests(unittest.TestCase):
                     "verify_token": encrypt_secret("tenant-verify-token"),
                     "connection_status": "connected",
                     "webhook_enabled": "true",
-                    "bot_enabled": "true",
                 }
                 for key, value in values.items():
                     db.add(
