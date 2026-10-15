@@ -1,6 +1,6 @@
 # Plan: agente conversacional de WhatsApp y cierre de pedidos tras 12 horas
 
-Estado: **implementada localmente, pendiente de validación final y despliegue**. Alcance: conversaciones entrantes de WhatsApp Cloud API por empresa. La validación se hizo con datos sintéticos locales; no se enviaron mensajes ni se usaron datos de producción.
+Estado: **implementada y publicada** en `chore/technical-improvement-plan` (`b4d827b`). La suite focalizada pasó 168 tests y omitió 4; la CI completa de GitHub sigue en curso. Alcance: conversaciones entrantes de WhatsApp Cloud API por empresa. La validación funcional se hizo con datos sintéticos locales; no se enviaron mensajes ni se usaron datos de producción.
 
 ## Resultado de la implementación local
 
@@ -99,7 +99,7 @@ El estado de «pedido completo» no equivale a «pedido confirmado», y «cerrad
 ### Configuración y experiencia de usuario
 
 - Ajustes por empresa: bot desactivado por defecto al migrar, activar en modo sugerencias/prueba, pasar a respuestas automáticas tras validación; plazo de 12 h configurable con valor inicial 12, pausa global, horario de atención para humanos, instrucciones/FAQ aprobadas y límites de coste/turnos.
-- En el chat: distintivo discreto de respuesta automática, estado del borrador y plazo, dudas pendientes, «Tomar control», «Reanudar bot», «Cerrar y evaluar ahora», enlaces a pedido/revisión y motivo de derivación. Evitar exponer internamente el prompt o el razonamiento del modelo al cliente.
+- En el chat: interruptor por conversación para alternar IA/atención humana, estado del borrador y plazo, dudas pendientes, «Cerrar y evaluar ahora», enlaces a pedido/revisión y motivo de derivación. Evitar exponer internamente el prompt o el razonamiento del modelo al cliente.
 - Observabilidad: eventos `turn_received`, `media_pending`, `intent_evaluated`, `reply_skipped/sent`, `handoff`, `timer_reset`, `finalize_started/skipped/completed`, `review_opened`; duración, coste estimado, errores y versiones, sin secretos ni texto sensible en logs.
 
 ## Secuencia aplicada en esta fase
