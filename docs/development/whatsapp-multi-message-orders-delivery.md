@@ -45,6 +45,7 @@ La sesión empezaba en la hora del último mensaje; si varios mensajes llegaban 
 | `backend/tests/test_whatsapp_agent_sessions.py` | Cubrir mensajes rápidos, PDF, turnos pendientes, contextos extensos y control humano | Tests de sesión |
 | `backend/tests/test_whatsapp_conversation_semantics.py` | Cubrir seguimiento contextual, fusión/corrección, saludos y límite de líneas | Tests de semántica |
 | `backend/tests/test_whatsapp_integration.py` | Cubrir la reencolación tras extraer media | Test de integración |
+| `backend/tests/test_messages_and_conversations.py` | Mantener el mock de creación de pedidos alineado con los argumentos actuales del pipeline | Test de confirmación |
 
 ## 7. Archivos creados
 
@@ -67,12 +68,15 @@ La sesión empezaba en la hora del último mensaje; si varios mensajes llegaban 
 |---|---|
 | `py -3.14 -m pytest tests/test_whatsapp_conversation_semantics.py tests/test_whatsapp_agent_sessions.py tests/test_whatsapp_conversation_orders.py tests/test_whatsapp_auto_responses.py tests/test_whatsapp_inbox.py tests/test_whatsapp_integration.py -q` (con `DEBUG=false` solo en el proceso de pruebas) | 131 aprobadas, 4 omitidas; sin fallos |
 | `py -3.14 -m pytest tests/test_whatsapp_conversation_semantics.py tests/test_whatsapp_agent_sessions.py tests/test_whatsapp_integration.py -k 'not inbox' -q` (con `DEBUG=false` solo en el proceso de pruebas) | 86 aprobadas; sin fallos, tras las últimas salvaguardas |
-| `py -3.14 -m compileall -q app tests` | Correcto |
-| `git diff --check` | Correcto; Git solo informó de la conversión de finales LF/CRLF en Windows |
-| `GET https://anchi-tan.vercel.app/login` | HTTP 200; comprobación pública no autenticada |
-| `GET http://127.0.0.1:8000/login` | Sin servidor local escuchando en ese puerto |
-| `APP_ENV=test; py -3.14 -m unittest discover -s tests` | Interrumpida tras varios minutos; aparecieron marcadores de error/fallo en la suite global, sin resumen final. No se cuenta como aprobada |
-| GitHub Actions para `f35c1b0` | `test-postgres` correcto; `test-sqlite` falló en la suite global. El log detallado no estuvo disponible; la entrega anterior ya documenta esta suite global en rojo, por lo que no se atribuye el fallo a esta modificación sin traceback |
+| `.venv\Scripts\python.exe -m unittest discover -s tests -p 'test_whatsapp*.py' -q` (FastAPI 0.115.6, `APP_ENV=test`, `DEBUG=false`) | 141 correctas, 4 omitidas |
+| `.venv\Scripts\python.exe -m unittest tests.test_messages_and_conversations -q` | 15 correctas tras alinear el mock con la firma del pipeline |
+| `.venv\Scripts\python.exe -m unittest tests.test_manual_whatsapp_import tests.test_agent_parsing_regressions tests.test_messages_and_conversations tests.test_jobs_reliability tests.test_schema_migrations -q` | 63 correctas |
+| `.venv\Scripts\python.exe -m unittest discover -s tests -q` | 568 tests; 5 fallos y 5 omitidos. Fallan cuatro pruebas de `test_multitenancy_auth` y una de adjuntos en `test_whatsapp_inbox`; las cinco pasan al ejecutar sus módulos/casos aislados y los 141 tests WhatsApp pasan juntos. Indicio de contaminación/orden en la suite global; no se cuenta como suite verde |
+| `.venv\Scripts\python.exe -m compileall -q app scripts tests` | Correcto |
+| `git diff --check` | Correcto tras la revisión final |
+| `curl.exe --silent --show-error --location --max-time 25 --output NUL --write-out "anchi-tan HTTP %{http_code}\n" https://anchi-tan.vercel.app/login` y equivalente para `https://anchi-gemavi.vercel.app/login` | Ambos dominios públicos responden HTTP 200; comprobación no autenticada, no demuestra el flujo de WhatsApp |
+| Estado de GitHub Actions | No se pudo leer el estado actual: `gh` no está instalado y la API pública devolvió 403 por límite de solicitudes |
+| Prueba visual autenticada y conversación real con Meta | No ejecutadas: el navegador integrado no conectó y no se usaron datos ni contactos de producción |
 
 La primera ejecución local no llegó a recopilar tests porque el entorno tenía un valor no booleano para `DEBUG`; se repitieron sin cambiar archivos ni secretos, fijando `DEBUG=false` solo para los procesos de prueba. Las suites informaron avisos deprecados de SQLite/SQLAlchemy y del cliente de pruebas Starlette; no afectan el resultado de aprobación.
 
@@ -86,6 +90,7 @@ La primera ejecución local no llegó a recopilar tests porque el entorno tenía
 - Saludos aislados no disparan una extracción y las respuestas de fecha de entrega se reconocen como contextuales.
 - Un PDF demasiado extenso o un pedido de más de 30 líneas se deriva a revisión humana en vez de finalizar parcialmente.
 - El test de takeover confirma que el agente queda silenciado para el chat hasta que se reanuda.
+- El mock de `_create_order` acepta `fast_path` y `whatsapp_session_id`, como la implementación real del pipeline.
 
 ## 11. Criterios de aceptación
 
@@ -104,7 +109,8 @@ La primera ejecución local no llegó a recopilar tests porque el entorno tenía
 - Conversaciones de más de 50 mensajes, contexto superior a 15.000 caracteres o pedidos con más de 30 líneas requieren revisión completa.
 - Las pruebas usan SQLite, proveedores simulados y datos sintéticos; no prueban una cuenta Meta real ni la recepción/envío en WhatsApp de producción.
 - No se pudo comprobar visualmente la conversación autenticada porque el navegador de esta sesión no estuvo disponible. La respuesta HTTP 200 solo confirma que la página pública de acceso está publicada.
-- La suite global de SQLite continúa siendo una deuda preexistente documentada en `docs/development/whatsapp-conversational-agent-delivery.md`; hace falta acceso al log del job para clasificarla. Los tests focalizados de esta entrega sí pasan.
+- La suite global todavía no está verde: los cinco fallos solo aparecen al ejecutar todos los módulos juntos; los cuatro tests de autenticación y el test de adjunto pasan aislados, y los 141 tests WhatsApp pasan juntos. Hay que aislar y corregir la contaminación de estado antes de usar la suite global como gate fiable.
+- El navegador integrado no conectó y no se enviaron mensajes reales a Meta. Los GET públicos HTTP 200 solo prueban disponibilidad de la pantalla de login, no el flujo autenticado ni la recepción/envío de WhatsApp.
 
 ## 13. Desviaciones respecto al alcance inicial
 
@@ -114,7 +120,7 @@ Se añadió una salvaguarda explícita para pedidos extensos y se documentaron l
 
 - Rama: `chore/technical-improvement-plan` (rama predeterminada confirmada en `origin`).
 - Commit de implementación: `f35c1b0` (`fix: preserve WhatsApp orders across messages and PDFs`), enviado a `origin/chore/technical-improvement-plan`.
-- Los cambios se limitan a los seis archivos de código/tests enumerados y este informe.
+- El commit de implementación `f35c1b0` ya estaba en la rama predeterminada. En esta continuación se alineó un mock de test y se actualizó este informe con la verificación ampliada; el estado final del repositorio se comprueba al cerrar la entrega.
 
 ## 15. Recomendación para la siguiente fase
 

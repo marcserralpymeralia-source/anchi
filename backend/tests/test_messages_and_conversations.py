@@ -719,6 +719,8 @@ class MessagesAndConversationsTests(unittest.TestCase):
                 extraction,
                 normalized,
                 existing_order=None,
+                fast_path=False,
+                whatsapp_session_id=None,
             ):
                 order = existing_order or Order(
                     company_id=inbound_message.company_id,
