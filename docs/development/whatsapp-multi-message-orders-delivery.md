@@ -71,6 +71,8 @@ La sesión empezaba en la hora del último mensaje; si varios mensajes llegaban 
 | `git diff --check` | Correcto; Git solo informó de la conversión de finales LF/CRLF en Windows |
 | `GET https://anchi-tan.vercel.app/login` | HTTP 200; comprobación pública no autenticada |
 | `GET http://127.0.0.1:8000/login` | Sin servidor local escuchando en ese puerto |
+| `APP_ENV=test; py -3.14 -m unittest discover -s tests` | Interrumpida tras varios minutos; aparecieron marcadores de error/fallo en la suite global, sin resumen final. No se cuenta como aprobada |
+| GitHub Actions para `f35c1b0` | `test-postgres` correcto; `test-sqlite` falló en la suite global. El log detallado no estuvo disponible; la entrega anterior ya documenta esta suite global en rojo, por lo que no se atribuye el fallo a esta modificación sin traceback |
 
 La primera ejecución local no llegó a recopilar tests porque el entorno tenía un valor no booleano para `DEBUG`; se repitieron sin cambiar archivos ni secretos, fijando `DEBUG=false` solo para los procesos de prueba. Las suites informaron avisos deprecados de SQLite/SQLAlchemy y del cliente de pruebas Starlette; no afectan el resultado de aprobación.
 
@@ -102,6 +104,7 @@ La primera ejecución local no llegó a recopilar tests porque el entorno tenía
 - Conversaciones de más de 50 mensajes, contexto superior a 15.000 caracteres o pedidos con más de 30 líneas requieren revisión completa.
 - Las pruebas usan SQLite, proveedores simulados y datos sintéticos; no prueban una cuenta Meta real ni la recepción/envío en WhatsApp de producción.
 - No se pudo comprobar visualmente la conversación autenticada porque el navegador de esta sesión no estuvo disponible. La respuesta HTTP 200 solo confirma que la página pública de acceso está publicada.
+- La suite global de SQLite continúa siendo una deuda preexistente documentada en `docs/development/whatsapp-conversational-agent-delivery.md`; hace falta acceso al log del job para clasificarla. Los tests focalizados de esta entrega sí pasan.
 
 ## 13. Desviaciones respecto al alcance inicial
 
@@ -110,7 +113,7 @@ Se añadió una salvaguarda explícita para pedidos extensos y se documentaron l
 ## 14. Estado final de Git
 
 - Rama: `chore/technical-improvement-plan` (rama predeterminada confirmada en `origin`).
-- Este informe y los cambios enumerados forman parte de la entrega versionada en la rama predeterminada.
+- Commit de implementación: `f35c1b0` (`fix: preserve WhatsApp orders across messages and PDFs`), enviado a `origin/chore/technical-improvement-plan`.
 - Los cambios se limitan a los seis archivos de código/tests enumerados y este informe.
 
 ## 15. Recomendación para la siguiente fase
