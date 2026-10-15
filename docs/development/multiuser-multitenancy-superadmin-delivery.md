@@ -307,9 +307,9 @@ Se añadió el índice de endpoints WhatsApp, el cifrado de URLs tenant, el aisl
 ## 14. Estado final de Git
 
 - Rama actual: `chore/technical-improvement-plan`.
-- `HEAD` es `6cdfb01 docs: record final tenant access checks`; los 22 commits pendientes se enviaron a `origin/chore/technical-improvement-plan`.
-- GitHub Actions terminó en verde para los jobs `test-sqlite` y `test-postgres` (ejecución `38822073630`).
-- Vercel confirmó `Production – anchi` y `Preview – anchi-gemavi` como completados para el mismo commit.
+- El lote de 22 commits funcionales quedó enviado a `origin/chore/technical-improvement-plan` hasta `6cdfb01`; la actualización del informe se envió después en `e45a9b7`. Ambos pushes fueron aceptados por GitHub.
+- GitHub Actions terminó en verde para `test-sqlite` y `test-postgres` tanto en el commit funcional `6cdfb01` (ejecución `38822073630`) como en el commit documental `e45a9b7` (ejecución `38822881921`).
+- Vercel confirmó `Production – anchi` y `Preview – anchi-gemavi` como completados para ambos commits.
 - No se descartaron cambios locales ajenos ni se incluyeron en el push. Permanecen sin commit y sin staging estos 14 archivos previos:
   - `backend/app/settings/channels_routes.py`
   - `backend/app/templates/settings/channels.html`
