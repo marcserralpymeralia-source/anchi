@@ -1,6 +1,6 @@
 # Plan: agente conversacional de WhatsApp y cierre de pedidos tras 12 horas
 
-Estado: **implementada y publicada** en `chore/technical-improvement-plan` (`b4d827b`). La suite focalizada pasó 168 tests y omitió 4; la CI completa de GitHub sigue en curso. Alcance: conversaciones entrantes de WhatsApp Cloud API por empresa. La validación funcional se hizo con datos sintéticos locales; no se enviaron mensajes ni se usaron datos de producción.
+Estado: **implementada y publicada** en `chore/technical-improvement-plan` (`b4d827b`). La suite focalizada pasó 168 tests y omitió 4; CI confirmó compilación y PostgreSQL, pero falló `test-sqlite` en la suite global. Sus logs detallados requieren permisos admin. Alcance: conversaciones entrantes de WhatsApp Cloud API por empresa. La validación funcional se hizo con datos sintéticos locales; no se enviaron mensajes ni se usaron datos de producción.
 
 ## Resultado de la implementación local
 

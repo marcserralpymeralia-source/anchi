@@ -97,6 +97,7 @@ Se incorporó el orquestador `backend/app/whatsapp/agent.py`, el modelo/migraci�
 | `$env:DEBUG='false'; $env:APP_ENV='test'; py -3.14 -m unittest discover -s tests` (desde `backend`) | 557 ejecutados; 6 fallos, 6 errores y 5 omitidos, en 1102,81 s. El reporte del proceso identifica al menos un fallo preexistente de `test_whatsapp_webhook_observability`, que espera rutas GET en `/webhooks/whatsapp`; esa ruta no forma parte de los archivos modificados. Los 11 fallos/errores restantes no se aislaron individualmente. |
 | `$env:DEBUG='false'; $env:APP_ENV='test'; py -3.14 -m pytest tests/test_whatsapp_webhook_observability.py -q` (desde `backend`) | 2 pasaron y 1 falló en la aserción de rutas GET de webhook indicada arriba; test y rutas fuera del alcance de esta entrega. |
 | `py -V:Astral\CPython3.13.15 -c "import pytest, fastapi, sqlalchemy"` | No ejecutable localmente: ese Python 3.13 no tiene instaladas las dependencias; CI configura e instala las dependencias en Python 3.13. |
+| CI de GitHub para `b4d827b` | Compilación y `test-postgres` pasaron; `test-sqlite` falló en la suite general. No fue posible consultar el log detallado: la API exige permisos de administrador del repositorio. |
 | `git diff --check` | Correcto. Git solo advierte conversiones LF/CRLF habituales en Windows. |
 
 ## 10. Tests añadidos o modificados
@@ -116,6 +117,7 @@ Se añadieron casos de sesión, confirmación ligada al resumen exacto, FAQ fund
 | Un interruptor por chat alterna control humano y bot, reflejando también una derivación pendiente. | Implementado y probado localmente | Suite focalizada de 168 tests; la prueba de bandeja verifica ambos estados y ambos POST. |
 | Publicación en la rama por defecto. | Push confirmado | `origin/chore/technical-improvement-plan` apunta a `b4d827b`. |
 | Despliegues Vercel asociados al commit `b4d827b`. | Correcto | GitHub marcó `Vercel – anchi` y `Vercel – anchi-gemavi` como `success`; un GET sin autenticación a `https://anchi-tan.vercel.app/login` respondió HTTP 200. |
+| CI del commit de implementación. | Suite SQLite falló; PostgreSQL pasó | Compilación y `test-postgres` verdes; `test-sqlite` falló. El API de logs respondió 403 por falta de permisos admin; no se atribuye el fallo a WhatsApp sin ese traceback. |
 | Prueba visual autenticada en producción, Meta real y PostgreSQL concurrente. | Pendiente | No se accedió a datos de producción ni se enviaron mensajes reales; tampoco hay servicio PostgreSQL de pruebas local. |
 
 ## 12. Riesgos y observaciones pendientes
@@ -126,7 +128,7 @@ Se añadieron casos de sesión, confirmación ligada al resumen exacto, FAQ fund
 - El límite de turnos por sesión es una cota operativa, no un tope monetario diario. No habilitar respuestas automáticas sin fijar presupuesto/coste si es requisito de negocio.
 - Una sesión en `human_handoff` no la cierra automáticamente el barrido de 12 h; requiere acción humana, para no cerrar silenciosamente una atención tomada por una persona.
 - Antes de activar el modo automático, probar una cuenta/número de staging con Meta y destinatarios de prueba consentidos, incluida la ventana de 24 h, webhooks, medios y conciliación de estado.
-- El conjunto global local no está verde (6 fallos y 6 errores); además del fallo de observabilidad aislado, quedan 11 casos por clasificar. La suite focalizada de esta entrega sí está verde.
+- El conjunto global local no está verde (6 fallos y 6 errores); además del fallo de observabilidad aislado, quedan 11 casos por clasificar. El `test-sqlite` remoto también falló sin logs detallados disponibles. La suite focalizada de esta entrega sí está verde; PostgreSQL smoke y compilación remotos pasaron.
 
 ## 13. Desviaciones respecto al alcance inicial
 
@@ -134,8 +136,8 @@ Se implementó el alcance conversacional con pruebas sintéticas y se publicó e
 
 ## 14. Estado final de Git
 
-Rama de trabajo y rama por defecto del remoto: `chore/technical-improvement-plan`. El commit de implementación `b4d827b` está subido y el ref remoto fue verificado. Vercel confirmó los despliegues de `anchi` y `anchi-gemavi`; la ejecución CI de GitHub estaba `in_progress` en la última consulta. La entrega contiene 23 archivos versionados modificados y 4 nuevos enumerados en las secciones 6 y 7; este informe se añadirá en un commit documental separado. No se cambiaron ramas ni se descartaron cambios locales. Todo el diff corresponde al agente conversacional, su seguridad, interfaz, pruebas o documentación.
+Rama de trabajo y rama por defecto del remoto: `chore/technical-improvement-plan`. El commit de implementación `b4d827b` y las actualizaciones documentales están subidos; el ref remoto se verificó. Vercel confirmó los despliegues de `anchi` y `anchi-gemavi`. CI: compilación y PostgreSQL correctos; suite SQLite general fallida, con detalle restringido por permisos. La entrega contiene 23 archivos versionados modificados y 4 nuevos enumerados en las secciones 6 y 7. No se cambiaron ramas ni se descartaron cambios locales. Todo el diff corresponde al agente conversacional, su seguridad, interfaz, pruebas o documentación.
 
 ## 15. Recomendación para la siguiente fase
 
-Investigar los 11 fallos/errores de la suite general restante y revisar el resultado CI (que corre Python 3.13 y PostgreSQL). Después validar migración y concurrencia con PostgreSQL de pruebas. Para el piloto, conectar un número Meta de staging, completar OCR/STT si el negocio quiere automatizar medios y acordar presupuesto máximo antes de habilitar envíos automáticos en una empresa.
+Obtener con permisos de administrador el log del job `test-sqlite` para clasificar sus fallos; revisar también los 11 fallos/errores locales restantes, empezando por `test_whatsapp_webhook_observability`. Después validar migración y concurrencia con PostgreSQL de pruebas. Para el piloto, conectar un número Meta de staging, completar OCR/STT si el negocio quiere automatizar medios y acordar presupuesto máximo antes de habilitar envíos automáticos en una empresa.
