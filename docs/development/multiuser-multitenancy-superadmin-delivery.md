@@ -46,6 +46,8 @@ Preparar Anchi para operar como aplicación multiempresa y multiusuario, separan
 - No se ha hecho push de los cambios de esta corrección.
 - No se han tocado bases de datos de producción.
 - No se ha cambiado la infraestructura externa de despliegue.
+- No se verificó un despliegue remoto: `.github/workflows/ci.yml` solo ejecuta CI y no contiene un paso de deploy; `vercel` CLI no está disponible para confirmar la integración Git de Vercel.
+- No se ejecutó el smoke PostgreSQL local porque Docker Desktop no tenía un engine accesible; no se sustituyó por una conexión a Neon/producción.
 - El endpoint de snapshots está preparado para cron, pero el scheduler externo debe configurarse por despliegue.
 - No se han añadido facturación, límites comerciales ni SSO.
 
@@ -223,6 +225,8 @@ La revisión adicional encontró que el alta aceptaba reutilizar una misma base 
 | `$env:APP_ENV='test'; $env:RUN_INTERNAL_JOB_WORKER='false'; $env:RUN_INTERNAL_EMAIL_WORKER='false'; .\.venv\Scripts\python.exe -m unittest tests.test_multitenancy_auth.MultiTenancyAuthenticationTests.test_selecting_membership_uses_the_selected_tenant_database -v` (PowerShell, desde `backend`) | 1 test OK en 9.554 s; administrador tenant abre Configuración, Canales y el drawer de Email, ve ambos canales y no ve ni puede abrir Superadmin |
 | `$env:APP_ENV='test'; $env:RUN_INTERNAL_JOB_WORKER='false'; $env:RUN_INTERNAL_EMAIL_WORKER='false'; .\.venv\Scripts\python.exe -m unittest tests.test_multitenancy_auth.MultiTenancyAuthenticationTests.test_single_company_admin_can_open_email_settings_without_platform_access -v` (PowerShell, desde `backend`) | 1 test OK en 8.138 s; login directo del único tenant asignado, panel de Email disponible y Superadmin inaccesible |
 | Navegación local aislada con Playwright CLI en `http://127.0.0.1:8010` | Con datos sintéticos: el dueño global entró en una empresa recién creada, abrió Configuración y Canales y vio Email y WhatsApp; la cabecera identificó la empresa correcta. No se consultó producción |
+| `vercel whoami` | No ejecutable: la CLI Vercel no está instalada; no se pudo verificar integración/despliegue externo |
+| `docker info --format '{{.ServerVersion}}'` | Docker CLI presente, engine local inaccesible; el smoke PostgreSQL no se ejecutó |
 | `git diff --check` | OK; sin errores de whitespace; Git avisa de conversión LF/CRLF en Windows |
 
 Las suites se ejecutaron con SQLite temporal sintético; no se consultaron bases ni datos de producción. Persisten avisos deprecados de FastAPI/Starlette y del adaptador datetime de SQLite, sin fallos asociados.
@@ -307,7 +311,7 @@ Se añadió el índice de endpoints WhatsApp, el cifrado de URLs tenant, el aisl
 - Permanecen 14 archivos locales previos de WhatsApp/canales/workers sin incluir; se conservaron intactos y fuera de esta corrección.
 - Commits locales de esta continuación: `7b25404 test: avoid leaking app environment between suites`, `96781ff perf: avoid duplicate tenant schema inspection`, `0342936 fix: guard external tenant database isolation`, `a3dbf7c test: compare order date in tenant timezone` y `1ad0c2f fix: serialize tenant database claims`.
 - También permanecen los commits previos de aislamiento `7990970 fix: prevent sharing tenant databases` y `3fd6b68 docs: record tenant database isolation guard`.
-- El arreglo de branding está en `a8c6b90`, la auditoría en `69e7594`, el acceso de membresía múltiple en `59ecadc` y el drawer de Email en `4209d59`; el login directo de tenant único y esta evidencia se registran juntas en este commit (20 commits por delante de `origin/chore/technical-improvement-plan`). No se hizo push ni despliegue.
+- El arreglo de branding está en `a8c6b90`, la auditoría en `69e7594`, el acceso de membresía múltiple en `59ecadc`, el drawer de Email en `4209d59` y el login directo de tenant único en `d556b0e`. La rama está 20 commits por delante; esta actualización documental la dejará 21 por delante de `origin/chore/technical-improvement-plan`. No se hizo push ni despliegue.
 - La rama permanece únicamente local; no se ha hecho push ni desplegado.
 - No se han descartado cambios locales ajenos.
 - Los cambios locales no publicados aún no han pasado CI remoto ni Vercel.
