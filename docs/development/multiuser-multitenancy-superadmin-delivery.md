@@ -94,6 +94,7 @@ La revisión adicional encontró que el alta aceptaba reutilizar una misma base 
 - Evitada una inspección duplicada de `schema_migrations` en el diagnóstico de esquema tenant; se reutiliza una única lectura de columnas.
 - Corregida una fuga de estado entre suites: los tests de extracción ya no fuerzan `APP_ENV=development` al importar el módulo cuando CI ya seleccionó `test`.
 - Centralizada la identidad de URLs de bases tenant y aplicada también a la provisión externa, validando antes de modificar la empresa o abrir una conexión externa.
+- Serializada la asignación de bases en PostgreSQL con `pg_advisory_xact_lock` por identidad normalizada; los hosts directos y pooler de Neon esperan el mismo lock transaccional.
 - Estabilizada la comprobación de fecha del pedido para comparar la fecha local de `Europe/Madrid`, igual que la plantilla, en vez de comparar el valor UTC sin convertir.
 
 ## 6. Archivos modificados
@@ -205,9 +206,10 @@ La revisión adicional encontró que el alta aceptaba reutilizar una misma base 
 | `pytest tests/test_worker_tenant_scope.py -q` | 1 passed; scope tenant de workers |
 | Primera suite global, antes del arreglo de `APP_ENV` | 588 tests, 10 fallos; se reprodujeron siete fallos de multitenancy por el valor global de entorno impuesto al importar el módulo de extracción |
 | Suite global tras aislar `APP_ENV`, antes del ajuste de migraciones | 593 tests, un fallo reproducible: detalle de pedido medio con 16 consultas (límite 15) |
-| `APP_ENV=test; RUN_INTERNAL_JOB_WORKER=false; RUN_INTERNAL_EMAIL_WORKER=false; .venv\Scripts\python.exe -m unittest discover -s tests -v` (desde `backend`) | 595 tests OK; 5 omitidos; 1401.057 s. Solo SQLite de pruebas |
+| `APP_ENV=test; RUN_INTERNAL_JOB_WORKER=false; RUN_INTERNAL_EMAIL_WORKER=false; .venv\Scripts\python.exe -m unittest discover -s tests -v` (desde `backend`) | 599 tests OK; 5 omitidos; 1382.980 s. Pasada global final tras todos los cambios; solo SQLite de pruebas |
 | `APP_ENV=test; RUN_INTERNAL_JOB_WORKER=false; RUN_INTERNAL_EMAIL_WORKER=false; .venv\Scripts\python.exe -m unittest tests.test_superadmin tests.test_multitenancy_auth tests.test_schema_migrations tests.test_orders_detail_optimization -v` (desde `backend`) | 55 tests OK; 151.770 s |
 | `APP_ENV=test; RUN_INTERNAL_JOB_WORKER=false; RUN_INTERNAL_EMAIL_WORKER=false; .venv\Scripts\python.exe -m unittest tests.test_superadmin tests.test_schema_migrations -v` (desde `backend`) | 43 tests OK; 57.863 s, tras el guard previo a mutaciones |
+| `APP_ENV=test; RUN_INTERNAL_JOB_WORKER=false; RUN_INTERNAL_EMAIL_WORKER=false; .venv\Scripts\python.exe -m unittest tests.test_superadmin -v` (desde `backend`) | 15 tests OK; 44.631 s, incluido el lock transaccional por URL Neon |
 | `APP_ENV=test` y workers por defecto; `python -m unittest tests.test_order_extraction_service tests.test_multitenancy_auth tests.test_orders_detail_optimization tests.test_orders_list_optimization -v` (desde `backend`) | 25 tests OK; 77.331 s. Reproduce los defaults del job SQLite de CI |
 | `APP_ENV=test` y workers por defecto; test aislado `test_order_date_defaults_to_email_date_and_saves_iso` | 1 test OK; confirma la expectativa de fecha local |
 | `APP_ENV=test; .venv\Scripts\python.exe -m compileall -q app scripts tests` (desde `backend`) | OK; sin errores sintácticos |
@@ -217,7 +219,7 @@ Las suites se ejecutaron con SQLite temporal sintético; no se consultaron bases
 
 La auditoría adicional aprobó `python -m unittest tests.test_superadmin -q` (13 tests), `tests.test_tenant_isolation` (8), `tests.test_multitenancy_auth` (7) y `tests.test_schema_migrations` (29). La última incluye una actualización desde `2026.10.15.1` que aplica `2026.10.15.2` y crea el canal Email que faltaba.
 
-Los fallos globales previos quedaron diagnosticados y corregidos: contaminación de `APP_ENV` por un test de extracción y una inspección SQL redundante en el reporte de migraciones. La suite global de 595 tests pasó con workers internos desactivados. Después, las suites focalizadas (25 con los valores por defecto de CI y 43 de Superadmin/migraciones con workers desactivados) pasaron tras los últimos ajustes. No se repitió la suite global completa tras los cambios finales, que además de mover la validación antes de cualquier mutación solo ajustan la expectativa de fecha del test.
+Los fallos globales previos quedaron diagnosticados y corregidos: contaminación de `APP_ENV` por un test de extracción y una inspección SQL redundante en el reporte de migraciones. La suite global final de 599 tests pasó con workers internos desactivados; también pasaron las suites focalizadas (25 con los valores por defecto de CI, 43 de Superadmin/migraciones y 15 de Superadmin tras añadir el lock). La pasada global se ejecutó después de todos los cambios de código y del test de zona horaria.
 
 ## 10. Tests añadidos o modificados
 
@@ -236,6 +238,7 @@ Los fallos globales previos quedaron diagnosticados y corregidos: contaminación
 - Tests de compatibilidad de conexión BBDD y bootstrap en entorno `test`.
 - Test de que importar los tests de extracción no sobrescribe `APP_ENV=test`.
 - Test de que la provisión externa valida la base antes de abrir la conexión o modificar la empresa.
+- Test de que URLs directas y pooler equivalentes de Neon comparten la misma clave de advisory lock PostgreSQL.
 - Test que comprueba la fecha del pedido en la zona tenant y no depende de que el reloj ejecute la prueba antes o después de medianoche UTC.
 
 ## 11. Criterios de aceptacion
@@ -273,7 +276,7 @@ Los fallos globales previos quedaron diagnosticados y corregidos: contaminación
 - El panel Superadmin mantiene una navegación propia y separada del menú operativo tenant.
 - Deben revisarse rutas legacy que aún puedan asumir un único usuario tenant.
 - La protección evita asignaciones duplicadas nuevas; no se consultaron datos reales, por lo que una revisión aprobada debe verificar si ya existen URLs asignadas a varias empresas.
-- La identidad de base se comprueba en la aplicación antes de provisionar; no es una restricción atómica de base de datos. Una futura mejora debería cubrir altas concurrentes con una clave normalizada única.
+- En PostgreSQL las altas concurrentes de la misma base se serializan con advisory lock transaccional. Otros dialectos distintos de PostgreSQL no tienen ese bloqueo; si se usan con varias réplicas, habría que añadir un mecanismo equivalente.
 - Las membresías de soporte creadas por versiones anteriores no se borran automáticamente; se excluyen de listados y contadores. Su eliminación requiere una limpieza de datos aprobada y separada.
 - En producción el worker de jobs se desactiva en el proceso web por configuración (`RUN_INTERNAL_JOB_WORKER=false`) y se mantiene en el servicio dedicado; el worker de email puede mantenerse en el web tradicional o desactivarse explícitamente.
 
@@ -286,9 +289,9 @@ Se añadió el índice de endpoints WhatsApp, el cifrado de URLs tenant, el aisl
 - Rama actual: `chore/technical-improvement-plan`.
 - Las correcciones de soporte temporal, canal Email, revocación de sesión, propiedad de base tenant y validaciones globales están registradas en commits locales separados.
 - Quedan 14 archivos locales previos de WhatsApp/canales/workers sin incluir; se conservaron intactos y fuera de estos commits.
-- Commits locales de esta continuación: `7b25404 test: avoid leaking app environment between suites`, `96781ff perf: avoid duplicate tenant schema inspection`, `0342936 fix: guard external tenant database isolation` y `a3dbf7c test: compare order date in tenant timezone`.
+- Commits locales de esta continuación: `7b25404 test: avoid leaking app environment between suites`, `96781ff perf: avoid duplicate tenant schema inspection`, `0342936 fix: guard external tenant database isolation`, `a3dbf7c test: compare order date in tenant timezone` y `1ad0c2f fix: serialize tenant database claims`.
 - También permanecen los commits previos de aislamiento `7990970 fix: prevent sharing tenant databases` y `3fd6b68 docs: record tenant database isolation guard`.
-- Antes de guardar este informe la rama está 12 commits por delante de `origin/chore/technical-improvement-plan`; el commit documental la dejará 13 por delante.
+- Antes de guardar este informe la rama está 14 commits por delante de `origin/chore/technical-improvement-plan`; el commit documental la dejará 15 por delante.
 - La rama permanece únicamente local; no se ha hecho push ni desplegado.
 - No se han descartado cambios locales ajenos.
 - Los cambios locales no publicados aún no han pasado CI remoto ni Vercel.
