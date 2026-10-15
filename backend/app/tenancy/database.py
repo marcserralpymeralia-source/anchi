@@ -108,6 +108,9 @@ def get_tenant_db(request: Request, master_db: Session = Depends(get_master_db))
             raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": login_location_for_request(request)})
         if tenant:
             request.state.tenant = tenant
+        elif getattr(request.state, "auth_invalid", False):
+            request.session.clear()
+            raise HTTPException(status_code=status.HTTP_303_SEE_OTHER, headers={"Location": login_location_for_request(request)})
         elif has_complete_identity:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Membresia no disponible")
 

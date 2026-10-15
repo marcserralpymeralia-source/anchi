@@ -86,6 +86,7 @@ También existía riesgo operacional en instalaciones antiguas: una URL tenant n
 - Añadido un actor local técnico sin credenciales utilizables y fuera de las membresías para conservar referencias de auditoría tenant; se oculta y se bloquea su edición desde Usuarios.
 - Las membresías históricas del dueño global se conservan sin borrarlas, pero no se muestran como usuarios empresariales ni se incluyen en el contador de accesos.
 - Añadido el evento `company.support_access` a la auditoría master al entrar en una empresa.
+- Corregido el cierre de sesiones tenant inválidas: al revocar o cambiar la versión de sesión, se limpia el contexto y se redirige al login en lugar de dejar un 403 persistente.
 - Añadida la migración tenant `2026.10.15.2` para crear idempotentemente el canal Email que falte, sin cambiar canales ya existentes.
 
 ## 6. Archivos modificados
@@ -183,7 +184,7 @@ También existía riesgo operacional en instalaciones antiguas: una URL tenant n
 | `APP_ENV=test` + batería de login (`tests.test_templating_paths`, `tests.test_security_config` y dos casos de `tests.test_core`) | 29 tests OK |
 | AX tree y captura visual de `/superadmin` tras reiniciar Uvicorn | OK; shell, navegación, tablas e iconos SVG visibles |
 | `backend\.venv\Scripts\python.exe -m compileall -q app tests` (desde `backend`) | OK; sin errores sintácticos |
-| `pytest tests/test_multitenancy_auth.py -q` | 6 passed; entrada temporal, acceso a configuración, auditoría y membresías históricas |
+| `pytest tests/test_multitenancy_auth.py -q` | 7 passed; entrada temporal, acceso a configuración, auditoría, membresías históricas y revocación |
 | `pytest tests/test_superadmin.py -q` | 11 passed; incluye el contador de accesos sin el dueño global |
 | `pytest tests/test_schema_migrations.py -q` | 28 passed; migración Email idempotente incluida |
 | `pytest tests/test_tenant_isolation.py -q` | 8 passed; aislamiento entre empresas e IDs coincidentes |
@@ -191,7 +192,7 @@ También existía riesgo operacional en instalaciones antiguas: una URL tenant n
 | `pytest tests/test_worker_tenant_scope.py -q` | 1 passed; scope tenant de workers |
 | `git diff --check` | OK; solo avisos de conversión LF/CRLF de Git |
 
-Las seis suites focalizadas posteriores suman 55 tests aprobados. Se ejecutaron con SQLite temporal sintético; no se consultaron bases ni datos de producción. Persisten avisos deprecados de FastAPI/Starlette y del adaptador datetime de SQLite, sin fallos asociados.
+Las seis suites focalizadas posteriores suman 56 tests aprobados. Se ejecutaron con SQLite temporal sintético; no se consultaron bases ni datos de producción. Persisten avisos deprecados de FastAPI/Starlette y del adaptador datetime de SQLite, sin fallos asociados.
 
 La ejecución global `unittest discover` no se usa como criterio de esta fase porque mantiene workers de ciclo de vida y mezcla fixtures legacy. La batería relacionada con esta fase terminó correctamente con 64 tests, además de los smoke tests aislados indicados arriba.
 
@@ -203,6 +204,7 @@ La ejecución global `unittest discover` no se usa como criterio de esta fase po
 - Tests de roles, permisos y panel Superadmin.
 - Tests de acceso temporal de soporte, ausencia de membresía creada, auditoría y acceso a Configuración/Canales.
 - Tests de que actores de soporte y membresías históricas del Superadmin no se muestran como usuarios tenant.
+- Test de que revocar la sesión global invalida y cierra inmediatamente el acceso temporal a empresa.
 - Test de migración que crea el canal Email una sola vez por empresa.
 - Tests de resolución WhatsApp mediante índice master.
 - Tests de claim y recuperación de jobs con `company_id`.

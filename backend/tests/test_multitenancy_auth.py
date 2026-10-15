@@ -346,6 +346,44 @@ class MultiTenancyAuthenticationTests(unittest.TestCase):
         finally:
             client.close()
 
+    def test_revoking_platform_session_invalidates_temporary_company_access(self):
+        with self.MasterSession() as db:
+            db.add(
+                MasterUser(
+                    id=2,
+                    email="admin@anchi.local",
+                    full_name="Anchi Owner",
+                    password_hash=hash_password("platform-password"),
+                    is_active=True,
+                    platform_role_key="superadmin",
+                )
+            )
+            db.commit()
+
+        app, client = self._client()
+        try:
+            with patch.dict(os.environ, {"PLATFORM_ADMIN_EMAIL": "admin@anchi.local"}), patch.object(
+                middleware_module, "MasterSessionLocal", self.MasterSession
+            ), patch.object(tenancy_database_module, "ensure_tenant_schema_once", return_value={}):
+                login = client.post(
+                    "/login",
+                    data={"email": "admin@anchi.local", "password": "platform-password"},
+                    follow_redirects=False,
+                )
+                self.assertEqual(login.headers["location"], "/superadmin")
+                self.assertEqual(client.post("/superadmin/companies/1/enter", follow_redirects=False).headers["location"], "/")
+                self.assertEqual(client.get("/settings/channels", follow_redirects=False).status_code, 200)
+                with self.MasterSession() as db:
+                    platform_owner = db.get(MasterUser, 2)
+                    platform_owner.session_version += 1
+                    db.commit()
+                revoked = client.get("/settings/channels", follow_redirects=False)
+
+            self.assertEqual(revoked.status_code, 303)
+            self.assertTrue(revoked.headers["location"].startswith("/login"))
+        finally:
+            client.close()
+
     def test_selecting_membership_uses_the_selected_tenant_database(self):
         app, client = self._client()
         try:
