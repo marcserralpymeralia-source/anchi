@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import sys
 
-os.environ["APP_ENV"] = "development"
+os.environ.setdefault("APP_ENV", "development")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.agent.extraction import OrderExtractionError, extract_order  # noqa: E402
