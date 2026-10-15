@@ -28,7 +28,7 @@ from app.whatsapp.conversation_orders import (
     has_explicit_order_close,
     is_short_order_confirmation,
 )
-from app.whatsapp.conversation_semantics import evaluate_whatsapp_agent_turn
+from app.whatsapp.conversation_semantics import WhatsAppAgentTurnResult, evaluate_whatsapp_agent_turn
 from app.whatsapp.service import (
     send_automatic_response,
     whatsapp_config,
@@ -57,6 +57,8 @@ _MEDIA_UNREADABLE = {
     "transcription_pending",
 }
 _ACTIVE_JOB_STATES = {"queued", "running", "retrying"}
+_MAX_AGENT_CONTEXT_CHARS = 15000
+_MAX_AGENT_CONTEXT_MESSAGES = 50
 
 
 def _unit_key(value: str | None) -> str:
@@ -196,11 +198,70 @@ def _latest_session_customer_message(
     )
 
 
+def _initial_session_started_at(
+    db: Session,
+    *,
+    company_id: int,
+    conversation_id: int,
+    latest_message: InboundMessage,
+    idle_hours: int,
+) -> datetime:
+    """Include a burst of customer messages even if earlier jobs were superseded."""
+
+    latest_at = _aware(latest_message.received_at) or _now()
+    previous_session = db.scalar(
+        select(WhatsAppOrderSession)
+        .where(
+            WhatsAppOrderSession.company_id == company_id,
+            WhatsAppOrderSession.conversation_id == conversation_id,
+        )
+        .order_by(WhatsAppOrderSession.id.desc())
+        .limit(1)
+    )
+    query = select(InboundMessage).where(
+        InboundMessage.company_id == company_id,
+        InboundMessage.conversation_id == conversation_id,
+        InboundMessage.direction == "inbound",
+        InboundMessage.content_type != "whatsapp_status",
+        or_(
+            InboundMessage.received_at < latest_at,
+            (InboundMessage.received_at == latest_at) & (InboundMessage.id <= latest_message.id),
+        ),
+    )
+    if previous_session:
+        boundary_at = _aware(previous_session.last_customer_message_at)
+        if boundary_at:
+            boundary_id = int(previous_session.last_processed_message_id or 0)
+            query = query.where(
+                or_(
+                    InboundMessage.received_at > boundary_at,
+                    (InboundMessage.received_at == boundary_at) & (InboundMessage.id > boundary_id),
+                )
+            )
+
+    candidates = db.scalars(
+        query.order_by(InboundMessage.received_at.desc(), InboundMessage.id.desc()).limit(500)
+    ).all()
+    start_at = latest_at
+    cursor_at = latest_at
+    max_gap = timedelta(hours=max(1, idle_hours))
+    for candidate in candidates:
+        if candidate.id == latest_message.id:
+            continue
+        candidate_at = _aware(candidate.received_at)
+        if not candidate_at or cursor_at - candidate_at > max_gap:
+            break
+        start_at = candidate_at
+        cursor_at = candidate_at
+    return start_at
+
+
 def _get_or_create_session(
     db: Session,
     *,
     company_id: int,
     conversation_id: int,
+    latest_message: InboundMessage,
     message_at: datetime,
     idle_hours: int,
     force_new: bool = False,
@@ -214,6 +275,13 @@ def _get_or_create_session(
         return session
 
     now = _aware(message_at) or _now()
+    started_at = now if force_new else _initial_session_started_at(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+        latest_message=latest_message,
+        idle_hours=idle_hours,
+    )
     active_key = f"{base_key}:{message_id}" if force_new and message_id is not None else base_key
     session = WhatsAppOrderSession(
         company_id=company_id,
@@ -224,7 +292,7 @@ def _get_or_create_session(
         revision=0,
         draft_json="{}",
         missing_fields_json="[]",
-        started_at=now,
+        started_at=started_at,
         last_customer_message_at=now,
         due_at=now + timedelta(hours=idle_hours),
         created_at=_now(),
@@ -259,20 +327,53 @@ def _message_text(message: InboundMessage) -> str:
     return "\n".join(part for part in parts if part)
 
 
-def _bounded_recent_transcript(messages: list[InboundMessage], *, max_chars: int = 5600) -> str:
+def _bounded_recent_transcript(
+    messages: list[InboundMessage],
+    *,
+    max_chars: int = _MAX_AGENT_CONTEXT_CHARS,
+) -> str:
     parts: list[str] = []
     customer_messages = [row for row in messages if row.direction == "inbound"]
-    for row in customer_messages[-24:]:
+    for row in customer_messages[-_MAX_AGENT_CONTEXT_MESSAGES:]:
         text = _message_text(row)
         if text:
-            parts.append(f"CLIENTE: {text[:1600]}")
+            parts.append(f"CLIENTE: {text}")
     # Retain the newest turns when the model context budget is reached.
     while len(parts) > 1 and len("\n".join(parts)) > max_chars:
         parts.pop(0)
     transcript = "\n".join(parts)
     if len(transcript) > max_chars:
-        transcript = transcript[-max_chars:]
+        # Keep the beginning of a single long document: order PDFs commonly
+        # list their line items from the first page onward.
+        transcript = transcript[:max_chars]
     return transcript
+
+
+def _context_exceeds_agent_limit(
+    messages: list[InboundMessage],
+    *,
+    has_order_context: bool = False,
+) -> bool:
+    customer_messages = [message for message in messages if message.direction == "inbound"]
+    exceeds_limit = (
+        len(customer_messages) > _MAX_AGENT_CONTEXT_MESSAGES
+        or sum(len(_message_text(message)) + len("CLIENTE: ") for message in customer_messages)
+        > _MAX_AGENT_CONTEXT_CHARS
+    )
+    if not exceeds_limit:
+        return False
+    if has_order_context or any(
+        attachment.extracted_text
+        for message in customer_messages
+        for attachment in message.attachments or []
+    ):
+        return True
+    return bool(
+        re.search(
+            r"\b(?:pedido|pedir|comprar|compra|producto|productos|unidades|cantidad)\b",
+            " ".join(str(message.original_content or "") for message in customer_messages).casefold(),
+        )
+    )
 
 
 def _explicit_new_order_request(text: str | None) -> bool:
@@ -598,6 +699,10 @@ def _canonicalize_draft(
                 catalog_by_reference[str(value).strip().casefold()] = product
 
     lines = draft.get("lines") if isinstance(draft.get("lines"), list) else []
+    if len(lines) > 30:
+        missing.append(
+            "El pedido supera el límite de 30 líneas y necesita una revisión completa del equipo."
+        )
     for index, raw_line in enumerate(lines[:30], start=1):
         if not isinstance(raw_line, dict):
             continue
@@ -1319,8 +1424,28 @@ def process_whatsapp_agent_turn(
     latest_message = _latest_customer_message(
         db, company_id=company_id, conversation_id=conversation.id
     )
-    if not latest_message or latest_message.id != inbound_message.id:
+    if not latest_message:
         return {"ok": True, "skipped": True, "reason": "superseded_by_new_customer_message"}
+    if latest_message.id != inbound_message.id:
+        active_session = active_whatsapp_session(
+            db,
+            company_id=company_id,
+            conversation_id=conversation.id,
+        )
+        media_ready = bool(inbound_message.attachments) and all(
+            str(attachment.extraction_status or "pending").lower() not in _MEDIA_PENDING
+            for attachment in inbound_message.attachments
+        )
+        if (
+            active_session
+            and latest_message.processing_step == "whatsapp_media_pending"
+            and media_ready
+        ):
+            # Re-evaluate the latest customer turn when an earlier PDF/document
+            # finishes downloading; that turn had been deferred on this media.
+            inbound_message = latest_message
+        else:
+            return {"ok": True, "skipped": True, "reason": "superseded_by_new_customer_message"}
 
     message_at = _aware(latest_message.received_at) or _now()
     previous_session = active_whatsapp_session(
@@ -1360,6 +1485,7 @@ def process_whatsapp_agent_turn(
             db,
             company_id=company_id,
             conversation_id=conversation.id,
+            latest_message=latest_message,
             message_at=message_at,
             idle_hours=config.idle_session_hours,
             force_new=force_new_session,
@@ -1520,7 +1646,11 @@ def process_whatsapp_agent_turn(
         messages=messages,
     )
     recent_transcript = _bounded_recent_transcript(messages)
-    products = _product_context(
+    context_limit_exceeded = _context_exceeds_agent_limit(
+        messages,
+        has_order_context=session.intent in {"order", "order_question"} or bool(prior_draft.get("lines")),
+    )
+    products = [] if context_limit_exceeded else _product_context(
         db,
         company_id=company_id,
         transcript=recent_transcript,
@@ -1528,19 +1658,32 @@ def process_whatsapp_agent_turn(
     )
     faq_entries = _faq_entries(config.business_faq, latest_message.original_content)
     try:
-        evaluation = evaluate_whatsapp_agent_turn(
-            db,
-            company_id=company_id,
-            transcript=recent_transcript,
-            draft=prior_draft,
-            customer=customer,
-            products=products,
-            business_faq=json.dumps(faq_entries, ensure_ascii=False),
-            missing_or_uncertain=prior_missing,
-            latest_message_text=_message_text(latest_message),
-            inbound_message=latest_message,
-            input_reference=f"whatsapp-session:{session.id}:revision:{session.revision}",
-        )
+        if context_limit_exceeded:
+            evaluation = WhatsAppAgentTurnResult(
+                intent="order_question" if prior_draft.get("lines") else "order",
+                action="handoff",
+                draft=prior_draft,
+                missing_or_uncertain=prior_missing or ["Revisar todas las líneas del pedido manualmente."],
+                reply_needed=True,
+                suggested_reply="",
+                confidence=1.0,
+                evidence_ids=[],
+                close_requested=False,
+            )
+        else:
+            evaluation = evaluate_whatsapp_agent_turn(
+                db,
+                company_id=company_id,
+                transcript=recent_transcript,
+                draft=prior_draft,
+                customer=customer,
+                products=products,
+                business_faq=json.dumps(faq_entries, ensure_ascii=False),
+                missing_or_uncertain=prior_missing,
+                latest_message_text=_message_text(latest_message),
+                inbound_message=latest_message,
+                input_reference=f"whatsapp-session:{session.id}:revision:{session.revision}",
+            )
     except Exception as exc:  # noqa: BLE001
         _set_handoff(
             db,
@@ -1575,6 +1718,9 @@ def process_whatsapp_agent_turn(
         intent=evaluation.intent,
         messages=[item for item in messages if item.direction == "inbound"],
     )
+    line_limit_exceeded = any(
+        "supera el límite de 30 líneas" in item.casefold() for item in missing
+    )
     preserve_existing_order = evaluation.intent in {"question", "order_question", "other"} and bool(prior_draft.get("lines"))
     if preserve_existing_order:
         clean_draft = prior_draft
@@ -1596,7 +1742,9 @@ def process_whatsapp_agent_turn(
         )
     if invalid_evidence:
         action = "handoff"
-    if evaluation.confidence < 0.45:
+    if line_limit_exceeded:
+        action = "handoff"
+    if evaluation.confidence < 0.45 and not evaluation.contextual_order_followup:
         action = "handoff"
     if evaluation.intent in {"question", "other"} and evaluation.reply_needed and not grounded_answer:
         action = "handoff"
@@ -1620,7 +1768,14 @@ def process_whatsapp_agent_turn(
     session.draft_json = json.dumps(clean_draft, ensure_ascii=False)
     session.missing_fields_json = json.dumps(missing, ensure_ascii=False)
     if action == "handoff":
-        safe_reply = "Voy a pasar tu consulta a una persona del equipo para que pueda ayudarte."
+        safe_reply = (
+            "El pedido o el PDF es demasiado extenso para revisar todas sus líneas automáticamente. "
+            "Lo paso al equipo para que lo compruebe completo."
+            if context_limit_exceeded
+            else "El pedido tiene más de 30 líneas; lo paso al equipo para revisar el documento completo."
+            if line_limit_exceeded
+            else "Voy a pasar tu consulta a una persona del equipo para que pueda ayudarte."
+        )
     elif preserve_existing_order and evaluation.reply_needed and grounded_answer:
         continuation = _order_summary_reply(clean_draft) if complete else _clarification_reply(missing)
         safe_reply = f"{grounded_answer}\n\n{continuation}"
@@ -1650,6 +1805,10 @@ def process_whatsapp_agent_turn(
             reason=(
                 "La IA propuso información sin evidencia del catálogo o de la FAQ."
                 if invalid_evidence
+                else "El pedido o PDF supera el límite de análisis automático y requiere revisión íntegra."
+                if context_limit_exceeded
+                else "El pedido supera 30 líneas y requiere revisión completa."
+                if line_limit_exceeded
                 else "La conversación necesita atención humana."
             ),
         )

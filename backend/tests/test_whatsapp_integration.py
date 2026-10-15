@@ -533,6 +533,54 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         self.assertEqual(db.scalar(select(func.count()).select_from(BackgroundJob)) or 0, 1)
         db.close()
 
+    def test_media_processing_can_be_enqueued_again_after_extraction_finishes(self):
+        db = self.TenantSession()
+        channel = db.scalar(
+            select(InputChannel).where(
+                InputChannel.company_id == 1,
+                InputChannel.key == "whatsapp",
+            )
+        )
+        message = InboundMessage(
+            company_id=1,
+            channel_id=channel.id,
+            provider="meta",
+            source_external_id="wa-media-state-retry-1",
+            direction="inbound",
+            status="received",
+            original_content="Adjunto pedido",
+            received_at=datetime.now(timezone.utc),
+        )
+        db.add(message)
+        db.flush()
+        attachment = MessageAttachment(
+            company_id=1,
+            inbound_message_id=message.id,
+            filename="pedido.pdf",
+            content_type="application/pdf",
+            size_bytes=100,
+            extraction_status="pending",
+        )
+        db.add(attachment)
+        db.commit()
+
+        pending_job = enqueue_whatsapp_processing(db, 1, message.id)
+        attachment.extracted_text = "4 cajas de Caja eco"
+        attachment.extraction_status = "extracted"
+        db.commit()
+        ready_job = enqueue_whatsapp_processing(db, 1, message.id)
+
+        self.assertNotEqual(pending_job.id, ready_job.id)
+        self.assertEqual(
+            db.scalar(
+                select(func.count())
+                .select_from(BackgroundJob)
+                .where(BackgroundJob.job_type == "process_inbound_message")
+            ),
+            2,
+        )
+        db.close()
+
     def test_duplicate_insert_race_reuses_existing_message(self):
         payload = {
             "entry": [

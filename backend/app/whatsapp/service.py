@@ -2063,12 +2063,38 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
 
 def enqueue_whatsapp_processing(db: Session, company_id: int, inbound_message_id: int, user_id: int | None = None) -> object:
     config = whatsapp_config(db, company_id)
+    attachments = db.scalars(
+        select(MessageAttachment)
+        .where(
+            MessageAttachment.company_id == company_id,
+            MessageAttachment.inbound_message_id == inbound_message_id,
+        )
+        .order_by(MessageAttachment.id.asc())
+    ).all()
+    dedupe_key = None
+    if attachments:
+        media_state = [
+            {
+                "id": attachment.id,
+                "status": attachment.extraction_status,
+                "size": int(attachment.size_bytes or 0),
+                "has_text": bool(attachment.extracted_text or attachment.ocr_text or attachment.transcription_text),
+            }
+            for attachment in attachments
+        ]
+        digest = hashlib.sha256(
+            json.dumps(media_state, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:20]
+        # A media message must be processable again when download/extraction
+        # changes its state, even if its original queue job already succeeded.
+        dedupe_key = f"whatsapp-media:{inbound_message_id}:{digest}"
     return enqueue_job(
         db,
         company_id=company_id,
         job_type="process_inbound_message",
         payload={"inbound_message_id": inbound_message_id, "channel": WHATSAPP_CHANNEL_KEY},
         created_by_user_id=user_id,
+        dedupe_key=dedupe_key,
         delay_seconds=config.bot_debounce_seconds if config.bot_enabled else 0,
     )
 

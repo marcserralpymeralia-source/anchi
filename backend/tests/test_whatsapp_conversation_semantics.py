@@ -175,7 +175,189 @@ class WhatsAppSharedEmailPipelineTests(unittest.TestCase):
                 business_faq="[]",
             )
         self.assertEqual(result.intent, "order")
+        self.assertTrue(result.contextual_order_followup)
         extractor.assert_called_once()
+        db.close()
+
+    def test_low_confidence_order_fragment_continues_and_preserves_earlier_lines(self):
+        db = self.Session()
+        extraction = {
+            "pedido": {
+                "lineas": [
+                    {
+                        "producto_detectado": "Bolsa kraft",
+                        "referencia_detectada": "BOL-2",
+                        "cantidad": 8,
+                        "unidad": "cajas",
+                    }
+                ]
+            }
+        }
+        previous_draft = {
+            "customer_name": "Cliente validado",
+            "lines": [
+                {
+                    "product_query": "Caja eco",
+                    "reference": "ECO-1",
+                    "quantity": 4,
+                    "unit": "cajas",
+                }
+            ],
+            "notes": "Entrega por la mañana",
+        }
+        transcript = "CLIENTE: Quiero 4 cajas eco\nCLIENTE: Son 8 cajas de bolsa kraft"
+
+        with (
+            patch(
+                "app.whatsapp.conversation_semantics.UnifiedOrderPipelineService.classify_inbound_text",
+                return_value={"tipo_correo": "dudoso", "confianza": 0.31, "motivo": "Fragmento breve"},
+            ),
+            patch(
+                "app.whatsapp.conversation_semantics.UnifiedOrderPipelineService.extract_inbound_order",
+                return_value=extraction,
+            ) as extractor,
+        ):
+            result = evaluate_whatsapp_agent_turn(
+                db,
+                company_id=1,
+                transcript=transcript,
+                latest_message_text="Son 8 cajas de bolsa kraft",
+                draft=previous_draft,
+                missing_or_uncertain=["Indicar la referencia exacta"],
+                customer={"name": "Cliente validado"},
+                products=[],
+                business_faq="[]",
+            )
+
+        self.assertEqual(result.intent, "order")
+        self.assertNotEqual(result.action, "handoff")
+        self.assertTrue(result.contextual_order_followup)
+        self.assertEqual(
+            [line["product_query"] for line in result.draft["lines"]],
+            ["Caja eco", "Bolsa kraft"],
+        )
+        self.assertEqual(result.draft["customer_name"], "Cliente validado")
+        self.assertIn("Entrega por la mañana", result.draft["notes"])
+        self.assertIn("Indicar la referencia exacta", result.missing_or_uncertain)
+        self.assertEqual(extractor.call_args.args[2], transcript)
+        db.close()
+
+    def test_extracted_correction_updates_a_saved_line_without_erasing_other_fields(self):
+        from app.whatsapp.conversation_semantics import _merge_order_drafts
+
+        merged, preserved = _merge_order_drafts(
+            {
+                "customer_name": "Cliente",
+                "lines": [
+                    {
+                        "product_query": "Caja eco",
+                        "reference": "ECO-1",
+                        "quantity": 4,
+                        "unit": "cajas",
+                    }
+                ],
+                "notes": "Entrega mañana",
+            },
+            {
+                "customer_name": "",
+                "lines": [{"product_query": "Caja eco", "quantity": 6}],
+                "notes": "",
+            },
+        )
+
+        self.assertFalse(preserved)
+        self.assertEqual(len(merged["lines"]), 1)
+        self.assertEqual(merged["lines"][0]["quantity"], 6)
+        self.assertEqual(merged["lines"][0]["reference"], "ECO-1")
+        self.assertEqual(merged["lines"][0]["unit"], "cajas")
+        self.assertEqual(merged["notes"], "Entrega mañana")
+
+    def test_simple_greeting_does_not_become_a_pending_order_fragment(self):
+        db = self.Session()
+        previous_draft = {
+            "customer_name": "Cliente",
+            "lines": [{"product_query": "Caja eco", "quantity": None}],
+            "notes": "",
+        }
+        with (
+            patch(
+                "app.whatsapp.conversation_semantics.UnifiedOrderPipelineService.classify_inbound_text",
+                return_value={"tipo_correo": "no_pedido", "confianza": 0.96},
+            ),
+            patch(
+                "app.whatsapp.conversation_semantics.UnifiedOrderPipelineService.extract_inbound_order"
+            ) as extractor,
+        ):
+            result = evaluate_whatsapp_agent_turn(
+                db,
+                company_id=1,
+                transcript="CLIENTE: Hola",
+                latest_message_text="Hola",
+                draft=previous_draft,
+                missing_or_uncertain=["Indicar la cantidad"],
+                customer={"name": "Cliente"},
+                products=[],
+                business_faq="[]",
+            )
+
+        self.assertEqual(result.intent, "other")
+        self.assertEqual(result.action, "silent")
+        self.assertFalse(result.contextual_order_followup)
+        extractor.assert_not_called()
+        db.close()
+
+    def test_delivery_date_answer_is_a_contextual_order_followup(self):
+        from app.whatsapp.conversation_semantics import _is_contextual_order_followup
+
+        self.assertTrue(
+            _is_contextual_order_followup(
+                "El viernes por la tarde",
+                previous_lines=[{"product_query": "Caja eco", "quantity": 4}],
+                previous_missing=["Indicar la fecha de entrega"],
+            )
+        )
+
+    def test_order_with_more_than_thirty_lines_is_handed_off_without_silent_truncation(self):
+        db = self.Session()
+        extraction = {
+            "pedido": {
+                "lineas": [
+                    {
+                        "producto_detectado": f"Producto {index}",
+                        "referencia_detectada": f"REF-{index}",
+                        "cantidad": 1,
+                        "unidad": "caja",
+                    }
+                    for index in range(31)
+                ]
+            }
+        }
+        with (
+            patch(
+                "app.whatsapp.conversation_semantics.UnifiedOrderPipelineService.classify_inbound_text",
+                return_value={"tipo_correo": "pedido", "confianza": 0.99},
+            ),
+            patch(
+                "app.whatsapp.conversation_semantics.UnifiedOrderPipelineService.extract_inbound_order",
+                return_value=extraction,
+            ),
+        ):
+            result = evaluate_whatsapp_agent_turn(
+                db,
+                company_id=1,
+                transcript="CLIENTE: Adjunto el pedido completo",
+                latest_message_text="Adjunto el pedido completo",
+                draft={"customer_name": "", "lines": [], "notes": ""},
+                customer=None,
+                products=[],
+                business_faq="[]",
+            )
+
+        self.assertEqual(result.action, "handoff")
+        self.assertEqual(len(result.draft["lines"]), 30)
+        self.assertTrue(
+            any("supera el límite de 30 líneas" in item for item in result.missing_or_uncertain)
+        )
         db.close()
 
     def test_unknown_question_or_incident_is_handed_to_a_person(self):

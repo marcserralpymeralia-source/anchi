@@ -18,6 +18,7 @@ from app.db.models import (
     Customer,
     InboundMessage,
     InputChannel,
+    MessageAttachment,
     Order,
     WhatsAppOrderSession,
 )
@@ -148,6 +149,205 @@ class WhatsAppAgentSessionTests(unittest.TestCase):
         self.assertEqual(session.agent_turn_count, 1)
         self.assertNotEqual(session.suggested_reply, "¿Qué referencia necesitas?")
         self.assertIsNone(session.order_id)
+        db.close()
+
+    def test_low_confidence_answer_to_pending_order_does_not_force_handoff(self):
+        db = self.Session()
+        previous = self._message(db, 100, "Quiero cajas eco")
+        message = self._message(db, 101, "Son 4 cajas")
+        session = WhatsAppOrderSession(
+            company_id=1,
+            conversation_id=1,
+            active_key="whatsapp-conversation:1",
+            status="awaiting_customer",
+            intent="order",
+            revision=1,
+            last_processed_message_id=previous.id,
+            draft_json=json.dumps({"customer_name": "", "lines": [{"product_query": "Caja eco"}], "notes": ""}),
+            missing_fields_json=json.dumps(["Indicar la cantidad"]),
+            started_at=previous.received_at,
+            last_customer_message_at=previous.received_at,
+            due_at=message.received_at + timedelta(hours=12),
+        )
+        db.add(session)
+        db.commit()
+        result = WhatsAppAgentTurnResult(
+            intent="order",
+            action="ask",
+            draft={"customer_name": "", "lines": [{"product_query": "Caja eco", "quantity": 4, "unit": "cajas"}], "notes": ""},
+            missing_or_uncertain=["Indicar la referencia exacta"],
+            reply_needed=True,
+            suggested_reply="¿Qué referencia necesitas?",
+            confidence=0.31,
+            evidence_ids=[],
+            close_requested=False,
+            contextual_order_followup=True,
+        )
+
+        with patch("app.whatsapp.agent.evaluate_whatsapp_agent_turn", return_value=result):
+            output = process_whatsapp_agent_turn(db, company_id=1, inbound_message=message)
+
+        db.refresh(session)
+        self.assertEqual(output["status"], "awaiting_customer")
+        self.assertEqual(session.status, "awaiting_customer")
+        self.assertFalse(session.human_active)
+        db.close()
+
+    def test_new_session_keeps_rapid_messages_and_extracted_pdf_text(self):
+        db = self.Session()
+        now = datetime.now(timezone.utc)
+        old_message = self._message(db, 110, "Conversación antigua", at=now - timedelta(days=2))
+        first = self._message(db, 111, "Quiero hacer un pedido de cajas eco", at=now - timedelta(minutes=2))
+        latest = self._message(db, 112, "Te adjunto el PDF", at=now)
+        extracted_pdf_text = "Pedido del cliente\n" + ("Línea de catálogo. " * 130) + "\nECO-1: 4 cajas de Caja eco"
+        latest.attachments.append(
+            MessageAttachment(
+                company_id=1,
+                filename="pedido.pdf",
+                content_type="application/pdf",
+                extracted_text=extracted_pdf_text,
+                is_pdf=True,
+                extraction_status="extracted",
+            )
+        )
+        db.commit()
+        result = WhatsAppAgentTurnResult(
+            intent="order",
+            action="ask",
+            draft={"customer_name": "", "lines": [{"product_query": "Caja eco", "reference": "ECO-1", "quantity": 4, "unit": "cajas"}], "notes": ""},
+            missing_or_uncertain=["Confirmar el pedido"],
+            reply_needed=True,
+            suggested_reply="¿Confirmas el pedido?",
+            confidence=0.91,
+            evidence_ids=[],
+            close_requested=False,
+        )
+
+        with patch("app.whatsapp.agent.evaluate_whatsapp_agent_turn", return_value=result) as evaluator:
+            process_whatsapp_agent_turn(db, company_id=1, inbound_message=latest)
+
+        session = db.scalar(select(WhatsAppOrderSession))
+        evaluation_kwargs = evaluator.call_args.kwargs
+        self.assertEqual(session.started_at, first.received_at)
+        self.assertIn("Quiero hacer un pedido de cajas eco", evaluation_kwargs["transcript"])
+        self.assertIn("ECO-1: 4 cajas de Caja eco", evaluation_kwargs["transcript"])
+        self.assertIn("ECO-1: 4 cajas de Caja eco", evaluation_kwargs["latest_message_text"])
+        self.assertNotIn("Conversación antigua", evaluation_kwargs["transcript"])
+        self.assertGreater(len(evaluation_kwargs["transcript"]), 1600)
+        db.close()
+
+    def test_processed_earlier_pdf_retries_latest_turn_deferred_for_media(self):
+        db = self.Session()
+        now = datetime.now(timezone.utc)
+        pdf_message = self._message(db, 120, "Adjunto el pedido", at=now - timedelta(minutes=1))
+        pdf_message.attachments.append(
+            MessageAttachment(
+                company_id=1,
+                filename="pedido.pdf",
+                content_type="application/pdf",
+                extracted_text="Referencia ECO-1: 4 cajas de Caja eco",
+                is_pdf=True,
+                extraction_status="extracted",
+            )
+        )
+        latest = self._message(db, 121, "Son 4 cajas", at=now)
+        latest.processing_step = "whatsapp_media_pending"
+        session = WhatsAppOrderSession(
+            company_id=1,
+            conversation_id=1,
+            active_key="whatsapp-conversation:1",
+            status="awaiting_customer",
+            intent="order",
+            revision=1,
+            last_processed_message_id=latest.id,
+            draft_json=json.dumps({"customer_name": "", "lines": [{"product_query": "Caja eco"}], "notes": ""}),
+            missing_fields_json=json.dumps(["Indicar la referencia exacta"]),
+            started_at=pdf_message.received_at,
+            last_customer_message_at=latest.received_at,
+            due_at=latest.received_at + timedelta(hours=12),
+        )
+        db.add(session)
+        db.commit()
+        result = WhatsAppAgentTurnResult(
+            intent="order",
+            action="ask",
+            draft={"customer_name": "", "lines": [{"product_query": "Caja eco", "reference": "ECO-1", "quantity": 4, "unit": "cajas"}], "notes": ""},
+            missing_or_uncertain=["Confirmar el pedido"],
+            reply_needed=True,
+            suggested_reply="¿Confirmas el pedido?",
+            confidence=0.9,
+            evidence_ids=[],
+            close_requested=False,
+        )
+
+        with patch("app.whatsapp.agent.evaluate_whatsapp_agent_turn", return_value=result) as evaluator:
+            output = process_whatsapp_agent_turn(db, company_id=1, inbound_message=pdf_message)
+
+        self.assertEqual(output["session_id"], session.id)
+        self.assertEqual(evaluator.call_args.kwargs["latest_message_text"], "Son 4 cajas")
+        self.assertIn("Referencia ECO-1: 4 cajas de Caja eco", evaluator.call_args.kwargs["transcript"])
+        self.assertEqual(latest.processing_step, "whatsapp_agent_evaluated")
+        db.close()
+
+    def test_oversized_pdf_is_sent_for_full_review_instead_of_truncated_extraction(self):
+        db = self.Session()
+        message = self._message(db, 130, "Adjunto el pedido completo")
+        message.attachments.append(
+            MessageAttachment(
+                company_id=1,
+                filename="pedido-extenso.pdf",
+                content_type="application/pdf",
+                extracted_text=("Referencia ECO-1, 4 cajas de Caja eco. " * 500),
+                is_pdf=True,
+                extraction_status="extracted",
+            )
+        )
+        db.commit()
+
+        with patch("app.whatsapp.agent.evaluate_whatsapp_agent_turn") as evaluator:
+            output = process_whatsapp_agent_turn(db, company_id=1, inbound_message=message)
+
+        session = db.scalar(select(WhatsAppOrderSession))
+        self.assertEqual(output["status"], "human_handoff")
+        self.assertIn("supera el límite", session.handoff_reason)
+        evaluator.assert_not_called()
+        db.close()
+
+    def test_agent_hands_off_extracted_order_with_more_than_thirty_lines(self):
+        db = self.Session()
+        message = self._message(db, 140, "Adjunto el pedido completo")
+        db.commit()
+        result = WhatsAppAgentTurnResult(
+            intent="order",
+            action="respond",
+            draft={
+                "customer_name": "",
+                "lines": [
+                    {
+                        "product_query": f"Producto {index}",
+                        "reference": f"REF-{index}",
+                        "quantity": 1,
+                        "unit": "caja",
+                    }
+                    for index in range(31)
+                ],
+                "notes": "",
+            },
+            missing_or_uncertain=[],
+            reply_needed=True,
+            suggested_reply="",
+            confidence=0.95,
+            evidence_ids=[],
+            close_requested=False,
+        )
+
+        with patch("app.whatsapp.agent.evaluate_whatsapp_agent_turn", return_value=result):
+            output = process_whatsapp_agent_turn(db, company_id=1, inbound_message=message)
+
+        session = db.scalar(select(WhatsAppOrderSession))
+        self.assertEqual(output["status"], "human_handoff")
+        self.assertIn("30 líneas", session.handoff_reason)
+        self.assertIn("30 líneas", session.suggested_reply)
         db.close()
 
     def test_catalog_unit_mismatch_keeps_order_out_of_finalization(self):

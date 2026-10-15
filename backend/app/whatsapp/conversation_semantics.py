@@ -24,6 +24,7 @@ class WhatsAppAgentTurnResult:
     evidence_ids: list[str]
     close_requested: bool
     prompt_execution_id: int | None = None
+    contextual_order_followup: bool = False
 
 
 def _confidence(value: Any) -> float:
@@ -110,6 +111,125 @@ def _empty_draft() -> dict[str, Any]:
     return {"customer_name": "", "lines": [], "notes": ""}
 
 
+def _line_identity(line: dict[str, Any]) -> set[str]:
+    values = (line.get("reference"), line.get("product_query"), line.get("product_name"))
+    return {
+        _normalized(value).strip()
+        for value in values
+        if _normalized(value).strip()
+    }
+
+
+def _merge_order_drafts(
+    previous: dict[str, Any],
+    extracted: dict[str, Any],
+) -> tuple[dict[str, Any], bool]:
+    """Keep earlier order lines when a later turn only extracts a fragment.
+
+    A matching line is refreshed with the latest extraction (so corrections can
+    replace an earlier quantity); unmatched lines from the saved draft survive.
+    The boolean indicates that at least one previous line had to be preserved.
+    """
+
+    previous_lines = previous.get("lines") if isinstance(previous.get("lines"), list) else []
+    extracted_lines = extracted.get("lines") if isinstance(extracted.get("lines"), list) else []
+    available_previous = [
+        line for line in previous_lines[:30] if isinstance(line, dict)
+    ]
+    matched_previous: set[int] = set()
+    merged_lines: list[dict[str, Any]] = [dict(line) for line in available_previous]
+
+    for extracted_line in extracted_lines[:30]:
+        if not isinstance(extracted_line, dict):
+            continue
+        extracted_identity = _line_identity(extracted_line)
+        match_index = next(
+            (
+                index
+                for index, previous_line in enumerate(available_previous)
+                if index not in matched_previous
+                and extracted_identity
+                and extracted_identity.intersection(_line_identity(previous_line))
+            ),
+            None,
+        )
+        if match_index is None:
+            merged_lines.append(dict(extracted_line))
+            continue
+
+        matched_previous.add(match_index)
+        previous_line = merged_lines[match_index]
+        merged_line = dict(previous_line)
+        for key, value in extracted_line.items():
+            if key == "quantity":
+                if value is not None:
+                    merged_line[key] = value
+            elif value not in (None, "", []):
+                merged_line[key] = value
+        merged_lines[match_index] = merged_line
+
+    unmatched_previous = [
+        line for index, line in enumerate(available_previous) if index not in matched_previous
+    ]
+
+    notes: list[str] = []
+    seen_notes: set[str] = set()
+    for value in (previous.get("notes"), extracted.get("notes")):
+        for note in re.split(r"[\n;]+", str(value or "")):
+            note = note.strip()
+            key = _normalized(note).strip()
+            if note and key not in seen_notes:
+                seen_notes.add(key)
+                notes.append(note)
+    return (
+        {
+            "customer_name": str(extracted.get("customer_name") or previous.get("customer_name") or ""),
+            "lines": merged_lines,
+            "notes": "\n".join(notes)[:1000],
+        },
+        bool(unmatched_previous),
+    )
+
+
+def _is_contextual_order_followup(
+    text: str,
+    *,
+    previous_lines: list[Any],
+    previous_missing: list[str],
+) -> bool:
+    if not previous_lines or not previous_missing or not text.strip() or _is_question(text):
+        return False
+    normalized = _normalized(text).strip()
+    if re.fullmatch(
+        r"(?:hola+|buenas?(?:\s+(?:dias|tardes|noches))?|hey|ey|saludos)[.! ]*",
+        normalized,
+    ):
+        return False
+    if re.search(r"\b(?:reclamaci[oó]n|incidencia|problema|devoluci[oó]n|rotura)\b", normalized):
+        return False
+    if re.fullmatch(r"(?:gracias|ok|okay|vale|perfecto|si|s[ií]|correcto|de acuerdo)[.! ]*", normalized):
+        return False
+    if re.search(r"\b(?:nada mas|eso es todo|cierra el pedido|confirma el pedido|envia el pedido)\b", normalized):
+        return False
+
+    has_order_detail = bool(
+        re.search(r"\d", normalized)
+        or re.search(r"\b(?:uds?|unidades?|cajas?|paquetes?|bolsas?|kg|kilos?|litros?|metros?|rollos?|referencia|modelo|codigo|pedido|adjunto)\b", normalized)
+    )
+    missing_expects_detail = any(
+        re.search(
+            r"\b(?:producto|referencia|modelo|cantidad|unidad|medida|formato|linea|fecha|entrega|direccion|direcci[oó]n|color|tamano|tama[nñ]o|nombre|empresa|observaciones?)\b",
+            _normalized(item),
+        )
+        for item in previous_missing
+    )
+    known_product_terms = set().union(
+        *(_terms(" ".join(_line_identity(line))) for line in previous_lines if isinstance(line, dict))
+    ) if previous_lines else set()
+    text_terms = _terms(text)
+    return has_order_detail or (missing_expects_detail and len(text_terms) >= 1) or bool(known_product_terms & text_terms)
+
+
 def _map_extraction(
     pipeline: UnifiedOrderPipelineService,
     extraction: dict[str, Any],
@@ -123,6 +243,10 @@ def _map_extraction(
     raw_lines = pipeline._lines_from_extraction(extraction)
     lines: list[dict[str, Any]] = []
     uncertainties: list[str] = []
+    if len(raw_lines) > 30:
+        uncertainties.append(
+            "El pedido supera el límite de 30 líneas y necesita una revisión completa del equipo."
+        )
     for index, raw_line in enumerate(raw_lines[:30], start=1):
         if not isinstance(raw_line, dict):
             continue
@@ -215,23 +339,32 @@ def evaluate_whatsapp_agent_turn(
         or ""
     ).strip().lower()
     confidence = _confidence(classification.get("confianza", classification.get("confidence")))
-    classification_requires_handoff = kind in {"incidencia", "dudoso"} or confidence < 0.45
     previous_draft = draft if isinstance(draft, dict) else _empty_draft()
     previous_lines = previous_draft.get("lines") if isinstance(previous_draft.get("lines"), list) else []
     previous_missing = [str(item).strip() for item in (missing_or_uncertain or []) if str(item).strip()]
+    contextual_order_followup = (
+        kind != "incidencia"
+        and kind in {"consulta", "dudoso", "no_pedido"}
+        and _is_contextual_order_followup(
+            latest_text,
+            previous_lines=previous_lines,
+            previous_missing=previous_missing,
+        )
+    )
+    classification_requires_handoff = (
+        kind == "incidencia"
+        or (confidence < 0.45 and not contextual_order_followup)
+    )
 
-    if kind == "pedido":
+    if kind == "pedido" or contextual_order_followup:
         intent = "order"
     elif kind == "consulta":
-        if previous_lines and previous_missing and not _is_question(latest_text):
+        if contextual_order_followup:
             intent = "order"
         else:
             intent = "order_question" if previous_lines else "question"
     elif kind == "no_pedido":
-        if previous_lines and previous_missing and not _is_question(latest_text):
-            # Short answers such as "cajas" or "5 kg" continue an order
-            # conversation, even though the email classifier calls them
-            # non-orders when viewed as isolated messages.
+        if contextual_order_followup:
             intent = "order"
         elif previous_lines and _is_question(latest_text):
             intent = "order_question"
@@ -263,17 +396,31 @@ def evaluate_whatsapp_agent_turn(
             if "no se ha podido crear el pedido" not in str(exc).casefold():
                 raise
             extraction = {}
-            missing.append("No he podido identificar las líneas del pedido. Indica productos y cantidades.")
+            if previous_lines:
+                result_draft = previous_draft
+                missing.extend(previous_missing)
+            else:
+                missing.append("No he podido identificar las líneas del pedido. Indica productos y cantidades.")
         if extraction:
-            result_draft, extraction_uncertainties = _map_extraction(
+            extracted_draft, extraction_uncertainties = _map_extraction(
                 pipeline,
                 extraction,
                 customer=customer,
             )
+            result_draft, preserved_previous_lines = _merge_order_drafts(
+                previous_draft,
+                extracted_draft,
+            )
             missing.extend(extraction_uncertainties)
+            if preserved_previous_lines:
+                missing.extend(previous_missing)
         if not result_draft.get("lines"):
             missing.append("Indicar los productos y cantidades del pedido.")
-        action = "ask" if missing else "respond"
+        action = (
+            "handoff"
+            if any("supera el límite de 30 líneas" in item.casefold() for item in missing)
+            else "ask" if missing else "respond"
+        )
     elif intent in {"question", "order_question"}:
         faq_entries = _faq_entries(business_faq)
         faq_ids = _faq_evidence_ids(latest_text, faq_entries)
@@ -293,4 +440,5 @@ def evaluate_whatsapp_agent_turn(
         evidence_ids=evidence_ids,
         close_requested=False,
         prompt_execution_id=None,
+        contextual_order_followup=contextual_order_followup,
     )
