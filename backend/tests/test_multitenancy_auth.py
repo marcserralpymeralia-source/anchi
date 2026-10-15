@@ -403,10 +403,18 @@ class MultiTenancyAuthenticationTests(unittest.TestCase):
                 self.assertEqual(selected.headers["location"], "/dashboard/summary")
 
                 summary = client.get("/dashboard/summary", follow_redirects=False)
+                settings = client.get("/settings", follow_redirects=False)
+                channels = client.get("/settings/channels", follow_redirects=False)
                 superadmin = client.get("/superadmin", follow_redirects=False)
 
             self.assertEqual(summary.status_code, 200)
             self.assertNotIn('class="superadmin-app-link', summary.text)
+            self.assertEqual(settings.status_code, 200)
+            self.assertIn('title="Configuración"', settings.text)
+            self.assertEqual(channels.status_code, 200)
+            self.assertIn("Email", channels.text)
+            self.assertIn("WhatsApp", channels.text)
+            self.assertNotIn('class="superadmin-app-link', channels.text)
             subjects = [item["subject"] for item in summary.json()["latest_items"]]
             self.assertEqual(subjects, ["Mensaje exclusivo de Beta"])
             self.assertEqual(superadmin.status_code, 403)
