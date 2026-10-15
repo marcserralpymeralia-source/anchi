@@ -14,8 +14,9 @@ from app.core.security import hash_password
 from app.db.models import User
 from app.master.database import MasterBase
 from app.master.bootstrap import ensure_platform_admin
-from app.master.models import CompanyMembership, MasterTenantDatabase, MasterUser
-from app.master.service import authenticate_master_user
+from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser
+from app.master.service import _membership_to_user, authenticate_master_user
+from app.superadmin.routes import _companies
 from app.superadmin.service import create_company, create_company_user, platform_stats, toggle_user
 from app.tenancy.database import clear_tenant_engine_cache, tenant_db_session
 from app.whatsapp.service import resolve_company_from_whatsapp_identifiers, upsert_master_whatsapp_endpoint
@@ -109,6 +110,47 @@ class SuperadminProvisioningTests(unittest.TestCase):
                 select(MasterUser).where(MasterUser.email == "admin@company-without-login.test")
             )
         )
+
+    def test_platform_owner_gets_company_admin_access_without_changing_membership(self):
+        company = MasterCompany(name="Owner access", slug="owner-access", active=True)
+        self.db.add(company)
+        self.db.flush()
+        owner_membership = CompanyMembership(
+            user_id=1,
+            company_id=company.id,
+            role_key="Solo lectura",
+            is_active=True,
+            is_owner=False,
+        )
+        regular_user = MasterUser(
+            email="readonly@example.test",
+            full_name="Read-only user",
+            password_hash=hash_password("ReadOnlyPassword123!"),
+            is_active=True,
+            platform_role_key="tenant_user",
+        )
+        self.db.add(regular_user)
+        self.db.flush()
+        regular_membership = CompanyMembership(
+            user_id=regular_user.id,
+            company_id=company.id,
+            role_key="Solo lectura",
+            is_active=True,
+            is_owner=False,
+        )
+        self.db.add_all([owner_membership, regular_membership])
+        self.db.commit()
+
+        with patch.dict(os.environ, {"PLATFORM_ADMIN_EMAIL": "root@example.com"}):
+            owner_context = _membership_to_user(owner_membership)
+            regular_context = _membership_to_user(regular_membership)
+            company_rows = _companies(self.db)
+
+        self.assertEqual(owner_context.role.name, "Administrador")
+        self.assertIn("configure_settings", owner_context.role.permissions)
+        self.assertEqual(owner_membership.role_key, "Solo lectura")
+        self.assertEqual(regular_context.role.name, "Solo lectura")
+        self.assertEqual(company_rows[0]["memberships"], 1)
 
     def test_company_without_database_url_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "base de datos externa propia"):

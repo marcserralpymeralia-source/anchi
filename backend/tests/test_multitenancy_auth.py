@@ -22,9 +22,9 @@ from app.core import middleware as middleware_module  # noqa: E402
 from app.core.app_factory import create_app  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import Company, Email  # noqa: E402
+from app.db.models import Company, Email, Role, User  # noqa: E402
 from app.master.database import MasterBase, get_master_db  # noqa: E402
-from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
+from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser, PlatformAuditLog  # noqa: E402
 from app.master.provisioning import synchronize_tenant_actors  # noqa: E402
 from app.tenancy import database as tenancy_database_module  # noqa: E402
 from app.tenancy.database import clear_tenant_engine_cache, clear_tenant_schema_cache, ensure_tenant_schema  # noqa: E402
@@ -202,6 +202,147 @@ class MultiTenancyAuthenticationTests(unittest.TestCase):
                 self.assertEqual(response.headers["location"], "/superadmin")
                 self.assertEqual(client.get("/superadmin", follow_redirects=False).status_code, 200)
                 self.assertNotEqual(client.get("/orders", follow_redirects=False).status_code, 200)
+        finally:
+            client.close()
+
+    def test_platform_owner_entering_company_can_open_configuration_and_email_channel(self):
+        with self.MasterSession() as db:
+            db.add(
+                MasterUser(
+                    id=2,
+                    email="admin@anchi.local",
+                    full_name="Anchi Owner",
+                    password_hash=hash_password("platform-password"),
+                    is_active=True,
+                    platform_role_key="superadmin",
+                )
+            )
+            db.commit()
+
+        app, client = self._client()
+        try:
+            with patch.dict(os.environ, {"PLATFORM_ADMIN_EMAIL": "admin@anchi.local"}), patch.object(
+                middleware_module, "MasterSessionLocal", self.MasterSession
+            ), patch.object(tenancy_database_module, "ensure_tenant_schema_once", return_value={}):
+                login = client.post(
+                    "/login",
+                    data={"email": "admin@anchi.local", "password": "platform-password"},
+                    follow_redirects=False,
+                )
+                self.assertEqual(login.headers["location"], "/superadmin")
+                entered = client.post("/superadmin/companies/1/enter", follow_redirects=False)
+                channels = client.get("/settings/channels", follow_redirects=False)
+                users = client.get("/users", follow_redirects=False)
+                superadmin = client.get("/superadmin", follow_redirects=False)
+
+            self.assertEqual(entered.headers["location"], "/")
+            self.assertEqual(channels.status_code, 200)
+            self.assertIn("Email", channels.text)
+            self.assertIn("WhatsApp", channels.text)
+            self.assertEqual(users.status_code, 200)
+            self.assertNotIn("Soporte de plataforma", users.text)
+            self.assertEqual(superadmin.status_code, 200)
+            with sessionmaker(bind=self.tenant_engines[1], autoflush=False, autocommit=False)() as db:
+                support_actor = db.scalar(
+                    select(User).where(
+                        User.company_id == 1,
+                        User.actor_type == "platform_support",
+                    )
+                )
+                self.assertIsNotNone(support_actor)
+                self.assertIsNone(support_actor.master_user_id)
+                support_actor_id = support_actor.id
+                support_actor_role_id = support_actor.role_id
+            update_support_actor = client.post(
+                f"/users/{support_actor_id}",
+                data={"name": "Cambio no permitido", "role_id": support_actor_role_id, "is_active": "true"},
+                follow_redirects=False,
+            )
+            self.assertEqual(update_support_actor.status_code, 303)
+            with sessionmaker(bind=self.tenant_engines[1], autoflush=False, autocommit=False)() as db:
+                support_actor = db.get(User, support_actor_id)
+                self.assertEqual(support_actor.name, "Soporte de plataforma")
+            with self.MasterSession() as db:
+                support_membership = db.scalar(
+                    select(CompanyMembership).where(
+                        CompanyMembership.user_id == 2,
+                        CompanyMembership.company_id == 1,
+                    )
+                )
+                support_audit = db.scalar(
+                    select(PlatformAuditLog).where(
+                        PlatformAuditLog.action == "company.support_access",
+                        PlatformAuditLog.company_id == 1,
+                        PlatformAuditLog.actor_user_id == 2,
+                    )
+                )
+            self.assertIsNone(support_membership)
+            self.assertIsNotNone(support_audit)
+        finally:
+            client.close()
+
+    def test_legacy_platform_membership_is_hidden_from_company_users(self):
+        with self.MasterSession() as db:
+            platform_owner = MasterUser(
+                id=2,
+                email="admin@anchi.local",
+                full_name="Anchi Owner",
+                password_hash=hash_password("platform-password"),
+                is_active=True,
+                platform_role_key="superadmin",
+            )
+            db.add(platform_owner)
+            db.flush()
+            legacy_membership = CompanyMembership(
+                user_id=platform_owner.id,
+                company_id=1,
+                role_key="Solo lectura",
+                is_active=True,
+                is_owner=False,
+            )
+            db.add(legacy_membership)
+            db.commit()
+
+        with sessionmaker(bind=self.tenant_engines[1], autoflush=False, autocommit=False)() as db:
+            admin_role = db.scalar(select(Role).where(Role.company_id == 1, Role.name == "Administrador"))
+            db.add(
+                User(
+                    company_id=1,
+                    role_id=admin_role.id,
+                    email="admin@anchi.local",
+                    name="Legacy platform projection",
+                    password_hash=hash_password("legacy-disabled-password"),
+                    is_active=True,
+                    master_user_id=2,
+                    actor_type="human",
+                )
+            )
+            db.commit()
+
+        app, client = self._client()
+        try:
+            with patch.dict(os.environ, {"PLATFORM_ADMIN_EMAIL": "admin@anchi.local"}), patch.object(
+                middleware_module, "MasterSessionLocal", self.MasterSession
+            ), patch.object(tenancy_database_module, "ensure_tenant_schema_once", return_value={}):
+                login = client.post(
+                    "/login",
+                    data={"email": "admin@anchi.local", "password": "platform-password"},
+                    follow_redirects=False,
+                )
+                self.assertEqual(login.headers["location"], "/superadmin")
+                self.assertEqual(client.post("/superadmin/companies/1/enter", follow_redirects=False).headers["location"], "/")
+                users = client.get("/users", follow_redirects=False)
+
+            self.assertEqual(users.status_code, 200)
+            self.assertNotIn("Legacy platform projection", users.text)
+            with self.MasterSession() as db:
+                legacy_membership = db.scalar(
+                    select(CompanyMembership).where(
+                        CompanyMembership.user_id == 2,
+                        CompanyMembership.company_id == 1,
+                    )
+                )
+            self.assertIsNotNone(legacy_membership)
         finally:
             client.close()
 

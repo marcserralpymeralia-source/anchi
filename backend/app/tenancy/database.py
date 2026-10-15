@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.auth.redirects import login_location_for_request
 from app.master.database import get_master_db
-from app.master.service import load_tenant_context
+from app.master.service import has_complete_tenant_session, load_tenant_context
 from app.db.database import Base
 from app.tenancy.migrations import tenant_migration_report, upgrade_tenant_schema
 
@@ -96,7 +96,7 @@ def get_tenant_db(request: Request, master_db: Session = Depends(get_master_db))
     tenant = getattr(request.state, "tenant", None)
     session = request.scope.get("session") or {}
     has_any_identity = any(session.get(key) for key in ("membership_id", "user_id", "company_id", "company_slug"))
-    has_complete_identity = all(session.get(key) for key in ("membership_id", "user_id", "company_id"))
+    has_complete_identity = has_complete_tenant_session(session)
     if tenant is None:
         try:
             tenant = load_tenant_context(request, master_db)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -12,13 +13,14 @@ from app.auth.sessions import rotate_server_session
 from app.core.templating import templates
 from app.master.database import get_master_db
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser, PlatformAuditLog
-from app.master.provisioning import find_tenant_actor_id, synchronize_tenant_actors
-from app.master.service import TenantUser
+from app.master.provisioning import ensure_platform_support_actor_id
+from app.master.service import TenantUser, configured_platform_admin_email
 from app.superadmin.metrics import latest_health_snapshots
-from app.superadmin.service import TENANT_ROLES, create_company, create_company_user, platform_stats, retry_company_provisioning, toggle_company, toggle_user
+from app.superadmin.service import TENANT_ROLES, create_company, create_company_user, platform_stats, record_platform_audit, retry_company_provisioning, toggle_company, toggle_user
 
 
 router = APIRouter(prefix="/superadmin", tags=["superadmin"])
+logger = logging.getLogger(__name__)
 
 
 def _redirect(path: str, message: str | None = None) -> RedirectResponse:
@@ -47,7 +49,15 @@ def _companies(master_db: Session, *, offset: int = 0, limit: int | None = None)
         company_query = company_query.limit(max(limit, 1))
     companies = master_db.scalars(company_query).all()
     company_ids = [company.id for company in companies]
-    membership_counts = dict(master_db.execute(select(CompanyMembership.company_id, func.count(CompanyMembership.id)).where(CompanyMembership.company_id.in_(company_ids)).group_by(CompanyMembership.company_id)).all()) if company_ids else {}
+    membership_query = (
+        select(CompanyMembership.company_id, func.count(CompanyMembership.id))
+        .join(MasterUser, MasterUser.id == CompanyMembership.user_id)
+        .where(CompanyMembership.company_id.in_(company_ids))
+    ) if company_ids else None
+    platform_owner_email = configured_platform_admin_email()
+    if membership_query is not None and platform_owner_email:
+        membership_query = membership_query.where(func.lower(MasterUser.email) != platform_owner_email)
+    membership_counts = dict(master_db.execute(membership_query.group_by(CompanyMembership.company_id)).all()) if membership_query is not None else {}
     db_rows = {row.company_id: row for row in master_db.execute(select(MasterTenantDatabase).where(MasterTenantDatabase.company_id.in_(company_ids))).scalars().all()} if company_ids else {}
     health_rows = {row.company_id: row for row in latest_health_snapshots(master_db, company_ids)}
     result = []
@@ -113,22 +123,11 @@ def enter_company(
     master_db: Session = Depends(get_master_db),
     user: TenantUser = Depends(require_superadmin),
 ):
-    """Switch a platform user into one of their explicit company memberships."""
+    """Open a temporary, audited support context without creating a membership."""
 
-    membership = master_db.scalar(
-        select(CompanyMembership).where(
-            CompanyMembership.user_id == user.id,
-            CompanyMembership.company_id == company_id,
-            CompanyMembership.is_active.is_(True),
-        )
-    )
     company = master_db.get(MasterCompany, company_id)
-    if membership is None and company is not None and company.active:
-        membership = CompanyMembership(user_id=user.id, company_id=company_id, role_key="Solo lectura", is_active=True, is_owner=False)
-        master_db.add(membership)
-        master_db.commit()
-    if not membership or not company or not company.active:
-        return _redirect("/superadmin/companies", "No tienes una membresía activa para esa empresa")
+    if not company or not company.active or company.status != "active":
+        return _redirect("/superadmin/companies", "La empresa no está disponible")
     tenant_db = master_db.scalar(
         select(MasterTenantDatabase).where(
             MasterTenantDatabase.company_id == company_id,
@@ -138,45 +137,44 @@ def enter_company(
     if not tenant_db or not tenant_db.database_url:
         return _redirect("/superadmin/companies", "La empresa todavía no tiene una base operativa disponible")
 
+    master_user = master_db.get(MasterUser, user.id)
+    if master_user is None or not master_user.is_active:
+        return _redirect("/superadmin/companies", "La sesión de plataforma ya no está disponible")
+    try:
+        actor_id = ensure_platform_support_actor_id(
+            tenant_db.database_url,
+            company_id=company.id,
+            platform_user_id=master_user.id,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo preparar el acceso de soporte company_id=%s", company.id)
+        return _redirect("/superadmin/companies", "No se pudo preparar el acceso de soporte")
+
     request.session["user_id"] = user.id
     request.session["platform_user_id"] = user.id
     request.session["platform_session_version"] = user.session_version
     request.session["company_id"] = company.id
-    request.session["membership_id"] = membership.id
+    request.session.pop("membership_id", None)
+    request.session["platform_support_company_id"] = company.id
     request.session["company_slug"] = company.slug
     request.session["tenant_session_version"] = user.session_version
-    request.session.pop("tenant_actor_id", None)
-    actor_id = find_tenant_actor_id(
-        tenant_db.database_url,
+    request.session["tenant_actor_id"] = actor_id
+    record_platform_audit(
+        master_db,
+        actor_user_id=master_user.id,
+        action="company.support_access",
+        target_type="company",
+        target_id=company.id,
         company_id=company.id,
-        master_user_id=user.id,
-        email=user.email,
+        metadata={"access_mode": "temporary_platform_support"},
     )
-    if actor_id is None:
-        try:
-            synchronize_tenant_actors(master_db, tenant_db)
-        except Exception:  # noqa: BLE001
-            actor_id = None
-        else:
-            actor_id = find_tenant_actor_id(
-                tenant_db.database_url,
-                company_id=company.id,
-                master_user_id=user.id,
-                email=user.email,
-            )
-    if actor_id is not None:
-        request.session["tenant_actor_id"] = actor_id
-    else:
-        return _redirect("/superadmin/companies", "La identidad local todavía no está sincronizada; reintenta tras completar el aprovisionamiento")
-    master_user = master_db.get(MasterUser, user.id)
-    if master_user is not None:
-        rotate_server_session(
-            master_db,
-            request,
-            master_user,
-            company_id=company.id,
-            membership_id=membership.id,
-        )
+    rotate_server_session(
+        master_db,
+        request,
+        master_user,
+        company_id=company.id,
+        membership_id=None,
+    )
     return RedirectResponse("/", status_code=303)
 
 
@@ -193,7 +191,13 @@ def users_page(request: Request, master_db: Session = Depends(get_master_db), us
     page = min(page, total_pages)
     page_users = master_db.scalars(select(MasterUser).order_by(MasterUser.full_name, MasterUser.email).offset((page - 1) * page_size).limit(page_size)).all()
     user_ids = [item.id for item in page_users]
-    memberships = master_db.scalars(select(CompanyMembership).where(CompanyMembership.user_id.in_(user_ids)).order_by(CompanyMembership.company_id, CompanyMembership.user_id)).all() if user_ids else []
+    memberships_query = select(CompanyMembership).where(CompanyMembership.user_id.in_(user_ids)) if user_ids else None
+    platform_owner_email = configured_platform_admin_email()
+    if memberships_query is not None and platform_owner_email:
+        memberships_query = memberships_query.join(MasterUser, MasterUser.id == CompanyMembership.user_id).where(
+            func.lower(MasterUser.email) != platform_owner_email
+        )
+    memberships = master_db.scalars(memberships_query.order_by(CompanyMembership.company_id, CompanyMembership.user_id)).all() if memberships_query is not None else []
     memberships_by_user: dict[int, list[CompanyMembership]] = {}
     for membership in memberships:
         memberships_by_user.setdefault(membership.user_id, []).append(membership)

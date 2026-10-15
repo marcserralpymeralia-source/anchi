@@ -9,7 +9,7 @@ from app.auth.sessions import validate_server_session
 from app.core.permissions import has_permission, permission_for_request
 from app.master.database import get_master_db
 from app.master.models import MasterUser
-from app.master.service import TenantUser, _platform_user_to_context, is_configured_platform_owner, load_tenant_context
+from app.master.service import TenantUser, _platform_user_to_context, has_complete_tenant_session, is_configured_platform_owner, load_tenant_context
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ def _has_any_session_identity(session: dict) -> bool:
 
 
 def _has_complete_session_identity(session: dict) -> bool:
-    return all(session.get(key) for key in ("membership_id", "user_id", "company_id"))
+    return has_complete_tenant_session(session)
 
 
 def current_tenant_user(request: Request, master_db: Session = Depends(get_master_db)) -> TenantUser:

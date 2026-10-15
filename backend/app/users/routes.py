@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.templating import templates
@@ -9,7 +9,7 @@ from app.auth.dependencies import require_tenant_role
 from app.auth.rate_limit import consume_public_action
 from app.master.database import get_master_db
 from app.master.models import CompanyMembership, MasterUser, UserInvitation
-from app.master.service import TenantUser
+from app.master.service import TenantUser, configured_platform_admin_email
 from app.superadmin.service import TENANT_ROLES, create_company_user
 from app.db.models import Role, User
 from app.logs.service import log_action
@@ -26,6 +26,10 @@ MANAGE_USER_ROLES = ("Administrador",)
 def _local_actor(db: Session, user: TenantUser) -> User | None:
     """Resolve the tenant projection used by local foreign keys and audit logs."""
 
+    if user.tenant_actor_id is not None:
+        actor = db.scalar(select(User).where(User.company_id == user.company_id, User.id == user.tenant_actor_id))
+        if actor is not None:
+            return actor
     actor = db.scalar(select(User).where(User.company_id == user.company_id, User.master_user_id == user.id))
     if actor is not None:
         return actor
@@ -40,7 +44,19 @@ def _error_redirect(message: str) -> RedirectResponse:
 
 @router.get("")
 def list_users(request: Request, db: Session = Depends(get_tenant_db), master_db: Session = Depends(get_master_db), user: TenantUser = Depends(require_tenant_role(*MANAGE_USER_ROLES))):
-    users = db.scalars(select(User).where(User.company_id == user.company_id).order_by(User.name)).all()
+    user_query = select(User).where(User.company_id == user.company_id, User.actor_type != "platform_support")
+    platform_owner_email = configured_platform_admin_email()
+    if platform_owner_email:
+        platform_owner_ids = master_db.scalars(
+            select(MasterUser.id).where(
+                MasterUser.platform_role_key == "superadmin",
+                func.lower(MasterUser.email) == platform_owner_email,
+            )
+        ).all()
+        user_query = user_query.where(func.lower(User.email) != platform_owner_email)
+        if platform_owner_ids:
+            user_query = user_query.where(or_(User.master_user_id.is_(None), User.master_user_id.not_in(platform_owner_ids)))
+    users = db.scalars(user_query.order_by(User.name)).all()
     roles = db.scalars(
         select(Role)
         .where(Role.company_id == user.company_id, Role.name.in_(TENANT_ROLES))
@@ -128,7 +144,7 @@ def update_user(
     user: TenantUser = Depends(require_tenant_role(*MANAGE_USER_ROLES)),
 ):
     target = db.get(User, user_id)
-    if target and target.company_id == user.company_id:
+    if target and target.company_id == user.company_id and target.actor_type != "platform_support":
         role = db.scalar(select(Role).where(Role.id == role_id, Role.company_id == user.company_id))
         if role is None or role.name not in TENANT_ROLES:
             return _error_redirect("El rol seleccionado no está disponible para usuarios de empresa")

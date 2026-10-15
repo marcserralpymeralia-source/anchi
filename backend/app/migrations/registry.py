@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from app.db.models import TenantSchemaMigration
 from app.master.models import MasterSchemaMigration
-from sqlalchemy import inspect, text
+from sqlalchemy import MetaData, Table, insert, inspect, select, text
 
 from app.migrations.helpers import checksum_text, ensure_columns, ensure_unique_index
 from app.migrations.runner import MigrationSpec, registry_checksum
@@ -1297,6 +1297,51 @@ def _apply_tenant_whatsapp_chat_bot_control(engine, dry_run: bool) -> list[str]:
     )
 
 
+def _apply_tenant_default_email_channel(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Ensure every provisioned company has an Email channel, even when empty."""
+
+    if not {"companies", "input_channels"}.issubset(set(inspect(engine).get_table_names())):
+        return []
+    metadata = MetaData()
+    actions: list[str] = []
+    with engine.begin() as conn:
+        companies = Table("companies", metadata, autoload_with=conn)
+        channels = Table("input_channels", metadata, autoload_with=conn)
+        company_ids = conn.execute(select(companies.c.id)).scalars().all()
+        for company_id in company_ids:
+            existing = conn.execute(
+                select(channels.c.id).where(
+                    channels.c.company_id == company_id,
+                    channels.c.key == "email",
+                )
+            ).first()
+            if existing:
+                continue
+            actions.append(f"Create default Email channel for company {company_id}")
+            if dry_run:
+                continue
+            values = {
+                "company_id": company_id,
+                "key": "email",
+                "name": "Email",
+                "channel_type": "message",
+                "is_active": True,
+                "is_default": True,
+                "supports_text": True,
+                "supports_attachments": True,
+                "supports_audio": False,
+                "supports_documents": True,
+                "supports_images": False,
+            }
+            now = datetime.now(timezone.utc)
+            if "created_at" in channels.c:
+                values["created_at"] = now
+            if "updated_at" in channels.c:
+                values["updated_at"] = now
+            conn.execute(insert(channels).values(**values))
+    return actions
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -1429,6 +1474,12 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant WhatsApp per-conversation bot control",
         checksum=checksum_text("tenant", "whatsapp_bot_enabled", "conversations"),
         upgrade=_apply_tenant_whatsapp_chat_bot_control,
+    ),
+    MigrationSpec(
+        version="2026.10.15.2",
+        name="tenant default Email channel",
+        checksum=checksum_text("tenant", "default_email_channel", "input_channels", "companies"),
+        upgrade=_apply_tenant_default_email_channel,
     ),
 ]
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from pathlib import Path
 
 from sqlalchemy import create_engine, func, select, text
@@ -223,6 +224,76 @@ def find_tenant_actor_id(database_url: str, *, company_id: int, master_user_id: 
     except Exception:  # noqa: BLE001
         return None
     finally:
+        engine.dispose()
+
+
+def ensure_platform_support_actor_id(
+    database_url: str,
+    *,
+    company_id: int,
+    platform_user_id: int,
+) -> int:
+    """Create or reuse a non-login operational actor for a scoped support session.
+
+    This row exists only to satisfy tenant-local audit/foreign-key references.
+    It is deliberately not projected from a company membership and has no
+    master user link, so regular membership synchronization cannot turn it into
+    a company user.
+    """
+
+    if not isinstance(database_url, str) or not database_url.strip():
+        raise ValueError("La empresa no tiene una base de datos operativa")
+    support_email = f"platform-support-{platform_user_id}-{company_id}@internal.anchi.invalid"
+    engine, session_factory = _session_factory(database_url)
+    tenant_db = session_factory()
+    try:
+        if tenant_db.get(TenantCompany, company_id) is None:
+            raise LookupError("La empresa todavía no existe en su base operativa")
+        role = tenant_db.scalar(
+            select(operational_models.Role).where(
+                operational_models.Role.company_id == company_id,
+                operational_models.Role.name == "Administrador",
+            )
+        )
+        if role is None:
+            role = operational_models.Role(
+                company_id=company_id,
+                name="Administrador",
+                permissions=DEFAULT_ROLE_PERMISSIONS["Administrador"],
+            )
+            tenant_db.add(role)
+            tenant_db.flush()
+        actor = tenant_db.scalar(
+            select(operational_models.User).where(
+                operational_models.User.company_id == company_id,
+                operational_models.User.email == support_email,
+            )
+        )
+        if actor is None:
+            actor = operational_models.User(
+                company_id=company_id,
+                role_id=role.id,
+                email=support_email,
+                name="Soporte de plataforma",
+                password_hash=hash_password(secrets.token_urlsafe(32)),
+                is_active=True,
+                master_user_id=None,
+                actor_type="platform_support",
+            )
+            tenant_db.add(actor)
+        elif actor.actor_type != "platform_support" or actor.master_user_id is not None:
+            raise RuntimeError("La identidad local de soporte no es válida")
+        else:
+            actor.role_id = role.id
+            actor.name = "Soporte de plataforma"
+            actor.is_active = True
+        tenant_db.commit()
+        return int(actor.id)
+    except Exception:
+        tenant_db.rollback()
+        raise
+    finally:
+        tenant_db.close()
         engine.dispose()
 
 

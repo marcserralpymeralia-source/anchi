@@ -111,7 +111,11 @@ def _membership_to_user(
     tenant_actor_id: int | None = None,
 ) -> TenantUser:
     role_name = membership.role_key or "Usuario"
-    if role_name == "Superadmin":
+    # The configured platform owner is not a tenant account, but when they
+    # enter a company from Superadmin they need the same configuration access
+    # as its administrator. Keep the stored membership unchanged; this is an
+    # effective role for the platform-owner session only.
+    if is_configured_platform_owner(membership.user) or role_name == "Superadmin":
         role_name = "Administrador"
     return TenantUser(
         id=membership.user_id,
@@ -152,6 +156,26 @@ def _platform_user_to_context(user: MasterUser) -> TenantUser:
         session_version=int(user.session_version or 1),
         master_user_id=user.id,
     )
+
+
+def is_platform_support_session(session: dict) -> bool:
+    """Return whether a session has the complete shape of a support context."""
+
+    company_id = session.get("company_id")
+    return bool(
+        session.get("platform_support_company_id") is not None
+        and session.get("platform_support_company_id") == company_id
+        and session.get("membership_id") is None
+        and session.get("user_id") is not None
+        and session.get("user_id") == session.get("platform_user_id")
+        and session.get("tenant_actor_id") is not None
+    )
+
+
+def has_complete_tenant_session(session: dict) -> bool:
+    """Support both a tenant membership and the platform owner's scoped session."""
+
+    return all(session.get(key) is not None for key in ("membership_id", "user_id", "company_id")) or is_platform_support_session(session)
 
 
 def _is_demo_admin_password(password: str, settings) -> bool:
@@ -329,6 +353,75 @@ def load_tenant_context(request, master_db: Session) -> TenantContext | None:
     host = (request.headers.get("host") or "").split(":")[0].lower()
     settings = get_settings()
     running_on_vercel = settings.environment == "demo" or os.getenv("VERCEL") == "1" or bool(os.getenv("VERCEL_ENV"))
+
+    if "platform_support_company_id" in session:
+        if not is_platform_support_session(session):
+            request.state.auth_invalid = True
+            return None
+        try:
+            platform_user_id = int(session["platform_user_id"])
+            company_id = int(session["company_id"])
+            actor_id = int(session["tenant_actor_id"])
+        except (TypeError, ValueError):
+            request.state.auth_invalid = True
+            return None
+        platform_user = master_db.get(MasterUser, platform_user_id)
+        if (
+            platform_user is None
+            or not platform_user.is_active
+            or not is_configured_platform_owner(platform_user)
+            or session.get("user_id") != platform_user.id
+            or not validate_server_session(request, master_db, platform_user)
+        ):
+            request.state.auth_invalid = True
+            return None
+        try:
+            expected_platform_version = int(session.get("platform_session_version"))
+            expected_tenant_version = int(session.get("tenant_session_version"))
+        except (TypeError, ValueError):
+            request.state.auth_invalid = True
+            return None
+        current_version = int(platform_user.session_version or 1)
+        if expected_platform_version != current_version or expected_tenant_version != current_version:
+            request.state.auth_invalid = True
+            return None
+
+        company = master_db.get(MasterCompany, company_id)
+        if company is None or not company.active or company.status != "active":
+            request.state.auth_invalid = True
+            return None
+        if company_slug and company.slug != company_slug:
+            request.state.auth_invalid = True
+            return None
+        if not running_on_vercel and host and host not in {"localhost", "127.0.0.1"} and "." in host:
+            if host.split(".", 1)[0] != company.slug:
+                request.state.auth_invalid = True
+                return None
+        tenant_db = master_db.scalar(
+            select(MasterTenantDatabase).where(
+                MasterTenantDatabase.company_id == company.id,
+                MasterTenantDatabase.is_active.is_(True),
+            )
+        )
+        if tenant_db is None or not tenant_db.database_url:
+            return None
+        tenant_user = TenantUser(
+            id=platform_user.id,
+            email=platform_user.email,
+            name=platform_user.full_name,
+            is_active=True,
+            company_id=company.id,
+            company_name=company.name,
+            company_slug=company.slug,
+            role=TenantRole(name="Administrador", permissions=DEFAULT_ROLE_PERMISSIONS["Administrador"]),
+            membership_id=None,
+            database_url=tenant_db.database_url,
+            platform_role_key="superadmin",
+            session_version=current_version,
+            master_user_id=platform_user.id,
+            tenant_actor_id=actor_id,
+        )
+        return TenantContext(company=_company_to_context(company, tenant_db), user=tenant_user)
 
     if not membership_id or not user_id or not company_id:
         return None
