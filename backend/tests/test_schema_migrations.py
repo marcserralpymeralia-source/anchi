@@ -25,7 +25,8 @@ from app.master.models import CompanyMembership, EmailSyncState, MasterCompany, 
 from app.master.provisioning import _ensure_master_user  # noqa: E402
 from app.migrations.inspection import discover_sqlite_files, inspect_database_url, inventory_records, simulate_sqlite_reference  # noqa: E402
 from app.migrations.helpers import table_exists  # noqa: E402
-from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, MASTER_EMAIL_SYNC_STATE_COLUMNS, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_master_email_sync_state_repair, _apply_tenant_default_email_channel, _apply_tenant_email_favorites, _apply_tenant_external_database_schema_snapshot, _apply_tenant_ftp_connections, _apply_tenant_knowledge_entries, _apply_tenant_order_archiving, _apply_tenant_product_embeddings, _apply_tenant_proxy_connection_scope, _apply_tenant_proxy_connections, _apply_tenant_whatsapp_agent_sessions, _apply_tenant_whatsapp_chat_bot_control, _apply_tenant_whatsapp_read_state, _apply_tenant_whatsapp_session_safety  # noqa: E402
+from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, MASTER_EMAIL_SYNC_STATE_COLUMNS, TENANT_COMPAT_COLUMNS, TENANT_SCHEMA_MIGRATIONS, _apply_master_email_listener_state, _apply_master_email_sync_state_repair, _apply_tenant_default_email_channel, _apply_tenant_email_favorites, _apply_tenant_external_database_schema_snapshot, _apply_tenant_ftp_connections, _apply_tenant_knowledge_entries, _apply_tenant_order_archiving, _apply_tenant_product_embeddings, _apply_tenant_proxy_connection_scope, _apply_tenant_proxy_connections, _apply_tenant_whatsapp_agent_sessions, _apply_tenant_whatsapp_chat_bot_control, _apply_tenant_whatsapp_read_state, _apply_tenant_whatsapp_session_safety  # noqa: E402
+from app.migrations.runner import registry_checksum  # noqa: E402
 from app.tenancy.database import get_tenant_engine  # noqa: E402
 from app.tenancy.migrations import tenant_migration_report, upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import run_worker_cycle  # noqa: E402
@@ -100,6 +101,38 @@ class SchemaMigrationTests(unittest.TestCase):
         self.assertEqual([channel.company_id for channel in email_channels], [1, 2])
         self.assertTrue(all(channel.is_active and channel.is_default for channel in email_channels))
         self.assertEqual(_apply_tenant_default_email_channel(self.tenant_engine, dry_run=False), [])
+
+    def test_tenant_upgrade_from_previous_release_applies_default_email_channel(self):
+        self._create_tables_without_ledger(self.tenant_engine, Base.metadata)
+        TenantSchemaMigration.__table__.create(self.tenant_engine)
+        with self.TenantSession() as db:
+            db.add_all(
+                [
+                    Company(id=1, name="Mulet"),
+                    InputChannel(company_id=1, key="whatsapp", name="WhatsApp", channel_type="message"),
+                    TenantSchemaMigration(
+                        company_id=1,
+                        version="2026.10.15.1",
+                        name="tenant WhatsApp per-conversation bot control",
+                        checksum=registry_checksum(TENANT_SCHEMA_MIGRATIONS[:-1]),
+                        status="current",
+                    ),
+                ]
+            )
+            db.commit()
+
+        result = upgrade_tenant_schema(self.tenant_engine, company_id=1)
+
+        with self.TenantSession() as db:
+            email_channel = db.scalar(
+                select(InputChannel).where(
+                    InputChannel.company_id == 1,
+                    InputChannel.key == "email",
+                )
+            )
+        self.assertEqual(result["applied_versions"], ["2026.10.15.2"])
+        self.assertTrue(result["is_current"])
+        self.assertIsNotNone(email_channel)
 
     def test_whatsapp_agent_migration_disables_legacy_bot_and_seeds_safe_defaults(self):
         self._create_tables_without_ledger(self.tenant_engine, Base.metadata)

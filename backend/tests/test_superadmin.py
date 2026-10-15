@@ -17,7 +17,7 @@ from app.master.bootstrap import ensure_platform_admin
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser
 from app.master.service import _membership_to_user, authenticate_master_user
 from app.superadmin.routes import _companies
-from app.superadmin.service import create_company, create_company_user, platform_stats, toggle_user
+from app.superadmin.service import _tenant_database_identity, create_company, create_company_user, platform_stats, toggle_user
 from app.tenancy.database import clear_tenant_engine_cache, tenant_db_session
 from app.whatsapp.service import resolve_company_from_whatsapp_identifiers, upsert_master_whatsapp_endpoint
 
@@ -110,6 +110,38 @@ class SuperadminProvisioningTests(unittest.TestCase):
                 select(MasterUser).where(MasterUser.email == "admin@company-without-login.test")
             )
         )
+
+    def test_company_creation_rejects_a_database_already_assigned_to_another_company(self):
+        tenant_url = f"sqlite:///{Path(self.temp_dir.name, 'shared-tenant.db').as_posix()}"
+        first = create_company(
+            self.db,
+            name="First isolated company",
+            slug="first-isolated-company",
+            database_url=tenant_url,
+            actor_user_id=1,
+        )
+
+        with self.assertRaisesRegex(ValueError, "base de datos ya está asignada"):
+            create_company(
+                self.db,
+                name="Second isolated company",
+                slug="second-isolated-company",
+                database_url=tenant_url,
+                actor_user_id=1,
+            )
+
+        self.assertIsNotNone(self.db.get(MasterCompany, first.id))
+        self.assertIsNone(
+            self.db.scalar(
+                select(MasterCompany).where(MasterCompany.slug == "second-isolated-company")
+            )
+        )
+
+    def test_database_identity_ignores_credentials_and_neon_pooler_hostname(self):
+        direct_url = "postgresql+psycopg://tenant_a:secret-a@ep-demo.eu-central-1.aws.neon.tech/anchi?sslmode=require"
+        pooler_url = "postgresql://tenant_b:secret-b@ep-demo-pooler.eu-central-1.aws.neon.tech/anchi"
+
+        self.assertEqual(_tenant_database_identity(direct_url), _tenant_database_identity(pooler_url))
 
     def test_platform_owner_gets_company_admin_access_without_changing_membership(self):
         company = MasterCompany(name="Owner access", slug="owner-access", active=True)

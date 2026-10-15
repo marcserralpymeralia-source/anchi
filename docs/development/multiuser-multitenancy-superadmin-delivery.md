@@ -55,11 +55,14 @@ La aplicación tenía identidad y datos operativos mezclados en una única ruta 
 
 También existía riesgo operacional en instalaciones antiguas: una URL tenant no disponible podía llegar al código de conexión como `None`, y el bootstrap local podía convertir accidentalmente el usuario de pruebas en Superadmin de plataforma. La entrada anterior del Superadmin creaba además una membresía `Solo lectura`, que no daba acceso a Configuración y mezclaba la identidad global con los usuarios de empresa. Algunas empresas existentes tampoco tenían una fila de canal Email visible en Canales.
 
+La revisión adicional encontró que el alta aceptaba reutilizar una misma base operativa en varias empresas. Eso contradecía el aislamiento por base definido para esta fase y podía hacer que accesos legacy por ID resolvieran registros de otra compañía.
+
 ## 5. Cambios realizados
 
 - Añadido el modelo master con `MasterCompany`, `MasterUser`, membresías, invitaciones, reset de contraseña, auditoría, uso diario, provisión tenant e índice de endpoints WhatsApp.
 - Añadido `EncryptedDatabaseURL` para almacenar cifradas las URLs de bases tenant, manteniendo compatibilidad de lectura con instalaciones legacy.
-- Añadidas migraciones master hasta `2026.09.15.11` y migraciones tenant hasta `2026.09.15.2` para sesiones opacas, rate limiting, puente de identidad y snapshots de salud.
+- Rechazada la asignación de un destino de base de datos ya vinculado a otra empresa; se compara el endpoint sin credenciales y se normalizan los hosts direct/pooler de Neon.
+- Añadidas migraciones master y tenant para sesiones opacas, rate limiting, puente de identidad, snapshots de salud, control del bot por conversación y canal Email predeterminado.
 - Añadido el servicio de provisión y sincronización de actores master hacia la tabla operativa tenant.
 - Añadida la resolución de usuarios y contexto tenant desde la sesión y la membresía activa.
 - Añadido el panel `/superadmin` con gestión de compañías, usuarios, estadísticas, auditoría y entrada controlada a una compañía.
@@ -194,6 +197,8 @@ También existía riesgo operacional en instalaciones antiguas: una URL tenant n
 
 Las seis suites focalizadas posteriores suman 56 tests aprobados. Se ejecutaron con SQLite temporal sintético; no se consultaron bases ni datos de producción. Persisten avisos deprecados de FastAPI/Starlette y del adaptador datetime de SQLite, sin fallos asociados.
 
+La auditoría adicional aprobó `python -m unittest tests.test_superadmin -q` (13 tests), `tests.test_tenant_isolation` (8), `tests.test_multitenancy_auth` (7) y `tests.test_schema_migrations` (29). La última incluye una actualización desde `2026.10.15.1` que aplica `2026.10.15.2` y crea el canal Email que faltaba.
+
 La ejecución global `unittest discover` no se usa como criterio de esta fase porque mantiene workers de ciclo de vida y mezcla fixtures legacy. La batería relacionada con esta fase terminó correctamente con 64 tests, además de los smoke tests aislados indicados arriba.
 
 ## 10. Tests añadidos o modificados
@@ -206,6 +211,8 @@ La ejecución global `unittest discover` no se usa como criterio de esta fase po
 - Tests de que actores de soporte y membresías históricas del Superadmin no se muestran como usuarios tenant.
 - Test de que revocar la sesión global invalida y cierra inmediatamente el acceso temporal a empresa.
 - Test de migración que crea el canal Email una sola vez por empresa.
+- Test de actualización desde la versión tenant anterior para verificar el canal Email en instalaciones existentes.
+- Tests que impiden asignar el mismo destino de base de datos a varias empresas aunque cambien credenciales o se use el host pooler de Neon.
 - Tests de resolución WhatsApp mediante índice master.
 - Tests de claim y recuperación de jobs con `company_id`.
 - Tests de compatibilidad de conexión BBDD y bootstrap en entorno `test`.
@@ -228,6 +235,7 @@ La ejecución global `unittest discover` no se usa como criterio de esta fase po
 | No se puede suspender al último propietario activo | Cumplido | `test_superadmin.py` |
 | El Superadmin entra con contexto temporal y no se convierte en miembro de la empresa | Cumplido | `test_platform_owner_entering_company_can_open_configuration_and_email_channel` |
 | Configuración muestra Email y WhatsApp aunque Email aún no exista en el tenant | Cumplido | `test_default_email_channel_migration_seeds_empty_companies_idempotently` |
+| Una base operativa no se comparte accidentalmente al crear otra empresa | Cumplido | `test_company_creation_rejects_a_database_already_assigned_to_another_company` |
 | El acceso de soporte se audita y no aparece como usuario empresarial | Cumplido | `test_multitenancy_auth.py` y `PlatformAuditLog` |
 | Las altas de empresas no bloquean la petición web | Cumplido | `provisioning_worker.py` y estados `pending/running/failed` |
 | La autenticación y lifecycle tienen rate limiting compartido | Cumplido | `MasterRateLimitBucket` y `auth/rate_limit.py` |
@@ -243,6 +251,7 @@ La ejecución global `unittest discover` no se usa como criterio de esta fase po
 - El envío de invitaciones en producción debe conectarse a un proveedor de correo transaccional y monitorizarse.
 - El panel Superadmin mantiene una navegación propia y separada del menú operativo tenant.
 - Deben revisarse rutas legacy que aún puedan asumir un único usuario tenant.
+- La protección evita asignaciones duplicadas nuevas; no se consultaron datos reales, por lo que una revisión aprobada debe verificar si ya existen URLs asignadas a varias empresas.
 - Las membresías de soporte creadas por versiones anteriores no se borran automáticamente; se excluyen de listados y contadores. Su eliminación requiere una limpieza de datos aprobada y separada.
 - En producción el worker de jobs se desactiva en el proceso web por configuración (`RUN_INTERNAL_JOB_WORKER=false`) y se mantiene en el servicio dedicado; el worker de email puede mantenerse en el web tradicional o desactivarse explícitamente.
 
