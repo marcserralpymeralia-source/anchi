@@ -153,6 +153,20 @@ class SetupOnboardingTests(unittest.TestCase):
     def _login(self, client):
         return client.post("/login", data={"email": "admin@setup.local", "password": "setup-password"}, follow_redirects=False)
 
+    def test_new_tenant_branding_defaults_to_its_company_name(self):
+        fixture = SetupFixture()
+        try:
+            with fixture.TenantSession() as db:
+                company = db.get(Company, 1)
+                company.name = "Empresa Independiente"
+
+                branding = get_or_create_branding(db, company.id)
+
+                self.assertEqual(branding.company_name, "Empresa Independiente")
+                self.assertEqual(branding.app_name, "Anchi")
+        finally:
+            fixture.cleanup()
+
     def test_setup_status_operational_requires_company_channel_products_customers_and_openai(self):
         fixture = SetupFixture()
         try:

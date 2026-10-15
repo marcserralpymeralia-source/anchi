@@ -84,6 +84,7 @@ La revisión adicional encontró que el alta aceptaba reutilizar una misma base 
 - Añadida paginación SQL a compañías y usuarios del panel Superadmin y cambiado `export-preview` a POST con control de propiedad.
 - Añadidos tests de aislamiento, lifecycle, Superadmin y workers.
 - Añadido el shell visual del panel Superadmin sin alterar sus rutas, permisos ni acciones administrativas.
+- Corregido el branding inicial de tenants nuevos: el nombre comercial parte del nombre de su propia empresa, sin sobrescribir filas de identidad ya guardadas.
 - Ajustada la compatibilidad del rate limiter con dobles ligeros usados por los tests del login, sin cambiar el comportamiento de producción.
 - Reemplazada la membresía implícita de soporte por un contexto temporal ligado a la sesión server-side y limitado al tenant seleccionado; se valida de nuevo la identidad global, empresa, versión de sesión y base operativa en cada petición.
 - Añadido un actor local técnico sin credenciales utilizables y fuera de las membresías para conservar referencias de auditoría tenant; se oculta y se bloquea su edición desde Usuarios.
@@ -120,6 +121,7 @@ La revisión adicional encontró que el alta aceptaba reutilizar una misma base 
 | `backend/app/master/service.py` | Contexto y autenticación | Servicio de identidad |
 | `backend/app/migrations/registry.py` | Migraciones master/tenant y canal Email por defecto | Registro de versiones |
 | `backend/app/settings/channels_routes.py` | Estado de canales por tenant | Aislamiento de configuración |
+| `backend/app/settings/branding.py` | Usar el nombre de la empresa tenant al crear su identidad inicial | Corrección de default tenant |
 | `backend/app/static/styles.css` | Panel y pantallas nuevas | Estilos |
 | `backend/app/templates/base.html` | Navegación Superadmin | Plantilla |
 | `backend/app/templates/login.html` | Mensajes de lifecycle | Plantilla |
@@ -133,6 +135,8 @@ La revisión adicional encontró que el alta aceptaba reutilizar una misma base 
 | `backend/tests/test_superadmin.py` | Verificar unicidad de destino de base de datos por empresa | Tests de aprovisionamiento |
 | `backend/tests/test_order_extraction_service.py` | Respetar el entorno `test` configurado por el runner | Aislamiento de configuración de tests |
 | `backend/tests/test_orders_detail_optimization.py` | Comparar la fecha mostrada usando la zona horaria tenant | Estabilidad de test |
+| `backend/tests/test_setup_onboarding.py` | Verificar que la identidad inicial usa el nombre de su empresa tenant | Regresión de onboarding |
+| `docs/development/multiuser-multitenancy-superadmin-delivery.md` | Registrar la corrección de branding y sus validaciones locales | Evidencia de fase |
 | `backend/app/whatsapp/inbox_routes.py` | Aislamiento WhatsApp | Rutas |
 | `backend/app/whatsapp/service.py` | Índice de endpoints | Resolución master |
 | `backend/app/workers/jobs_worker.py` | Worker por compañía | Aislamiento de ejecución |
@@ -213,6 +217,9 @@ La revisión adicional encontró que el alta aceptaba reutilizar una misma base 
 | `APP_ENV=test` y workers por defecto; `python -m unittest tests.test_order_extraction_service tests.test_multitenancy_auth tests.test_orders_detail_optimization tests.test_orders_list_optimization -v` (desde `backend`) | 25 tests OK; 77.331 s. Reproduce los defaults del job SQLite de CI |
 | `APP_ENV=test` y workers por defecto; test aislado `test_order_date_defaults_to_email_date_and_saves_iso` | 1 test OK; confirma la expectativa de fecha local |
 | `APP_ENV=test; .venv\Scripts\python.exe -m compileall -q app scripts tests` (desde `backend`) | OK; sin errores sintácticos |
+| `APP_ENV=test RUN_INTERNAL_JOB_WORKER=false RUN_INTERNAL_EMAIL_WORKER=false .\.venv\Scripts\python.exe -m compileall -q app\settings\branding.py tests\test_setup_onboarding.py` (desde `backend`) | OK; sintaxis del cambio de branding |
+| `APP_ENV=test RUN_INTERNAL_JOB_WORKER=false RUN_INTERNAL_EMAIL_WORKER=false .\.venv\Scripts\python.exe -m unittest tests.test_setup_onboarding tests.test_branding_cache -v` (desde `backend`) | 18 tests OK en 79.164 s; aparecieron avisos `ResourceWarning` al cerrar la suite, sin fallo de test |
+| Navegación local aislada con Playwright CLI en `http://127.0.0.1:8010` | Con datos sintéticos: el dueño global entró en una empresa recién creada, abrió Configuración y Canales y vio Email y WhatsApp; la cabecera identificó la empresa correcta. No se consultó producción |
 | `git diff --check` | OK; sin errores de whitespace; Git avisa de conversión LF/CRLF en Windows |
 
 Las suites se ejecutaron con SQLite temporal sintético; no se consultaron bases ni datos de producción. Persisten avisos deprecados de FastAPI/Starlette y del adaptador datetime de SQLite, sin fallos asociados.
@@ -240,6 +247,7 @@ Los fallos globales previos quedaron diagnosticados y corregidos: contaminación
 - Test de que la provisión externa valida la base antes de abrir la conexión o modificar la empresa.
 - Test de que URLs directas y pooler equivalentes de Neon comparten la misma clave de advisory lock PostgreSQL.
 - Test que comprueba la fecha del pedido en la zona tenant y no depende de que el reloj ejecute la prueba antes o después de medianoche UTC.
+- Test de que una fila de identidad nueva toma el nombre de la compañía tenant y conserva el nombre de aplicación Anchi.
 
 ## 11. Criterios de aceptacion
 
@@ -265,6 +273,7 @@ Los fallos globales previos quedaron diagnosticados y corregidos: contaminación
 | La autenticación y lifecycle tienen rate limiting compartido | Cumplido | `MasterRateLimitBucket` y `auth/rate_limit.py` |
 | La app arranca localmente con el estado actual | Cumplido | Uvicorn + `/login` 200 |
 | El panel Superadmin comparte el lenguaje visual de Anchi sin perder sus acciones | Cumplido | tests relacionados, AX tree y captura visual local |
+| Un tenant nuevo recibe como nombre comercial inicial el nombre de su propia empresa | Cumplido | `test_new_tenant_branding_defaults_to_its_company_name` y navegación local en una empresa sintética recién provisionada |
 
 ## 12. Riesgos y observaciones pendientes
 
@@ -279,6 +288,7 @@ Los fallos globales previos quedaron diagnosticados y corregidos: contaminación
 - En PostgreSQL las altas concurrentes de la misma base se serializan con advisory lock transaccional. Otros dialectos distintos de PostgreSQL no tienen ese bloqueo; si se usan con varias réplicas, habría que añadir un mecanismo equivalente.
 - Las membresías de soporte creadas por versiones anteriores no se borran automáticamente; se excluyen de listados y contadores. Su eliminación requiere una limpieza de datos aprobada y separada.
 - En producción el worker de jobs se desactiva en el proceso web por configuración (`RUN_INTERNAL_JOB_WORKER=false`) y se mantiene en el servicio dedicado; el worker de email puede mantenerse en el web tradicional o desactivarse explícitamente.
+- Las filas de branding ya existentes no se reescriben automáticamente: pueden contener una identidad personalizada y deben revisarse aparte si muestran un nombre anterior. La navegación local también registró un 404 de `/favicon.ico` y sugerencias de `autocomplete` en login; son observaciones fuera del cambio de branding.
 
 ## 13. Desviaciones respecto al alcance inicial
 
@@ -288,10 +298,10 @@ Se añadió el índice de endpoints WhatsApp, el cifrado de URLs tenant, el aisl
 
 - Rama actual: `chore/technical-improvement-plan`.
 - Las correcciones de soporte temporal, canal Email, revocación de sesión, propiedad de base tenant y validaciones globales están registradas en commits locales separados.
-- Quedan 14 archivos locales previos de WhatsApp/canales/workers sin incluir; se conservaron intactos y fuera de estos commits.
+- Permanecen 14 archivos locales previos de WhatsApp/canales/workers sin incluir; se conservaron intactos y fuera de esta corrección.
 - Commits locales de esta continuación: `7b25404 test: avoid leaking app environment between suites`, `96781ff perf: avoid duplicate tenant schema inspection`, `0342936 fix: guard external tenant database isolation`, `a3dbf7c test: compare order date in tenant timezone` y `1ad0c2f fix: serialize tenant database claims`.
 - También permanecen los commits previos de aislamiento `7990970 fix: prevent sharing tenant databases` y `3fd6b68 docs: record tenant database isolation guard`.
-- Antes de guardar este informe la rama está 14 commits por delante de `origin/chore/technical-improvement-plan`; el commit documental la dejará 15 por delante.
+- Estado al iniciar esta corrección: la rama estaba 15 commits por delante de `origin/chore/technical-improvement-plan`. El arreglo, su test y este informe se registran en un commit local (16 por delante); no se hizo push ni despliegue.
 - La rama permanece únicamente local; no se ha hecho push ni desplegado.
 - No se han descartado cambios locales ajenos.
 - Los cambios locales no publicados aún no han pasado CI remoto ni Vercel.

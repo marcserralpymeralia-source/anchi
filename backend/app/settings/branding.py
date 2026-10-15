@@ -9,7 +9,7 @@ from fastapi import UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.db.models import BrandingSettings, utcnow
+from app.db.models import BrandingSettings, Company, utcnow
 
 
 DEFAULT_THEME: dict[str, Any] = {
@@ -134,9 +134,9 @@ def deep_merge(default: dict[str, Any], current: dict[str, Any]) -> dict[str, An
     return merged
 
 
-def default_branding_payload() -> dict[str, Any]:
+def default_branding_payload(*, company_name: str | None = None) -> dict[str, Any]:
     settings = get_settings()
-    company_name = settings.default_company_name
+    company_name = (company_name or settings.default_company_name).strip() or settings.default_company_name
     app_name = settings.branding_app_name or settings.app_name
     return {
         "company_name": company_name,
@@ -160,7 +160,8 @@ def get_or_create_branding(db: Session, company_id: int) -> BrandingSettings:
     branding = db.query(BrandingSettings).filter(BrandingSettings.company_id == company_id).one_or_none()
     if branding:
         return branding
-    payload = default_branding_payload()
+    company = db.get(Company, company_id)
+    payload = default_branding_payload(company_name=company.name if company else None)
     branding = BrandingSettings(
         company_id=company_id,
         app_name=payload["app_name"],
