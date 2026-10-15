@@ -15,6 +15,7 @@ from app.db.models import User
 from app.master.database import MasterBase
 from app.master.bootstrap import ensure_platform_admin
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser
+from app.master.database_identity import ensure_tenant_database_is_unassigned
 from app.master.provisioning import provision_external_tenant
 from app.master.service import _membership_to_user, authenticate_master_user
 from app.superadmin.routes import _companies
@@ -143,6 +144,37 @@ class SuperadminProvisioningTests(unittest.TestCase):
         pooler_url = "postgresql://tenant_b:secret-b@ep-demo-pooler.eu-central-1.aws.neon.tech/anchi"
 
         self.assertEqual(_tenant_database_identity(direct_url), _tenant_database_identity(pooler_url))
+
+    def test_postgres_advisory_lock_serializes_direct_and_pooler_urls(self):
+        class FakePostgresSession:
+            def __init__(self):
+                self.lock_calls = []
+
+            def get_bind(self):
+                return SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+
+            def execute(self, statement, params):
+                self.lock_calls.append((statement, params))
+
+            def scalars(self, statement):
+                return []
+
+        direct_session = FakePostgresSession()
+        pooler_session = FakePostgresSession()
+        ensure_tenant_database_is_unassigned(
+            direct_session,
+            "postgresql+psycopg://first:secret@ep-demo.eu-central-1.aws.neon.tech/anchi",
+        )
+        ensure_tenant_database_is_unassigned(
+            pooler_session,
+            "postgresql://second:other-secret@ep-demo-pooler.eu-central-1.aws.neon.tech/anchi",
+        )
+
+        self.assertEqual(len(direct_session.lock_calls), 1)
+        self.assertEqual(len(pooler_session.lock_calls), 1)
+        statement, direct_params = direct_session.lock_calls[0]
+        self.assertIn("pg_advisory_xact_lock", statement.text)
+        self.assertEqual(direct_params, pooler_session.lock_calls[0][1])
 
     def test_external_provisioning_rejects_a_database_assigned_to_another_company(self):
         existing_company = MasterCompany(name="Existing external company", slug="existing-external-company", active=True)

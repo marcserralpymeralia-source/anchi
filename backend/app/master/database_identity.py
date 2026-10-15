@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from hashlib import sha256
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import text
 
 from app.master.models import MasterTenantDatabase
 
@@ -34,9 +36,23 @@ def ensure_tenant_database_is_unassigned(
     *,
     exclude_company_id: int | None = None,
 ) -> None:
-    """Prevent multiple companies from sharing one operational database."""
+    """Prevent multiple companies from sharing one operational database.
+
+    PostgreSQL's transaction-scoped advisory lock makes the check-and-assign
+    sequence atomic across web replicas without locking tenant data.
+    """
 
     requested_identity = tenant_database_identity(database_url)
+    bind = master_db.get_bind()
+    if bind.dialect.name == "postgresql":
+        identity_material = "\0".join(str(part or "") for part in requested_identity)
+        identity_digest = sha256(identity_material.encode("utf-8")).digest()
+        lock_key = int.from_bytes(identity_digest[:8], "big", signed=True)
+        master_db.execute(
+            text("SELECT pg_advisory_xact_lock(:lock_key)"),
+            {"lock_key": lock_key},
+        )
+
     statement = select(MasterTenantDatabase)
     if exclude_company_id is not None:
         statement = statement.where(MasterTenantDatabase.company_id != exclude_company_id)
