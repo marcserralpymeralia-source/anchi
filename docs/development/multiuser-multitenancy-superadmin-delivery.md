@@ -91,6 +91,10 @@ La revisión adicional encontró que el alta aceptaba reutilizar una misma base 
 - Añadido el evento `company.support_access` a la auditoría master al entrar en una empresa.
 - Corregido el cierre de sesiones tenant inválidas: al revocar o cambiar la versión de sesión, se limpia el contexto y se redirige al login en lugar de dejar un 403 persistente.
 - Añadida la migración tenant `2026.10.15.2` para crear idempotentemente el canal Email que falte, sin cambiar canales ya existentes.
+- Evitada una inspección duplicada de `schema_migrations` en el diagnóstico de esquema tenant; se reutiliza una única lectura de columnas.
+- Corregida una fuga de estado entre suites: los tests de extracción ya no fuerzan `APP_ENV=development` al importar el módulo cuando CI ya seleccionó `test`.
+- Centralizada la identidad de URLs de bases tenant y aplicada también a la provisión externa, validando antes de modificar la empresa o abrir una conexión externa.
+- Estabilizada la comprobación de fecha del pedido para comparar la fecha local de `Europe/Madrid`, igual que la plantilla, en vez de comparar el valor UTC sin convertir.
 
 ## 6. Archivos modificados
 
@@ -120,11 +124,14 @@ La revisión adicional encontró que el alta aceptaba reutilizar una misma base 
 | `backend/app/templates/login.html` | Mensajes de lifecycle | Plantilla |
 | `backend/app/templates/users/list.html` | Gestión de usuarios | Plantilla |
 | `backend/app/tenancy/database.py` | Provisionado cacheado, errores y sesión de soporte | Resolución tenant |
+| `backend/app/tenancy/migrations.py` | Reutilizar inspección de columnas del reporte de migración | Optimización de consulta |
 | `backend/app/users/routes.py` | Gestión tenant, ocultación y protección de actores internos | Usuarios tenant |
 | `backend/app/superadmin/service.py` | Rechazar destinos de base tenant ya asignados a otra empresa | Validación de aprovisionamiento |
 | `backend/tests/test_multitenancy_auth.py` | Verificar acceso temporal, auditoría y ocultación de identidades globales | Tests E2E |
 | `backend/tests/test_schema_migrations.py` | Verificar creación idempotente del canal Email | Tests de migración |
 | `backend/tests/test_superadmin.py` | Verificar unicidad de destino de base de datos por empresa | Tests de aprovisionamiento |
+| `backend/tests/test_order_extraction_service.py` | Respetar el entorno `test` configurado por el runner | Aislamiento de configuración de tests |
+| `backend/tests/test_orders_detail_optimization.py` | Comparar la fecha mostrada usando la zona horaria tenant | Estabilidad de test |
 | `backend/app/whatsapp/inbox_routes.py` | Aislamiento WhatsApp | Rutas |
 | `backend/app/whatsapp/service.py` | Índice de endpoints | Resolución master |
 | `backend/app/workers/jobs_worker.py` | Worker por compañía | Aislamiento de ejecución |
@@ -140,6 +147,7 @@ La revisión adicional encontró que el alta aceptaba reutilizar una misma base 
 | `backend/app/superadmin/__init__.py` | Paquete Superadmin |
 | `backend/app/superadmin/routes.py` | Endpoints del panel Superadmin |
 | `backend/app/superadmin/service.py` | Provisión, usuarios, estadísticas, auditoría y validación de unicidad de base tenant | Servicio de dominio |
+| `backend/app/master/database_identity.py` | Identidad común de URL y guard compartido de provisión | Módulo nuevo |
 | `backend/app/workers/provisioning_worker.py` | Aprovisionamiento asíncrono de empresas | Worker |
 | `backend/app/core/csrf.py` | Protección CSRF para formularios y peticiones AJAX |
 | `backend/app/static/js/security.js` | Envío automático del token CSRF |
@@ -195,15 +203,21 @@ La revisión adicional encontró que el alta aceptaba reutilizar una misma base 
 | `pytest tests/test_tenant_isolation.py -q` | 8 passed; aislamiento entre empresas e IDs coincidentes |
 | `pytest tests/test_account_lifecycle.py -q` | 1 passed; invitaciones y revocación de sesiones |
 | `pytest tests/test_worker_tenant_scope.py -q` | 1 passed; scope tenant de workers |
-| `APP_ENV=test; .venv\Scripts\python.exe -m unittest tests.test_multitenancy_auth tests.test_orders_detail_optimization -v` (desde `backend`) | 12 tests OK; selección multiempresa y detalle de pedidos pasan aislados |
-| `APP_ENV=test; .venv\Scripts\python.exe -m unittest discover -s tests` (desde `backend`) | 587 tests: 8 failures, 1 error, 5 skipped. En el resultado se observó un detalle de pedido con 16 consultas frente al máximo de 15; no se reprodujo al ejecutar esa suite aisladamente. No se obtuvo un diagnóstico completo de los otros fallos en esta ejecución |
-| `git diff --check` | OK; solo avisos de conversión LF/CRLF de Git |
+| Primera suite global, antes del arreglo de `APP_ENV` | 588 tests, 10 fallos; se reprodujeron siete fallos de multitenancy por el valor global de entorno impuesto al importar el módulo de extracción |
+| Suite global tras aislar `APP_ENV`, antes del ajuste de migraciones | 593 tests, un fallo reproducible: detalle de pedido medio con 16 consultas (límite 15) |
+| `APP_ENV=test; RUN_INTERNAL_JOB_WORKER=false; RUN_INTERNAL_EMAIL_WORKER=false; .venv\Scripts\python.exe -m unittest discover -s tests -v` (desde `backend`) | 595 tests OK; 5 omitidos; 1401.057 s. Solo SQLite de pruebas |
+| `APP_ENV=test; RUN_INTERNAL_JOB_WORKER=false; RUN_INTERNAL_EMAIL_WORKER=false; .venv\Scripts\python.exe -m unittest tests.test_superadmin tests.test_multitenancy_auth tests.test_schema_migrations tests.test_orders_detail_optimization -v` (desde `backend`) | 55 tests OK; 151.770 s |
+| `APP_ENV=test; RUN_INTERNAL_JOB_WORKER=false; RUN_INTERNAL_EMAIL_WORKER=false; .venv\Scripts\python.exe -m unittest tests.test_superadmin tests.test_schema_migrations -v` (desde `backend`) | 43 tests OK; 57.863 s, tras el guard previo a mutaciones |
+| `APP_ENV=test` y workers por defecto; `python -m unittest tests.test_order_extraction_service tests.test_multitenancy_auth tests.test_orders_detail_optimization tests.test_orders_list_optimization -v` (desde `backend`) | 25 tests OK; 77.331 s. Reproduce los defaults del job SQLite de CI |
+| `APP_ENV=test` y workers por defecto; test aislado `test_order_date_defaults_to_email_date_and_saves_iso` | 1 test OK; confirma la expectativa de fecha local |
+| `APP_ENV=test; .venv\Scripts\python.exe -m compileall -q app scripts tests` (desde `backend`) | OK; sin errores sintácticos |
+| `git diff --check` | OK; sin errores de whitespace; Git avisa de conversión LF/CRLF en Windows |
 
-Las seis suites focalizadas posteriores suman 56 tests aprobados. Se ejecutaron con SQLite temporal sintético; no se consultaron bases ni datos de producción. Persisten avisos deprecados de FastAPI/Starlette y del adaptador datetime de SQLite, sin fallos asociados.
+Las suites se ejecutaron con SQLite temporal sintético; no se consultaron bases ni datos de producción. Persisten avisos deprecados de FastAPI/Starlette y del adaptador datetime de SQLite, sin fallos asociados.
 
 La auditoría adicional aprobó `python -m unittest tests.test_superadmin -q` (13 tests), `tests.test_tenant_isolation` (8), `tests.test_multitenancy_auth` (7) y `tests.test_schema_migrations` (29). La última incluye una actualización desde `2026.10.15.1` que aplica `2026.10.15.2` y crea el canal Email que faltaba.
 
-La ejecución global sí se realizó y no quedó verde: 8 fallos y 1 error entre 587 tests (5 omitidos). Un fallo visible fue el presupuesto de consultas del detalle de pedido (16 frente a 15), aunque al repetir la suite relacionada de forma aislada pasó. Las suites focalizadas de esta fase y los tests de detalle pasan por separado; el estado global queda pendiente de identificar y reproducir. No se han corregido fallos ajenos sin evidencia de que pertenezcan a esta fase.
+Los fallos globales previos quedaron diagnosticados y corregidos: contaminación de `APP_ENV` por un test de extracción y una inspección SQL redundante en el reporte de migraciones. La suite global de 595 tests pasó con workers internos desactivados. Después, las suites focalizadas (25 con los valores por defecto de CI y 43 de Superadmin/migraciones con workers desactivados) pasaron tras los últimos ajustes. No se repitió la suite global completa tras los cambios finales, que además de mover la validación antes de cualquier mutación solo ajustan la expectativa de fecha del test.
 
 ## 10. Tests añadidos o modificados
 
@@ -220,6 +234,9 @@ La ejecución global sí se realizó y no quedó verde: 8 fallos y 1 error entre
 - Tests de resolución WhatsApp mediante índice master.
 - Tests de claim y recuperación de jobs con `company_id`.
 - Tests de compatibilidad de conexión BBDD y bootstrap en entorno `test`.
+- Test de que importar los tests de extracción no sobrescribe `APP_ENV=test`.
+- Test de que la provisión externa valida la base antes de abrir la conexión o modificar la empresa.
+- Test que comprueba la fecha del pedido en la zona tenant y no depende de que el reloj ejecute la prueba antes o después de medianoche UTC.
 
 ## 11. Criterios de aceptacion
 
@@ -256,6 +273,7 @@ La ejecución global sí se realizó y no quedó verde: 8 fallos y 1 error entre
 - El panel Superadmin mantiene una navegación propia y separada del menú operativo tenant.
 - Deben revisarse rutas legacy que aún puedan asumir un único usuario tenant.
 - La protección evita asignaciones duplicadas nuevas; no se consultaron datos reales, por lo que una revisión aprobada debe verificar si ya existen URLs asignadas a varias empresas.
+- La identidad de base se comprueba en la aplicación antes de provisionar; no es una restricción atómica de base de datos. Una futura mejora debería cubrir altas concurrentes con una clave normalizada única.
 - Las membresías de soporte creadas por versiones anteriores no se borran automáticamente; se excluyen de listados y contadores. Su eliminación requiere una limpieza de datos aprobada y separada.
 - En producción el worker de jobs se desactiva en el proceso web por configuración (`RUN_INTERNAL_JOB_WORKER=false`) y se mantiene en el servicio dedicado; el worker de email puede mantenerse en el web tradicional o desactivarse explícitamente.
 
@@ -266,12 +284,12 @@ Se añadió el índice de endpoints WhatsApp, el cifrado de URLs tenant, el aisl
 ## 14. Estado final de Git
 
 - Rama actual: `chore/technical-improvement-plan`.
-- Las correcciones de soporte temporal, canal Email, revocación de sesión y propiedad de la base tenant están registradas en commits locales separados.
-- Quedan cambios locales previos de WhatsApp/canales sin incluir; se conservaron intactos.
-- En la última revisión había 11 archivos locales modificados de WhatsApp/canales, fuera de la corrección de unicidad de bases tenant; se dejaron intactos y fuera de estos commits.
-- Commits locales de la comprobación adicional: `7990970 fix: prevent sharing tenant databases` y `3fd6b68 docs: record tenant database isolation guard`.
-- En la verificación previa a registrar este informe, la rama estaba 7 commits por delante de `origin/chore/technical-improvement-plan`; el commit de este informe añade uno más.
-- No se ha hecho push ni se ha desplegado esta corrección.
+- Las correcciones de soporte temporal, canal Email, revocación de sesión, propiedad de base tenant y validaciones globales están registradas en commits locales separados.
+- Quedan 14 archivos locales previos de WhatsApp/canales/workers sin incluir; se conservaron intactos y fuera de estos commits.
+- Commits locales de esta continuación: `7b25404 test: avoid leaking app environment between suites`, `96781ff perf: avoid duplicate tenant schema inspection`, `0342936 fix: guard external tenant database isolation` y `a3dbf7c test: compare order date in tenant timezone`.
+- También permanecen los commits previos de aislamiento `7990970 fix: prevent sharing tenant databases` y `3fd6b68 docs: record tenant database isolation guard`.
+- Antes de guardar este informe la rama está 12 commits por delante de `origin/chore/technical-improvement-plan`; el commit documental la dejará 13 por delante.
+- La rama permanece únicamente local; no se ha hecho push ni desplegado.
 - No se han descartado cambios locales ajenos.
 - Los cambios locales no publicados aún no han pasado CI remoto ni Vercel.
 - Las validaciones automatizadas usaron bases SQLite temporales y `TestClient`; no se conectó directamente a una base de datos productiva.
