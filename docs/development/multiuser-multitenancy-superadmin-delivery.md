@@ -139,6 +139,9 @@ La revisión adicional encontró que el alta aceptaba reutilizar una misma base 
 | `docs/development/multiuser-multitenancy-superadmin-delivery.md` | Registrar la corrección de branding y sus validaciones locales | Evidencia de fase |
 | `backend/app/whatsapp/inbox_routes.py` | Aislamiento WhatsApp | Rutas |
 | `backend/app/whatsapp/service.py` | Índice de endpoints | Resolución master |
+| `backend/app/templates/whatsapp/_chat_live.html` | Control del agente por conversación | Interfaz del chat WhatsApp |
+| `backend/app/templates/whatsapp/inbox.html` | Selector de activación del agente por chat | Bandeja de WhatsApp |
+| `backend/tests/test_whatsapp_auto_responses.py` | Verificar respuestas automáticas respetando el control por conversación | Test de integración WhatsApp |
 | `backend/app/workers/jobs_worker.py` | Worker por compañía | Aislamiento de ejecución |
 | `docker-compose.yml` | Separación web/worker | Evitar doble poller de jobs |
 
