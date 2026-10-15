@@ -188,7 +188,7 @@ class WhatsAppInboxTests(unittest.TestCase):
             page = client.get(f"/whatsapp/inbox?conversation_id={conversation_id}")
             csrf = re.search(r'<meta name="csrf-token" content="([^"]*)"', page.text)
             self.assertIn('role="switch" aria-checked="false"', page.text)
-            self.assertIn("Agente IA", page.text)
+            self.assertIn("Bot de WhatsApp", page.text)
             self.assertNotIn("Atención humana", page.text)
             response = client.post(
                 f"/whatsapp/inbox/{conversation_id}/assistant-control",
@@ -208,9 +208,9 @@ class WhatsAppInboxTests(unittest.TestCase):
             fixture.cleanup()
 
         self.assertEqual(page.status_code, 200)
-        self.assertIn("Agente conversacional", page.text)
-        self.assertIn("Esperando datos del cliente", page.text)
-        self.assertIn("Indicar cantidad", page.text)
+        self.assertNotIn("Agente conversacional", page.text)
+        self.assertNotIn("Esperando datos del cliente", page.text)
+        self.assertNotIn("Indicar cantidad", page.text)
         self.assertIn('role="switch" aria-checked="true"', enabled_page.text)
         self.assertIn('role="switch" aria-checked="false"', paused_page.text)
         self.assertEqual(response.status_code, 303)
@@ -229,7 +229,7 @@ class WhatsAppInboxTests(unittest.TestCase):
 
         self.assertEqual(page.status_code, 200)
         self.assertIn('role="switch" aria-checked="false"', page.text)
-        self.assertIn("Agente IA", page.text)
+        self.assertIn("Bot de WhatsApp", page.text)
 
     def test_manual_reply_takes_control_before_provider_send_finishes(self):
         fixture = build_performance_fixture("small")

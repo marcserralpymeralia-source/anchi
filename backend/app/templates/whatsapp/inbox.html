@@ -142,7 +142,6 @@
         window.initWhatsAppMediaDownloads(nextChat);
         window.initWhatsAppAudioPlayers(nextChat);
         window.initWhatsAppSearchNavigation(nextChat);
-        window.updateWhatsAppAgentSessionTimer?.(nextChat);
         if (!hasLocalComposeState && typeof window.initWhatsAppComposer === "function") {
           window.initWhatsAppComposer(nextCompose);
         }
@@ -435,24 +434,6 @@
   };
 
   window.initWhatsAppReplyControls();
-
-  window.updateWhatsAppAgentSessionTimer = function(container = document) {
-    container.querySelectorAll("[data-wa-session-due]").forEach((timer) => {
-      const dueAt = Date.parse(timer.dataset.waSessionDue || "");
-      if (!Number.isFinite(dueAt)) return;
-      const remaining = Math.max(0, dueAt - Date.now());
-      if (remaining === 0) {
-        timer.textContent = "Pendiente de cierre y evaluación";
-        return;
-      }
-      const hours = Math.floor(remaining / 3600000);
-      const minutes = Math.floor((remaining % 3600000) / 60000);
-      timer.textContent = `Cierre y evaluación en ${hours ? `${hours} h ` : ""}${minutes} min`;
-    });
-  };
-
-  window.updateWhatsAppAgentSessionTimer();
-  window.setInterval(() => window.updateWhatsAppAgentSessionTimer(), 60000);
 
   window.initWhatsAppAudioPlayers = function(container = document) {
     const players = container.querySelectorAll("[data-wa-audio-player]");

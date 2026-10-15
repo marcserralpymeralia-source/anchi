@@ -15113,71 +15113,6 @@ table.logs-table tr:hover td {
   outline: none !important;
 }
 
-.whatsapp-inbox-shell .wa-agent-session {
-  display: grid;
-  gap: 9px;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--wa-line);
-  background: var(--wa-panel);
-  color: var(--wa-text);
-  font-size: 12px;
-}
-
-.whatsapp-inbox-shell .wa-agent-session-topline,
-.whatsapp-inbox-shell .wa-agent-session-topline > div,
-.whatsapp-inbox-shell .wa-agent-suggestion,
-.whatsapp-inbox-shell .wa-agent-session-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-width: 0;
-}
-
-.whatsapp-inbox-shell .wa-agent-session-topline > div {
-  justify-content: flex-start;
-  flex-wrap: wrap;
-}
-
-.whatsapp-inbox-shell .wa-agent-session-timer,
-.whatsapp-inbox-shell .wa-agent-handoff-reason,
-.whatsapp-inbox-shell .wa-agent-missing {
-  color: var(--wa-muted);
-}
-
-.whatsapp-inbox-shell .wa-agent-draft,
-.whatsapp-inbox-shell .wa-agent-suggestion {
-  padding: 9px 11px;
-  border: 1px solid var(--wa-line);
-  border-radius: 8px;
-  background: var(--wa-softer);
-}
-
-.whatsapp-inbox-shell .wa-agent-draft ul {
-  display: grid;
-  gap: 3px;
-  margin: 5px 0 0;
-  padding-left: 18px;
-}
-
-.whatsapp-inbox-shell .wa-agent-suggestion > div {
-  min-width: 0;
-}
-
-.whatsapp-inbox-shell .wa-agent-suggestion p,
-.whatsapp-inbox-shell .wa-agent-handoff-reason {
-  margin: 3px 0 0;
-}
-
-.whatsapp-inbox-shell .wa-agent-session-actions {
-  justify-content: flex-start;
-  flex-wrap: wrap;
-}
-
-.whatsapp-inbox-shell .wa-agent-session-actions form {
-  margin: 0;
-}
-
 .whatsapp-inbox-shell .wa-agent-control-toggle {
   display: inline-flex;
   align-items: center;
@@ -15254,16 +15189,4 @@ table.logs-table tr:hover td {
 .whatsapp-inbox-shell .wa-chat-bot-toggle {
   flex: 0 0 auto;
   margin: 0 0 0 auto;
-}
-
-@media (max-width: 680px) {
-  .whatsapp-inbox-shell .wa-agent-session-topline {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .whatsapp-inbox-shell .wa-agent-suggestion {
-    align-items: flex-start;
-    flex-direction: column;
-  }
 }

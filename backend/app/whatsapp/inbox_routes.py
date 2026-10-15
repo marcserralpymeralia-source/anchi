@@ -37,8 +37,6 @@ from app.whatsapp.service import (
     WhatsAppEmbeddedSignupError,
 )
 from app.whatsapp.agent import (
-    active_whatsapp_session,
-    enqueue_whatsapp_session_finalization,
     set_whatsapp_bot_enabled,
     set_whatsapp_human_control,
 )
@@ -520,49 +518,6 @@ def _inbox_live_revision(
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
-def _assistant_session_context(
-    db: Session,
-    *,
-    company_id: int,
-    selected: dict | None,
-) -> dict | None:
-    if not selected:
-        return None
-    session = db.scalar(
-        select(WhatsAppOrderSession)
-        .where(
-            WhatsAppOrderSession.company_id == company_id,
-            WhatsAppOrderSession.conversation_id == selected["id"],
-        )
-        .order_by(WhatsAppOrderSession.id.desc())
-        .limit(1)
-    )
-    if not session:
-        return None
-    try:
-        draft = json.loads(session.draft_json or "{}")
-    except (TypeError, json.JSONDecodeError):
-        draft = {}
-    try:
-        missing = json.loads(session.missing_fields_json or "[]")
-    except (TypeError, json.JSONDecodeError):
-        missing = []
-    return {
-        "id": session.id,
-        "status": session.status,
-        "intent": session.intent,
-        "draft": draft if isinstance(draft, dict) else {},
-        "missing": missing if isinstance(missing, list) else [],
-        "suggested_reply": session.suggested_reply or "",
-        "handoff_reason": session.handoff_reason or "",
-        "due_at": session.due_at.isoformat() if session.due_at else "",
-        "human_active": bool(session.human_active),
-        "active": bool(session.active_key),
-        "closed_reason": session.closed_reason or "",
-        "order_id": session.order_id,
-    }
-
-
 def _whatsapp_compose_context(
     db: Session,
     user: TenantUser,
@@ -594,11 +549,6 @@ def _whatsapp_compose_context(
         "ready_to_send": ready_to_send,
         "response_window": response_window,
         "can_send": ready_to_send and response_window["is_open"],
-        "assistant_session": _assistant_session_context(
-            db,
-            company_id=user.company_id,
-            selected=selected,
-        ),
         "assistant_enabled": assistant_enabled,
     }
 
@@ -871,32 +821,6 @@ async def whatsapp_inbox_assistant_control(
         message=f"Agente de WhatsApp {'activado' if normalized_action == 'enable' else 'pausado'} para la conversación.",
     )
     return _redirect_to_conversation(conversation_id, notice="assistant_updated")
-
-
-@router.post("/whatsapp/inbox/{conversation_id}/sessions/{session_id}/close")
-async def whatsapp_inbox_close_assistant_session(
-    conversation_id: int,
-    session_id: int,
-    db: Session = Depends(get_tenant_db),
-    user: TenantUser = Depends(current_user),
-):
-    session = db.scalar(
-        select(WhatsAppOrderSession).where(
-            WhatsAppOrderSession.id == session_id,
-            WhatsAppOrderSession.company_id == user.company_id,
-            WhatsAppOrderSession.conversation_id == conversation_id,
-            WhatsAppOrderSession.active_key.is_not(None),
-        )
-    )
-    if not session:
-        return _redirect_to_conversation(conversation_id, error="assistant_session_not_found")
-    enqueue_whatsapp_session_finalization(
-        db,
-        session=session,
-        reason="manual",
-        user_id=user.actor_id,
-    )
-    return _redirect_to_conversation(conversation_id, notice="assistant_finalization_queued")
 
 
 @router.post("/whatsapp/inbox/{conversation_id}/reply")

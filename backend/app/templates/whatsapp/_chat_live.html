@@ -44,64 +44,15 @@
     </div>
     <form method="post" action="/whatsapp/inbox/{{ selected.id }}/assistant-control" class="wa-chat-bot-toggle">
       <input type="hidden" name="action" value="{{ 'disable' if assistant_enabled else 'enable' }}">
-      <button type="submit" class="wa-agent-control-toggle" role="switch" aria-checked="{{ 'true' if assistant_enabled else 'false' }}" aria-label="Agente IA en esta conversación">
+      <button type="submit" class="wa-agent-control-toggle" role="switch" aria-checked="{{ 'true' if assistant_enabled else 'false' }}" aria-label="Bot de WhatsApp en esta conversación">
         <span class="wa-agent-control-track" aria-hidden="true"><span></span></span>
         <span class="wa-agent-control-copy">
-          <strong>Agente IA</strong>
-          <small>{{ "Activo" if assistant_enabled else "Pausado" }}</small>
+          <strong>Bot de WhatsApp</strong>
+          <small>{{ "Activo" if assistant_enabled else "Desactivado" }}</small>
         </span>
       </button>
     </form>
   </header>
-
-  {% if assistant_session %}
-    <section class="wa-agent-session" aria-label="Estado del agente de WhatsApp">
-      <div class="wa-agent-session-topline">
-        <div>
-          <strong>Agente conversacional</strong>
-          <span class="badge {% if assistant_session.status in ['human_handoff', 'closed_review'] %}warning{% else %}success{% endif %}">
-            {% if assistant_session.status == 'collecting' %}Conversación en curso
-            {% elif assistant_session.status == 'awaiting_customer' %}Esperando datos del cliente
-            {% elif assistant_session.status == 'ready_for_review' %}Pedido completo · pendiente de cierre
-            {% elif assistant_session.status == 'human_handoff' %}Atención humana
-            {% elif assistant_session.status == 'finalizing' %}Evaluando pedido
-            {% elif assistant_session.status == 'closed_review' %}Cerrada · requiere revisión
-            {% else %}Consulta cerrada{% endif %}
-          </span>
-        </div>
-        {% if assistant_session.active and assistant_session.due_at %}
-          <span class="wa-agent-session-timer" data-wa-session-due="{{ assistant_session.due_at }}">Cierre y evaluación en espera</span>
-        {% elif assistant_session.order_id %}
-          <a class="button secondary compact-button" href="/orders/{{ assistant_session.order_id }}">Abrir pedido</a>
-        {% endif %}
-      </div>
-
-      {% if assistant_session.draft.lines %}
-        <div class="wa-agent-draft">
-          <strong>Borrador del pedido</strong>
-          <ul>
-            {% for line in assistant_session.draft.lines %}
-              <li>{{ line.quantity if line.quantity is not none else 'Cantidad pendiente' }} {{ line.unit or '' }} · {{ line.product_name or line.product_query or 'Producto pendiente' }}{% if line.reference %} <span class="muted">({{ line.reference }})</span>{% endif %}</li>
-            {% endfor %}
-          </ul>
-        </div>
-      {% endif %}
-
-      {% if assistant_session.missing %}
-        <div class="wa-agent-missing"><strong>Por aclarar:</strong> {{ assistant_session.missing|join(' · ') }}</div>
-      {% endif %}
-      {% if assistant_session.handoff_reason %}
-        <p class="wa-agent-handoff-reason">{{ assistant_session.handoff_reason }}</p>
-      {% endif %}
-      {% if assistant_session.active %}
-        <div class="wa-agent-session-actions">
-          <form method="post" action="/whatsapp/inbox/{{ selected.id }}/sessions/{{ assistant_session.id }}/close">
-            <button class="button secondary compact-button">Cerrar y evaluar ahora</button>
-          </form>
-        </div>
-      {% endif %}
-    </section>
-  {% endif %}
 
   {% if search %}
     <div class="wa-search-navigation" role="navigation" aria-label="Navegación de resultados del chat">
