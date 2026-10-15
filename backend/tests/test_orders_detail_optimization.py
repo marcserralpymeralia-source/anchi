@@ -12,6 +12,7 @@ os.environ.setdefault("PERFORMANCE_PROFILING_ENABLED", "true")
 os.environ.setdefault("ENABLE_PERFORMANCE_PROFILING", "true")
 
 from scripts.performance_data import build_performance_fixture, performance_test_client  # noqa: E402
+from app.core.timezones import format_local_datetime  # noqa: E402
 from app.db.models import Email, Order  # noqa: E402
 
 
@@ -96,7 +97,11 @@ class OrdersDetailOptimizationTests(unittest.TestCase):
                 self.assertIsNotNone(email)
                 self.assertIsNotNone(email.received_at)
 
-                expected_display_date = email.received_at.strftime("%d-%m-%Y")
+                expected_display_date = format_local_datetime(
+                    email.received_at,
+                    "Europe/Madrid",
+                    "%d-%m-%Y",
+                )
                 order.order_date = ""
                 db.commit()
 
