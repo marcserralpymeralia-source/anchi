@@ -43,11 +43,9 @@ Preparar Anchi para operar como aplicación multiempresa y multiusuario, separan
 
 ## 3. Alcance no ejecutado
 
-- No se ha hecho push de los cambios de esta corrección.
-- No se han tocado bases de datos de producción.
-- No se ha cambiado la infraestructura externa de despliegue.
-- No se verificó un despliegue remoto: `.github/workflows/ci.yml` solo ejecuta CI y no contiene un paso de deploy; `vercel` CLI no está disponible para confirmar la integración Git de Vercel.
-- No se ejecutó el smoke PostgreSQL local porque Docker Desktop no tenía un engine accesible; no se sustituyó por una conexión a Neon/producción.
+- No se hizo una prueba funcional autenticada contra producción ni se consultaron o modificaron sus datos.
+- No se cambió manualmente la infraestructura de despliegue. El push a la rama por defecto activó las integraciones Git existentes de Vercel.
+- No se ejecutó el smoke PostgreSQL en Docker local porque el engine no estaba accesible; el job PostgreSQL de GitHub Actions sí pasó.
 - El endpoint de snapshots está preparado para cron, pero el scheduler externo debe configurarse por despliegue.
 - No se han añadido facturación, límites comerciales ni SSO.
 
@@ -225,7 +223,9 @@ La revisión adicional encontró que el alta aceptaba reutilizar una misma base 
 | `$env:APP_ENV='test'; $env:RUN_INTERNAL_JOB_WORKER='false'; $env:RUN_INTERNAL_EMAIL_WORKER='false'; .\.venv\Scripts\python.exe -m unittest tests.test_multitenancy_auth.MultiTenancyAuthenticationTests.test_selecting_membership_uses_the_selected_tenant_database -v` (PowerShell, desde `backend`) | 1 test OK en 9.554 s; administrador tenant abre Configuración, Canales y el drawer de Email, ve ambos canales y no ve ni puede abrir Superadmin |
 | `$env:APP_ENV='test'; $env:RUN_INTERNAL_JOB_WORKER='false'; $env:RUN_INTERNAL_EMAIL_WORKER='false'; .\.venv\Scripts\python.exe -m unittest tests.test_multitenancy_auth.MultiTenancyAuthenticationTests.test_single_company_admin_can_open_email_settings_without_platform_access -v` (PowerShell, desde `backend`) | 1 test OK en 8.138 s; login directo del único tenant asignado, panel de Email disponible y Superadmin inaccesible |
 | Navegación local aislada con Playwright CLI en `http://127.0.0.1:8010` | Con datos sintéticos: el dueño global entró en una empresa recién creada, abrió Configuración y Canales y vio Email y WhatsApp; la cabecera identificó la empresa correcta. No se consultó producción |
-| `vercel whoami` | No ejecutable: la CLI Vercel no está instalada; no se pudo verificar integración/despliegue externo |
+| GitHub Actions CI para `6cdfb01e3548349692fc58f5bb44b17a24e10291` | `test-sqlite` y `test-postgres` completados con éxito; [ejecución 38822073630](https://github.com/marcserralpymeralia-source/anchi/actions/runs/38822073630) |
+| GitHub deployment statuses para `6cdfb01e3548349692fc58f5bb44b17a24e10291` | `Production – anchi` y `Preview – anchi-gemavi` completados con éxito; no se hizo navegación autenticada ni se leyeron datos de producción |
+| `vercel whoami` | No ejecutable: la CLI Vercel no está instalada; la integración se verificó mediante los estados de deployment de GitHub |
 | `docker info --format '{{.ServerVersion}}'` | Docker CLI presente, engine local inaccesible; el smoke PostgreSQL no se ejecutó |
 | `git diff --check` | OK; sin errores de whitespace; Git avisa de conversión LF/CRLF en Windows |
 
@@ -307,15 +307,25 @@ Se añadió el índice de endpoints WhatsApp, el cifrado de URLs tenant, el aisl
 ## 14. Estado final de Git
 
 - Rama actual: `chore/technical-improvement-plan`.
-- Las correcciones de soporte temporal, canal Email, revocación de sesión, propiedad de base tenant y validaciones globales están registradas en commits locales separados.
-- Permanecen 14 archivos locales previos de WhatsApp/canales/workers sin incluir; se conservaron intactos y fuera de esta corrección.
-- Commits locales de esta continuación: `7b25404 test: avoid leaking app environment between suites`, `96781ff perf: avoid duplicate tenant schema inspection`, `0342936 fix: guard external tenant database isolation`, `a3dbf7c test: compare order date in tenant timezone` y `1ad0c2f fix: serialize tenant database claims`.
-- También permanecen los commits previos de aislamiento `7990970 fix: prevent sharing tenant databases` y `3fd6b68 docs: record tenant database isolation guard`.
-- El arreglo de branding está en `a8c6b90`, la auditoría en `69e7594`, el acceso de membresía múltiple en `59ecadc`, el drawer de Email en `4209d59`, el login directo de tenant único en `d556b0e` y los límites de verificación en `7ea790f`. La rama está 21 commits por delante; esta actualización documental la dejará 22 por delante de `origin/chore/technical-improvement-plan`. No se hizo push ni despliegue.
-- La rama permanece únicamente local; no se ha hecho push ni desplegado.
-- No se han descartado cambios locales ajenos.
-- Los cambios locales no publicados aún no han pasado CI remoto ni Vercel.
-- Las validaciones automatizadas usaron bases SQLite temporales y `TestClient`; no se conectó directamente a una base de datos productiva.
+- `HEAD` es `6cdfb01 docs: record final tenant access checks`; los 22 commits pendientes se enviaron a `origin/chore/technical-improvement-plan`.
+- GitHub Actions terminó en verde para los jobs `test-sqlite` y `test-postgres` (ejecución `38822073630`).
+- Vercel confirmó `Production – anchi` y `Preview – anchi-gemavi` como completados para el mismo commit.
+- No se descartaron cambios locales ajenos ni se incluyeron en el push. Permanecen sin commit y sin staging estos 14 archivos previos:
+  - `backend/app/settings/channels_routes.py`
+  - `backend/app/templates/settings/channels.html`
+  - `backend/app/whatsapp/agent.py`
+  - `backend/app/whatsapp/conversation_semantics.py`
+  - `backend/app/whatsapp/inbox_routes.py`
+  - `backend/app/whatsapp/routes.py`
+  - `backend/app/whatsapp/service.py`
+  - `backend/app/workers/jobs_worker.py`
+  - `backend/tests/test_jobs_reliability.py`
+  - `backend/tests/test_settings_email_autoconfig.py`
+  - `backend/tests/test_whatsapp_agent_sessions.py`
+  - `backend/tests/test_whatsapp_conversation_semantics.py`
+  - `backend/tests/test_whatsapp_inbox.py`
+  - `backend/tests/test_whatsapp_integration.py`
+- Las validaciones usaron datos sintéticos/locales y runners de GitHub Actions; no se consultaron ni modificaron datos de producción.
 
 ## 15. Recomendacion para la siguiente fase
 
