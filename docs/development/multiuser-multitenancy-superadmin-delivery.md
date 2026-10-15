@@ -253,10 +253,10 @@ Se añadió el índice de endpoints WhatsApp, el cifrado de URLs tenant, el aisl
 ## 14. Estado final de Git
 
 - Rama actual: `chore/technical-improvement-plan`.
-- Hay cambios locales sin commit.
-- No se ha hecho commit ni push.
+- Los cambios locales sin commit corresponden únicamente a trabajo previo de WhatsApp y no se incluyeron en esta entrega.
+- No se ha hecho push ni se ha desplegado esta corrección.
 - No se han descartado cambios locales ajenos.
-- La corrección de soporte temporal y canal Email queda registrada en un commit local separado, sin push.
+- Las correcciones de soporte temporal, canal Email y revocación de sesión quedaron registradas en commits locales separados, sin push.
 - Los cambios locales ajenos de WhatsApp se conservan fuera de ese commit.
 - Las validaciones de esta corrección usaron `TestClient` y bases SQLite temporales; no se consultaron datos de producción ni se reinició un servidor web.
 
