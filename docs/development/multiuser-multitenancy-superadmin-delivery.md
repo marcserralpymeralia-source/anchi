@@ -219,6 +219,7 @@ La revisión adicional encontró que el alta aceptaba reutilizar una misma base 
 | `APP_ENV=test; .venv\Scripts\python.exe -m compileall -q app scripts tests` (desde `backend`) | OK; sin errores sintácticos |
 | `APP_ENV=test RUN_INTERNAL_JOB_WORKER=false RUN_INTERNAL_EMAIL_WORKER=false .\.venv\Scripts\python.exe -m compileall -q app\settings\branding.py tests\test_setup_onboarding.py` (desde `backend`) | OK; sintaxis del cambio de branding |
 | `APP_ENV=test RUN_INTERNAL_JOB_WORKER=false RUN_INTERNAL_EMAIL_WORKER=false .\.venv\Scripts\python.exe -m unittest tests.test_setup_onboarding tests.test_branding_cache -v` (desde `backend`) | 18 tests OK en 79.164 s; aparecieron avisos `ResourceWarning` al cerrar la suite, sin fallo de test |
+| `$env:APP_ENV='test'; $env:RUN_INTERNAL_JOB_WORKER='false'; $env:RUN_INTERNAL_EMAIL_WORKER='false'; .\.venv\Scripts\python.exe -m unittest tests.test_multitenancy_auth tests.test_superadmin tests.test_schema_migrations tests.test_tenant_isolation -v` (PowerShell, desde `backend`) | 59 tests OK en 134.837 s; incluye soporte del dueño, acceso tenant a Canales, bloqueo de `/superadmin`, Email en migraciones y aislamiento entre tenants. Al salir apareció un `ResourceWarning` de una conexión SQLite |
 | Navegación local aislada con Playwright CLI en `http://127.0.0.1:8010` | Con datos sintéticos: el dueño global entró en una empresa recién creada, abrió Configuración y Canales y vio Email y WhatsApp; la cabecera identificó la empresa correcta. No se consultó producción |
 | `git diff --check` | OK; sin errores de whitespace; Git avisa de conversión LF/CRLF en Windows |
 
@@ -301,7 +302,7 @@ Se añadió el índice de endpoints WhatsApp, el cifrado de URLs tenant, el aisl
 - Permanecen 14 archivos locales previos de WhatsApp/canales/workers sin incluir; se conservaron intactos y fuera de esta corrección.
 - Commits locales de esta continuación: `7b25404 test: avoid leaking app environment between suites`, `96781ff perf: avoid duplicate tenant schema inspection`, `0342936 fix: guard external tenant database isolation`, `a3dbf7c test: compare order date in tenant timezone` y `1ad0c2f fix: serialize tenant database claims`.
 - También permanecen los commits previos de aislamiento `7990970 fix: prevent sharing tenant databases` y `3fd6b68 docs: record tenant database isolation guard`.
-- Estado al iniciar esta corrección: la rama estaba 15 commits por delante de `origin/chore/technical-improvement-plan`. El arreglo, su test y este informe se registran en un commit local (16 por delante); no se hizo push ni despliegue.
+- El arreglo y su regresión están en `a8c6b90`; la rama quedó 16 commits por delante de `origin/chore/technical-improvement-plan`. Esta actualización de evidencia se registra en un commit documental separado (17 por delante); no se hizo push ni despliegue.
 - La rama permanece únicamente local; no se ha hecho push ni desplegado.
 - No se han descartado cambios locales ajenos.
 - Los cambios locales no publicados aún no han pasado CI remoto ni Vercel.
