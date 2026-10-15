@@ -148,6 +148,8 @@ class EmailAutoconfigRouteTests(unittest.TestCase):
             self.assertIn('data-email-save-detected', response.text)
             self.assertIn('name="email_account_only" value="on"', response.text)
             self.assertIn('action="/settings/email/autoconfig"', response.text)
+            self.assertIn('Agente conversacional', response.text)
+            self.assertIn('Desactivado por defecto', response.text)
         finally:
             fixture.cleanup()
 

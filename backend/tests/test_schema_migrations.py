@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.security import hash_password, verify_password  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import BackgroundJob, Conversation, Customer, Email, EmailSettings, FTPConnection, JobAttempt, KnowledgeEntry, Order, OrderLine, ProductEmbedding, ProxyConnection, TenantSchemaMigration  # noqa: E402
+from app.db.models import BackgroundJob, ChannelSetting, Company, Conversation, Customer, Email, EmailSettings, FTPConnection, InputChannel, JobAttempt, KnowledgeEntry, Order, OrderLine, ProductEmbedding, ProxyConnection, TenantSchemaMigration  # noqa: E402
 from app.jobs.service import enqueue_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.migrations import CURRENT_MASTER_SCHEMA_CHECKSUM, CURRENT_MASTER_SCHEMA_NAME, CURRENT_MASTER_SCHEMA_VERSION, master_migration_report, upgrade_master_schema  # noqa: E402
@@ -25,7 +25,7 @@ from app.master.models import CompanyMembership, EmailSyncState, MasterCompany, 
 from app.master.provisioning import _ensure_master_user  # noqa: E402
 from app.migrations.inspection import discover_sqlite_files, inspect_database_url, inventory_records, simulate_sqlite_reference  # noqa: E402
 from app.migrations.helpers import table_exists  # noqa: E402
-from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, MASTER_EMAIL_SYNC_STATE_COLUMNS, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_master_email_sync_state_repair, _apply_tenant_email_favorites, _apply_tenant_external_database_schema_snapshot, _apply_tenant_ftp_connections, _apply_tenant_knowledge_entries, _apply_tenant_order_archiving, _apply_tenant_product_embeddings, _apply_tenant_proxy_connection_scope, _apply_tenant_proxy_connections, _apply_tenant_whatsapp_read_state  # noqa: E402
+from app.migrations.registry import CURRENT_TENANT_SCHEMA_CHECKSUM, CURRENT_TENANT_SCHEMA_NAME, CURRENT_TENANT_SCHEMA_VERSION, MASTER_EMAIL_SYNC_STATE_COLUMNS, TENANT_COMPAT_COLUMNS, _apply_master_email_listener_state, _apply_master_email_sync_state_repair, _apply_tenant_email_favorites, _apply_tenant_external_database_schema_snapshot, _apply_tenant_ftp_connections, _apply_tenant_knowledge_entries, _apply_tenant_order_archiving, _apply_tenant_product_embeddings, _apply_tenant_proxy_connection_scope, _apply_tenant_proxy_connections, _apply_tenant_whatsapp_agent_sessions, _apply_tenant_whatsapp_read_state, _apply_tenant_whatsapp_session_safety  # noqa: E402
 from app.tenancy.database import get_tenant_engine  # noqa: E402
 from app.tenancy.migrations import tenant_migration_report, upgrade_tenant_schema  # noqa: E402
 from app.workers.jobs_worker import run_worker_cycle  # noqa: E402
@@ -74,6 +74,51 @@ class SchemaMigrationTests(unittest.TestCase):
         columns = {column["name"] for column in inspect(self.tenant_engine).get_columns("inbound_messages")}
         self.assertIn("read_at", columns)
         self.assertIn("TIMESTAMP WITH TIME ZONE", actions[0])
+
+    def test_whatsapp_agent_migration_disables_legacy_bot_and_seeds_safe_defaults(self):
+        self._create_tables_without_ledger(self.tenant_engine, Base.metadata)
+        db = self.TenantSession()
+        db.add(Company(id=1, name="Tenant"))
+        channel = InputChannel(
+            id=1,
+            company_id=1,
+            key="whatsapp",
+            name="WhatsApp",
+            channel_type="message",
+        )
+        db.add(channel)
+        db.add(
+            ChannelSetting(
+                company_id=1,
+                channel_id=1,
+                key="bot_enabled",
+                value="true",
+                value_type="boolean",
+            )
+        )
+        db.commit()
+        db.close()
+
+        _apply_tenant_whatsapp_agent_sessions(self.tenant_engine, dry_run=False)
+        _apply_tenant_whatsapp_session_safety(self.tenant_engine, dry_run=False)
+
+        db = self.TenantSession()
+        settings = {
+            row.key: row.value
+            for row in db.query(ChannelSetting).filter_by(company_id=1, channel_id=1).all()
+        }
+        self.assertEqual(settings["bot_enabled"], "false")
+        self.assertEqual(settings["bot_mode"], "suggestions")
+        self.assertEqual(settings["idle_session_hours"], "12")
+        self.assertEqual(settings["bot_debounce_seconds"], "3")
+        self.assertEqual(settings["business_faq"], "")
+        self.assertIn("whatsapp_order_sessions", inspect(self.tenant_engine).get_table_names())
+        session_columns = {column["name"] for column in inspect(self.tenant_engine).get_columns("whatsapp_order_sessions")}
+        self.assertIn("pending_media_retry_count", session_columns)
+        self.assertIn("message_cutoff_at", session_columns)
+        self.assertIn("agent_turn_count", session_columns)
+        self.assertIn("whatsapp_session_id", {column["name"] for column in inspect(self.tenant_engine).get_columns("orders")})
+        db.close()
 
     def test_ftp_migration_copies_legacy_settings_into_profile(self):
         self._create_tables_without_ledger(self.tenant_engine, Base.metadata)

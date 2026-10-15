@@ -1791,7 +1791,15 @@ def call_openai(settings: LLMSettings, messages: list[dict], model: str) -> dict
     return {"ok": False, "error_type": classify_integration_error(last_error or "Error desconocido conectando con OpenAI."), "message": last_error or "Error desconocido conectando con OpenAI."}
 
 
-def classify_sample(db: Session, settings: LLMSettings, company_id: int, text: str, prompt: str | None = None) -> dict:
+def classify_sample(
+    db: Session,
+    settings: LLMSettings,
+    company_id: int,
+    text: str,
+    prompt: str | None = None,
+    *,
+    input_reference: str | None = None,
+) -> dict:
     result = run_prompt_execution(
         db,
         company_id,
@@ -1800,6 +1808,7 @@ def classify_sample(db: Session, settings: LLMSettings, company_id: int, text: s
         text,
         provider_call=call_openai,
         prompt_override=prompt,
+        input_reference=input_reference,
     )
     if not result.get("ok"):
         return result
@@ -1810,7 +1819,15 @@ def classify_sample(db: Session, settings: LLMSettings, company_id: int, text: s
     return result
 
 
-def extract_sample(db: Session, settings: LLMSettings, company_id: int, text: str, prompt: str | None = None) -> dict:
+def extract_sample(
+    db: Session,
+    settings: LLMSettings,
+    company_id: int,
+    text: str,
+    prompt: str | None = None,
+    *,
+    input_reference: str | None = None,
+) -> dict:
     result = run_prompt_execution(
         db,
         company_id,
@@ -1819,6 +1836,7 @@ def extract_sample(db: Session, settings: LLMSettings, company_id: int, text: st
         text,
         provider_call=call_openai,
         prompt_override=prompt,
+        input_reference=input_reference,
     )
     if not result.get("ok"):
         return result

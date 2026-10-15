@@ -56,6 +56,7 @@ from app.whatsapp.service import (
     whatsapp_event_requires_media_download,
     whatsapp_config,
 )
+from app.whatsapp.conversation_semantics import WhatsAppAgentTurnResult
 from app.workers.jobs_worker import run_worker_cycle
 
 
@@ -131,6 +132,8 @@ class WhatsAppIntegrationTests(unittest.TestCase):
             "connection_status": "connected",
             "webhook_enabled": "true",
             "bot_enabled": "true",
+            "bot_mode": "automatic",
+            "bot_debounce_seconds": "0",
             "default_language": "es",
             "timezone": "Europe/Madrid",
         }.items():
@@ -152,6 +155,32 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         )
         db.commit()
         db.close()
+
+    @staticmethod
+    def _complete_agent_turn():
+        return WhatsAppAgentTurnResult(
+            intent="order",
+            action="respond",
+            draft={
+                "customer_name": "Cliente WhatsApp SL",
+                "lines": [
+                    {
+                        "product_query": "Producto WhatsApp",
+                        "reference": "P-100",
+                        "quantity": 5,
+                        "unit": "uds",
+                        "notes": "",
+                    }
+                ],
+                "notes": "",
+            },
+            missing_or_uncertain=[],
+            reply_needed=False,
+            suggested_reply="",
+            confidence=0.99,
+            evidence_ids=["product:1"],
+            close_requested=True,
+        )
 
     def test_verification_and_signature(self):
         db = self.TenantSession()
@@ -1849,14 +1878,16 @@ class WhatsAppIntegrationTests(unittest.TestCase):
             },
             ensure_ascii=False,
         )
-        with patch("app.agent.platform.classify_sample", return_value={"ok": True, "content": classification}), patch(
+        with patch("app.whatsapp.agent.evaluate_whatsapp_agent_turn", return_value=self._complete_agent_turn()), patch(
+            "app.agent.platform.classify_sample", return_value={"ok": True, "content": classification}
+        ), patch(
             "app.agent.platform.extract_sample", return_value={"ok": True, "content": extraction}
         ), patch("app.workers.jobs_worker.MasterSessionLocal", new=self.MasterSession):
             worker_summary = run_worker_cycle()
 
         db = self.TenantSession()
         self.assertIs(inbound, duplicate)
-        self.assertEqual(worker_summary["processed"], 1)
+        self.assertEqual(worker_summary["processed"], 2)
         order = db.scalar(select(Order).where(Order.company_id == 1))
         self.assertIsNotNone(order)
         self.assertEqual(order.customer_id, 1)
@@ -2041,13 +2072,15 @@ class WhatsAppIntegrationTests(unittest.TestCase):
             },
             ensure_ascii=False,
         )
-        with patch("app.agent.platform.classify_sample", return_value={"ok": True, "content": classification}), patch(
+        with patch("app.whatsapp.agent.evaluate_whatsapp_agent_turn", return_value=self._complete_agent_turn()), patch(
+            "app.agent.platform.classify_sample", return_value={"ok": True, "content": classification}
+        ), patch(
             "app.agent.platform.extract_sample", return_value={"ok": True, "content": extraction}
         ), patch("app.workers.jobs_worker.MasterSessionLocal", new=self.MasterSession):
             summary = run_worker_cycle()
 
         db = self.TenantSession()
-        self.assertEqual(summary["processed"], 1)
+        self.assertEqual(summary["processed"], 2)
         order = db.scalar(select(Order).where(Order.company_id == 1))
         self.assertIsNotNone(order)
         self.assertEqual(order.customer_id, 1)
@@ -2160,7 +2193,7 @@ class WhatsAppIntegrationTests(unittest.TestCase):
                                         "id": "wa-retry-1",
                                         "from": "+34600000000",
                                         "type": "text",
-                                        "text": {"body": "Reintentar. Confirma el pedido"},
+                                        "text": {"body": "Pedido de 5 unidades de P-100. Confirma el pedido"},
                                     }
                                 ],
                             }
@@ -2175,6 +2208,8 @@ class WhatsAppIntegrationTests(unittest.TestCase):
         db.close()
 
         with patch("app.workers.jobs_worker.MasterSessionLocal", new=self.MasterSession), patch(
+            "app.whatsapp.agent.evaluate_whatsapp_agent_turn", return_value=self._complete_agent_turn()
+        ), patch(
             "app.agent.platform.UnifiedOrderPipelineService.process_inbound_message",
             return_value={"ok": False, "retryable": True, "error_type": "provider_unavailable", "message": "Proveedor temporalmente no disponible"},
         ):
@@ -2182,9 +2217,17 @@ class WhatsAppIntegrationTests(unittest.TestCase):
 
         db = self.TenantSession()
         processed_job = db.get(BackgroundJob, job.id)
-        self.assertEqual(summary["processed"], 0)
-        self.assertEqual(processed_job.status, "retrying")
-        self.assertEqual(processed_job.last_error_type, "provider_unavailable")
+        finalization_job = db.scalar(
+            select(BackgroundJob).where(
+                BackgroundJob.company_id == 1,
+                BackgroundJob.job_type == "whatsapp_finalize_session",
+            )
+        )
+        self.assertEqual(summary["processed"], 1)
+        self.assertEqual(processed_job.status, "success")
+        self.assertIsNotNone(finalization_job)
+        self.assertEqual(finalization_job.status, "retrying")
+        self.assertEqual(finalization_job.last_error_type, "provider_unavailable")
         db.close()
 
     def test_embedded_signup_exchanges_code_registers_phone_and_subscribes_webhook(self):

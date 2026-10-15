@@ -33,38 +33,6 @@ PROMPT_REGISTRY: dict[str, dict[str, Any]] = {
         "fallback": "Clasifica la entrada como pedido, no_pedido, consulta, incidencia o dudoso. Responde solo JSON con tipo_correo, confianza y motivo.",
         "input_limit": 12000,
     },
-    "whatsapp_conversation": {
-        "name": "Estado conversacional de WhatsApp",
-        "purpose": "whatsapp_conversation",
-        "default_model": "gpt-4.1-mini",
-        "default_parameters": {"temperature": 0.0, "max_tokens": 900},
-        "expected_schema": {
-            "type": "object",
-            "required": [
-                "intent",
-                "state",
-                "missing_or_uncertain",
-                "reply_needed",
-                "suggested_reply",
-                "confidence",
-            ],
-        },
-        "fallback": (
-            "Analiza una conversacion de WhatsApp B2B entre CLIENTE y EMPRESA. "
-            "Determina si el cliente esta realizando un pedido y si hay informacion "
-            "suficiente para pedir su confirmacion. No inventes productos, cantidades, "
-            "unidades ni clientes. Responde solo JSON con: "
-            "intent (order, question u other), "
-            "state (collecting, needs_clarification o ready_for_confirmation), "
-            "missing_or_uncertain (lista de textos), "
-            "reply_needed (boolean), suggested_reply (texto) y confidence (0 a 1). "
-            "Usa ready_for_confirmation solo cuando el pedido expresado sea suficientemente "
-            "claro para resumirlo y pedir confirmacion al cliente. "
-            "Si falta o es ambigua informacion necesaria del pedido usa needs_clarification. "
-            "Si el cliente todavia parece estar añadiendo contenido usa collecting."
-        ),
-        "input_limit": 12000,
-    },
     "extraction": {
         "name": "Extraccion de pedido",
         "purpose": "extraction",
@@ -196,74 +164,6 @@ def validate_prompt_output(purpose: str, content: str) -> PromptValidationResult
         if confidence is None:
             return PromptValidationResult(status="missing_fields", data=data, errors=["Falta confianza."])
         return PromptValidationResult(status="valid", data=data, errors=[])
-    if purpose == "whatsapp_conversation":
-        intent = str(data.get("intent") or "").strip().lower()
-        state = str(data.get("state") or "").strip().lower()
-        missing = data.get("missing_or_uncertain")
-        reply_needed = data.get("reply_needed")
-        suggested_reply = data.get("suggested_reply")
-        confidence = data.get("confidence")
-
-        if intent not in {"order", "question", "other"}:
-            return PromptValidationResult(
-                status="unsupported_value",
-                data=data,
-                errors=[f"Intent no soportado: {intent or 'vacio'}."],
-            )
-        if state not in {
-            "collecting",
-            "needs_clarification",
-            "ready_for_confirmation",
-        }:
-            return PromptValidationResult(
-                status="unsupported_value",
-                data=data,
-                errors=[f"Estado conversacional no soportado: {state or 'vacio'}."],
-            )
-        if not isinstance(missing, list) or not all(
-            isinstance(item, str) for item in missing
-        ):
-            return PromptValidationResult(
-                status="schema_error",
-                data=data,
-                errors=["missing_or_uncertain debe ser una lista de textos."],
-            )
-        if not isinstance(reply_needed, bool):
-            return PromptValidationResult(
-                status="schema_error",
-                data=data,
-                errors=["reply_needed debe ser boolean."],
-            )
-        if not isinstance(suggested_reply, str):
-            return PromptValidationResult(
-                status="schema_error",
-                data=data,
-                errors=["suggested_reply debe ser texto."],
-            )
-        if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
-            return PromptValidationResult(
-                status="schema_error",
-                data=data,
-                errors=["confidence debe ser numerico."],
-            )
-        if not 0 <= float(confidence) <= 1:
-            return PromptValidationResult(
-                status="unsupported_value",
-                data=data,
-                errors=["confidence debe estar entre 0 y 1."],
-            )
-        if state in {"needs_clarification", "ready_for_confirmation"}:
-            if not reply_needed or not suggested_reply.strip():
-                return PromptValidationResult(
-                    status="schema_error",
-                    data=data,
-                    errors=[
-                        "El estado requiere una respuesta sugerida para el cliente."
-                    ],
-                )
-
-        return PromptValidationResult(status="valid", data=data, errors=[])
-
     if purpose == "extraction":
         order = data.get("pedido") or data.get("order") or {}
         if not isinstance(order, dict):
@@ -356,11 +256,6 @@ def _decision_summary(purpose: str, data: dict[str, Any] | None) -> str | None:
         return str(data.get("resumen") or data.get("summary") or "") or None
     if purpose == "extraction":
         return str(data.get("resumen") or data.get("observaciones") or "") or None
-    if purpose == "whatsapp_conversation":
-        missing = data.get("missing_or_uncertain") or []
-        if isinstance(missing, list) and missing:
-            return "Faltan o son inciertos: " + "; ".join(str(item) for item in missing)
-        return str(data.get("summary") or "") or None
     return str(data.get("summary") or data.get("motivo") or "") or None
 
 
@@ -391,9 +286,10 @@ def run_prompt_execution(
     else:
         model = configured_model or definition.default_model
     effective_parameters = _effective_parameters(settings, model)
-    detailed_logging = bool(getattr(settings, "detailed_llm_logs", False))
-    store_payloads = bool(getattr(settings, "store_llm_payloads", False))
-    anonymize_logs = bool(getattr(settings, "anonymize_llm_logs", True))
+    sensitive_whatsapp_input = str(input_reference or "").startswith("whatsapp-session:")
+    detailed_logging = bool(getattr(settings, "detailed_llm_logs", False)) and not sensitive_whatsapp_input
+    store_payloads = bool(getattr(settings, "store_llm_payloads", False)) and not sensitive_whatsapp_input
+    anonymize_logs = True if sensitive_whatsapp_input else bool(getattr(settings, "anonymize_llm_logs", True))
     messages = [
         {"role": "system", "content": prompt_text},
         {"role": "user", "content": text[: definition.input_limit]},
@@ -491,9 +387,18 @@ def run_prompt_execution(
     response_content = response.get("content") or ""
     validation = validate_prompt_output(purpose, response_content) if response.get("ok") else PromptValidationResult(status="provider_error", data=None, errors=[response.get("message") or "Error llamando al proveedor IA."])
     finished_at = datetime.now(timezone.utc)
-    response_excerpt = _safe_excerpt(response_content)
+    validation_errors = validation.errors
+    if sensitive_whatsapp_input and not response.get("ok"):
+        # Provider diagnostics can echo submitted text. Keep the status useful
+        # without persisting a potentially sensitive provider response.
+        validation_errors = ["Error del proveedor de IA."]
+    response_excerpt = None if sensitive_whatsapp_input else _safe_excerpt(response_content)
     response_hash = sha256(response_content.encode("utf-8")).hexdigest() if response_content else None
-    decision_summary = _decision_summary(purpose, validation.data if validation.ok else None)
+    decision_summary = (
+        None
+        if sensitive_whatsapp_input
+        else _decision_summary(purpose, validation.data if validation.ok else None)
+    )
     reasoning_summary = response.get("reasoning_summary") if isinstance(response.get("reasoning_summary"), str) else None
     execution = PromptExecution(
         company_id=company_id,
@@ -505,7 +410,7 @@ def run_prompt_execution(
         parameters_json=json.dumps(effective_parameters, ensure_ascii=False, sort_keys=True),
         input_reference=input_reference,
         output_status=validation.status,
-        validation_errors_json=json.dumps(validation.errors, ensure_ascii=False) if validation.errors else None,
+        validation_errors_json=json.dumps(validation_errors, ensure_ascii=False) if validation_errors else None,
         input_tokens=int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0),
         output_tokens=int(usage.get("completion_tokens") or usage.get("output_tokens") or 0),
         estimated_cost=usage.get("estimated_cost"),
@@ -562,7 +467,7 @@ def run_prompt_execution(
             "prompt_version": execution.prompt_version,
             "model": model,
             "output_status": validation.status,
-            "validation_errors": validation.errors,
+            "validation_errors": validation_errors,
             "input_length": len(text or ""),
             "input_was_truncated": input_was_truncated,
             "output_length": len(response_content or ""),
@@ -585,7 +490,7 @@ def run_prompt_execution(
             "model": model,
             "parameters": definition.default_parameters,
             "validation_status": validation.status,
-            "validation_errors": validation.errors,
+            "validation_errors": validation_errors,
             "validation_ok": validation.ok,
             "started_at": started_at,
             "finished_at": finished_at,

@@ -541,6 +541,7 @@ class WhatsAppConversationWorkerTests(unittest.TestCase):
         return message
 
     def test_partial_whatsapp_does_not_call_pipeline(self):
+        self.skipTest("The legacy worker evaluator was replaced by the conversational agent; covered in test_whatsapp_agent_sessions.py.")
         from types import SimpleNamespace
         from unittest.mock import MagicMock, patch
 
@@ -588,6 +589,7 @@ class WhatsAppConversationWorkerTests(unittest.TestCase):
         db.close()
 
     def test_semantic_clarification_sends_mocked_auto_response(self):
+        self.skipTest("Auto-replies now use the structured conversational-agent turn; covered in test_whatsapp_agent_sessions.py.")
         from types import SimpleNamespace
         from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -647,6 +649,7 @@ class WhatsAppConversationWorkerTests(unittest.TestCase):
         db.close()
 
     def test_bot_disabled_skips_semantic_evaluation_and_auto_response(self):
+        self.skipTest("Bot-disabled behavior is now tested directly against process_whatsapp_agent_turn.")
         from types import SimpleNamespace
         from unittest.mock import MagicMock, patch
 
@@ -723,6 +726,7 @@ class WhatsAppConversationWorkerTests(unittest.TestCase):
 
 
     def test_closing_message_processes_full_transcript_and_links_messages(self):
+        self.skipTest("A close phrase now finalizes a validated session draft instead of the legacy transcript gate.")
         from types import SimpleNamespace
         from unittest.mock import MagicMock, patch
 

@@ -17,7 +17,7 @@ from app.auth.dependencies import current_user
 from app.core.pagination import normalize_page
 from app.core.templating import templates
 from app.customers.matching import build_customer_phone_index, customer_id_from_phone
-from app.db.models import Conversation, Customer, InboundMessage, InputChannel, MessageAttachment, utcnow
+from app.db.models import Conversation, Customer, InboundMessage, InputChannel, MessageAttachment, WhatsAppOrderSession, utcnow
 from app.master.service import TenantUser
 from app.tenancy.database import get_tenant_db
 from app.whatsapp.service import (
@@ -34,6 +34,12 @@ from app.whatsapp.service import (
     whatsapp_outbound_is_ready,
     whatsapp_response_window_status,
     WhatsAppEmbeddedSignupError,
+)
+from app.whatsapp.agent import (
+    active_whatsapp_session,
+    enqueue_whatsapp_session_finalization,
+    pause_whatsapp_bot,
+    set_whatsapp_human_control,
 )
 
 logger = logging.getLogger(__name__)
@@ -468,7 +474,13 @@ def _mark_conversation_as_read(
     return True
 
 
-def _inbox_live_revision(db: Session, conditions: list) -> str:
+def _inbox_live_revision(
+    db: Session,
+    conditions: list,
+    *,
+    company_id: int,
+    conversation_id: int | None = None,
+) -> str:
     row = db.execute(
         select(
             func.count(func.distinct(Conversation.id)),
@@ -487,7 +499,67 @@ def _inbox_live_revision(db: Session, conditions: list) -> str:
         .where(*conditions)
     ).one()
     source = "|".join(str(value or "") for value in row)
+    if conversation_id is not None:
+        session_state = db.execute(
+            select(
+                WhatsAppOrderSession.id,
+                WhatsAppOrderSession.status,
+                WhatsAppOrderSession.revision,
+                WhatsAppOrderSession.due_at,
+                WhatsAppOrderSession.updated_at,
+            )
+            .where(
+                WhatsAppOrderSession.company_id == company_id,
+                WhatsAppOrderSession.conversation_id == conversation_id,
+            )
+            .order_by(WhatsAppOrderSession.id.desc())
+            .limit(1)
+        ).first()
+        source += "|" + "|".join(str(value or "") for value in (session_state or ()))
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
+def _assistant_session_context(
+    db: Session,
+    *,
+    company_id: int,
+    selected: dict | None,
+) -> dict | None:
+    if not selected:
+        return None
+    session = db.scalar(
+        select(WhatsAppOrderSession)
+        .where(
+            WhatsAppOrderSession.company_id == company_id,
+            WhatsAppOrderSession.conversation_id == selected["id"],
+        )
+        .order_by(WhatsAppOrderSession.id.desc())
+        .limit(1)
+    )
+    if not session:
+        return None
+    try:
+        draft = json.loads(session.draft_json or "{}")
+    except (TypeError, json.JSONDecodeError):
+        draft = {}
+    try:
+        missing = json.loads(session.missing_fields_json or "[]")
+    except (TypeError, json.JSONDecodeError):
+        missing = []
+    return {
+        "id": session.id,
+        "status": session.status,
+        "intent": session.intent,
+        "draft": draft if isinstance(draft, dict) else {},
+        "missing": missing if isinstance(missing, list) else [],
+        "suggested_reply": session.suggested_reply or "",
+        "handoff_reason": session.handoff_reason or "",
+        "due_at": session.due_at.isoformat() if session.due_at else "",
+        "human_active": bool(session.human_active),
+        "active": bool(session.active_key),
+        "closed_reason": session.closed_reason or "",
+        "order_id": session.order_id,
+    }
 
 
 def _whatsapp_compose_context(
@@ -511,6 +583,13 @@ def _whatsapp_compose_context(
         "ready_to_send": ready_to_send,
         "response_window": response_window,
         "can_send": ready_to_send and response_window["is_open"],
+        "assistant_session": _assistant_session_context(
+            db,
+            company_id=user.company_id,
+            selected=selected,
+        ),
+        "assistant_enabled": bool(config.bot_enabled),
+        "assistant_mode": config.bot_mode,
     }
 
 
@@ -587,7 +666,12 @@ async def whatsapp_inbox(
     selected = data["selected"]
 
     compose_context = _whatsapp_compose_context(db, user, selected, config)
-    live_revision = _inbox_live_revision(db, data["conditions"])
+    live_revision = _inbox_live_revision(
+        db,
+        data["conditions"],
+        company_id=user.company_id,
+        conversation_id=selected["id"] if selected else None,
+    )
     return templates.TemplateResponse(
         "whatsapp/inbox.html",
         {
@@ -647,7 +731,12 @@ async def whatsapp_inbox_updates(
         )
     normalized_search = search.strip()
     conditions = _inbox_conditions(company_id=user.company_id, channel_id=channel.id, search=normalized_search)
-    revision = _inbox_live_revision(db, conditions)
+    revision = _inbox_live_revision(
+        db,
+        conditions,
+        company_id=user.company_id,
+        conversation_id=conversation_id,
+    )
     headers = {"Cache-Control": "no-store", "ETag": f'"{revision}"'}
     if since and since == revision:
         return Response(status_code=304, headers=headers)
@@ -692,7 +781,7 @@ async def whatsapp_inbox_events(
 
     channel = _channel(db, user.company_id)
     if not channel:
-        return PlainTextResponse("El canal WhatsApp no estÃ¡ activo para este tenant.", status_code=404)
+        return PlainTextResponse("El canal WhatsApp no está activo para este tenant.", status_code=404)
     if conversation_id is not None:
         _mark_conversation_as_read(
             db,
@@ -706,7 +795,12 @@ async def whatsapp_inbox_events(
 
     async def stream():
         while not await request.is_disconnected():
-            revision = _inbox_live_revision(db, conditions)
+            revision = _inbox_live_revision(
+                db,
+                conditions,
+                company_id=user.company_id,
+                conversation_id=conversation_id,
+            )
             if not initial_revision or revision != initial_revision:
                 yield f"event: update\ndata: {json.dumps({'revision': revision})}\n\n"
                 return
@@ -725,6 +819,75 @@ async def whatsapp_inbox_events(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@router.post("/whatsapp/inbox/{conversation_id}/assistant-control")
+async def whatsapp_inbox_assistant_control(
+    conversation_id: int,
+    action: str = Form(...),
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    channel = _channel(db, user.company_id)
+    if not channel:
+        return PlainTextResponse("El canal WhatsApp no está activo para este tenant.", status_code=404)
+    conversation = db.scalar(
+        select(Conversation).where(
+            Conversation.id == conversation_id,
+            Conversation.company_id == user.company_id,
+            Conversation.channel_id == channel.id,
+        )
+    )
+    if not conversation:
+        return PlainTextResponse("Conversación no encontrada.", status_code=404)
+    normalized_action = str(action or "").strip().lower()
+    if normalized_action == "pause":
+        pause_whatsapp_bot(db, company_id=user.company_id, conversation_id=conversation_id)
+    elif normalized_action == "take":
+        set_whatsapp_human_control(
+            db,
+            company_id=user.company_id,
+            conversation_id=conversation_id,
+            active=True,
+            user_id=user.actor_id,
+        )
+    elif normalized_action == "resume":
+        set_whatsapp_human_control(
+            db,
+            company_id=user.company_id,
+            conversation_id=conversation_id,
+            active=False,
+            user_id=user.actor_id,
+        )
+    else:
+        return _redirect_to_conversation(conversation_id, error="invalid_assistant_action")
+    return _redirect_to_conversation(conversation_id, notice="assistant_updated")
+
+
+@router.post("/whatsapp/inbox/{conversation_id}/sessions/{session_id}/close")
+async def whatsapp_inbox_close_assistant_session(
+    conversation_id: int,
+    session_id: int,
+    db: Session = Depends(get_tenant_db),
+    user: TenantUser = Depends(current_user),
+):
+    session = db.scalar(
+        select(WhatsAppOrderSession).where(
+            WhatsAppOrderSession.id == session_id,
+            WhatsAppOrderSession.company_id == user.company_id,
+            WhatsAppOrderSession.conversation_id == conversation_id,
+            WhatsAppOrderSession.active_key.is_not(None),
+        )
+    )
+    if not session:
+        return _redirect_to_conversation(conversation_id, error="assistant_session_not_found")
+    enqueue_whatsapp_session_finalization(
+        db,
+        session=session,
+        reason="manual",
+        user_id=user.actor_id,
+    )
+    return _redirect_to_conversation(conversation_id, notice="assistant_finalization_queued")
 
 
 @router.post("/whatsapp/inbox/{conversation_id}/reply")
@@ -796,6 +959,18 @@ async def whatsapp_inbox_reply(
         parsed_reply_to_message_id = int(reply_to_message_id) if str(reply_to_message_id or "").strip() else None
     except (TypeError, ValueError):
         return _redirect_to_conversation(conversation_id, error="invalid_reply")
+    # Claim the conversation before awaiting Meta. If an LLM turn is still in
+    # flight, its final reservation check now observes human ownership.
+    set_whatsapp_human_control(
+        db,
+        company_id=user.company_id,
+        conversation_id=conversation_id,
+        active=True,
+        user_id=user.actor_id,
+    )
+    conversation.status = "human_owned"
+    conversation.assigned_user_id = user.actor_id
+    db.commit()
     try:
         await send_manual_response(
             db,

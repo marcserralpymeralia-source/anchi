@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.agent.model_catalog import DEFAULT_OPENAI_MODEL
@@ -816,6 +816,45 @@ class InboundMessage(Base):
     __table_args__ = (UniqueConstraint("company_id", "channel_id", "provider", "source_external_id"),)
 
 
+class WhatsAppOrderSession(Base):
+    __tablename__ = "whatsapp_order_sessions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    conversation_id: Mapped[int] = mapped_column(ForeignKey("conversations.id"), index=True)
+    active_key: Mapped[str | None] = mapped_column(String(120))
+    status: Mapped[str] = mapped_column(String(40), default="collecting", index=True)
+    intent: Mapped[str] = mapped_column(String(40), default="other")
+    revision: Mapped[int] = mapped_column(Integer, default=0)
+    draft_json: Mapped[str] = mapped_column(Text, default="{}")
+    missing_fields_json: Mapped[str] = mapped_column(Text, default="[]")
+    suggested_reply: Mapped[str | None] = mapped_column(Text)
+    last_processed_message_id: Mapped[int | None] = mapped_column(ForeignKey("inbound_messages.id"))
+    last_prompt_execution_id: Mapped[int | None] = mapped_column(ForeignKey("prompt_executions.id"))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    message_cutoff_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_customer_message_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    due_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    handoff_reason: Mapped[str | None] = mapped_column(String(255))
+    handoff_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    human_active: Mapped[bool] = mapped_column(Boolean, default=False)
+    closed_reason: Mapped[str | None] = mapped_column(String(80))
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    snapshot_json: Mapped[str | None] = mapped_column(Text)
+    order_id: Mapped[int | None] = mapped_column(ForeignKey("orders.id"))
+    finalization_job_key: Mapped[str | None] = mapped_column(String(180))
+    pending_media_retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    agent_turn_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("company_id", "conversation_id", "active_key"),
+        Index("ix_whatsapp_order_sessions_due", "company_id", "status", "due_at"),
+    )
+
+
 class MessageAttachment(Base):
     __tablename__ = "message_attachments"
 
@@ -1104,6 +1143,9 @@ class Order(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
     conversation_id: Mapped[int | None] = mapped_column(ForeignKey("conversations.id"), index=True)
+    whatsapp_session_id: Mapped[int | None] = mapped_column(
+        ForeignKey("whatsapp_order_sessions.id"), unique=True, index=True
+    )
     email_id: Mapped[int | None] = mapped_column(ForeignKey("emails.id"))
     customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"))
     validated_customer_id: Mapped[int | None] = mapped_column(ForeignKey("customers.id"))

@@ -28,6 +28,7 @@ DEFAULT_MAX_RETRIES = {
     "process_order": 3,
     "process_inbound_message": 3,
     "download_whatsapp_media": 3,
+    "whatsapp_finalize_session": 5,
     "export_order": 3,
     "export_order_ftp": 3,
     "bulk_order_action": 2,
@@ -195,6 +196,7 @@ def enqueue_job(
     created_by_user_id: int | None = None,
     dedupe_key: str | None = None,
     max_retries: int | None = None,
+    delay_seconds: int = 0,
 ) -> BackgroundJob:
     normalized_payload = _safe_payload(payload)
     key = dedupe_key or build_dedupe_key(job_type, normalized_payload)
@@ -233,6 +235,11 @@ def enqueue_job(
         created_by_user_id=safe_created_by_user_id,
         max_retries=max_retries_final,
         queued_at=_now(),
+        next_retry_at=(
+            _now() + timedelta(seconds=max(0, min(int(delay_seconds or 0), 60)))
+            if delay_seconds
+            else None
+        ),
         attempt_count=0,
         updated_at=_now(),
     )

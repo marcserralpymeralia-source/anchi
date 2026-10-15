@@ -22,7 +22,7 @@ from app.core.config import Settings, get_settings
 from app.core.encryption import decrypt_secret, encrypt_secret
 from app.core.attachment_extraction import extract_attachment_text
 from app.core.attachment_storage import read_attachment, save_attachment
-from app.db.models import Alert, ChannelSetting, Conversation, InboundMessage, InputChannel, MessageAttachment, Order, User
+from app.db.models import Alert, ChannelSetting, Conversation, InboundMessage, InputChannel, MessageAttachment, Order, User, WhatsAppOrderSession
 from app.jobs.service import enqueue_job
 from app.logs.service import log_action
 from app.messages.service import (
@@ -82,14 +82,19 @@ class WhatsAppTenantConfig:
     access_token: str = ""
     verify_token: str = ""
     webhook_enabled: bool = False
-    bot_enabled: bool = True
+    bot_enabled: bool = False
+    bot_mode: str = "suggestions"
+    idle_session_hours: int = 12
+    bot_debounce_seconds: int = 3
+    business_faq: str = ""
     connection_status: str = "not_connected"
     connected_at: str = ""
     last_error: str = ""
     default_language: str = "es"
     timezone: str = "Europe/Madrid"
     response_window_minutes: int = 24 * 60
-    max_auto_messages: int = 3
+    max_auto_messages: int = 20
+    max_agent_turns_per_session: int = 30
     max_attachment_bytes: int = 10 * 1024 * 1024
 
 
@@ -152,14 +157,19 @@ def whatsapp_config(db: Session, company_id: int) -> WhatsAppTenantConfig:
         access_token=_secret_value(settings_map.get("access_token")).strip(),
         verify_token=_secret_value(settings_map.get("verify_token")).strip(),
         webhook_enabled=_as_bool(settings_map.get("webhook_enabled")),
-        bot_enabled=_as_bool(settings_map.get("bot_enabled"), default=True),
+        bot_enabled=_as_bool(settings_map.get("bot_enabled"), default=False),
+        bot_mode=(settings_map.get("bot_mode") or "suggestions").strip().lower(),
+        idle_session_hours=max(1, min(_as_int(settings_map.get("idle_session_hours"), 12), 72)),
+        bot_debounce_seconds=max(0, min(_as_int(settings_map.get("bot_debounce_seconds"), 3), 15)),
+        business_faq=(settings_map.get("business_faq") or "").strip()[:12000],
         connection_status=(settings_map.get("connection_status") or "not_connected").strip().lower(),
         connected_at=(settings_map.get("connected_at") or "").strip(),
         last_error=(settings_map.get("last_error") or "").strip(),
         default_language=(settings_map.get("default_language") or "es").strip(),
         timezone=(settings_map.get("timezone") or "Europe/Madrid").strip(),
         response_window_minutes=_as_int(settings_map.get("response_window_minutes"), 24 * 60),
-        max_auto_messages=_as_int(settings_map.get("max_auto_messages"), 3),
+        max_auto_messages=max(1, min(_as_int(settings_map.get("max_auto_messages"), 20), 100)),
+        max_agent_turns_per_session=max(1, min(_as_int(settings_map.get("max_agent_turns_per_session"), 30), 100)),
         max_attachment_bytes=_as_int(settings_map.get("max_attachment_bytes"), 10 * 1024 * 1024),
     )
 
@@ -182,6 +192,10 @@ def redact_whatsapp_config(config: WhatsAppTenantConfig) -> dict[str, Any]:
         "verify_token": "••••••••" if config.verify_token else "",
         "webhook_enabled": config.webhook_enabled,
         "bot_enabled": config.bot_enabled,
+        "bot_mode": config.bot_mode,
+        "idle_session_hours": config.idle_session_hours,
+        "bot_debounce_seconds": config.bot_debounce_seconds,
+        "business_faq": config.business_faq,
         "connection_status": config.connection_status,
         "connected_at": config.connected_at,
         "last_error": config.last_error,
@@ -189,6 +203,7 @@ def redact_whatsapp_config(config: WhatsAppTenantConfig) -> dict[str, Any]:
         "timezone": config.timezone,
         "response_window_minutes": config.response_window_minutes,
         "max_auto_messages": config.max_auto_messages,
+        "max_agent_turns_per_session": config.max_agent_turns_per_session,
         "max_attachment_bytes": config.max_attachment_bytes,
     }
 
@@ -1059,6 +1074,7 @@ def _latest_whatsapp_inbound(
             InboundMessage.company_id == company_id,
             InboundMessage.conversation_id == conversation_id,
             InboundMessage.direction == "inbound",
+            InboundMessage.content_type != "whatsapp_status",
         )
         .order_by(InboundMessage.received_at.desc(), InboundMessage.id.desc())
     )
@@ -1286,7 +1302,13 @@ def _store_embedded_signup_state(
         "connection_status": connection_status,
         "connected_at": datetime.now(timezone.utc).isoformat() if connection_status == "connected" else "",
         "webhook_enabled": "true" if webhook_enabled else "false",
-        "bot_enabled": "true",
+        "bot_enabled": "false",
+        "bot_mode": "suggestions",
+        "idle_session_hours": "12",
+        "bot_debounce_seconds": "3",
+        "business_faq": "",
+        "max_auto_messages": "20",
+        "max_agent_turns_per_session": "30",
         "last_error": last_error[:500],
     }
     for key, value in values.items():
@@ -1991,6 +2013,30 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
                     extraction_status="pending",
                 )
             )
+    if (
+        event_kind == "message_echo"
+        and str(event.get("direction") or "").lower() == "outbound"
+        and is_new_message
+        and not metadata.get("auto_response")
+    ):
+        session = db.scalar(
+            select(WhatsAppOrderSession)
+            .where(
+                WhatsAppOrderSession.company_id == company_id,
+                WhatsAppOrderSession.conversation_id == conversation.id,
+                WhatsAppOrderSession.active_key.is_not(None),
+            )
+            .order_by(WhatsAppOrderSession.id.desc())
+            .limit(1)
+        )
+        if session:
+            session.status = "human_handoff"
+            session.human_active = True
+            session.handoff_reason = "Atención asumida por un agente desde WhatsApp."
+            session.handoff_at = datetime.now(timezone.utc)
+            session.updated_at = datetime.now(timezone.utc)
+            conversation.status = "human_owned"
+            conversation.updated_at = datetime.now(timezone.utc)
     try:
         db.commit()
     except IntegrityError:
@@ -2016,12 +2062,14 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
 
 
 def enqueue_whatsapp_processing(db: Session, company_id: int, inbound_message_id: int, user_id: int | None = None) -> object:
+    config = whatsapp_config(db, company_id)
     return enqueue_job(
         db,
         company_id=company_id,
         job_type="process_inbound_message",
         payload={"inbound_message_id": inbound_message_id, "channel": WHATSAPP_CHANNEL_KEY},
         created_by_user_id=user_id,
+        delay_seconds=config.bot_debounce_seconds if config.bot_enabled else 0,
     )
 
 
@@ -2314,7 +2362,21 @@ def automatic_response_status(
             "limit": config.max_auto_messages,
         }
 
-    boundary = _last_conversation_order_created_at(
+    guard_reason, active_session = _automatic_response_guard(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+        trigger_message_id=trigger_message_id,
+    )
+    if guard_reason:
+        return {
+            "allowed": False,
+            "reason": guard_reason,
+            "count": 0,
+            "limit": config.max_auto_messages,
+        }
+
+    boundary = active_session.started_at if active_session else _last_conversation_order_created_at(
         db,
         company_id=company_id,
         conversation_id=conversation_id,
@@ -2334,6 +2396,8 @@ def automatic_response_status(
 
     automatic_messages: list[InboundMessage] = []
     for message in outbound_messages:
+        if str(message.status or "").strip().lower() == "cancelled":
+            continue
         metadata = _whatsapp_message_metadata(message)
         if not metadata.get("auto_response"):
             continue
@@ -2366,6 +2430,66 @@ def automatic_response_status(
     }
 
 
+def _automatic_response_guard(
+    db: Session,
+    *,
+    company_id: int,
+    conversation_id: int,
+    trigger_message_id: int,
+    lock_rows: bool = False,
+) -> tuple[str | None, WhatsAppOrderSession | None]:
+    conversation_query = (
+        select(Conversation)
+        .where(
+            Conversation.company_id == company_id,
+            Conversation.id == conversation_id,
+        )
+        .execution_options(populate_existing=True)
+    )
+    if lock_rows:
+        conversation_query = conversation_query.with_for_update()
+    conversation = db.scalar(conversation_query)
+    if conversation is None:
+        return "conversation_not_found", None
+    if conversation.status == "human_owned":
+        return "human_owned", None
+
+    sessions_query = (
+        select(WhatsAppOrderSession)
+        .where(
+            WhatsAppOrderSession.company_id == company_id,
+            WhatsAppOrderSession.conversation_id == conversation_id,
+            WhatsAppOrderSession.active_key.is_not(None),
+        )
+        .order_by(WhatsAppOrderSession.id.desc())
+        .execution_options(populate_existing=True)
+    )
+    if lock_rows:
+        sessions_query = sessions_query.with_for_update()
+    active_sessions = list(db.scalars(sessions_query).all())
+    if any(session.human_active for session in active_sessions):
+        return "human_active", active_sessions[0] if active_sessions else None
+
+    latest_inbound_query = (
+        select(InboundMessage)
+        .where(
+            InboundMessage.company_id == company_id,
+            InboundMessage.conversation_id == conversation_id,
+            InboundMessage.direction == "inbound",
+        )
+        .order_by(InboundMessage.received_at.desc(), InboundMessage.id.desc())
+        .limit(1)
+        .execution_options(populate_existing=True)
+    )
+    if lock_rows:
+        latest_inbound_query = latest_inbound_query.with_for_update()
+    latest_inbound = db.scalar(latest_inbound_query)
+    if latest_inbound is None or int(latest_inbound.id) != int(trigger_message_id):
+        return "stale_trigger", active_sessions[0] if active_sessions else None
+
+    return None, active_sessions[0] if active_sessions else None
+
+
 def record_automatic_response(
     db: Session,
     *,
@@ -2376,6 +2500,8 @@ def record_automatic_response(
     trigger_message_id: int,
     semantic_state: str,
     prompt_execution_id: int | None = None,
+    assistant_session_id: int | None = None,
+    draft_revision: int | None = None,
     idempotency_key: str | None = None,
     status: str = "accepted",
     processing_step: str = "outbound_auto_accepted",
@@ -2401,6 +2527,8 @@ def record_automatic_response(
         "trigger_message_id": trigger_message_id,
         "semantic_state": semantic_state,
         "prompt_execution_id": prompt_execution_id,
+        "assistant_session_id": assistant_session_id,
+        "draft_revision": draft_revision,
         "idempotency_key": idempotency_key,
     }
     if is_pending_existing:
@@ -2456,6 +2584,8 @@ def _reserve_automatic_response(
     trigger_message_id: int,
     semantic_state: str,
     prompt_execution_id: int | None,
+    assistant_session_id: int | None = None,
+    draft_revision: int | None = None,
     idempotency_key: str,
 ) -> tuple[InboundMessage, bool]:
     existing = _find_idempotent_outbound(
@@ -2466,6 +2596,18 @@ def _reserve_automatic_response(
     )
     if existing:
         return _reuse_or_reject_outbound(existing), False
+    guard_reason, _ = _automatic_response_guard(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+        trigger_message_id=trigger_message_id,
+        lock_rows=True,
+    )
+    if guard_reason:
+        raise WhatsAppEmbeddedSignupError(
+            "La respuesta automática ya no es segura para esta conversación.",
+            error_type=guard_reason,
+        )
     try:
         message = record_automatic_response(
             db,
@@ -2476,6 +2618,8 @@ def _reserve_automatic_response(
             trigger_message_id=trigger_message_id,
             semantic_state=semantic_state,
             prompt_execution_id=prompt_execution_id,
+            assistant_session_id=assistant_session_id,
+            draft_revision=draft_revision,
             idempotency_key=idempotency_key,
             status="sending",
             processing_step="outbound_auto_sending",
@@ -2503,6 +2647,8 @@ async def send_automatic_response(
     body: str,
     semantic_state: str,
     prompt_execution_id: int | None = None,
+    assistant_session_id: int | None = None,
+    draft_revision: int | None = None,
     client: httpx.AsyncClient | None = None,
 ) -> dict[str, Any]:
     status = automatic_response_status(
@@ -2534,6 +2680,8 @@ async def send_automatic_response(
             trigger_message_id=trigger_message_id,
             semantic_state=semantic_state,
             prompt_execution_id=prompt_execution_id,
+            assistant_session_id=assistant_session_id,
+            draft_revision=draft_revision,
             idempotency_key=idempotency_key,
         )
     except WhatsAppEmbeddedSignupError as exc:
@@ -2549,6 +2697,32 @@ async def send_automatic_response(
             "sent": False,
             "skipped": True,
             "reason": "already_replied",
+            "message_id": reservation.id,
+            "count": int(status["count"]),
+            "limit": status["limit"],
+        }
+    # Recheck after reserving the idempotency key: the customer may have sent a
+    # newer message or an agent may have taken over while this reply was being
+    # prepared. This narrows the race window immediately before the Meta call.
+    latest_config = whatsapp_config(db, company_id)
+    guard_reason, _ = _automatic_response_guard(
+        db,
+        company_id=company_id,
+        conversation_id=conversation_id,
+        trigger_message_id=trigger_message_id,
+        lock_rows=True,
+    )
+    if not latest_config.bot_enabled:
+        guard_reason = "bot_disabled"
+    if guard_reason:
+        reservation.status = "cancelled"
+        reservation.processing_step = "outbound_auto_cancelled"
+        reservation.processing_error = None
+        db.commit()
+        return {
+            "sent": False,
+            "skipped": True,
+            "reason": guard_reason,
             "message_id": reservation.id,
             "count": int(status["count"]),
             "limit": status["limit"],
@@ -2570,6 +2744,8 @@ async def send_automatic_response(
             trigger_message_id=trigger_message_id,
             semantic_state=semantic_state,
             prompt_execution_id=prompt_execution_id,
+            assistant_session_id=assistant_session_id,
+            draft_revision=draft_revision,
             idempotency_key=idempotency_key,
         )
     except Exception as exc:  # noqa: BLE001
@@ -2690,6 +2866,19 @@ def record_manual_response(
                 extraction_error=extraction_error,
             )
         )
+    active_session = db.scalar(
+        select(WhatsAppOrderSession).where(
+            WhatsAppOrderSession.company_id == company_id,
+            WhatsAppOrderSession.conversation_id == conversation_id,
+            WhatsAppOrderSession.active_key.is_not(None),
+        ).order_by(WhatsAppOrderSession.id.desc()).limit(1)
+    )
+    if active_session:
+        active_session.status = "human_handoff"
+        active_session.human_active = True
+        active_session.handoff_reason = "Atención asumida por un agente."
+        active_session.handoff_at = datetime.now(timezone.utc)
+        active_session.updated_at = datetime.now(timezone.utc)
     conversation.status = "human_owned"
     conversation.updated_at = datetime.now(timezone.utc)
     db.commit()

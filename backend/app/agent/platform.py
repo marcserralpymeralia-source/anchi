@@ -1309,6 +1309,49 @@ def _parse_positive_quantity(value) -> tuple[float | None, str | None]:  # noqa:
     return quantity, None
 
 
+def _whatsapp_snapshot_to_extraction(snapshot: dict[str, Any]) -> dict[str, Any]:
+    """Adapt the validated WhatsApp draft to the shared review pipeline."""
+    draft = snapshot.get("draft") if isinstance(snapshot.get("draft"), dict) else {}
+    draft_lines = draft.get("lines") if isinstance(draft.get("lines"), list) else []
+    lines = []
+    for line in draft_lines[:30]:
+        if not isinstance(line, dict):
+            continue
+        product_name = str(line.get("product_name") or line.get("product_query") or "").strip()
+        reference = str(line.get("reference") or "").strip()
+        quantity = line.get("quantity")
+        unit = str(line.get("unit") or "").strip()
+        if not product_name or not reference or not isinstance(quantity, (int, float)) or isinstance(quantity, bool) or quantity <= 0 or not unit:
+            raise ValueError("El snapshot WhatsApp contiene una línea incompleta.")
+        evidence_ids = line.get("source_message_ids") if isinstance(line.get("source_message_ids"), list) else []
+        if not evidence_ids:
+            raise ValueError("El snapshot WhatsApp no vincula la línea con mensajes del cliente.")
+        lines.append(
+            {
+                "texto_original": f"{quantity:g} {unit} {product_name} ({reference})",
+                "producto_detectado": product_name,
+                "referencia_detectada": reference,
+                "cantidad": quantity,
+                "unidad": unit,
+                "confianza_extraccion": 1.0,
+                "uncertainties": [],
+                "source_fields": {"messageIds": [int(value) for value in evidence_ids if str(value).isdigit()]},
+            }
+        )
+    if not lines:
+        raise ValueError("El snapshot WhatsApp no contiene líneas verificadas.")
+    review_reasons = [str(item).strip() for item in snapshot.get("review_reasons", []) if str(item).strip()]
+    if not snapshot.get("customer_confirmed"):
+        review_reasons.append("Pedido generado tras 12 horas sin confirmación expresa del cliente.")
+    return {
+        "cliente": {"nombre_detectado": str(draft.get("customer_name") or "")},
+        "pedido": {"observaciones": str(draft.get("notes") or ""), "lineas": lines},
+        "requiere_revision_humana": True,
+        "motivos_revision": list(dict.fromkeys(review_reasons)),
+        "_extraction_meta": {"source": "whatsapp_validated_session_snapshot"},
+    }
+
+
 class UnifiedOrderPipelineService:
     def __init__(self) -> None:
         self.matching = CustomerMatchingService()
@@ -1320,6 +1363,46 @@ class UnifiedOrderPipelineService:
         self.exporter = ExportService()
         self.alerts = AlertService()
 
+    def classify_inbound_text(
+        self,
+        db: Session,
+        company_id: int,
+        text: str,
+        *,
+        input_reference: str | None = None,
+    ) -> dict[str, Any]:
+        """Run the same classification path used by inbound email processing."""
+
+        settings = get_or_create_settings(db, LLMSettings, company_id)
+        return self._classify(
+            db,
+            settings,
+            company_id,
+            text,
+            input_reference=input_reference,
+        )
+
+    def extract_inbound_order(
+        self,
+        db: Session,
+        company_id: int,
+        text: str,
+        inbound_message: InboundMessage | None = None,
+        *,
+        input_reference: str | None = None,
+    ) -> dict[str, Any]:
+        """Run the same structured/legacy extraction path used by email."""
+
+        settings = get_or_create_settings(db, LLMSettings, company_id)
+        return self._extract(
+            db,
+            settings,
+            company_id,
+            text,
+            inbound_message,
+            input_reference=input_reference,
+        )
+
     def process_inbound_message(
         self,
         db: Session,
@@ -1329,6 +1412,9 @@ class UnifiedOrderPipelineService:
         email: Email | None = None,
         source_text_override: str | None = None,
         email_fast_path: bool = False,
+        whatsapp_session_id: int | None = None,
+        force_human_review: bool = False,
+        validated_order_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.decision.reset_runtime_state()
         pipeline_started_at = perf_counter()
@@ -1346,8 +1432,31 @@ class UnifiedOrderPipelineService:
                 "provider": inbound_message.provider,
                 "force_order": force_order,
                 "email_fast_path": email_fast_path,
+                "whatsapp_session_id": whatsapp_session_id,
+                "force_human_review": force_human_review,
             },
         )
+
+        if whatsapp_session_id:
+            existing_session_order = db.scalar(
+                select(Order).where(
+                    Order.company_id == inbound_message.company_id,
+                    Order.whatsapp_session_id == whatsapp_session_id,
+                )
+            )
+            if existing_session_order:
+                inbound_message.order_id = existing_session_order.id
+                inbound_message.customer_id = existing_session_order.customer_id
+                inbound_message.status = "order_detected"
+                inbound_message.processing_step = "whatsapp_session_already_evaluated"
+                db.commit()
+                return {
+                    "ok": True,
+                    "status": "order_detected",
+                    "message": f"Pedido {existing_session_order.id} ya evaluado para esta sesión.",
+                    "order_id": existing_session_order.id,
+                    "score": existing_session_order.score,
+                }
 
         if not force_order and inbound_message.order_id:
             order = db.scalar(
@@ -1435,6 +1544,7 @@ class UnifiedOrderPipelineService:
         )
 
         email = email or db.scalar(select(Email).where(Email.company_id == inbound_message.company_id, Email.external_id == inbound_message.source_external_id))
+        llm_input_reference = f"whatsapp-session:{whatsapp_session_id}:final" if whatsapp_session_id else None
         try:
             source_text = source_text_override or self._input_text(inbound_message, email)
             log_flow_event(
@@ -1502,7 +1612,18 @@ class UnifiedOrderPipelineService:
                 metadata={"normalized_length": len(normalized), "line_count": len(normalized.splitlines())},
             )
 
-            if email_fast_path:
+            if validated_order_snapshot is not None:
+                extraction = _whatsapp_snapshot_to_extraction(validated_order_snapshot)
+                extraction_source = "whatsapp_validated_session_snapshot"
+                tipo = "pedido"
+                confidence = 1.0
+                classification = {
+                    "tipo_correo": tipo,
+                    "confianza": confidence,
+                    "motivo": "Borrador conversacional validado y vinculado a evidencias del cliente.",
+                    "_extraction_source": extraction_source,
+                }
+            elif email_fast_path:
                 if not llm_settings.can_extract_order and not force_order:
                     inbound_message.status = "order_detected"
                     inbound_message.processing_step = "order_detected_no_extraction"
@@ -1625,7 +1746,13 @@ class UnifiedOrderPipelineService:
                     "_extraction_source": extraction_source,
                 }
             else:
-                classification = self._classify(db, llm_settings, inbound_message.company_id, normalized)
+                classification = self._classify(
+                    db,
+                    llm_settings,
+                    inbound_message.company_id,
+                    normalized,
+                    input_reference=llm_input_reference,
+                )
                 tipo = str(classification.get("tipo_correo") or classification.get("type") or classification.get("tipo") or "").lower()
                 confidence = _confidence(classification.get("confianza") or classification.get("confidence"), 0.0)
                 log_flow_event(
@@ -1712,7 +1839,14 @@ class UnifiedOrderPipelineService:
                     )
                     return {"ok": True, "status": "order_detected", "message": "Pedido detectado. Extraccion desactivada por configuracion."}
 
-                extraction = self._extract(db, llm_settings, inbound_message.company_id, normalized, inbound_message)
+                extraction = self._extract(
+                    db,
+                    llm_settings,
+                    inbound_message.company_id,
+                    normalized,
+                    inbound_message,
+                    input_reference=llm_input_reference,
+                )
                 extraction_source = (extraction.get("_extraction_meta") or {}).get("source") if isinstance(extraction.get("_extraction_meta"), dict) else None
             log_flow_event(
                 db,
@@ -1786,6 +1920,7 @@ class UnifiedOrderPipelineService:
                     normalized,
                     existing_order=existing_order,
                     fast_path=True,
+                    whatsapp_session_id=whatsapp_session_id,
                 )
             else:
                 order = self._create_order(
@@ -1795,6 +1930,8 @@ class UnifiedOrderPipelineService:
                     extraction,
                     normalized,
                     existing_order=existing_order,
+                    fast_path=validated_order_snapshot is not None,
+                    whatsapp_session_id=whatsapp_session_id,
                 )
             score_result = self.scoring.score_order(db, order)
             order.score = score_result.total_score
@@ -1846,6 +1983,8 @@ class UnifiedOrderPipelineService:
 
             is_email_input = bool(email is not None or inbound_channel_key(inbound_message) == "email")
             auto_confirm_allowed = (
+                not force_human_review
+                and
                 llm_settings.allow_auto_confirm
                 and not decision_settings.always_human_review
                 and (not is_email_input or not email_settings.always_human_review)
@@ -1878,6 +2017,7 @@ class UnifiedOrderPipelineService:
                         "score": order.score,
                         "safe_threshold": scoring_settings.safe_threshold,
                         "email_input": is_email_input,
+                        "force_human_review": force_human_review,
                     },
                 )
             else:
@@ -1896,6 +2036,7 @@ class UnifiedOrderPipelineService:
                         "safe_threshold": scoring_settings.safe_threshold,
                         "email_input": is_email_input,
                         "always_human_review": decision_settings.always_human_review,
+                        "force_human_review": force_human_review,
                     },
                 )
 
@@ -2096,23 +2237,53 @@ class UnifiedOrderPipelineService:
         sender = inbound_message.sender or (email.sender if email else "")
         return f"Asunto: {subject}\nRemitente: {sender}\n\n{source}".strip()
 
-    def _classify(self, db: Session, settings: LLMSettings, company_id: int, text: str) -> dict[str, Any]:
+    def _classify(
+        self,
+        db: Session,
+        settings: LLMSettings,
+        company_id: int,
+        text: str,
+        *,
+        input_reference: str | None = None,
+    ) -> dict[str, Any]:
         prompt = _active_prompt(
             db,
             company_id,
             "classification",
             "Clasifica la entrada como pedido, no_pedido, consulta, incidencia o dudoso. Responde solo JSON con tipo_correo, confianza y motivo.",
         )
-        result = classify_sample(db, settings, company_id, text[:12000], prompt)
+        result = classify_sample(
+            db,
+            settings,
+            company_id,
+            text[:12000],
+            prompt,
+            input_reference=input_reference,
+        )
         if not result.get("ok"):
             raise RuntimeError(result.get("message") or "Error llamando al proveedor IA.")
         return _json_from_content(result.get("content", ""))
 
-    def _extract(self, db: Session, settings: LLMSettings, company_id: int, text: str, inbound_message: InboundMessage | None = None) -> dict[str, Any]:
+    def _extract(
+        self,
+        db: Session,
+        settings: LLMSettings,
+        company_id: int,
+        text: str,
+        inbound_message: InboundMessage | None = None,
+        *,
+        input_reference: str | None = None,
+    ) -> dict[str, Any]:
         structured, structured_error = self._extract_structured(settings, text, inbound_message)
         if structured:
             return self._legacy_payload_from_structured(structured)
-        legacy = self._extract_legacy(db, settings, company_id, text)
+        legacy = self._extract_legacy(
+            db,
+            settings,
+            company_id,
+            text,
+            input_reference=input_reference,
+        )
         legacy.setdefault(
             "_extraction_meta",
             {
@@ -2257,14 +2428,29 @@ class UnifiedOrderPipelineService:
             },
         }
 
-    def _extract_legacy(self, db: Session, settings: LLMSettings, company_id: int, text: str) -> dict[str, Any]:
+    def _extract_legacy(
+        self,
+        db: Session,
+        settings: LLMSettings,
+        company_id: int,
+        text: str,
+        *,
+        input_reference: str | None = None,
+    ) -> dict[str, Any]:
         prompt = _active_prompt(
             db,
             company_id,
             "extraction",
             "Extrae un pedido en JSON valido con cliente y pedido.lineas. Cada linea debe incluir texto_original, referencia_detectada, producto_detectado, cantidad, unidad y confianza_extraccion.",
         )
-        result = extract_sample(db, settings, company_id, text[:16000], prompt)
+        result = extract_sample(
+            db,
+            settings,
+            company_id,
+            text[:16000],
+            prompt,
+            input_reference=input_reference,
+        )
         if not result.get("ok"):
             raise RuntimeError(result.get("message") or "Error llamando al proveedor IA.")
         data = _json_from_content(result.get("content", ""))
@@ -2297,6 +2483,7 @@ class UnifiedOrderPipelineService:
         *,
         existing_order: Order | None = None,
         fast_path: bool = False,
+        whatsapp_session_id: int | None = None,
     ) -> Order:
         customer_data = self._customer_from_extraction(extracted)
         order_data = self._order_from_extraction(extracted)
@@ -2383,6 +2570,8 @@ class UnifiedOrderPipelineService:
             order = existing_order
             order.lines.clear()
             db.flush()
+            if whatsapp_session_id:
+                order.whatsapp_session_id = whatsapp_session_id
             order.conversation_id = inbound_message.conversation_id
             order.email_id = email.id if email else order.email_id
             order.customer_id = customer.id if customer else None
@@ -2399,6 +2588,7 @@ class UnifiedOrderPipelineService:
             order = Order(
                 company_id=inbound_message.company_id,
                 conversation_id=inbound_message.conversation_id,
+                whatsapp_session_id=whatsapp_session_id,
                 email_id=email.id if email else None,
                 customer_id=customer.id if customer else None,
                 validated_customer_id=customer.id if customer else None,

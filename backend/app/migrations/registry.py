@@ -1188,6 +1188,106 @@ def _apply_tenant_whatsapp_read_state(engine, dry_run: bool) -> list[str]:  # no
     )
 
 
+def _apply_tenant_whatsapp_agent_sessions(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    """Persist WhatsApp order sessions and start the new agent paused."""
+
+    from sqlalchemy import MetaData, Table, insert, select, update
+
+    from app.db.models import WhatsAppOrderSession
+
+    actions: list[str] = []
+    actions.extend(
+        ensure_columns(
+            engine,
+            "orders",
+            {"whatsapp_session_id": "INTEGER"},
+            dry_run=dry_run,
+        )
+    )
+    actions.extend(
+        ensure_unique_index(
+            engine,
+            "orders",
+            "uq_orders_whatsapp_session",
+            ("whatsapp_session_id",),
+            dry_run=dry_run,
+        )
+    )
+    with engine.begin() as conn:
+        table_names = set(inspect(conn).get_table_names())
+        if WhatsAppOrderSession.__tablename__ not in table_names:
+            actions.append("CREATE TABLE whatsapp_order_sessions (...)")
+            if not dry_run:
+                WhatsAppOrderSession.__table__.create(bind=conn, checkfirst=True)
+        elif not dry_run:
+            WhatsAppOrderSession.__table__.create(bind=conn, checkfirst=True)
+
+        if dry_run or not {"channel_settings", "input_channels"}.issubset(table_names):
+            return actions
+
+        metadata = MetaData()
+        channels = Table("input_channels", metadata, autoload_with=conn)
+        channel_settings = Table("channel_settings", metadata, autoload_with=conn)
+        now = datetime.now(timezone.utc)
+        whatsapp_channels = conn.execute(
+            select(channels.c.id, channels.c.company_id).where(channels.c.key == "whatsapp")
+        ).all()
+        for channel_id, company_id in whatsapp_channels:
+            for key, value in (
+                ("bot_enabled", "false"),
+                ("bot_mode", "suggestions"),
+                ("idle_session_hours", "12"),
+                ("bot_debounce_seconds", "3"),
+                ("business_faq", ""),
+                ("max_auto_messages", "20"),
+            ):
+                existing = conn.execute(
+                    select(channel_settings.c.id).where(
+                        channel_settings.c.company_id == company_id,
+                        channel_settings.c.channel_id == channel_id,
+                        channel_settings.c.key == key,
+                    )
+                ).first()
+                if existing:
+                    if key in {"bot_enabled", "max_auto_messages"}:
+                        conn.execute(
+                            update(channel_settings)
+                            .where(channel_settings.c.id == existing.id)
+                            .values(
+                                value=value,
+                                value_type="boolean" if key == "bot_enabled" else "integer",
+                                updated_at=now,
+                            )
+                        )
+                else:
+                    conn.execute(
+                        insert(channel_settings).values(
+                            company_id=company_id,
+                            channel_id=channel_id,
+                            key=key,
+                            value=value,
+                            value_type=("boolean" if key == "bot_enabled" else "integer" if key in {"idle_session_hours", "bot_debounce_seconds", "max_auto_messages"} else "string"),
+                            is_secret=False,
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+    return actions
+
+
+def _apply_tenant_whatsapp_session_safety(engine, dry_run: bool) -> list[str]:  # noqa: ANN001
+    return ensure_columns(
+        engine,
+        "whatsapp_order_sessions",
+        {
+            "pending_media_retry_count": "INTEGER NOT NULL DEFAULT 0",
+            "message_cutoff_at": "TIMESTAMP WITH TIME ZONE",
+            "agent_turn_count": "INTEGER NOT NULL DEFAULT 0",
+        },
+        dry_run=dry_run,
+    )
+
+
 TENANT_SCHEMA_MIGRATIONS = [
     MigrationSpec(
         version="2026.07.15.1",
@@ -1302,6 +1402,18 @@ TENANT_SCHEMA_MIGRATIONS = [
         name="tenant WhatsApp read state",
         checksum=checksum_text("tenant", "whatsapp_read_state", "inbound_messages", "read_at"),
         upgrade=_apply_tenant_whatsapp_read_state,
+    ),
+    MigrationSpec(
+        version="2026.10.14.1",
+        name="tenant WhatsApp conversational agent sessions",
+        checksum=checksum_text("tenant", "whatsapp_agent_sessions", "whatsapp_order_sessions", "orders.whatsapp_session_id", "bot_disabled_by_default"),
+        upgrade=_apply_tenant_whatsapp_agent_sessions,
+    ),
+    MigrationSpec(
+        version="2026.10.14.2",
+        name="tenant WhatsApp pending media retries",
+        checksum=checksum_text("tenant", "whatsapp_pending_media_retry_count", "whatsapp_session_message_cutoff", "whatsapp_agent_turn_count", "whatsapp_order_sessions"),
+        upgrade=_apply_tenant_whatsapp_session_safety,
     ),
 ]
 

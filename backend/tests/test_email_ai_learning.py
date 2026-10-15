@@ -640,11 +640,11 @@ class EmailAiLearningTests(unittest.TestCase):
         classification = '{"tipo_correo":"pedido","confianza":0.96,"motivo":"Pedido claro"}'
         extraction = '{"cliente":{"nombre_detectado":"Cliente Demo SL","codigo_cliente_detectado":"C001"},"pedido":{"lineas":[{"texto_original":"5 unidades de P-100","referencia_detectada":"P-100","producto_detectado":"Producto Demo","cantidad":5,"unidad":"uds","confianza_extraccion":0.93}]}}'
 
-        def fake_classify(_db, _settings, _company_id, text, _prompt):  # noqa: ANN001
+        def fake_classify(_db, _settings, _company_id, text, _prompt, *, input_reference=None):  # noqa: ANN001
             captured["classification_text"] = text
             return {"ok": True, "content": classification}
 
-        def fake_extract(_db, _settings, _company_id, text, _prompt):  # noqa: ANN001
+        def fake_extract(_db, _settings, _company_id, text, _prompt, *, input_reference=None):  # noqa: ANN001
             captured["extraction_text"] = text
             return {"ok": True, "content": extraction}
 

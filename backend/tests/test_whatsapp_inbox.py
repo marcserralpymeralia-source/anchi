@@ -18,7 +18,7 @@ os.environ.setdefault("ENABLE_DEMO_BOOTSTRAP", "false")
 
 from app.core import lifespan as lifespan_module  # noqa: E402
 from app.core.app_factory import create_app  # noqa: E402
-from app.db.models import ChannelSetting, Conversation, Customer, InboundMessage, InputChannel, MessageAttachment, utcnow  # noqa: E402
+from app.db.models import ChannelSetting, Conversation, Customer, InboundMessage, InputChannel, MessageAttachment, WhatsAppOrderSession, utcnow  # noqa: E402
 from app.messages.service import upsert_inbound_message  # noqa: E402
 from app.whatsapp.service import WhatsAppEmbeddedSignupError, send_whatsapp_media  # noqa: E402
 from scripts.performance_data import build_performance_fixture, temporary_performance_environment  # noqa: E402
@@ -150,6 +150,124 @@ class WhatsAppInboxTests(unittest.TestCase):
         self.assertIn('data-wa-send-button', response.text)
         self.assertEqual(response.text.count('href="/mail"'), 1)
         self.assertEqual(response.text.count('class="nav-label">WhatsApp</span>'), 1)
+
+    def test_assistant_session_is_visible_and_can_be_taken_by_a_human(self):
+        fixture = build_performance_fixture("small")
+        conversation_id = self._seed_whatsapp(fixture)
+        engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        with session_factory() as db:
+            message = db.scalar(
+                select(InboundMessage).where(
+                    InboundMessage.company_id == 1,
+                    InboundMessage.conversation_id == conversation_id,
+                    InboundMessage.direction == "inbound",
+                )
+            )
+            db.add(
+                WhatsAppOrderSession(
+                    company_id=1,
+                    conversation_id=conversation_id,
+                    active_key=f"whatsapp-conversation:{conversation_id}",
+                    status="awaiting_customer",
+                    intent="order",
+                    revision=1,
+                    draft_json=json.dumps({"customer_name": "", "lines": [], "notes": ""}),
+                    missing_fields_json=json.dumps(["Indicar cantidad"]),
+                    started_at=message.received_at,
+                    last_customer_message_at=message.received_at,
+                    due_at=utcnow() + timedelta(hours=12),
+                )
+            )
+            db.commit()
+        engine.dispose()
+
+        client, cleanup = self._client_for(fixture)
+        try:
+            self._login(client, fixture)
+            page = client.get(f"/whatsapp/inbox?conversation_id={conversation_id}")
+            csrf = re.search(r'<meta name="csrf-token" content="([^"]*)"', page.text)
+            self.assertIn('role="switch" aria-checked="false"', page.text)
+            self.assertIn("Atención humana", page.text)
+            response = client.post(
+                f"/whatsapp/inbox/{conversation_id}/assistant-control",
+                data={"action": "take", "_csrf_token": csrf.group(1) if csrf else ""},
+                follow_redirects=False,
+            )
+            human_page = client.get(response.headers["location"])
+            human_csrf = re.search(r'<meta name="csrf-token" content="([^"]*)"', human_page.text)
+            resume = client.post(
+                f"/whatsapp/inbox/{conversation_id}/assistant-control",
+                data={"action": "resume", "_csrf_token": human_csrf.group(1) if human_csrf else ""},
+                follow_redirects=False,
+            )
+            bot_page = client.get(resume.headers["location"])
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("Agente conversacional", page.text)
+        self.assertIn("Esperando datos del cliente", page.text)
+        self.assertIn("Indicar cantidad", page.text)
+        self.assertIn('role="switch" aria-checked="true"', human_page.text)
+        self.assertIn('role="switch" aria-checked="false"', bot_page.text)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(resume.status_code, 303)
+
+    def test_manual_reply_takes_control_before_provider_send_finishes(self):
+        fixture = build_performance_fixture("small")
+        conversation_id = self._seed_whatsapp(fixture)
+        engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        with session_factory() as db:
+            inbound = db.scalar(
+                select(InboundMessage).where(
+                    InboundMessage.company_id == 1,
+                    InboundMessage.conversation_id == conversation_id,
+                    InboundMessage.direction == "inbound",
+                )
+            )
+            db.add(
+                WhatsAppOrderSession(
+                    company_id=1,
+                    conversation_id=conversation_id,
+                    active_key=f"whatsapp-conversation:{conversation_id}",
+                    status="awaiting_customer",
+                    intent="order",
+                    revision=1,
+                    draft_json="{}",
+                    missing_fields_json="[]",
+                    started_at=inbound.received_at,
+                    last_customer_message_at=inbound.received_at,
+                    due_at=utcnow() + timedelta(hours=12),
+                )
+            )
+            db.commit()
+
+        client, cleanup = self._client_for(fixture)
+        try:
+            self._login(client, fixture)
+            with patch(
+                "app.whatsapp.inbox_routes.send_manual_response",
+                new=AsyncMock(side_effect=WhatsAppEmbeddedSignupError("temporary", error_type="temporary")),
+            ):
+                response = client.post(
+                    f"/whatsapp/inbox/{conversation_id}/reply",
+                    data={"body": "Lo reviso ahora."},
+                    follow_redirects=False,
+                )
+            with session_factory() as db:
+                current = db.scalar(select(WhatsAppOrderSession).where(WhatsAppOrderSession.conversation_id == conversation_id))
+                conversation = db.get(Conversation, conversation_id)
+                self.assertTrue(current.human_active)
+                self.assertEqual(conversation.status, "human_owned")
+        finally:
+            cleanup()
+            engine.dispose()
+            fixture.cleanup()
+
+        self.assertEqual(response.status_code, 303)
 
     def test_contact_shows_the_number_of_unread_messages(self):
         fixture = build_performance_fixture("small")

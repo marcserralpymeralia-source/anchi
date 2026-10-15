@@ -22,7 +22,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import record_job
 from app.core.observability import observability_scope
-from app.db.models import BackgroundJob, Email, EmailSettings, ExportFile, ExportSettings, ImportJob, InboundMessage, Order, ScoringSettings
+from app.db.models import BackgroundJob, Conversation, Email, EmailSettings, ExportFile, ExportSettings, ImportJob, InboundMessage, Order, ScoringSettings, WhatsAppOrderSession
 from app.exports.service import ExportService, FTPService, resolve_ftp_destination
 from app.logs.service import log_action, log_flow_event
 from app.orders.state import ORDER_STATE
@@ -38,9 +38,11 @@ from app.settings.service import get_or_create_settings
 from app.jobs.service import claim_next_job, enqueue_job, fail_job, finish_job, job_payload, job_trace, recover_stale_jobs, update_job_progress
 from app.tenancy.migrations import tenant_migration_report
 from app.tenancy.database import tenant_db_session
-from app.whatsapp.conversation_orders import evaluate_conversation_order
-from app.whatsapp.conversation_semantics import evaluate_whatsapp_conversation_semantics
-from app.whatsapp.service import send_automatic_response, whatsapp_config
+from app.whatsapp.agent import (
+    enqueue_due_whatsapp_session_finalizations,
+    finalize_whatsapp_order_session,
+    process_whatsapp_agent_turn,
+)
 
 logger = logging.getLogger(__name__)
 _worker_started = False
@@ -55,6 +57,7 @@ JOB_TYPES = {
     "process_order",
     "process_inbound_message",
     "download_whatsapp_media",
+    "whatsapp_finalize_session",
     "import_confirm",
     "import_file",
     "export_order",
@@ -108,6 +111,15 @@ def _process_job(db, job: BackgroundJob) -> dict:
         return _process_product_embeddings_job(db, job, payload)
     if job.job_type == "index_knowledge_entries":
         return _process_knowledge_entries_job(db, job, payload)
+    if job.job_type == "whatsapp_finalize_session":
+        return finalize_whatsapp_order_session(
+            db,
+            company_id=job.company_id,
+            session_id=int(payload.get("session_id") or 0),
+            expected_revision=int(payload.get("expected_revision") or 0),
+            reason=str(payload.get("reason") or "idle_timeout"),
+            user_id=job.created_by_user_id,
+        )
     if job.job_type == "bulk_order_action":
         return _process_bulk_action(db, job, payload)
     if job.job_type == "email_sync":
@@ -316,90 +328,19 @@ def _process_job(db, job: BackgroundJob) -> dict:
         if not inbound_message or inbound_message.company_id != job.company_id:
             raise RuntimeError("No se encontró el mensaje a procesar.")
 
-        pipeline = AgentProcessingService().pipeline
-
         is_live_meta_whatsapp = (
             str(payload.get("channel") or "").strip().lower() == "whatsapp"
             and str(inbound_message.provider or "").strip().lower() == "meta"
         )
 
         if is_live_meta_whatsapp:
-            config = whatsapp_config(db, job.company_id)
-            semantic_evaluator = (
-                evaluate_whatsapp_conversation_semantics
-                if config.bot_enabled
-                else None
-            )
-
-            context = evaluate_conversation_order(
+            return process_whatsapp_agent_turn(
                 db,
-                message=inbound_message,
-                semantic_evaluator=semantic_evaluator,
+                company_id=job.company_id,
+                inbound_message=inbound_message,
             )
 
-            if context.state == "collecting":
-                inbound_message.status = "received"
-                inbound_message.processing_step = "whatsapp_order_collecting"
-                db.commit()
-
-                auto_response = None
-                if (
-                    config.bot_enabled
-                    and context.semantic_state
-                    in {"needs_clarification", "ready_for_confirmation"}
-                    and context.reply_needed
-                    and context.suggested_reply
-                ):
-                    auto_response = asyncio.run(
-                        send_automatic_response(
-                            db,
-                            company_id=job.company_id,
-                            conversation_id=context.conversation_id,
-                            trigger_message_id=inbound_message.id,
-                            body=context.suggested_reply,
-                            semantic_state=context.semantic_state,
-                            prompt_execution_id=context.prompt_execution_id,
-                        )
-                    )
-
-                return {
-                    "ok": True,
-                    "status": context.semantic_state or "collecting",
-                    "message": (
-                        "Conversación WhatsApp evaluada."
-                        if context.semantic_state
-                        else "Conversación WhatsApp pendiente de completar."
-                    ),
-                    "conversation_id": context.conversation_id,
-                    "semantic_state": context.semantic_state,
-                    "semantic_intent": context.semantic_intent,
-                    "missing_or_uncertain": context.missing_or_uncertain or [],
-                    "reply_needed": context.reply_needed,
-                    "auto_response": auto_response,
-                }
-
-            if context.state == "ready":
-                result = pipeline.process_inbound_message(
-                    db,
-                    inbound_message,
-                    source_text_override=context.transcript,
-                )
-
-                order_id = result.get("order_id") if isinstance(result, dict) else None
-                if order_id:
-                    for source_message in context.messages:
-                        if source_message.company_id != job.company_id:
-                            continue
-                        if source_message.order_id is None:
-                            source_message.order_id = int(order_id)
-                    db.commit()
-
-                return {
-                    "ok": True,
-                    "conversation_id": context.conversation_id,
-                    **result,
-                }
-
+        pipeline = AgentProcessingService().pipeline
         result = pipeline.process_inbound_message(db, inbound_message)
         return {"ok": True, **result}
     if job.job_type == "download_whatsapp_media":
@@ -413,14 +354,17 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 inbound_message_id=inbound_message_id,
             )
         )
-        processing_job_id = None
-        if result.get("ready_for_processing"):
-            processing_job = enqueue_whatsapp_processing(db, job.company_id, inbound_message_id, user_id=job.created_by_user_id)
-            processing_job_id = processing_job.id
+        processing_job = enqueue_whatsapp_processing(
+            db,
+            job.company_id,
+            inbound_message_id,
+            user_id=job.created_by_user_id,
+        )
+        processing_job_id = processing_job.id
         message = (
             "Media WhatsApp descargada y entrada encolada"
             if processing_job_id
-            else "Media WhatsApp guardada; la entrada queda pendiente de completar la extraccion"
+            else "Media WhatsApp revisada; el agente decidirá si ya puede procesar la entrada"
         )
         return {**result, "processing_job_id": processing_job_id, "message": message}
     raise RuntimeError(f"Tipo de job no soportado: {job.job_type}")
@@ -803,6 +747,7 @@ def _handle_tenant_jobs(
                 schema_report.get("checksum"),
             )
             return {"recovered": 0, "attempted": 0, "processed": 0, "blocked": 1}
+        enqueue_due_whatsapp_session_finalizations(db, company_id=tenant.company_id)
         recovered = recover_stale_jobs(db, owner=owner, company_id=tenant.company_id, job_types=JOB_TYPES)
         recovered_jobs += len(recovered)
         while max_jobs is None or attempted_jobs < max_jobs:
@@ -901,6 +846,30 @@ def _handle_tenant_jobs(
                         retry=should_retry,
                         error_type=str(getattr(exc, "error_type", None) or exc.__class__.__name__),
                     )
+                    if job.job_type == "whatsapp_finalize_session" and failed_job.status == "failed":
+                        session_id = int(job_payload(job).get("session_id") or 0)
+                        session = db.scalar(
+                            select(WhatsAppOrderSession).where(
+                                WhatsAppOrderSession.id == session_id,
+                                WhatsAppOrderSession.company_id == job.company_id,
+                            )
+                        )
+                        if session and session.active_key:
+                            session.status = "human_handoff"
+                            session.human_active = True
+                            session.handoff_reason = "La evaluación automática falló tras varios intentos; requiere revisión humana."
+                            session.handoff_at = _now()
+                            session.last_error = str(getattr(exc, "error_type", None) or exc.__class__.__name__)
+                            session.updated_at = _now()
+                            conversation = db.scalar(
+                                select(Conversation).where(
+                                    Conversation.id == session.conversation_id,
+                                    Conversation.company_id == job.company_id,
+                                )
+                            )
+                            if conversation:
+                                conversation.status = "human_owned"
+                            db.commit()
                     record_job(job_type=job.job_type, status=failed_job.status)
                     action_suffix = "retrying" if failed_job.status == "retrying" else "failed"
                     log_action(db, company_id=job.company_id, user=None, action=f"job.{job.job_type}.{action_suffix}", entity_type="job", entity_id=job.id, message=str(exc))
