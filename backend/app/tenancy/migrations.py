@@ -140,7 +140,8 @@ def upgrade_tenant_schema(
 
 
 def tenant_migration_report(db: Session, company_id: int | None, *, persist: bool = False) -> dict:
-    if not table_exists(db.get_bind(), "schema_migrations"):
+    schema_migration_columns = existing_columns(db.get_bind(), "schema_migrations")
+    if not schema_migration_columns:
         return {
             "version": None,
             "name": None,
@@ -158,7 +159,7 @@ def tenant_migration_report(db: Session, company_id: int | None, *, persist: boo
             "is_current": False,
         }
     required_columns = {"version", "name", "checksum", "execution_ms", "application_version", "status", "applied_at", "last_checked_at", "last_error", "notes"}
-    if not required_columns.issubset(existing_columns(db.get_bind(), "schema_migrations")):
+    if not required_columns.issubset(schema_migration_columns):
         return {
             "version": None,
             "name": None,
