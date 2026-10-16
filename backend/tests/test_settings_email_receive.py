@@ -13,7 +13,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.core.encryption import decrypt_secret
-from app.db.models import EmailSettings, InputChannel, PromptExecution, PromptExecutionDetail, User
+from app.db.models import ChannelSetting, EmailSettings, InputChannel, PromptExecution, PromptExecutionDetail, User
 from app.master.models import CompanyMembership, EmailSyncState
 from scripts.performance_data import build_performance_fixture, performance_test_client
 
@@ -145,6 +145,69 @@ class SettingsEmailReceiveHttpTests(unittest.TestCase):
                     self.assertEqual(reloaded.imap_username, "demo.user@example.com")
                     self.assertEqual(reloaded.imap_password_encrypted, encrypted_password)
                     self.assertEqual(decrypt_secret(reloaded.imap_password_encrypted), "DemoAppPassword123!")
+        finally:
+            master_engine.dispose()
+            tenant_engine.dispose()
+            fixture.cleanup()
+
+    def test_activate_whatsapp_channel_if_settings_page_only_rendered_it_transiently(self):
+        fixture = build_performance_fixture("small")
+        master_engine = create_engine(fixture.master_database_url, connect_args={"check_same_thread": False})
+        tenant_engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        MasterSession = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
+        TenantSession = sessionmaker(bind=tenant_engine, autoflush=False, autocommit=False)
+        try:
+            with MasterSession() as db:
+                membership = db.scalar(select(CompanyMembership).where(CompanyMembership.company_id == fixture.company_id))
+                self.assertIsNotNone(membership)
+                assert membership is not None
+                membership.role_key = "Administrador"
+                db.commit()
+
+            with TenantSession() as db:
+                db.query(User).delete()
+                channel = db.scalar(
+                    select(InputChannel).where(
+                        InputChannel.company_id == fixture.company_id,
+                        InputChannel.key == "whatsapp",
+                    )
+                )
+                if channel:
+                    db.query(ChannelSetting).filter(ChannelSetting.channel_id == channel.id).delete()
+                    db.delete(channel)
+                db.commit()
+
+            with performance_test_client(fixture) as client:
+                page = client.get("/settings/channels")
+                self.assertEqual(page.status_code, 200)
+                self.assertIn('/settings/channels/whatsapp/activate', page.text)
+
+                # The page rendered the channel, but its request transaction
+                # did not persist the newly-created row.
+                with TenantSession() as db:
+                    self.assertIsNone(
+                        db.scalar(
+                            select(InputChannel).where(
+                                InputChannel.company_id == fixture.company_id,
+                                InputChannel.key == "whatsapp",
+                            )
+                        )
+                    )
+
+                response = client.post("/settings/channels/whatsapp/activate", follow_redirects=False)
+                self.assertEqual(response.status_code, 303)
+                self.assertEqual(response.headers["location"], "/settings/channels?focus=whatsapp")
+
+                with TenantSession() as db:
+                    channel = db.scalar(
+                        select(InputChannel).where(
+                            InputChannel.company_id == fixture.company_id,
+                            InputChannel.key == "whatsapp",
+                        )
+                    )
+                    self.assertIsNotNone(channel)
+                    assert channel is not None
+                    self.assertTrue(channel.is_active)
         finally:
             master_engine.dispose()
             tenant_engine.dispose()

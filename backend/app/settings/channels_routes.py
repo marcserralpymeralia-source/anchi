@@ -406,6 +406,11 @@ async def activate_channel(
     if not has_admin_access(user):
         return RedirectResponse("/settings/channels", status_code=303)
     channel = _get_channel_or_404(db, user.company_id, channel_key)
+    if channel is None and channel_key == "whatsapp":
+        # A first visit may render a newly-created channel from the request's
+        # transaction, which is rolled back when the GET session closes. Make
+        # activation self-sufficient instead of silently redirecting.
+        channel = get_or_create_whatsapp_channel(db, user.company_id)
     if not channel:
         return RedirectResponse("/settings/channels", status_code=303)
 
