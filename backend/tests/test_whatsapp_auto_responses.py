@@ -18,6 +18,7 @@ from app.db.models import (
     WhatsAppOrderSession,
 )
 from app.whatsapp.service import (
+    WhatsAppEmbeddedSignupError,
     automatic_response_status,
     record_automatic_response,
     send_automatic_response,
@@ -465,6 +466,69 @@ class WhatsAppAutomaticResponseTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(retry["sent"])
         self.assertTrue(retry["skipped"])
         self.assertEqual(provider_calls, 1)
+        db.close()
+
+    async def test_rate_limited_automatic_reply_reuses_reservation_and_retries_safely(self):
+        db = self.Session()
+        provider_calls = 0
+
+        async def provider(*args, **kwargs):
+            nonlocal provider_calls
+            provider_calls += 1
+            if provider_calls == 1:
+                raise WhatsAppEmbeddedSignupError(
+                    "Rate limited",
+                    error_type="rate_limited",
+                )
+            return {"provider_message_id": "wamid-auto-retry-success"}
+
+        with patch("app.whatsapp.service.send_whatsapp_text", new=provider):
+            with self.assertRaises(WhatsAppEmbeddedSignupError) as first_error:
+                await send_automatic_response(
+                    db,
+                    company_id=1,
+                    conversation_id=1,
+                    trigger_message_id=1,
+                    body="¡Hola! ¿Quieres hacer un pedido?",
+                    semantic_state="informational",
+                    assistant_session_id=44,
+                    draft_revision=3,
+                )
+
+            failed = db.query(InboundMessage).filter(
+                InboundMessage.direction == "outbound"
+            ).one()
+            self.assertEqual(first_error.exception.error_type, "rate_limited")
+            self.assertEqual(failed.status, "failed")
+            self.assertEqual(failed.processing_step, "outbound_send_failed_retryable")
+            self.assertTrue(
+                automatic_response_status(
+                    db,
+                    company_id=1,
+                    conversation_id=1,
+                    trigger_message_id=1,
+                )["allowed"]
+            )
+
+            retry = await send_automatic_response(
+                db,
+                company_id=1,
+                conversation_id=1,
+                trigger_message_id=1,
+                body="¡Hola! ¿Quieres hacer un pedido?",
+                semantic_state="informational",
+                assistant_session_id=44,
+                draft_revision=3,
+            )
+
+        outbound = db.query(InboundMessage).filter(
+            InboundMessage.direction == "outbound"
+        ).all()
+        self.assertTrue(retry["sent"])
+        self.assertEqual(provider_calls, 2)
+        self.assertEqual(len(outbound), 1)
+        self.assertEqual(outbound[0].status, "accepted")
+        self.assertEqual(outbound[0].source_external_id, "wamid-auto-retry-success")
         db.close()
 
 

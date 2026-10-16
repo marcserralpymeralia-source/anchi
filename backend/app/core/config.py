@@ -190,14 +190,15 @@ class Settings(BaseSettings):
         running_on_vercel = os.getenv("VERCEL") == "1" or bool(os.getenv("VERCEL_ENV"))
         demo_runtime = self.environment == "demo" or running_on_vercel
 
-        # Keep long-lived loops out of serverless instances and avoid running
-        # a second jobs poller inside a production web process when a
-        # dedicated worker service is deployed. Email sync remains enabled in
-        # a traditional production web process unless explicitly disabled.
+        # Keep long-lived loops out of serverless instances and test runs, and
+        # avoid running a second jobs poller inside a production web process
+        # when a dedicated worker service is deployed. Email sync remains
+        # enabled in a traditional production web process unless explicitly
+        # disabled.
         if self.run_internal_email_worker is None:
-            self.run_internal_email_worker = not running_on_vercel
+            self.run_internal_email_worker = self.environment != "test" and not running_on_vercel
         if self.run_internal_job_worker is None:
-            self.run_internal_job_worker = self.environment != "production" and not running_on_vercel
+            self.run_internal_job_worker = self.environment not in {"production", "test"} and not running_on_vercel
         if running_on_vercel:
             self.run_internal_email_worker = False
             self.run_internal_job_worker = False

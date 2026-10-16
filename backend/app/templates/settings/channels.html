@@ -384,42 +384,6 @@
           {% set whatsapp_return_to = "settings" %}
           {% include "components/whatsapp_embedded_signup.html" %}
         </section>
-        <form class="drawer-card stack js-loading-form" method="post" action="/settings/channels/whatsapp/assistant">
-          <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token if request.state.csrf_token is defined else '' }}">
-          <div class="section-title-row">
-            <div>
-              <h4>Respuestas del agente</h4>
-              <p class="muted">El agente se activa o pausa individualmente desde cada conversación.</p>
-            </div>
-          </div>
-          <div class="form-grid">
-            <label>
-              Cerrar y evaluar tras (horas sin mensaje del cliente)
-              <input name="idle_session_hours" type="number" min="1" max="72" value="{{ item.settings.get('idle_session_hours') or '12' }}">
-            </label>
-            <label>
-              Agrupar mensajes consecutivos (segundos)
-              <input name="bot_debounce_seconds" type="number" min="0" max="15" value="{{ item.settings.get('bot_debounce_seconds') or '3' }}">
-            </label>
-            <label>
-              Respuestas automÃ¡ticas mÃ¡ximas por conversaciÃ³n
-              <input name="max_auto_messages" type="number" min="1" max="100" value="{{ item.settings.get('max_auto_messages') or '20' }}">
-            </label>
-            <label>
-              Turnos de IA mÃ¡ximos por pedido
-              <input name="max_agent_turns_per_session" type="number" min="1" max="100" value="{{ item.settings.get('max_agent_turns_per_session') or '30' }}">
-            </label>
-          </div>
-          <label>
-            Respuestas comerciales aprobadas (FAQ)
-            <small class="muted">Formato seguro: «Pregunta: ...» y «Respuesta: ...», con una línea vacía entre preguntas.</small>
-            <textarea name="business_faq" rows="5" maxlength="12000" placeholder="Añade solo condiciones y respuestas verificadas por tu empresa.">{{ item.settings.get('business_faq') or '' }}</textarea>
-            <small class="muted">El agente no inventará stock, precios ni plazos. Los pedidos de WhatsApp siempre requieren revisión humana antes de confirmarse o exportarse.</small>
-          </label>
-          <div class="drawer-actions">
-            <button data-loading-text="Guardando...">Guardar ajustes</button>
-          </div>
-        </form>
       {% else %}
         <form class="drawer-card stack js-loading-form" method="post" action="/settings/channels/{{ channel.key }}/settings">
           <div class="section-title-row">

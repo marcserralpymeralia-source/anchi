@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.customers.matching import resolve_customer_id_by_phone
@@ -40,6 +41,7 @@ def persist_normalized_message(
     has_attachments: bool = False,
     has_pdf: bool = False,
     has_audio: bool = False,
+    whatsapp_bot_enabled_on_create: bool = False,
 ) -> tuple[InboundMessage, Conversation]:
     return upsert_inbound_message(
         db,
@@ -61,6 +63,7 @@ def persist_normalized_message(
         has_attachments=has_attachments,
         has_pdf=has_pdf,
         has_audio=has_audio,
+        whatsapp_bot_enabled_on_create=whatsapp_bot_enabled_on_create,
     )
 
 def normalize_provider(value: str | None) -> str:
@@ -89,6 +92,26 @@ def normalize_recipients(value: Any) -> list[str]:
 
 def conversation_thread_key(message: NormalizedMessage) -> str:
     return (message.external_thread_id or message.external_id or "").strip()
+
+
+def _merge_conversation_activity(
+    conversation: Conversation,
+    *,
+    subject: str | None,
+    customer_id: int | None,
+    assigned_user_id: int | None,
+    last_activity_at: datetime | None,
+) -> Conversation:
+    if subject and not conversation.subject:
+        conversation.subject = subject
+    if customer_id and not conversation.customer_id:
+        conversation.customer_id = customer_id
+    if assigned_user_id and not conversation.assigned_user_id:
+        conversation.assigned_user_id = assigned_user_id
+    if last_activity_at:
+        conversation.last_activity_at = last_activity_at
+    conversation.updated_at = datetime.now(timezone.utc)
+    return conversation
 
 
 def ensure_input_channel(db: Session, company_id: int, *, key: str, name: str, provider: str = "imap") -> InputChannel:
@@ -125,6 +148,7 @@ def get_or_create_conversation(
     assigned_user_id: int | None = None,
     status: str = "open",
     last_activity_at: datetime | None = None,
+    whatsapp_bot_enabled_on_create: bool = False,
 ) -> Conversation:
     provider = normalize_provider(provider)
     thread_key = (external_thread_id or "").strip() or None
@@ -141,16 +165,13 @@ def get_or_create_conversation(
             .one_or_none()
         )
     if conversation:
-        if subject and not conversation.subject:
-            conversation.subject = subject
-        if customer_id and not conversation.customer_id:
-            conversation.customer_id = customer_id
-        if assigned_user_id and not conversation.assigned_user_id:
-            conversation.assigned_user_id = assigned_user_id
-        if last_activity_at:
-            conversation.last_activity_at = last_activity_at
-        conversation.updated_at = datetime.now(timezone.utc)
-        return conversation
+        return _merge_conversation_activity(
+            conversation,
+            subject=subject,
+            customer_id=customer_id,
+            assigned_user_id=assigned_user_id,
+            last_activity_at=last_activity_at,
+        )
     conversation = Conversation(
         company_id=company_id,
         channel_id=channel_id,
@@ -159,11 +180,41 @@ def get_or_create_conversation(
         customer_id=customer_id,
         assigned_user_id=assigned_user_id,
         status=status,
+        whatsapp_bot_enabled=bool(whatsapp_bot_enabled_on_create),
         subject=subject,
         last_activity_at=last_activity_at,
     )
-    db.add(conversation)
-    db.flush()
+    if thread_key:
+        try:
+            # Two WhatsApp callbacks can create the same thread at once. Keep
+            # a uniqueness race inside a savepoint so the losing request can
+            # reuse the winner's conversation without aborting its message.
+            with db.begin_nested():
+                db.add(conversation)
+                db.flush()
+        except IntegrityError:
+            winner = (
+                db.query(Conversation)
+                .filter(
+                    Conversation.company_id == company_id,
+                    Conversation.channel_id == channel_id,
+                    Conversation.provider == provider,
+                    Conversation.external_thread_id == thread_key,
+                )
+                .one_or_none()
+            )
+            if winner is None:
+                raise
+            return _merge_conversation_activity(
+                winner,
+                subject=subject,
+                customer_id=customer_id,
+                assigned_user_id=assigned_user_id,
+                last_activity_at=last_activity_at,
+            )
+    else:
+        db.add(conversation)
+        db.flush()
     return conversation
 
 
@@ -210,6 +261,7 @@ def upsert_inbound_message(
     has_attachments: bool = False,
     has_pdf: bool = False,
     has_audio: bool = False,
+    whatsapp_bot_enabled_on_create: bool = False,
 ) -> tuple[InboundMessage, Conversation]:
     normalized_channel = normalize_channel(channel_key)
     normalized_direction = normalize_direction(direction)
@@ -233,6 +285,13 @@ def upsert_inbound_message(
         subject=subject,
         customer_id=matched_customer_id,
         last_activity_at=received_at or sent_at or datetime.now(timezone.utc),
+        # Applied only when the conversation is first created; later customer
+        # messages must never override an operator's per-chat switch choice.
+        whatsapp_bot_enabled_on_create=(
+            whatsapp_bot_enabled_on_create
+            and normalized_channel == "whatsapp"
+            and normalized_direction == "inbound"
+        ),
     )
     existing = find_inbound_message(db, company_id=company_id, channel_id=channel.id, provider=provider, external_id=external_id)
     if existing:

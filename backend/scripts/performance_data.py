@@ -502,6 +502,7 @@ def temporary_performance_environment(fixture: PerformanceFixture) -> Iterator[N
     previous_master_sessionlocal = master_database_module.MasterSessionLocal
     previous_operational_engine = operational_database_module.engine
     previous_operational_sessionlocal = operational_database_module.SessionLocal
+    previous_lifespan_master_engine = lifespan_module.master_engine
     previous_lifespan_master_sessionlocal = lifespan_module.MasterSessionLocal
     previous_middleware_master_sessionlocal = middleware_module.MasterSessionLocal
     previous_jobs_worker_master_sessionlocal = jobs_worker_module.MasterSessionLocal
@@ -510,6 +511,7 @@ def temporary_performance_environment(fixture: PerformanceFixture) -> Iterator[N
     tenant_engine = create_engine(fixture.tenant_database_url, connect_args=_connect_args(fixture.tenant_database_url))
     master_database_module.engine = master_engine
     master_database_module.MasterSessionLocal = sessionmaker(bind=master_engine, autoflush=False, autocommit=False)
+    lifespan_module.master_engine = master_engine
     lifespan_module.MasterSessionLocal = master_database_module.MasterSessionLocal
     middleware_module.MasterSessionLocal = master_database_module.MasterSessionLocal
     jobs_worker_module.MasterSessionLocal = master_database_module.MasterSessionLocal
@@ -536,6 +538,7 @@ def temporary_performance_environment(fixture: PerformanceFixture) -> Iterator[N
         master_database_module.MasterSessionLocal = previous_master_sessionlocal
         operational_database_module.engine = previous_operational_engine
         operational_database_module.SessionLocal = previous_operational_sessionlocal
+        lifespan_module.master_engine = previous_lifespan_master_engine
         lifespan_module.MasterSessionLocal = previous_lifespan_master_sessionlocal
         middleware_module.MasterSessionLocal = previous_middleware_master_sessionlocal
         jobs_worker_module.MasterSessionLocal = previous_jobs_worker_master_sessionlocal

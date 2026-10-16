@@ -4,10 +4,11 @@ import json
 import logging
 import re
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, Header, Request, UploadFile
 from fastapi.responses import PlainTextResponse, RedirectResponse, Response, StreamingResponse
 from markupsafe import Markup, escape
 from sqlalchemy import exists, func, or_, select, update
@@ -29,6 +30,8 @@ from app.whatsapp.service import (
     WHATSAPP_SUPPORTED_IMAGE_EXTENSIONS,
     WHATSAPP_SUPPORTED_IMAGE_MIME_TYPES,
     download_whatsapp_media,
+    enqueue_whatsapp_processing,
+    has_accepted_manual_response_replay,
     retry_failed_whatsapp_message,
     send_manual_response,
     whatsapp_config,
@@ -44,6 +47,33 @@ from app.whatsapp.agent import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["whatsapp-inbox"])
+
+
+async def _process_whatsapp_job_after_manual_media_sync(
+    company_id: int,
+    job_id: int,
+    next_retry_at: datetime | None,
+) -> None:
+    if next_retry_at is not None:
+        due_at = next_retry_at
+        if due_at.tzinfo is None:
+            due_at = due_at.replace(tzinfo=timezone.utc)
+        delay = (due_at - datetime.now(timezone.utc)).total_seconds()
+        if delay > 15:
+            return
+        if delay > 0:
+            await asyncio.sleep(delay)
+    try:
+        from app.workers.jobs_worker import run_worker_cycle
+
+        await asyncio.to_thread(
+            run_worker_cycle,
+            max_jobs=1,
+            company_id=company_id,
+            job_id=job_id,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("Manual WhatsApp media retry processing failed company=%s job=%s", company_id, job_id)
 
 
 def _channel(db: Session, company_id: int) -> InputChannel | None:
@@ -850,6 +880,17 @@ async def whatsapp_inbox_reply(
     config = whatsapp_config(db, user.company_id)
     if not whatsapp_outbound_is_ready(db, user.company_id, config=config):
         return _redirect_to_conversation(conversation_id, error="whatsapp_not_ready")
+    idempotency_key = header_idempotency_key or form_idempotency_key
+    attachment_count = sum(1 for upload in files or [] if upload and upload.filename)
+    if has_accepted_manual_response_replay(
+        db,
+        company_id=user.company_id,
+        conversation_id=conversation_id,
+        idempotency_key=idempotency_key,
+        has_text=bool(body.strip()),
+        attachment_count=attachment_count,
+    ):
+        return _redirect_to_conversation(conversation_id, notice="sent")
     response_window = whatsapp_response_window_status(
         db,
         company_id=user.company_id,
@@ -912,7 +953,7 @@ async def whatsapp_inbox_reply(
             body=clean_body,
             user_id=user.actor_id,
             attachments=attachment_payloads,
-            idempotency_key=header_idempotency_key or form_idempotency_key,
+            idempotency_key=idempotency_key,
             reply_to_message_id=parsed_reply_to_message_id,
         )
     except WhatsAppEmbeddedSignupError as exc:
@@ -962,6 +1003,7 @@ async def whatsapp_inbox_retry_message(
 async def sync_media_attachment(
     conversation_id: int,
     attachment_id: int,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
@@ -973,7 +1015,24 @@ async def sync_media_attachment(
     )
     if attachment and attachment.inbound_message_id:
         try:
-            await download_whatsapp_media(db, company_id=user.company_id, inbound_message_id=attachment.inbound_message_id)
+            result = await download_whatsapp_media(
+                db,
+                company_id=user.company_id,
+                inbound_message_id=attachment.inbound_message_id,
+            )
+            if result.get("ready_for_processing"):
+                processing_job = enqueue_whatsapp_processing(
+                    db,
+                    user.company_id,
+                    attachment.inbound_message_id,
+                    user_id=user.actor_id,
+                )
+                background_tasks.add_task(
+                    _process_whatsapp_job_after_manual_media_sync,
+                    user.company_id,
+                    processing_job.id,
+                    processing_job.next_retry_at,
+                )
         except Exception as exc:
             logger.warning("Manual sync of whatsapp media failed: %s", exc)
     return RedirectResponse(f"/whatsapp/inbox?conversation_id={conversation_id}", status_code=303)

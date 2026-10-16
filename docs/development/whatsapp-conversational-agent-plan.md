@@ -1,12 +1,13 @@
 # Plan: agente conversacional de WhatsApp y cierre de pedidos tras 12 horas
 
-Estado: **implementada y publicada** en `chore/technical-improvement-plan` (`b4d827b`). La suite focalizada pasó 168 tests y omitió 4; CI confirmó compilación y PostgreSQL, pero falló `test-sqlite` en la suite global. Sus logs detallados requieren permisos admin. Alcance: conversaciones entrantes de WhatsApp Cloud API por empresa. La validación funcional se hizo con datos sintéticos locales; no se enviaron mensajes ni se usaron datos de producción.
+Estado: la implementación conversacional está en la rama local `chore/technical-improvement-plan`; conserva cambios sin commit ni push. La batería focalizada pasó: 290 tests ejecutados, 4 omitidos y el resto correcto con SQLite y datos sintéticos. No se ha validado el modelo real, PostgreSQL, Meta ni producción en esta revisión.
 
 ## Resultado de la implementación local
 
 - Se reutiliza el runtime de IA compartido y el pipeline final de pedidos, alimentándolo con un borrador validado y evidencia de mensajes; el paso por el pipeline fuerza revisión humana.
 - El plazo predeterminado es de 12 horas desde el último mensaje entrante del cliente y se reinicia con cada nuevo turno suyo. Las conversaciones se cierran con jobs persistentes e idempotentes.
-- El bot queda desactivado por defecto; se ofrecen modo sugerencias, FAQ, debounce y límites por sesión. Las respuestas automáticas se vuelven a validar justo antes de llamar a Meta.
+- Los chats históricos permanecen desactivados; una conversación nueva creada por un mensaje entrante en vivo arranca con el bot activo. El único control visible es un interruptor por chat; no hay selector de modos ni panel de controles adicionales. Los límites y el debounce son internos.
+- Las respuestas automáticas se vuelven a validar justo antes de llamar a Meta.
 - Dudas sin evidencia aprobada, identidad no verificada, turnos agotados o medios no interpretables se derivan a revisión humana.
 - Una confirmación corta solo es válida para el resumen exacto y la revisión actual del borrador.
 - No se integraron proveedores OCR/STT, límite monetario diario específico ni horario de atención humana. Son evoluciones pendientes; los medios no interpretables se derivan y el límite de turnos por sesión es la protección de coste incluida.
@@ -98,24 +99,25 @@ El estado de «pedido completo» no equivale a «pedido confirmado», y «cerrad
 
 ### Configuración y experiencia de usuario
 
-- Ajustes por empresa: bot desactivado por defecto al migrar, activar en modo sugerencias/prueba, pasar a respuestas automáticas tras validación; plazo de 12 h configurable con valor inicial 12, pausa global, horario de atención para humanos, instrucciones/FAQ aprobadas y límites de coste/turnos.
-- En el chat: interruptor por conversación para alternar IA/atención humana, estado del borrador y plazo, dudas pendientes, «Cerrar y evaluar ahora», enlaces a pedido/revisión y motivo de derivación. Evitar exponer internamente el prompt o el razonamiento del modelo al cliente.
+- En el chat: un interruptor por conversación para activar o desactivar el bot. Mantener la interacción simple: no añadir selector de modos, panel de ajustes, botón de cierre manual ni controles conversacionales extra. El pedido se procesa con las reglas actuales y el cierre de 12 horas.
+- FAQ/catálogo solo pueden fundamentar respuestas cuando exista información disponible y aprobada para ese tenant; si no hay evidencia, el bot deriva al equipo. No exponer prompts ni razonamiento interno al cliente.
 - Observabilidad: eventos `turn_received`, `media_pending`, `intent_evaluated`, `reply_skipped/sent`, `handoff`, `timer_reset`, `finalize_started/skipped/completed`, `review_opened`; duración, coste estimado, errores y versiones, sin secretos ni texto sensible en logs.
 
 ## Secuencia aplicada en esta fase
 
 1. **Contrato y pruebas de dominio.** Aplicado con fixtures sintéticos para pedidos completos/incompletos, consulta, toma humana, identidad, evidencia y medios.
-2. **Persistencia y migración.** Aplicada la entidad de sesión y migración compatible; bot desactivado por defecto.
+2. **Persistencia y migración.** Aplicada la entidad de sesión y migración compatible; los chats ya existentes empiezan desactivados y los nuevos chats en vivo activan el bot.
 3. **Orquestador conversacional.** Aplicado con runtime común, consultas tenant-scoped, FAQ/catálogo fundamentados, borrador, debounce, límites y handoff.
 4. **Temporizador y finalización.** Aplicados jobs persistentes, revisión de revisión/último mensaje, retry de medios acotado y cierre idempotente.
 5. **Pipeline y revisión.** Aplicado el snapshot al pipeline compartido con veto de autoconfirmación/exportación.
-6. **Interfaz y despliegue gradual.** Aplicados ajustes, inbox y modo sugerencias. El piloto externo y la operación gradual quedan pendientes.
+6. **Interfaz y despliegue gradual.** Aplicado un único interruptor de activar/desactivar por chat. El piloto externo y la validación operativa quedan pendientes.
 
 ## Matriz mínima de aceptación
 
 | Escenario | Resultado esperado |
 |---|---|
 | Cliente aporta producto ambiguo | Una pregunta concreta; sin producto inventado ni pedido finalizado prematuramente. |
+| Cliente reparte el pedido entre mensajes y un PDF, luego corrige una línea y cierra | Un solo pedido en revisión; líneas acumuladas y vinculadas a sus mensajes fuente, sin duplicados. |
 | Cliente pregunta algo verificable del catálogo | Respuesta basada en registro de su empresa; no prometer stock si no hay fuente. |
 | Cliente envía tres fragmentos seguidos | Un turno lógico y, como máximo, una respuesta pertinente; borrador sin duplicados. |
 | Cliente responde 11 h 59 min después | Reinicia 12 h; un job de cierre viejo no finaliza. |
@@ -144,8 +146,8 @@ Tests relacionados a ampliar: `backend/tests/test_whatsapp_conversation_orders.p
 
 ### Pendientes operativos
 
-- Cada empresa debe revisar y aprobar su FAQ y datos comerciales antes de activar el modo automático.
+- Antes de operar con clientes, comprobar en un número de pruebas que el bot activo por defecto en chats nuevos y el interruptor por chat se comportan como espera la empresa.
 - Acordar presupuesto/coste máximo diario si se requiere una cota monetaria adicional al límite de turnos por sesión.
 - Definir si se necesitan horarios de atención humana, y su zona horaria/reglas.
 - Decidir si se quiere integrar STT/OCR y aprobar proveedor, retención y tratamiento de medios.
-- Ejecutar piloto en Meta de staging, pruebas de PostgreSQL y revisar eventos de envío/webhook antes de producción.
+- Ejecutar piloto en Meta de staging, validar con el proveedor de IA usando conversaciones sintéticas, probar PostgreSQL y revisar eventos de envío/webhook antes de producción.

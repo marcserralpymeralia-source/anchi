@@ -22,7 +22,7 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import record_job
 from app.core.observability import observability_scope
-from app.db.models import BackgroundJob, Conversation, Email, EmailSettings, ExportFile, ExportSettings, ImportJob, InboundMessage, Order, ScoringSettings, WhatsAppOrderSession
+from app.db.models import Alert, BackgroundJob, Conversation, Email, EmailSettings, ExportFile, ExportSettings, ImportJob, InboundMessage, Order, ScoringSettings, WhatsAppOrderSession
 from app.exports.service import ExportService, FTPService, resolve_ftp_destination
 from app.logs.service import log_action, log_flow_event
 from app.orders.state import ORDER_STATE
@@ -354,17 +354,19 @@ def _process_job(db, job: BackgroundJob) -> dict:
                 inbound_message_id=inbound_message_id,
             )
         )
-        processing_job = enqueue_whatsapp_processing(
-            db,
-            job.company_id,
-            inbound_message_id,
-            user_id=job.created_by_user_id,
-        )
-        processing_job_id = processing_job.id
+        processing_job_id = None
+        if result.get("ready_for_processing"):
+            processing_job = enqueue_whatsapp_processing(
+                db,
+                job.company_id,
+                inbound_message_id,
+                user_id=job.created_by_user_id,
+            )
+            processing_job_id = processing_job.id
         message = (
             "Media WhatsApp descargada y entrada encolada"
             if processing_job_id
-            else "Media WhatsApp revisada; el agente decidirá si ya puede procesar la entrada"
+            else "Media WhatsApp sigue pendiente; el turno conversacional no se ha encolado"
         )
         return {**result, "processing_job_id": processing_job_id, "message": message}
     raise RuntimeError(f"Tipo de job no soportado: {job.job_type}")
@@ -727,6 +729,7 @@ def _handle_tenant_jobs(
     owner: str,
     *,
     max_jobs: int | None = None,
+    job_id: int | None = None,
 ) -> dict[str, int]:
     if not tenant.database_url:
         return {"recovered": 0, "attempted": 0, "processed": 0, "blocked": 0}
@@ -747,15 +750,29 @@ def _handle_tenant_jobs(
                 schema_report.get("checksum"),
             )
             return {"recovered": 0, "attempted": 0, "processed": 0, "blocked": 1}
-        enqueue_due_whatsapp_session_finalizations(db, company_id=tenant.company_id)
-        recovered = recover_stale_jobs(db, owner=owner, company_id=tenant.company_id, job_types=JOB_TYPES)
-        recovered_jobs += len(recovered)
+        # Webhook-triggered runs are deliberately scoped to one durable job:
+        # avoid sweeping unrelated sessions/jobs on the request's fast path.
+        # The regular worker/cron cycle continues to perform both maintenance
+        # tasks for the tenant.
+        if job_id is None:
+            from app.whatsapp.service import recover_stale_whatsapp_outbound_sends
+
+            recover_stale_whatsapp_outbound_sends(db, company_id=tenant.company_id)
+            enqueue_due_whatsapp_session_finalizations(db, company_id=tenant.company_id)
+            recovered = recover_stale_jobs(
+                db,
+                owner=owner,
+                company_id=tenant.company_id,
+                job_types=JOB_TYPES,
+            )
+            recovered_jobs += len(recovered)
         while max_jobs is None or attempted_jobs < max_jobs:
             job = claim_next_job(
                 db,
                 owner=owner,
                 company_id=tenant.company_id,
                 job_types=JOB_TYPES,
+                job_id=job_id,
             )
             if not job:
                 break
@@ -836,6 +853,10 @@ def _handle_tenant_jobs(
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.exception("Job fallido company=%s job=%s", job.company_id, job.job_type)
+                    # The failed handler may have left a database transaction
+                    # unusable (for example after an integrity error). Clear
+                    # it before persisting the job failure and any handoff.
+                    db.rollback()
                     should_retry = job.attempt_count < (max(0, job.max_retries or 0) + 1) and (
                         bool(getattr(exc, "retryable", False)) or _is_retryable_exception(exc)
                     )
@@ -846,6 +867,53 @@ def _handle_tenant_jobs(
                         retry=should_retry,
                         error_type=str(getattr(exc, "error_type", None) or exc.__class__.__name__),
                     )
+                    if job.job_type == "download_whatsapp_media" and failed_job.status == "failed":
+                        media_payload = job_payload(job)
+                        inbound_message_id = int(media_payload.get("inbound_message_id") or 0)
+                        try:
+                            from app.whatsapp.service import (
+                                enqueue_whatsapp_processing,
+                                mark_whatsapp_media_failed_after_retries,
+                            )
+
+                            if inbound_message_id and mark_whatsapp_media_failed_after_retries(
+                                db,
+                                company_id=job.company_id,
+                                inbound_message_id=inbound_message_id,
+                            ):
+                                enqueue_whatsapp_processing(
+                                    db,
+                                    job.company_id,
+                                    inbound_message_id,
+                                    user_id=job.created_by_user_id,
+                                )
+                        except Exception:  # noqa: BLE001
+                            logger.exception(
+                                "WhatsApp media exhausted retries; failed to enqueue human handoff company=%s message=%s",
+                                job.company_id,
+                                inbound_message_id,
+                            )
+                    if job.job_type == "process_inbound_message" and failed_job.status == "failed":
+                        failed_payload = job_payload(job)
+                        if str(failed_payload.get("channel") or "").strip().lower() == "whatsapp":
+                            inbound_message_id = int(failed_payload.get("inbound_message_id") or 0)
+                            try:
+                                from app.whatsapp.agent import handoff_failed_whatsapp_message
+
+                                if inbound_message_id:
+                                    handoff_failed_whatsapp_message(
+                                        db,
+                                        company_id=job.company_id,
+                                        inbound_message_id=inbound_message_id,
+                                        error_type=str(getattr(exc, "error_type", None) or type(exc).__name__),
+                                    )
+                            except Exception:  # noqa: BLE001
+                                db.rollback()
+                                logger.exception(
+                                    "WhatsApp agent exhausted retries; failed to hand off message company=%s message=%s",
+                                    job.company_id,
+                                    inbound_message_id,
+                                )
                     if job.job_type == "whatsapp_finalize_session" and failed_job.status == "failed":
                         session_id = int(job_payload(job).get("session_id") or 0)
                         session = db.scalar(
@@ -855,6 +923,24 @@ def _handle_tenant_jobs(
                             )
                         )
                         if session and session.active_key:
+                            inbound_message_id = int(session.last_processed_message_id or 0)
+                            if inbound_message_id:
+                                try:
+                                    from app.whatsapp.agent import handoff_failed_whatsapp_message
+
+                                    handoff_failed_whatsapp_message(
+                                        db,
+                                        company_id=job.company_id,
+                                        inbound_message_id=inbound_message_id,
+                                        error_type=str(getattr(exc, "error_type", None) or type(exc).__name__),
+                                    )
+                                except Exception:  # noqa: BLE001
+                                    db.rollback()
+                                    logger.exception(
+                                        "WhatsApp finalization failed; customer acknowledgement failed company=%s message=%s",
+                                        job.company_id,
+                                        inbound_message_id,
+                                    )
                             session.status = "human_handoff"
                             session.human_active = True
                             session.handoff_reason = "La evaluación automática falló tras varios intentos; requiere revisión humana."
@@ -869,6 +955,31 @@ def _handle_tenant_jobs(
                             )
                             if conversation:
                                 conversation.status = "human_owned"
+                                conversation.whatsapp_bot_enabled = False
+                            existing_alert = db.scalar(
+                                select(Alert).where(
+                                    Alert.company_id == job.company_id,
+                                    Alert.inbound_message_id == (inbound_message_id or None),
+                                    Alert.alert_type == "whatsapp_order_finalization_failed",
+                                    Alert.status == "open",
+                                )
+                            )
+                            if not existing_alert:
+                                db.add(
+                                    Alert(
+                                        company_id=job.company_id,
+                                        inbound_message_id=inbound_message_id or None,
+                                        alert_type="whatsapp_order_finalization_failed",
+                                        severity="high",
+                                        status="open",
+                                        title="Un pedido de WhatsApp necesita revisión",
+                                        message="No se pudo completar la evaluación automática tras varios intentos. Revisa el borrador y continúa manualmente.",
+                                        payload_json=json.dumps(
+                                            {"conversation_id": session.conversation_id, "session_id": session.id},
+                                            ensure_ascii=False,
+                                        ),
+                                    )
+                                )
                             db.commit()
                     record_job(job_type=job.job_type, status=failed_job.status)
                     action_suffix = "retrying" if failed_job.status == "retrying" else "failed"
@@ -910,7 +1021,26 @@ def _handle_tenant_jobs(
     }
 
 
-def run_worker_cycle(*, max_jobs: int | None = None, include_provisioning: bool = False) -> dict[str, int]:
+def _rotate_worker_tenants(tenants, *, max_jobs: int | None, minute_slot: int | None = None):
+    """Rotate bounded cron batches so low-ID tenants cannot starve the rest."""
+
+    rows = list(tenants)
+    if not rows or max_jobs is None or len(rows) <= max_jobs:
+        return rows
+    slot = int(time.time() // 60) if minute_slot is None else max(int(minute_slot), 0)
+    offset = (slot * max(1, int(max_jobs))) % len(rows)
+    return rows[offset:] + rows[:offset]
+
+
+def run_worker_cycle(
+    *,
+    max_jobs: int | None = None,
+    include_provisioning: bool = False,
+    company_id: int | None = None,
+    job_id: int | None = None,
+) -> dict[str, int]:
+    if job_id is not None and company_id is None:
+        raise ValueError("company_id es obligatorio al reclamar un job concreto.")
     configure_logging()
     if include_provisioning:
         from app.workers.provisioning_worker import run_provisioning_cycle
@@ -925,7 +1055,7 @@ def run_worker_cycle(*, max_jobs: int | None = None, include_provisioning: bool 
     }
     master_db = MasterSessionLocal()
     try:
-        tenants = master_db.scalars(
+        tenant_query = (
             select(MasterTenantDatabase)
             .join(MasterCompany, MasterCompany.id == MasterTenantDatabase.company_id)
             .where(
@@ -935,8 +1065,12 @@ def run_worker_cycle(*, max_jobs: int | None = None, include_provisioning: bool 
                 MasterCompany.status == "active",
             )
             .order_by(MasterTenantDatabase.company_id)
-        ).all()
+        )
+        if company_id is not None:
+            tenant_query = tenant_query.where(MasterTenantDatabase.company_id == int(company_id))
+        tenants = master_db.scalars(tenant_query).all()
         summary["tenants"] = len(tenants)
+        tenants = _rotate_worker_tenants(tenants, max_jobs=max_jobs)
         pending = list(tenants)
         while pending and (max_jobs is None or summary["attempted"] < max_jobs):
             next_round = []
@@ -945,7 +1079,12 @@ def run_worker_cycle(*, max_jobs: int | None = None, include_provisioning: bool 
                 if max_jobs is not None and summary["attempted"] >= max_jobs:
                     break
                 try:
-                    tenant_summary = _handle_tenant_jobs(tenant, owner=_identity(), max_jobs=1)
+                    tenant_summary = _handle_tenant_jobs(
+                        tenant,
+                        owner=_identity(),
+                        max_jobs=1,
+                        job_id=job_id,
+                    )
                 except Exception:  # noqa: BLE001
                     logger.exception("Job worker tenant cycle failed company=%s", tenant.company_id)
                     summary["blocked"] += 1

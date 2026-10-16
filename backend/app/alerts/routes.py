@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, Request
@@ -65,6 +66,17 @@ def alert_default_action(alert: Alert) -> tuple[str, str]:
         if alert.alert_type in {"order_review_required", "order_blocked", "automation_blocked"}:
             return "Resolver", f"/orders/{alert.order_id}"
         return "Abrir pedido", f"/orders/{alert.order_id}"
+    if str(alert.alert_type or "").startswith("whatsapp_") and alert.payload_json:
+        try:
+            payload = json.loads(alert.payload_json)
+        except (TypeError, ValueError):
+            payload = {}
+        try:
+            conversation_id = int(payload.get("conversation_id") or 0)
+        except (TypeError, ValueError):
+            conversation_id = 0
+        if conversation_id > 0:
+            return "Abrir conversación", f"/whatsapp/inbox?conversation_id={conversation_id}"
     if alert.inbound_message_id:
         return "Abrir entrada", "/pedidos?kind=emails"
     return "Revisar", "/alerts"

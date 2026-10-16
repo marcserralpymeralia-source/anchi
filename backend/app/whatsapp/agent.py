@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import re
+import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
@@ -18,6 +19,7 @@ from app.db.models import (
     Conversation,
     Customer,
     InboundMessage,
+    Order,
     Product,
     ProductAlias,
     WhatsAppOrderSession,
@@ -25,11 +27,13 @@ from app.db.models import (
 from app.jobs.service import enqueue_job
 from app.logs.service import log_flow_event
 from app.whatsapp.conversation_orders import (
+    has_explicit_order_cancellation,
     has_explicit_order_close,
     is_short_order_confirmation,
 )
 from app.whatsapp.conversation_semantics import WhatsAppAgentTurnResult, evaluate_whatsapp_agent_turn
 from app.whatsapp.service import (
+    WHATSAPP_RETRYABLE_AUTO_SEND_STEP,
     send_automatic_response,
     whatsapp_config,
     whatsapp_response_window_status,
@@ -45,10 +49,9 @@ _ACTIVE_STATUSES = {
     "human_handoff",
     "finalizing",
 }
-_MEDIA_PENDING = {"pending", "downloaded"}
+_MEDIA_PENDING = {"pending", "downloaded", "storage_error"}
 _MEDIA_UNREADABLE = {
     "extraction_error",
-    "storage_error",
     "unsupported",
     "no_text_found",
     "stored",
@@ -57,8 +60,21 @@ _MEDIA_UNREADABLE = {
     "transcription_pending",
 }
 _ACTIVE_JOB_STATES = {"queued", "running", "retrying"}
+_CANCEL_REPLY_PENDING = "customer_cancel_reply_pending"
+_CANCEL_HANDOFF_REPLY_PENDING = "customer_cancel_handoff_reply_pending"
 _MAX_AGENT_CONTEXT_CHARS = 15000
 _MAX_AGENT_CONTEXT_MESSAGES = 50
+
+
+class WhatsAppAgentReplyDeliveryError(RuntimeError):
+    """Keep a failed customer reply from being recorded as a successful job."""
+
+    def __init__(self, error_type: str, *, retryable: bool = False) -> None:
+        self.error_type = str(error_type or "reply_delivery_failed")[:120]
+        # A provider 429 explicitly rejects delivery. Network/5xx errors may
+        # have reached Meta, so replaying those could duplicate a customer reply.
+        self.retryable = bool(retryable and self.error_type == "rate_limited")
+        super().__init__("No se pudo confirmar la entrega de la respuesta automática de WhatsApp.")
 
 
 def _unit_key(value: str | None) -> str:
@@ -110,6 +126,44 @@ def _outbound_metadata(message: InboundMessage) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _reply_context_external_id(message: InboundMessage) -> str:
+    metadata = _json_object(message.raw_payload_json, {})
+    payload = metadata.get("payload") if isinstance(metadata.get("payload"), dict) else {}
+    context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+    return str(context.get("id") or "").strip()
+
+
+def _reply_context_message(
+    message: InboundMessage,
+    messages: list[InboundMessage],
+) -> InboundMessage | None:
+    external_id = _reply_context_external_id(message)
+    if external_id:
+        return next(
+            (
+                candidate
+                for candidate in messages
+                if candidate.id != message.id
+                and candidate.source_external_id == external_id
+                and candidate.company_id == message.company_id
+                and candidate.conversation_id == message.conversation_id
+            ),
+            None,
+        )
+    ordered = sorted(
+        (item for item in messages if item.content_type != "whatsapp_status"),
+        key=lambda item: (_aware(item.received_at) or _now(), item.id),
+    )
+    current_index = next(
+        (index for index, item in enumerate(ordered) if item.id == message.id),
+        None,
+    )
+    if current_index is None or current_index == 0:
+        return None
+    previous = ordered[current_index - 1]
+    return previous if previous.direction == "outbound" else None
+
+
 def _confirms_current_order_summary(
     messages: list[InboundMessage],
     *,
@@ -126,9 +180,23 @@ def _confirms_current_order_summary(
         (item for item in messages if item.id != message.id and item.content_type != "whatsapp_status"),
         key=lambda item: (_aware(item.received_at) or _now(), item.id),
     )
-    if not ordered or ordered[-1].direction != "outbound":
-        return False
-    previous = ordered[-1]
+    quoted_message = _reply_context_message(message, messages)
+    if quoted_message:
+        if quoted_message.direction != "outbound":
+            return False
+        quoted_index = next(
+            (index for index, item in enumerate(ordered) if item.id == quoted_message.id),
+            None,
+        )
+        if quoted_index is None or any(
+            item.direction == "inbound" for item in ordered[quoted_index + 1 :]
+        ):
+            return False
+        previous = quoted_message
+    else:
+        if not ordered or ordered[-1].direction != "outbound":
+            return False
+        previous = ordered[-1]
     metadata = _outbound_metadata(previous)
     return bool(
         metadata.get("auto_response")
@@ -176,6 +244,194 @@ def _latest_customer_message(db: Session, *, company_id: int, conversation_id: i
     )
 
 
+def _retry_prepared_whatsapp_reply(
+    db: Session,
+    *,
+    company_id: int,
+    conversation: Conversation,
+    session: WhatsAppOrderSession,
+    inbound_message: InboundMessage,
+    config: Any,
+) -> dict[str, Any]:
+    """Retry only a stored reply definitively rejected by Meta with HTTP 429."""
+
+    idempotency_key = f"auto:{inbound_message.id}"
+    outbound = db.scalar(
+        select(InboundMessage).where(
+            InboundMessage.company_id == company_id,
+            InboundMessage.conversation_id == conversation.id,
+            InboundMessage.direction == "outbound",
+            InboundMessage.source_message_id == idempotency_key,
+        )
+    )
+    metadata = _outbound_metadata(outbound) if outbound else {}
+    if (
+        not outbound
+        or outbound.status != "failed"
+        or outbound.processing_step != WHATSAPP_RETRYABLE_AUTO_SEND_STEP
+        or not session.suggested_reply
+        or str(outbound.original_content or "") != session.suggested_reply
+        or int(metadata.get("trigger_message_id") or 0) != inbound_message.id
+        or int(metadata.get("assistant_session_id") or 0) != session.id
+        or metadata.get("draft_revision") != session.revision
+    ):
+        raise WhatsAppAgentReplyDeliveryError("retry_state_invalid")
+
+    window = whatsapp_response_window_status(
+        db,
+        company_id=company_id,
+        conversation_id=conversation.id,
+        response_window_minutes=config.response_window_minutes,
+    )
+    if not window.get("is_open"):
+        if session.closed_reason in {
+            _CANCEL_REPLY_PENDING,
+            _CANCEL_HANDOFF_REPLY_PENDING,
+        }:
+            transition = _finish_pending_customer_cancellation(
+                db,
+                session=session,
+                conversation=conversation,
+                inbound_message=inbound_message,
+            )
+            return {
+                "ok": True,
+                "status": (transition or {}).get("status", session.status),
+                "session_id": session.id,
+                "auto_response": {
+                    "sent": False,
+                    "reason": str(window.get("reason") or "response_window_closed"),
+                },
+                "retried": True,
+            }
+        raise WhatsAppAgentReplyDeliveryError(
+            str(window.get("reason") or "response_window_closed")
+        )
+
+    try:
+        send_result = await_send_automatic_response(
+            db,
+            company_id=company_id,
+            conversation_id=conversation.id,
+            trigger_message_id=inbound_message.id,
+            body=session.suggested_reply,
+            semantic_state=str(metadata.get("semantic_state") or "informational"),
+            prompt_execution_id=metadata.get("prompt_execution_id"),
+            assistant_session_id=session.id,
+            draft_revision=session.revision,
+        )
+    except Exception as exc:  # noqa: BLE001
+        error_type = str(getattr(exc, "error_type", None) or type(exc).__name__)
+        retryable = error_type == "rate_limited"
+        if retryable:
+            inbound_message.processing_step = "whatsapp_agent_reply_retryable"
+            db.commit()
+        elif session.closed_reason in {
+            _CANCEL_REPLY_PENDING,
+            _CANCEL_HANDOFF_REPLY_PENDING,
+        }:
+            transition = _finish_pending_customer_cancellation(
+                db,
+                session=session,
+                conversation=conversation,
+                inbound_message=inbound_message,
+            )
+            return {
+                "ok": True,
+                "status": (transition or {}).get("status", session.status),
+                "session_id": session.id,
+                "auto_response": {"sent": False, "reason": error_type},
+                "retried": True,
+            }
+        raise WhatsAppAgentReplyDeliveryError(error_type, retryable=retryable) from exc
+
+    if not send_result.get("sent"):
+        reason = str(send_result.get("reason") or "reply_not_sent")
+        db.refresh(outbound)
+        if reason == "already_replied" and str(outbound.status or "").lower() in {
+            "accepted", "sent", "delivered", "read"
+        }:
+            pass
+        elif reason in {"bot_disabled", "human_owned", "human_active", "stale_trigger"}:
+            if session.closed_reason in {
+                _CANCEL_REPLY_PENDING,
+                _CANCEL_HANDOFF_REPLY_PENDING,
+            }:
+                transition = _finish_pending_customer_cancellation(
+                    db,
+                    session=session,
+                    conversation=conversation,
+                    inbound_message=inbound_message,
+                )
+                return {
+                    "ok": True,
+                    "status": (transition or {}).get("status", session.status),
+                    "session_id": session.id,
+                    "auto_response": {"sent": False, "reason": reason},
+                    "retried": True,
+                }
+            inbound_message.processing_step = (
+                "whatsapp_agent_handoff_waiting"
+                if reason in {"human_owned", "human_active"}
+                else "whatsapp_agent_superseded"
+            )
+            db.commit()
+            return {"ok": True, "skipped": True, "reason": reason, "session_id": session.id}
+        else:
+            raise WhatsAppAgentReplyDeliveryError(reason)
+
+    inbound_message.status = "received"
+    inbound_message.processing_step = "whatsapp_agent_reply_sent"
+    db.commit()
+    _log_agent_event(
+        db,
+        company_id=company_id,
+        conversation_id=conversation.id,
+        session_id=session.id,
+        event="reply_sent",
+        status="sent",
+        metadata={"message_id": inbound_message.id, "retry": True},
+    )
+    if session.status == "human_handoff":
+        conversation.whatsapp_bot_enabled = False
+        conversation.updated_at = _now()
+        db.commit()
+    transition = None
+    if session.closed_reason in {
+        _CANCEL_REPLY_PENDING,
+        _CANCEL_HANDOFF_REPLY_PENDING,
+    }:
+        transition = _finish_pending_customer_cancellation(
+            db,
+            session=session,
+            conversation=conversation,
+            inbound_message=inbound_message,
+        )
+    return {
+        "ok": True,
+        "status": (transition or {}).get("status", session.status),
+        "session_id": session.id,
+        "intent": session.intent,
+        "reply_needed": True,
+        "auto_response": send_result,
+        "retried": True,
+    }
+
+
+def _session_cutoff_condition(session: WhatsAppOrderSession):
+    cutoff = _aware(session.message_cutoff_at)
+    if cutoff is None:
+        return None
+    boundary_id = int(session.last_processed_message_id or 0)
+    return or_(
+        InboundMessage.received_at < cutoff,
+        and_(
+            InboundMessage.received_at == cutoff,
+            InboundMessage.id <= boundary_id,
+        ),
+    )
+
+
 def _latest_session_customer_message(
     db: Session,
     *,
@@ -189,8 +445,9 @@ def _latest_session_customer_message(
         InboundMessage.content_type != "whatsapp_status",
         InboundMessage.received_at >= session.started_at,
     )
-    if session.message_cutoff_at is not None:
-        query = query.where(InboundMessage.received_at < session.message_cutoff_at)
+    cutoff_condition = _session_cutoff_condition(session)
+    if cutoff_condition is not None:
+        query = query.where(cutoff_condition)
     return db.scalar(
         query.options(selectinload(InboundMessage.attachments))
         .order_by(InboundMessage.received_at.desc(), InboundMessage.id.desc())
@@ -254,6 +511,55 @@ def _initial_session_started_at(
         start_at = candidate_at
         cursor_at = candidate_at
     return start_at
+
+
+def _late_message_belongs_to_active_session(
+    db: Session,
+    *,
+    session: WhatsAppOrderSession,
+    message: InboundMessage,
+    latest_message: InboundMessage,
+    idle_hours: int,
+) -> bool:
+    message_at = _aware(message.received_at)
+    latest_at = _aware(latest_message.received_at)
+    if not message_at or not latest_at or latest_at - message_at > timedelta(hours=max(1, idle_hours)):
+        return False
+    cutoff_condition = _session_cutoff_condition(session)
+    if cutoff_condition is not None:
+        cutoff_at = _aware(session.message_cutoff_at)
+        if message_at > cutoff_at or (
+            message_at == cutoff_at
+            and int(message.id) > int(session.last_processed_message_id or 0)
+        ):
+            return False
+
+    previous_session = db.scalar(
+        select(WhatsAppOrderSession)
+        .where(
+            WhatsAppOrderSession.company_id == session.company_id,
+            WhatsAppOrderSession.conversation_id == session.conversation_id,
+            WhatsAppOrderSession.id < session.id,
+        )
+        .order_by(WhatsAppOrderSession.id.desc())
+        .limit(1)
+    )
+    if previous_session:
+        boundary_at = _aware(previous_session.last_customer_message_at)
+        boundary_id = int(previous_session.last_processed_message_id or 0)
+        if boundary_at and (
+            message_at < boundary_at
+            or (message_at == boundary_at and int(message.id) <= boundary_id)
+        ):
+            return False
+    return True
+
+
+def _mark_late_message_reconciled(message: InboundMessage | None) -> None:
+    if message is None:
+        return
+    message.status = "received"
+    message.processing_step = "whatsapp_agent_reconciled"
 
 
 def _get_or_create_session(
@@ -331,6 +637,7 @@ def _bounded_recent_transcript(
     messages: list[InboundMessage],
     *,
     max_chars: int = _MAX_AGENT_CONTEXT_CHARS,
+    quoted_message: InboundMessage | None = None,
 ) -> str:
     parts: list[str] = []
     customer_messages = [row for row in messages if row.direction == "inbound"]
@@ -338,6 +645,15 @@ def _bounded_recent_transcript(
         text = _message_text(row)
         if text:
             parts.append(f"CLIENTE: {text}")
+    if quoted_message:
+        role = "CLIENTE" if quoted_message.direction == "inbound" else "EMPRESA"
+        quoted_text = _message_text(quoted_message).strip()[:1500]
+        if quoted_text:
+            context_line = f"MENSAJE PREVIO RELACIONADO ({role}): {quoted_text}"
+            if parts:
+                parts.insert(len(parts) - 1, context_line)
+            else:
+                parts.append(context_line)
     # Retain the newest turns when the model context budget is reached.
     while len(parts) > 1 and len("\n".join(parts)) > max_chars:
         parts.pop(0)
@@ -392,14 +708,28 @@ def _session_transcript(
     session: WhatsAppOrderSession,
     latest_message: InboundMessage,
 ) -> tuple[str, list[InboundMessage]]:
+    latest_at = _aware(latest_message.received_at)
     query = select(InboundMessage).where(
             InboundMessage.company_id == company_id,
             InboundMessage.conversation_id == conversation_id,
             InboundMessage.content_type != "whatsapp_status",
             InboundMessage.received_at >= session.started_at,
     )
-    if session.message_cutoff_at is not None:
-        query = query.where(InboundMessage.received_at < session.message_cutoff_at)
+    if latest_at:
+        query = query.where(
+            or_(
+                InboundMessage.received_at < latest_at,
+                and_(
+                    InboundMessage.received_at == latest_at,
+                    InboundMessage.id <= latest_message.id,
+                ),
+            )
+        )
+    else:
+        query = query.where(InboundMessage.id <= latest_message.id)
+    cutoff_condition = _session_cutoff_condition(session)
+    if cutoff_condition is not None:
+        query = query.where(cutoff_condition)
     rows = db.scalars(
         query.options(selectinload(InboundMessage.attachments))
         .order_by(InboundMessage.received_at.asc(), InboundMessage.id.asc())
@@ -492,13 +822,34 @@ def _product_context(
     transcript: str,
     draft: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    terms = re.findall(r"[\w-]{3,}", transcript[-5000:], flags=re.UNICODE)
-    for line in draft.get("lines", []) if isinstance(draft, dict) else []:
-        if isinstance(line, dict):
-            terms.extend(re.findall(r"[\w-]{3,}", str(line.get("product_query") or ""), flags=re.UNICODE))
-    unique_terms = list(dict.fromkeys(term.lower() for term in terms))[-12:]
-    if not unique_terms:
-        return []
+    draft_references: set[str] = set()
+    draft_names: set[str] = set()
+    draft_terms: list[str] = []
+    draft_lines = draft.get("lines", []) if isinstance(draft, dict) else []
+    for line in draft_lines[:30] if isinstance(draft_lines, list) else []:
+        if not isinstance(line, dict):
+            continue
+        reference = str(line.get("reference") or "").strip()
+        if reference:
+            draft_references.add(reference)
+        for value in (line.get("product_query"), line.get("product_name")):
+            name = str(value or "").strip()
+            if name:
+                draft_names.add(name)
+                draft_terms.extend(
+                    re.findall(r"[\w-]{3,}", name, flags=re.UNICODE)[:4]
+                )
+
+    recent_terms = re.findall(r"[\w-]{3,}", transcript[-5000:], flags=re.UNICODE)
+    prioritized_draft_terms = list(
+        dict.fromkeys(term.casefold() for term in draft_terms)
+    )[-48:]
+    unique_terms = list(
+        dict.fromkeys(
+            prioritized_draft_terms
+            + [term.casefold() for term in recent_terms[-12:]]
+        )
+    )
     conditions = []
     for term in unique_terms:
         like = f"%{term}%"
@@ -510,20 +861,54 @@ def _product_context(
                 ProductAlias.alias.ilike(like),
             ]
         )
-    products = db.scalars(
-        select(Product)
-        .outerjoin(ProductAlias, ProductAlias.product_id == Product.id)
-        .where(
-            Product.company_id == company_id,
-            Product.deleted_at.is_(None),
-            Product.obsolete.is_(False),
-            Product.status != "inactive",
-            or_(*conditions),
+    tenant_catalog = (
+        Product.company_id == company_id,
+        Product.deleted_at.is_(None),
+        Product.obsolete.is_(False),
+        Product.status != "inactive",
+    )
+    draft_conditions = []
+    for reference in draft_references:
+        draft_conditions.extend(
+            [
+                Product.reference.ilike(reference),
+                Product.alternative_code.ilike(reference),
+                ProductAlias.alias.ilike(reference),
+            ]
         )
-        .distinct()
-        .order_by(Product.name.asc(), Product.id.asc())
-        .limit(8)
-    ).all()
+    for name in draft_names:
+        draft_conditions.extend(
+            [Product.name.ilike(name), ProductAlias.alias.ilike(name)]
+        )
+
+    products_by_id: dict[int, Product] = {}
+    if draft_conditions:
+        for product in db.scalars(
+            select(Product)
+            .outerjoin(ProductAlias, ProductAlias.product_id == Product.id)
+            .where(*tenant_catalog, or_(*draft_conditions))
+            .distinct()
+            .order_by(Product.name.asc(), Product.id.asc())
+            .limit(30)
+        ).all():
+            products_by_id[product.id] = product
+
+    if conditions and len(products_by_id) < 30:
+        candidates = db.scalars(
+            select(Product)
+            .outerjoin(ProductAlias, ProductAlias.product_id == Product.id)
+            .where(
+                *tenant_catalog,
+                Product.id.not_in(products_by_id) if products_by_id else True,
+                or_(*conditions),
+            )
+            .distinct()
+            .order_by(Product.name.asc(), Product.id.asc())
+            .limit(30 - len(products_by_id))
+        ).all()
+        products_by_id.update({product.id: product for product in candidates})
+
+    products = list(products_by_id.values())
     company = db.get(Company, company_id)
     currency = str(company.currency or "").strip().upper() if company else ""
     return [
@@ -615,8 +1000,44 @@ def _grounded_faq_answer(entries: list[dict[str, str]], evidence_ids: list[str])
     return cited[0] if len(cited) == 1 else None
 
 
-def _clarification_reply(missing: list[str]) -> str:
-    questions = [str(item).strip().rstrip(".") for item in missing[:4] if str(item).strip()]
+def _clarification_reply(
+    missing: list[str],
+    *,
+    draft: dict[str, Any] | None = None,
+) -> str:
+    questions = []
+    lines = draft.get("lines") if isinstance(draft, dict) else []
+    for item in missing[:4]:
+        question = str(item).strip().rstrip(".")
+        if not question:
+            continue
+        unknown_product = re.match(
+            r"verificar el producto\s+[\u00ab\"]?(.*?)[\u00bb\"]?\s+con el equipo$",
+            question,
+            flags=re.IGNORECASE,
+        )
+        if unknown_product:
+            product_name = unknown_product.group(1).strip()
+            question = (
+                f"No localizo \u00ab{product_name}\u00bb en el cat\u00e1logo. "
+                "\u00bfPuedes indicarme su referencia o el modelo para identificarlo?"
+            )
+        quantity_line = re.search(r"cantidad\s+de\s+la\s+l[i\u00ed]nea\s+(\d+)", question, flags=re.I)
+        if quantity_line and isinstance(lines, list):
+            line_index = int(quantity_line.group(1)) - 1
+            if 0 <= line_index < len(lines) and isinstance(lines[line_index], dict):
+                line = lines[line_index]
+                product = str(
+                    line.get("product_name") or line.get("product_query") or line.get("reference") or ""
+                ).strip()
+                unit = str(line.get("unit") or "").strip()
+                if product:
+                    question = (
+                        f"\u00bfQu\u00e9 cantidad de {product} ({unit}) necesitas?"
+                        if unit
+                        else f"\u00bfQu\u00e9 cantidad de {product} necesitas?"
+                    )
+        questions.append(question)
     if not questions:
         return "¿Puedes confirmar los datos del pedido para que pueda dejarlo preparado?"
     return "Para preparar bien el pedido necesito confirmar: " + "; ".join(questions) + "."
@@ -624,26 +1045,172 @@ def _clarification_reply(missing: list[str]) -> str:
 
 _NUMBER_WORDS = {
     1: {"un", "uno", "una"},
-    2: {"dos"},
+    2: {"dos", "un par"},
     3: {"tres"},
     4: {"cuatro"},
     5: {"cinco"},
-    6: {"seis"},
+    6: {"seis", "media docena"},
     7: {"siete"},
     8: {"ocho"},
     9: {"nueve"},
     10: {"diez"},
+    11: {"once"},
+    12: {"doce", "una docena"},
+    13: {"trece"},
+    14: {"catorce"},
+    15: {"quince"},
+    16: {"dieciseis"},
+    17: {"diecisiete"},
+    18: {"dieciocho"},
+    19: {"diecinueve"},
+    20: {"veinte"},
+    21: {"veintiun", "veintiuno", "veintiuna"},
+    22: {"veintidos"},
+    23: {"veintitres"},
+    24: {"veinticuatro"},
+    25: {"veinticinco"},
+    26: {"veintiseis"},
+    27: {"veintisiete"},
+    28: {"veintiocho"},
+    29: {"veintinueve"},
 }
+_TENS_NUMBER_WORDS = {
+    30: "treinta",
+    40: "cuarenta",
+    50: "cincuenta",
+    60: "sesenta",
+    70: "setenta",
+    80: "ochenta",
+    90: "noventa",
+}
+_NUMBER_WORD_UNITS = re.compile(
+    r"^(?:cajas?|bolsas?|unidades?|uds?|paquetes?|packs?|kg|kilos?|gramos?|"
+    r"litros?|metros?|rollos?|botes?|garrafas?|sacos?|palets?|docenas?)\b"
+)
 
 
-def _quantity_appears_in_text(quantity: int | float, text: str) -> bool:
-    normalized = str(text or "").casefold()
-    formatted = f"{float(quantity):g}"
-    if re.search(rf"(?<!\w){re.escape(formatted)}(?:[.,]0+)?(?!\w)", normalized):
-        return True
+def _number_word_variants(quantity: int) -> set[str]:
+    if quantity in _NUMBER_WORDS:
+        return _NUMBER_WORDS[quantity]
+    tens, units = divmod(quantity, 10)
+    tens_word = _TENS_NUMBER_WORDS.get(tens * 10)
+    if not tens_word or not units:
+        return set()
+    if units == 1:
+        return {
+            f"{tens_word} y un",
+            f"{tens_word} y uno",
+            f"{tens_word} y una",
+        }
+    unit_word = next(
+        (candidate for candidate in _NUMBER_WORDS.get(units, set()) if " " not in candidate),
+        "",
+    )
+    return {f"{tens_word} y {unit_word}"} if unit_word else set()
+
+
+def _is_standalone_quantity_reply(quantity: int | float, text: str) -> bool:
+    """Accept a short numeric answer only when a preceding bot question anchors it."""
+
+    normalized = unicodedata.normalize("NFKD", str(text or "").casefold())
+    normalized = "".join(char for char in normalized if not unicodedata.combining(char))
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not normalized:
+        return False
+
     if float(quantity).is_integer():
-        tokens = set(re.findall(r"[a-záéíóúñ]+", normalized))
-        return bool(_NUMBER_WORDS.get(int(quantity), set()).intersection(tokens))
+        value = str(int(quantity))
+        values = [rf"{re.escape(value)}(?:[.,]0+)?"]
+        values.extend(
+            r"\s+".join(re.escape(part) for part in phrase.split())
+            for phrase in _number_word_variants(int(quantity))
+        )
+    else:
+        value = f"{float(quantity):g}"
+        values = [re.escape(value).replace(r"\.", r"[.,]")]
+
+    unit = (
+        r"(?:cajas?|bolsas?|unidades?|uds?|paquetes?|packs?|kg|kilos?|gramos?|"
+        r"litros?|metros?|rollos?|botes?|garrafas?|sacos?|palets?|docenas?)"
+    )
+    prefix = (
+        r"(?:(?:si|vale|ok(?:ay)?|perfecto|de acuerdo|seria|serian|son|seran|"
+        r"pues|entonces|quiero|necesito|ponme|pon|me pones)\s*,?\s*)*"
+    )
+    pattern = rf"{prefix}(?:{'|'.join(values)})(?:\s+{unit})?[.!\s]*"
+    return bool(re.fullmatch(pattern, normalized))
+
+
+def _has_local_quantity_context(
+    text: str,
+    start: int,
+    end: int,
+    product_markers: list[str],
+) -> bool:
+    if re.match(r"\s*[:/]\s*\d", text[end:]):
+        return False
+    raw_tail = text[end:].lstrip(" \t,.:;-")
+    if re.match(r"^(?:€|eur(?:os?)?|dolares?|usd|gbp)(?:\b|$)", raw_tail):
+        return False
+    if re.match(r"^por\s+", raw_tail) and re.search(
+        r"\b(?:precio|cuesta|coste|vale|importe)\b",
+        text[max(0, start - 80):start],
+    ):
+        return False
+    tail = raw_tail
+    tail = re.sub(r"^(?:(?:x|por|de|del)\s+)?(?:(?:el|la|los|las)\s+)?", "", tail)
+    if _NUMBER_WORD_UNITS.match(tail):
+        return True
+    if any(tail.startswith(marker) for marker in product_markers):
+        return True
+
+    prefix = text[:start].rstrip(" \t,.:;()[]{}")
+    prefix = re.sub(r"(?:\s+|\b)(?:x|de|por)\s*$", "", prefix)
+    return any(prefix.endswith(marker) for marker in product_markers)
+
+
+def _quantity_appears_in_text(
+    quantity: int | float,
+    text: str,
+    *,
+    product_markers: list[str] | None = None,
+) -> bool:
+    normalized = unicodedata.normalize("NFKD", str(text or "").casefold())
+    normalized = "".join(char for char in normalized if not unicodedata.combining(char))
+    marker_values = []
+    for marker in product_markers or []:
+        clean_marker = unicodedata.normalize("NFKD", str(marker or "").casefold())
+        clean_marker = "".join(char for char in clean_marker if not unicodedata.combining(char)).strip()
+        if clean_marker:
+            marker_values.append(clean_marker)
+    number_pattern = re.compile(r"(?<![\w-])\d+(?:[.,]\d+)?(?![\w-])")
+    for match in number_pattern.finditer(normalized):
+        raw_number = match.group()
+        try:
+            if "." in raw_number and len(raw_number.rsplit(".", 1)[1]) == 3:
+                detected_quantity = float(raw_number.replace(".", ""))
+            else:
+                detected_quantity = float(raw_number.replace(",", "."))
+        except ValueError:
+            continue
+        if detected_quantity == float(quantity) and _has_local_quantity_context(
+            normalized,
+            match.start(),
+            match.end(),
+            marker_values,
+        ):
+            return True
+    if float(quantity).is_integer():
+        for phrase in sorted(_number_word_variants(int(quantity)), key=len, reverse=True):
+            pattern = r"(?<![\w-])" + r"\s+".join(re.escape(part) for part in phrase.split()) + r"(?![\w-])"
+            for match in re.finditer(pattern, normalized):
+                if _has_local_quantity_context(
+                    normalized,
+                    match.start(),
+                    match.end(),
+                    marker_values,
+                ):
+                    return True
     return False
 
 
@@ -654,6 +1221,10 @@ def _line_source_message_ids(
     product_name: str,
     quantity: int | float | None,
     messages: list[InboundMessage],
+    line_index: int | None = None,
+    allow_cross_message_pairing: bool = False,
+    order_quantities: list[int | float] | None = None,
+    catalog_products: list[dict[str, Any]] | None = None,
 ) -> list[int]:
     if quantity is None:
         return []
@@ -662,8 +1233,18 @@ def _line_source_message_ids(
         for value in (query, reference, product_name)
         for token in re.findall(r"[\w-]{3,}", str(value or ""), flags=re.UNICODE)
     }
+    distinctive_terms = product_terms - {
+        "caja", "cajas", "bolsa", "bolsas", "producto", "productos",
+        "unidad", "unidades", "uds", "ud", "paquete", "paquetes", "pack",
+    }
+    product_phrases = [
+        str(value).strip().casefold()
+        for value in (query, product_name, reference)
+        if str(value or "").strip()
+    ]
     product_ids: set[int] = set()
     quantity_ids: set[int] = set()
+    paired_ids: set[int] = set()
     for message in messages:
         if message.direction != "inbound":
             continue
@@ -671,11 +1252,221 @@ def _line_source_message_ids(
         tokens = set(re.findall(r"[\w-]{3,}", text, flags=re.UNICODE))
         if (reference and reference.casefold() in text) or product_terms.intersection(tokens):
             product_ids.add(message.id)
-        if _quantity_appears_in_text(quantity, text):
+        if _quantity_appears_in_text(
+            quantity,
+            text,
+            product_markers=product_phrases,
+        ):
             quantity_ids.add(message.id)
-    if not product_ids or not quantity_ids:
-        return []
-    return sorted(product_ids | quantity_ids)
+
+        def supports_product(segment: str) -> bool:
+            segment_tokens = set(re.findall(r"[\w-]{3,}", segment, flags=re.UNICODE))
+            return bool(
+                any(phrase in segment for phrase in product_phrases)
+                or (reference and reference.casefold() in segment)
+                or distinctive_terms.intersection(segment_tokens)
+            )
+
+        def supports_any_catalog_product(segment: str) -> bool:
+            segment_tokens = set(re.findall(r"[\w-]{3,}", segment, flags=re.UNICODE))
+            for catalog_product in catalog_products or []:
+                phrases = [
+                    str(catalog_product.get(key) or "").strip().casefold()
+                    for key in ("name", "reference", "alternative_code")
+                    if catalog_product.get(key)
+                ]
+                terms = {
+                    token
+                    for phrase in phrases
+                    for token in re.findall(r"[\w-]{3,}", phrase, flags=re.UNICODE)
+                } - {
+                    "caja", "cajas", "bolsa", "bolsas", "producto", "productos",
+                    "unidad", "unidades", "uds", "ud", "paquete", "paquetes", "pack",
+                }
+                if any(phrase in segment for phrase in phrases) or terms.intersection(segment_tokens):
+                    return True
+            return False
+
+        def has_any_order_quantity(segment: str) -> bool:
+            return any(
+                _quantity_appears_in_text(
+                    order_quantity,
+                    segment,
+                    product_markers=[
+                        str(catalog_product.get(key) or "")
+                        for catalog_product in catalog_products or []
+                        for key in ("name", "reference", "alternative_code")
+                    ],
+                )
+                for order_quantity in (order_quantities or [quantity])
+                if isinstance(order_quantity, (int, float)) and not isinstance(order_quantity, bool)
+            )
+
+        # Split separate line items before checking whether the product and
+        # quantity occur together. Keep "Caja Eco, 4 unidades" intact, but
+        # split "4 cajas Eco, 2 cajas Kraft" into independently evidenced lines.
+        segments: list[str] = []
+        for sentence in re.split(r"[\n;]+|\s+\b(?:y|ademas)\b\s+", text):
+            parts = sentence.split(",")
+            current = parts[0]
+            for part in parts[1:]:
+                if (
+                    supports_any_catalog_product(current)
+                    and has_any_order_quantity(current)
+                    and supports_any_catalog_product(part)
+                    and has_any_order_quantity(part)
+                ):
+                    segments.append(current)
+                    current = part
+                else:
+                    current = f"{current}, {part}"
+            segments.append(current)
+        if any(
+            supports_product(segment)
+            and _quantity_appears_in_text(
+                quantity,
+                segment,
+                product_markers=product_phrases,
+            )
+            for segment in segments
+        ):
+            paired_ids.add(message.id)
+
+    if paired_ids:
+        return sorted(paired_ids)
+
+    # A short quantity such as "4" has no product evidence by itself. Attach
+    # it only if it answers the latest bot question, that question names this
+    # product and asks for its quantity, and it names no other catalog item.
+    latest_customer_index = max(
+        (index for index, message in enumerate(messages) if message.direction == "inbound"),
+        default=-1,
+    )
+    if latest_customer_index >= 0 and _is_standalone_quantity_reply(
+        quantity,
+        _message_text(messages[latest_customer_index]),
+    ):
+        previous_customer_index = max(
+            (
+                index
+                for index, message in enumerate(messages[:latest_customer_index])
+                if message.direction == "inbound"
+            ),
+            default=-1,
+        )
+        preceding_bot_messages = [
+            message
+            for message in messages[previous_customer_index + 1:latest_customer_index]
+            if message.direction == "outbound"
+        ]
+        clarification = _message_text(preceding_bot_messages[-1]) if preceding_bot_messages else ""
+
+        def normalize_evidence_text(value: str) -> str:
+            normalized_value = unicodedata.normalize("NFKD", str(value or "").casefold())
+            return "".join(char for char in normalized_value if not unicodedata.combining(char))
+
+        normalized_clarification = normalize_evidence_text(clarification)
+        asks_quantity = bool(
+            re.search(r"\b(?:cantidad|cuant[oa]s?|unidades?)\b", normalized_clarification)
+        )
+        names_this_product = any(
+            normalize_evidence_text(phrase) in normalized_clarification
+            for phrase in product_phrases
+            if phrase
+        )
+        numbered_quantity_targets = re.findall(
+            r"\bcantidad\s+de\s+la\s+linea\s+(\d+)\b",
+            normalized_clarification,
+        )
+        targets_this_line = bool(
+            line_index is not None
+            and len(numbered_quantity_targets) == 1
+            and int(numbered_quantity_targets[0]) == line_index
+        )
+        names_another_product = False
+        for catalog_product in catalog_products or []:
+            catalog_name = normalize_evidence_text(str(catalog_product.get("name") or "").strip())
+            catalog_reference = normalize_evidence_text(str(catalog_product.get("reference") or "").strip())
+            catalog_alias = normalize_evidence_text(str(catalog_product.get("alternative_code") or "").strip())
+            normalized_reference = normalize_evidence_text(reference)
+            normalized_product_name = normalize_evidence_text(product_name)
+            normalized_query = normalize_evidence_text(query)
+            same_product = bool(
+                (normalized_reference and normalized_reference in {catalog_reference, catalog_alias})
+                or (normalized_product_name and normalized_product_name == catalog_name)
+                or (not normalized_product_name and normalized_query and normalized_query == catalog_name)
+            )
+            if same_product:
+                continue
+            if any(
+                value and value in normalized_clarification
+                for value in (catalog_name, catalog_reference, catalog_alias)
+            ):
+                names_another_product = True
+                break
+        if (
+            asks_quantity
+            and not names_another_product
+            and (names_this_product or targets_this_line)
+            and product_ids
+        ):
+            return sorted(product_ids | {messages[latest_customer_index].id})
+
+    if allow_cross_message_pairing and product_ids and quantity_ids and catalog_products:
+        def normalized_value(value: Any) -> str:
+            normalized = unicodedata.normalize("NFKD", str(value or "").casefold())
+            return "".join(char for char in normalized if not unicodedata.combining(char)).strip()
+
+        target_values = {
+            normalized_value(value)
+            for value in (query, reference, product_name)
+            if normalized_value(value)
+        }
+        target_catalog_ids: set[str] = set()
+        mentioned_catalog_ids: set[str] = set()
+        generic_terms = {
+            "caja", "cajas", "bolsa", "bolsas", "producto", "productos",
+            "unidad", "unidades", "uds", "ud", "paquete", "paquetes", "pack",
+        }
+        for catalog_product in catalog_products:
+            catalog_values = {
+                normalized_value(catalog_product.get(key))
+                for key in ("name", "reference", "alternative_code")
+                if catalog_product.get(key)
+            }
+            if not catalog_values:
+                continue
+            catalog_id = str(
+                catalog_product.get("id")
+                or catalog_product.get("reference")
+                or catalog_product.get("name")
+            ).strip()
+            if catalog_values.intersection(target_values):
+                target_catalog_ids.add(catalog_id)
+            distinctive_values = {
+                value for value in catalog_values
+                if value not in generic_terms and len(value) >= 3
+            }
+            if not distinctive_values:
+                continue
+            for message in messages:
+                if message.direction != "inbound":
+                    continue
+                message_text = normalized_value(_message_text(message))
+                if any(
+                    re.search(rf"(?<!\w){re.escape(value)}(?!\w)", message_text)
+                    for value in distinctive_values
+                ):
+                    mentioned_catalog_ids.add(catalog_id)
+                    break
+
+        # Cross-turn association is safe only when the transcript does not
+        # mention a different catalog product; otherwise an extractor can
+        # accidentally attach a quantity for another line to this one.
+        other_product_mentioned = bool(mentioned_catalog_ids - target_catalog_ids)
+        if target_catalog_ids and not other_product_mentioned:
+            return sorted(product_ids | quantity_ids)
+    return []
 
 
 def _canonicalize_draft(
@@ -692,13 +1483,24 @@ def _canonicalize_draft(
         "notes": str(draft.get("notes") or "")[:1000],
     }
     missing = [str(item).strip()[:240] for item in semantic_missing if str(item).strip()]
-    catalog_by_reference: dict[str, dict[str, Any]] = {}
+    catalog_by_reference: dict[str, list[dict[str, Any]]] = {}
     for product in products:
         for value in (product.get("reference"), product.get("alternative_code")):
             if value:
-                catalog_by_reference[str(value).strip().casefold()] = product
+                key = str(value).strip().casefold()
+                matches = catalog_by_reference.setdefault(key, [])
+                if not any(str(item.get("id")) == str(product.get("id")) for item in matches):
+                    matches.append(product)
 
     lines = draft.get("lines") if isinstance(draft.get("lines"), list) else []
+    order_quantities = [
+        line.get("quantity")
+        for line in lines[:30]
+        if isinstance(line, dict)
+        and isinstance(line.get("quantity"), (int, float))
+        and not isinstance(line.get("quantity"), bool)
+        and line.get("quantity") > 0
+    ]
     if len(lines) > 30:
         missing.append(
             "El pedido supera el límite de 30 líneas y necesita una revisión completa del equipo."
@@ -712,7 +1514,9 @@ def _canonicalize_draft(
         if isinstance(quantity, bool) or not isinstance(quantity, (int, float)) or quantity <= 0:
             quantity = None
         unit = str(raw_line.get("unit") or "").strip()[:80]
-        product = catalog_by_reference.get(reference.casefold()) if reference else None
+        reference_matches = catalog_by_reference.get(reference.casefold(), []) if reference else []
+        ambiguous_reference = len(reference_matches) > 1
+        product = reference_matches[0] if len(reference_matches) == 1 else None
         if not product and query:
             exact_matches = [
                 item
@@ -733,6 +1537,11 @@ def _canonicalize_draft(
                 )
             if not catalog_unit:
                 missing.append(f"Confirmar la unidad de medida de la línea {index}.")
+        elif reference and ambiguous_reference:
+            reference = ""
+            missing.append(
+                f"La referencia {raw_line.get('reference')} coincide con varios productos; confirma cuál necesitas."
+            )
         elif reference:
             # A model-supplied code must match this tenant's retrieved catalog.
             reference = ""
@@ -750,6 +1559,10 @@ def _canonicalize_draft(
                 product_name=str(product.get("name") or "") if product else "",
                 quantity=quantity,
                 messages=messages,
+                line_index=index,
+                allow_cross_message_pairing=len(lines) <= 1,
+                order_quantities=order_quantities,
+                catalog_products=products,
             )
             if messages is not None
             else []
@@ -844,7 +1657,7 @@ def _finalization_dedupe_key(db: Session, session: WhatsAppOrderSession) -> str:
             BackgroundJob.dedupe_key == candidate,
         )
     )
-    if existing and existing.status not in _ACTIVE_JOB_STATES | {"success"}:
+    if existing and existing.status not in _ACTIVE_JOB_STATES:
         return f"{base}:retry-after-{existing.id}"
     return candidate
 
@@ -856,12 +1669,367 @@ def _set_handoff(
     conversation: Conversation,
     reason: str,
     active: bool = False,
+    trigger_message_id: int | None = None,
 ) -> None:
     session.status = "human_handoff"
     session.handoff_reason = reason[:255]
     session.handoff_at = _now()
     session.human_active = bool(active)
     conversation.status = "human_owned" if active else "open"
+    if not active and trigger_message_id:
+        existing_alert = db.scalar(
+            select(Alert).where(
+                Alert.company_id == session.company_id,
+                Alert.inbound_message_id == trigger_message_id,
+                Alert.alert_type == "whatsapp_agent_handoff",
+                Alert.status == "open",
+            )
+        )
+        if not existing_alert:
+            db.add(
+                Alert(
+                    company_id=session.company_id,
+                    inbound_message_id=trigger_message_id,
+                    alert_type="whatsapp_agent_handoff",
+                    severity="high",
+                    status="open",
+                    title="Conversación de WhatsApp requiere atención",
+                    message=reason[:1000],
+                    payload_json=json.dumps(
+                        {
+                            "conversation_id": conversation.id,
+                            "session_id": session.id,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+            )
+
+
+def _finish_pending_customer_cancellation(
+    db: Session,
+    *,
+    session: WhatsAppOrderSession,
+    conversation: Conversation,
+    inbound_message: InboundMessage,
+) -> dict[str, Any] | None:
+    marker = session.closed_reason
+    if marker == _CANCEL_REPLY_PENDING:
+        session.status = "closed_no_order"
+        session.active_key = None
+        session.closed_reason = "customer_cancelled"
+        session.closed_at = _now()
+        session.human_active = False
+        session.handoff_reason = None
+        conversation.status = "open"
+        conversation.assigned_user_id = None
+        inbound_message.processing_step = "whatsapp_agent_order_cancelled"
+        event = "order_cancelled"
+        status = "closed_no_order"
+    elif marker == _CANCEL_HANDOFF_REPLY_PENDING:
+        reason = "El cliente solicita cancelar un pedido ya registrado; requiere revisión humana."
+        _set_handoff(
+            db,
+            session=session,
+            conversation=conversation,
+            reason=reason,
+            trigger_message_id=inbound_message.id,
+        )
+        session.closed_reason = "customer_cancelled_existing_order"
+        conversation.whatsapp_bot_enabled = False
+        conversation.updated_at = _now()
+        inbound_message.processing_step = "whatsapp_agent_cancel_handoff"
+        event = "order_cancellation_handoff"
+        status = "human_handoff"
+    else:
+        return None
+
+    session.updated_at = _now()
+    db.commit()
+    _log_agent_event(
+        db,
+        company_id=session.company_id,
+        conversation_id=conversation.id,
+        session_id=session.id,
+        event=event,
+        status=status,
+        metadata={"trigger_message_id": inbound_message.id},
+    )
+    return {"status": status, "event": event}
+
+
+def _send_pending_customer_cancellation_reply(
+    db: Session,
+    *,
+    company_id: int,
+    conversation: Conversation,
+    session: WhatsAppOrderSession,
+    inbound_message: InboundMessage,
+    config: Any,
+) -> dict[str, Any]:
+    marker = session.closed_reason
+    if marker not in {_CANCEL_REPLY_PENDING, _CANCEL_HANDOFF_REPLY_PENDING}:
+        return {"ok": True, "skipped": True, "reason": "no_cancellation_reply_pending"}
+
+    window = whatsapp_response_window_status(
+        db,
+        company_id=company_id,
+        conversation_id=conversation.id,
+        response_window_minutes=config.response_window_minutes,
+    )
+    if not window.get("is_open"):
+        result = {"sent": False, "reason": str(window.get("reason") or "response_window_closed")}
+        transition = _finish_pending_customer_cancellation(
+            db,
+            session=session,
+            conversation=conversation,
+            inbound_message=inbound_message,
+        )
+        return {
+            "ok": True,
+            "status": (transition or {}).get("status", session.status),
+            "session_id": session.id,
+            "auto_response": result,
+        }
+
+    try:
+        send_result = await_send_automatic_response(
+            db,
+            company_id=company_id,
+            conversation_id=conversation.id,
+            trigger_message_id=inbound_message.id,
+            body=str(session.suggested_reply or ""),
+            semantic_state=(
+                "human_handoff"
+                if marker == _CANCEL_HANDOFF_REPLY_PENDING
+                else "informational"
+            ),
+            assistant_session_id=session.id,
+            draft_revision=session.revision,
+        )
+    except Exception as exc:  # noqa: BLE001
+        error_type = str(getattr(exc, "error_type", None) or type(exc).__name__)
+        retryable = error_type == "rate_limited"
+        if retryable:
+            inbound_message.processing_step = "whatsapp_agent_reply_retryable"
+            db.commit()
+            raise WhatsAppAgentReplyDeliveryError(error_type, retryable=True) from exc
+        transition = _finish_pending_customer_cancellation(
+            db,
+            session=session,
+            conversation=conversation,
+            inbound_message=inbound_message,
+        )
+        return {
+            "ok": True,
+            "status": (transition or {}).get("status", session.status),
+            "session_id": session.id,
+            "auto_response": {"sent": False, "reason": error_type},
+        }
+
+    delivered = bool(send_result.get("sent"))
+    if not delivered and send_result.get("reason") == "already_replied":
+        outbound = db.scalar(
+            select(InboundMessage).where(
+                InboundMessage.company_id == company_id,
+                InboundMessage.conversation_id == conversation.id,
+                InboundMessage.direction == "outbound",
+                InboundMessage.source_message_id == f"auto:{inbound_message.id}",
+            )
+        )
+        delivered = bool(
+            outbound
+            and str(outbound.status or "").lower()
+            in {"accepted", "sent", "delivered", "read"}
+        )
+
+    transition = _finish_pending_customer_cancellation(
+        db,
+        session=session,
+        conversation=conversation,
+        inbound_message=inbound_message,
+    )
+    if not delivered:
+        logger.warning(
+            "WhatsApp cancellation reply not sent session=%s reason=%s",
+            session.id,
+            str(send_result.get("reason") or "reply_not_sent"),
+        )
+    return {
+        "ok": True,
+        "status": (transition or {}).get("status", session.status),
+        "session_id": session.id,
+        "auto_response": send_result,
+    }
+
+
+def _resume_pending_customer_cancellation(
+    db: Session,
+    *,
+    company_id: int,
+    conversation: Conversation,
+    session: WhatsAppOrderSession,
+    inbound_message: InboundMessage,
+    config: Any,
+) -> dict[str, Any] | None:
+    if session.closed_reason not in {
+        _CANCEL_REPLY_PENDING,
+        _CANCEL_HANDOFF_REPLY_PENDING,
+    }:
+        return None
+
+    outbound = db.scalar(
+        select(InboundMessage).where(
+            InboundMessage.company_id == company_id,
+            InboundMessage.conversation_id == conversation.id,
+            InboundMessage.direction == "outbound",
+            InboundMessage.source_message_id == f"auto:{inbound_message.id}",
+        )
+    )
+    if outbound and outbound.status == "failed" and outbound.processing_step == WHATSAPP_RETRYABLE_AUTO_SEND_STEP:
+        inbound_message.processing_step = "whatsapp_agent_reply_retryable"
+        db.commit()
+        return None
+    if outbound is None:
+        return _send_pending_customer_cancellation_reply(
+            db,
+            company_id=company_id,
+            conversation=conversation,
+            session=session,
+            inbound_message=inbound_message,
+            config=config,
+        )
+
+    delivered = str(outbound.status or "").lower() in {"accepted", "sent", "delivered", "read"}
+    if outbound.status in {"sending", "send_unknown"}:
+        # The provider outcome is ambiguous; never replay a possibly delivered
+        # cancellation acknowledgement. The requested safe state transition
+        # still completes and the outbound incident remains visible in the log.
+        delivered = False
+    transition = _finish_pending_customer_cancellation(
+        db,
+        session=session,
+        conversation=conversation,
+        inbound_message=inbound_message,
+    )
+    return {
+        "ok": True,
+        "status": (transition or {}).get("status", session.status),
+        "session_id": session.id,
+        "auto_response": {"sent": delivered, "reason": "recovered_previous_attempt"},
+    }
+
+
+def _handle_explicit_order_cancellation(
+    db: Session,
+    *,
+    company_id: int,
+    conversation: Conversation,
+    session: WhatsAppOrderSession,
+    inbound_message: InboundMessage,
+    config: Any,
+) -> dict[str, Any] | None:
+    if not has_explicit_order_cancellation(inbound_message.original_content):
+        return None
+
+    draft = _json_object(session.draft_json, {})
+    lines = draft.get("lines", []) if isinstance(draft, dict) else []
+    has_active_draft = bool(
+        isinstance(lines, list)
+        and any(isinstance(line, dict) and line for line in lines)
+        and session.order_id is None
+        and session.status not in {"closed_review", "finalizing"}
+    )
+    persisted_order = None
+    if not has_active_draft and session.order_id is None:
+        persisted_order = db.scalar(
+            select(Order)
+            .where(
+                Order.company_id == company_id,
+                Order.conversation_id == conversation.id,
+                Order.deleted_at.is_(None),
+            )
+            .order_by(Order.created_at.desc(), Order.id.desc())
+            .limit(1)
+        )
+    requires_handoff = bool(
+        session.order_id is not None
+        or session.status in {"closed_review", "finalizing"}
+        or persisted_order is not None
+    )
+    marker = _CANCEL_HANDOFF_REPLY_PENDING if requires_handoff else _CANCEL_REPLY_PENDING
+    if requires_handoff:
+        reply = (
+            "Ese pedido ya está registrado; no lo voy a cancelar automáticamente. "
+            "Lo dejo al equipo para que lo revise y te confirme."
+        )
+    elif has_active_draft:
+        reply = (
+            "He cancelado el borrador de este pedido; no se enviará para su tramitación. "
+            "Si quieres empezar otro, dime qué necesitas."
+        )
+    else:
+        reply = (
+            "No veo un pedido en curso que cancelar. Si te refieres a uno ya enviado, "
+            "lo revisará el equipo antes de cambiarlo."
+        )
+
+    now = _now()
+    session.revision = int(session.revision or 0) + 1
+    session.last_processed_message_id = inbound_message.id
+    session.last_customer_message_at = _aware(inbound_message.received_at) or now
+    session.due_at = session.last_customer_message_at + timedelta(
+        hours=config.idle_session_hours
+    )
+    session.finalization_job_key = None
+    session.suggested_reply = reply
+    session.last_error = None
+    session.closed_reason = marker
+    session.updated_at = now
+    if requires_handoff:
+        # Keep the active key and avoid marking the handoff until the prepared
+        # acknowledgement is delivered (or its delivery outcome is known).
+        if session.status in {"closed_review", "finalizing"}:
+            session.status = "collecting"
+    else:
+        session.intent = "cancelled"
+        session.status = "closed_no_order"
+        session.closed_at = None
+        session.human_active = False
+    session.snapshot_json = json.dumps(
+        {
+            "reason": "customer_requested_cancellation",
+            "cancellation_message_id": inbound_message.id,
+            "draft": draft,
+            "missing_or_uncertain": _json_object(session.missing_fields_json, []),
+            "existing_order_id": (
+                int(session.order_id) if session.order_id is not None
+                else int(persisted_order.id) if persisted_order is not None
+                else None
+            ),
+        },
+        ensure_ascii=False,
+    )
+    inbound_message.status = "received"
+    inbound_message.processing_step = "whatsapp_agent_cancel_reply_pending"
+    db.commit()
+    _log_agent_event(
+        db,
+        company_id=company_id,
+        conversation_id=conversation.id,
+        session_id=session.id,
+        event="order_cancellation_requested",
+        status="handoff_pending" if requires_handoff else "cancel_pending",
+        metadata={"trigger_message_id": inbound_message.id},
+    )
+    return _send_pending_customer_cancellation_reply(
+        db,
+        company_id=company_id,
+        conversation=conversation,
+        session=session,
+        inbound_message=inbound_message,
+        config=config,
+    )
 
 
 def set_whatsapp_human_control(
@@ -975,8 +2143,11 @@ def enqueue_due_whatsapp_session_finalizations(
     current = _aware(now) or _now()
     sessions = db.scalars(
         select(WhatsAppOrderSession)
+        .join(Conversation, Conversation.id == WhatsAppOrderSession.conversation_id)
         .where(
             WhatsAppOrderSession.company_id == company_id,
+            Conversation.company_id == company_id,
+            Conversation.whatsapp_bot_enabled.is_(True),
             WhatsAppOrderSession.active_key.is_not(None),
             WhatsAppOrderSession.status.in_(
                 ["collecting", "awaiting_customer", "ready_for_review"]
@@ -990,7 +2161,15 @@ def enqueue_due_whatsapp_session_finalizations(
     queued = 0
     for session in sessions:
         key = _finalization_dedupe_key(db, session)
-        if session.finalization_job_key == key:
+        existing = db.scalar(
+            select(BackgroundJob).where(
+                BackgroundJob.company_id == company_id,
+                BackgroundJob.job_type == "whatsapp_finalize_session",
+                BackgroundJob.dedupe_key == key,
+            )
+        )
+        if existing and existing.status in _ACTIVE_JOB_STATES:
+            session.finalization_job_key = key
             continue
         job = enqueue_job(
             db,
@@ -1055,6 +2234,17 @@ def finalize_whatsapp_order_session(
     )
     if not conversation:
         return {"ok": False, "message": "No se encontró la conversación WhatsApp."}
+
+    if reason != "manual" and not conversation.whatsapp_bot_enabled:
+        if session.status == "finalizing":
+            session.status = "ready_for_review" if _draft_is_complete(
+                _json_object(session.draft_json, {}),
+                _json_object(session.missing_fields_json, []),
+            ) else "awaiting_customer"
+        session.finalization_job_key = None
+        session.updated_at = _now()
+        db.commit()
+        return {"ok": True, "skipped": True, "reason": "bot_disabled"}
 
     latest_message = _latest_session_customer_message(
         db, company_id=company_id, session=session
@@ -1174,7 +2364,13 @@ def finalize_whatsapp_order_session(
                         status="open",
                         title="Adjunto de WhatsApp pendiente de revisión",
                         message="No se pudo finalizar el procesamiento del adjunto. Revisar manualmente antes de tramitar el pedido.",
-                        payload_json=json.dumps({"session_id": session.id}, ensure_ascii=False),
+                        payload_json=json.dumps(
+                            {
+                                "session_id": session.id,
+                                "conversation_id": conversation.id,
+                            },
+                            ensure_ascii=False,
+                        ),
                     )
                 )
         session.human_active = False
@@ -1241,6 +2437,40 @@ def finalize_whatsapp_order_session(
         session.closed_reason = "incomplete_order"
         session.closed_at = _now()
         session.human_active = False
+        if latest_message:
+            existing_alert = db.scalar(
+                select(Alert).where(
+                    Alert.company_id == company_id,
+                    Alert.inbound_message_id == latest_message.id,
+                    Alert.alert_type == "whatsapp_order_incomplete",
+                    Alert.status == "open",
+                )
+            )
+            if not existing_alert:
+                db.add(
+                    Alert(
+                        company_id=company_id,
+                        inbound_message_id=latest_message.id,
+                        alert_type="whatsapp_order_incomplete",
+                        severity="medium",
+                        status="open",
+                        title="Pedido de WhatsApp incompleto",
+                        message=(
+                            "Han pasado 12 horas sin respuesta; el pedido necesita revisión humana antes de tramitarse."
+                            if reason == "idle_timeout"
+                            else "La conversación se cerró con un pedido incompleto que necesita revisión humana antes de tramitarse."
+                        ),
+                        payload_json=json.dumps(
+                            {
+                                "session_id": session.id,
+                                "conversation_id": session.conversation_id,
+                                "draft": draft,
+                                "missing_or_uncertain": missing,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+                )
         session.handoff_reason = "El pedido qued\u00f3 incompleto y necesita revisi\u00f3n humana."
         session.updated_at = _now()
         conversation.status = "open"
@@ -1268,7 +2498,7 @@ def finalize_whatsapp_order_session(
         session.closed_reason = "order_evidence_unverified"
         session.closed_at = _now()
         session.human_active = False
-        session.handoff_reason = "Falta vincular alguna lÃ­nea del pedido a mensajes originales del cliente."
+        session.handoff_reason = "Falta vincular alguna línea del pedido a mensajes originales del cliente."
         session.updated_at = _now()
         db.add(
             Alert(
@@ -1279,7 +2509,13 @@ def finalize_whatsapp_order_session(
                 status="open",
                 title="Validar líneas del pedido de WhatsApp",
                 message="El borrador no tiene evidencia de origen para todas las líneas. Revisar la conversación antes de crear el pedido.",
-                payload_json=json.dumps({"session_id": session.id}, ensure_ascii=False),
+                payload_json=json.dumps(
+                    {
+                        "session_id": session.id,
+                        "conversation_id": conversation.id,
+                    },
+                    ensure_ascii=False,
+                ),
             )
         )
         conversation.status = "open"
@@ -1299,7 +2535,7 @@ def finalize_whatsapp_order_session(
         session.closed_reason = "customer_identity_unverified"
         session.closed_at = _now()
         session.human_active = False
-        session.handoff_reason = "El nÃºmero de WhatsApp no coincide con un cliente verificado; confirmar identidad antes de crear el pedido."
+        session.handoff_reason = "El número de WhatsApp no coincide con un cliente verificado; confirmar identidad antes de crear el pedido."
         session.updated_at = _now()
         existing_alert = db.scalar(
             select(Alert).where(
@@ -1318,8 +2554,14 @@ def finalize_whatsapp_order_session(
                     severity="medium",
                     status="open",
                     title="Verificar cliente de pedido WhatsApp",
-                    message="El nÃºmero de WhatsApp no coincide de forma Ãºnica con un cliente. Confirmar identidad antes de crear el pedido.",
-                    payload_json=json.dumps({"session_id": session.id}, ensure_ascii=False),
+                    message="El número de WhatsApp no coincide de forma única con un cliente. Confirmar identidad antes de crear el pedido.",
+                    payload_json=json.dumps(
+                        {
+                            "session_id": session.id,
+                            "conversation_id": conversation.id,
+                        },
+                        ensure_ascii=False,
+                    ),
                 )
             )
         conversation.status = "open"
@@ -1358,7 +2600,7 @@ def finalize_whatsapp_order_session(
                 "draft": draft,
                 "customer_confirmed": reason == "customer_confirmation",
                 "review_reasons": [] if reason == "customer_confirmation" else [
-                    "Pedido recibido en WhatsApp sin confirmaciÃ³n expresa del cliente."
+                    "Pedido recibido en WhatsApp sin confirmación expresa del cliente."
                 ],
             },
         )
@@ -1400,9 +2642,9 @@ def finalize_whatsapp_order_session(
         db.rollback()
         refreshed = db.get(WhatsAppOrderSession, session_id)
         if refreshed and refreshed.company_id == company_id:
-            refreshed.status = "human_handoff"
+            refreshed.status = "finalizing"
             refreshed.human_active = False
-            refreshed.handoff_reason = "No se pudo completar la evaluación automática; requiere revisión humana."
+            refreshed.handoff_reason = None
             refreshed.last_error = type(exc).__name__
             refreshed.updated_at = _now()
             db.commit()
@@ -1433,6 +2675,12 @@ def process_whatsapp_agent_turn(
     if not conversation:
         return {"ok": True, "skipped": True, "reason": "conversation_not_found"}
 
+    if inbound_message.processing_step in {
+        "whatsapp_agent_order_cancelled",
+        "whatsapp_agent_cancel_handoff",
+    }:
+        return {"ok": True, "skipped": True, "reason": "turn_already_processed"}
+
     config = whatsapp_config(db, company_id)
     if not conversation.whatsapp_bot_enabled:
         inbound_message.status = "received"
@@ -1448,6 +2696,7 @@ def process_whatsapp_agent_turn(
     )
     if not latest_message:
         return {"ok": True, "skipped": True, "reason": "superseded_by_new_customer_message"}
+    late_message_to_reconcile: InboundMessage | None = None
     if latest_message.id != inbound_message.id:
         active_session = active_whatsapp_session(
             db,
@@ -1465,6 +2714,42 @@ def process_whatsapp_agent_turn(
         ):
             # Re-evaluate the latest customer turn when an earlier PDF/document
             # finishes downloading; that turn had been deferred on this media.
+            if (
+                active_session.last_processed_message_id == latest_message.id
+                and inbound_message.processing_step in {"received", "received_whatsapp"}
+                and _late_message_belongs_to_active_session(
+                    db,
+                    session=active_session,
+                    message=inbound_message,
+                    latest_message=latest_message,
+                    idle_hours=config.idle_session_hours,
+                )
+            ):
+                late_message_to_reconcile = inbound_message
+            inbound_message = latest_message
+        elif (
+            active_session
+            and active_session.status in {"collecting", "awaiting_customer", "ready_for_review"}
+            and not active_session.human_active
+            and conversation.status != "human_owned"
+            and active_session.last_processed_message_id == latest_message.id
+            and inbound_message.processing_step in {"received", "received_whatsapp"}
+            and all(
+                str(attachment.extraction_status or "pending").lower() not in _MEDIA_PENDING
+                for attachment in inbound_message.attachments
+            )
+            and _late_message_belongs_to_active_session(
+                db,
+                session=active_session,
+                message=inbound_message,
+                latest_message=latest_message,
+                idle_hours=config.idle_session_hours,
+            )
+        ):
+            # Meta may deliver an earlier customer message after a newer one
+            # has already been processed. Re-evaluate the current chronological
+            # latest turn with the complete transcript so no order line is lost.
+            late_message_to_reconcile = inbound_message
             inbound_message = latest_message
         else:
             return {"ok": True, "skipped": True, "reason": "superseded_by_new_customer_message"}
@@ -1476,11 +2761,64 @@ def process_whatsapp_agent_turn(
         conversation_id=conversation.id,
         lock=True,
     )
+    if (
+        previous_session
+        and previous_session.closed_reason in {
+            _CANCEL_REPLY_PENDING,
+            _CANCEL_HANDOFF_REPLY_PENDING,
+        }
+        and previous_session.last_processed_message_id != latest_message.id
+    ):
+        pending_trigger = db.scalar(
+            select(InboundMessage).where(
+                InboundMessage.id == previous_session.last_processed_message_id,
+                InboundMessage.company_id == company_id,
+                InboundMessage.conversation_id == conversation.id,
+            )
+        )
+        if pending_trigger is None:
+            pending_trigger = latest_message
+        transition = _finish_pending_customer_cancellation(
+            db,
+            session=previous_session,
+            conversation=conversation,
+            inbound_message=pending_trigger,
+        )
+        if previous_session.status == "human_handoff":
+            latest_message.status = "received"
+            latest_message.processing_step = "whatsapp_agent_handoff_waiting"
+            previous_session.last_processed_message_id = latest_message.id
+            previous_session.last_customer_message_at = message_at
+            previous_session.due_at = message_at + timedelta(
+                hours=config.idle_session_hours
+            )
+            previous_session.revision = int(previous_session.revision or 0) + 1
+            previous_session.updated_at = _now()
+            db.commit()
+            return {
+                "ok": True,
+                "status": "human_handoff",
+                "session_id": previous_session.id,
+                "reason": "customer_cancelled_existing_order",
+                "pending_reply": bool(transition),
+            }
+        if previous_session.closed_reason == "customer_cancelled":
+            previous_session = None
+
     if previous_session and (previous_session.human_active or conversation.status == "human_owned"):
         session = previous_session
     else:
         prior_draft = _json_object(previous_session.draft_json, {}) if previous_session else {}
-        force_new_session = bool(
+        previous_due_at = _aware(previous_session.due_at) if previous_session else None
+        session_idle_expired = bool(
+            previous_session
+            and previous_session.active_key
+            and previous_session.status not in {"human_handoff", "closed_review", "closed_no_order"}
+            and not previous_session.human_active
+            and previous_due_at
+            and message_at >= previous_due_at
+        )
+        force_new_session = session_idle_expired or bool(
             previous_session
             and prior_draft.get("lines")
             and _explicit_new_order_request(latest_message.original_content)
@@ -1501,7 +2839,7 @@ def process_whatsapp_agent_turn(
             enqueue_whatsapp_session_finalization(
                 db,
                 session=previous_session,
-                reason="order_boundary",
+                reason="idle_timeout" if session_idle_expired else "order_boundary",
             )
         session = _get_or_create_session(
             db,
@@ -1519,6 +2857,21 @@ def process_whatsapp_agent_turn(
             conversation_id=conversation.id,
             lock=True,
         ) or session
+    if (
+        late_message_to_reconcile is not None
+        and (
+            session.last_processed_message_id != latest_message.id
+            or session.status not in {"collecting", "awaiting_customer", "ready_for_review"}
+            or session.human_active
+            or conversation.status == "human_owned"
+        )
+    ):
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "session_changed_during_late_message_reconciliation",
+            "session_id": session.id,
+        }
     if session.human_active or conversation.status == "human_owned":
         _set_handoff(
             db,
@@ -1533,8 +2886,38 @@ def process_whatsapp_agent_turn(
         session.finalization_job_key = None
         session.last_processed_message_id = latest_message.id
         session.updated_at = _now()
+        _mark_late_message_reconciled(late_message_to_reconcile)
         db.commit()
         return {"ok": True, "status": "human_handoff"}
+    if (
+        session.closed_reason in {
+            _CANCEL_REPLY_PENDING,
+            _CANCEL_HANDOFF_REPLY_PENDING,
+        }
+        and session.last_processed_message_id == latest_message.id
+    ):
+        pending_result = _resume_pending_customer_cancellation(
+            db,
+            company_id=company_id,
+            conversation=conversation,
+            session=session,
+            inbound_message=latest_message,
+            config=config,
+        )
+        if pending_result is not None:
+            return pending_result
+    if (
+        inbound_message.processing_step == "whatsapp_agent_reply_retryable"
+        and session.last_processed_message_id == latest_message.id
+    ):
+        return _retry_prepared_whatsapp_reply(
+            db,
+            company_id=company_id,
+            conversation=conversation,
+            session=session,
+            inbound_message=latest_message,
+            config=config,
+        )
     if session.status == "human_handoff":
         session.last_customer_message_at = message_at
         session.due_at = message_at + timedelta(hours=config.idle_session_hours)
@@ -1543,13 +2926,32 @@ def process_whatsapp_agent_turn(
         session.last_processed_message_id = latest_message.id
         inbound_message.status = "received"
         inbound_message.processing_step = "whatsapp_agent_handoff_waiting"
+        _mark_late_message_reconciled(late_message_to_reconcile)
         db.commit()
         return {"ok": True, "status": "human_handoff", "session_id": session.id}
     if (
         session.last_processed_message_id == latest_message.id
         and inbound_message.processing_step != "whatsapp_media_pending"
+        and late_message_to_reconcile is None
     ):
         return {"ok": True, "skipped": True, "reason": "turn_already_processed", "session_id": session.id}
+
+    cancellation_result = _handle_explicit_order_cancellation(
+        db,
+        company_id=company_id,
+        conversation=conversation,
+        session=session,
+        inbound_message=latest_message,
+        config=config,
+    )
+    if cancellation_result is not None:
+        return cancellation_result
+
+    if late_message_to_reconcile is not None:
+        late_at = _aware(late_message_to_reconcile.received_at)
+        started_at = _aware(session.started_at)
+        if late_at and (not started_at or late_at < started_at):
+            session.started_at = late_at
 
     transcript, messages = _session_transcript(
         db,
@@ -1570,6 +2972,7 @@ def process_whatsapp_agent_turn(
         session.last_processed_message_id = latest_message.id
         inbound_message.status = "received"
         inbound_message.processing_step = "whatsapp_media_pending"
+        _mark_late_message_reconciled(late_message_to_reconcile)
         db.commit()
         _log_agent_event(
             db,
@@ -1580,22 +2983,70 @@ def process_whatsapp_agent_turn(
             status="waiting",
         )
         return {"ok": True, "status": "media_pending", "session_id": session.id}
-    if media_state == "unreadable":
+    readable_inbound_text_exists = any(
+        item.direction == "inbound" and bool(_message_text(item).strip())
+        for item in messages
+    )
+    if media_state == "unreadable" and not readable_inbound_text_exists:
         session.last_processed_message_id = latest_message.id
+        fallback_reply = (
+            f"No he podido interpretar el archivo o audio adjunto {media_filename}. "
+            "Lo paso al equipo para que lo revise; no se tramitará automáticamente."
+        )
+        session.suggested_reply = fallback_reply
         _set_handoff(
             db,
             session=session,
             conversation=conversation,
             reason=f"No se pudo interpretar el adjunto {media_filename}.",
+            trigger_message_id=latest_message.id,
         )
         inbound_message.status = "received"
         inbound_message.processing_step = "whatsapp_media_handoff"
+        _mark_late_message_reconciled(late_message_to_reconcile)
         db.commit()
-        return {"ok": True, "status": "human_handoff", "session_id": session.id}
+        send_result: dict[str, Any] = {"sent": False, "reason": "response_window_closed"}
+        window = whatsapp_response_window_status(
+            db,
+            company_id=company_id,
+            conversation_id=conversation.id,
+            response_window_minutes=config.response_window_minutes,
+        )
+        if window.get("is_open"):
+            try:
+                send_result = await_send_automatic_response(
+                    db,
+                    company_id=company_id,
+                    conversation_id=conversation.id,
+                    trigger_message_id=latest_message.id,
+                    body=fallback_reply,
+                    semantic_state="human_handoff",
+                    assistant_session_id=session.id,
+                    draft_revision=session.revision,
+                )
+            except Exception as exc:  # noqa: BLE001
+                error_type = str(getattr(exc, "error_type", None) or type(exc).__name__)
+                if error_type == "rate_limited" and conversation.whatsapp_bot_enabled:
+                    inbound_message.processing_step = "whatsapp_agent_reply_retryable"
+                    db.commit()
+                    raise WhatsAppAgentReplyDeliveryError(
+                        error_type, retryable=True
+                    ) from exc
+                send_result = {"sent": False, "reason": type(exc).__name__}
+        conversation.whatsapp_bot_enabled = False
+        conversation.updated_at = _now()
+        db.commit()
+        return {
+            "ok": True,
+            "status": "human_handoff",
+            "session_id": session.id,
+            "reason": "unreadable_media",
+            "auto_response": send_result,
+        }
 
     prior_draft = _json_object(session.draft_json, {})
     prior_missing = _json_object(session.missing_fields_json, [])
-    if _confirms_current_order_summary(
+    if late_message_to_reconcile is None and _confirms_current_order_summary(
         messages,
         message=latest_message,
         session=session,
@@ -1622,15 +3073,20 @@ def process_whatsapp_agent_turn(
             db,
             session=session,
             conversation=conversation,
-            reason="Se alcanzÃ³ el lÃ­mite de turnos de IA configurado.",
+            reason="Se alcanzó el límite de turnos de IA configurado.",
+            trigger_message_id=latest_message.id,
         )
         session.last_processed_message_id = latest_message.id
         session.last_customer_message_at = message_at
         session.due_at = message_at + timedelta(hours=config.idle_session_hours)
         session.revision = int(session.revision or 0) + 1
         session.finalization_job_key = None
+        session.suggested_reply = (
+            "Voy a pasar tu consulta a una persona del equipo para que pueda ayudarte."
+        )
         inbound_message.status = "received"
         inbound_message.processing_step = "whatsapp_agent_turn_limit"
+        _mark_late_message_reconciled(late_message_to_reconcile)
         db.commit()
         send_result: dict[str, Any] = {"sent": False, "reason": "response_window_closed"}
         window = whatsapp_response_window_status(
@@ -1646,13 +3102,23 @@ def process_whatsapp_agent_turn(
                     company_id=company_id,
                     conversation_id=conversation.id,
                     trigger_message_id=latest_message.id,
-                    body="Voy a pasar tu consulta a una persona del equipo para que pueda ayudarte.",
+                    body=session.suggested_reply,
                     semantic_state="human_handoff",
                     assistant_session_id=session.id,
                     draft_revision=session.revision,
                 )
             except Exception as exc:  # noqa: BLE001
+                error_type = str(getattr(exc, "error_type", None) or type(exc).__name__)
+                if error_type == "rate_limited" and conversation.whatsapp_bot_enabled:
+                    inbound_message.processing_step = "whatsapp_agent_reply_retryable"
+                    db.commit()
+                    raise WhatsAppAgentReplyDeliveryError(
+                        error_type, retryable=True
+                    ) from exc
                 send_result = {"sent": False, "reason": type(exc).__name__}
+        conversation.whatsapp_bot_enabled = False
+        conversation.updated_at = _now()
+        db.commit()
         return {
             "ok": True,
             "status": "human_handoff",
@@ -1666,7 +3132,17 @@ def process_whatsapp_agent_turn(
         conversation=conversation,
         messages=messages,
     )
-    recent_transcript = _bounded_recent_transcript(messages)
+    quoted_message = _reply_context_message(latest_message, messages)
+    reply_context_text = None
+    if quoted_message:
+        quoted_role = "CLIENTE" if quoted_message.direction == "inbound" else "EMPRESA"
+        quoted_text = _message_text(quoted_message).strip()[:1500]
+        if quoted_text:
+            reply_context_text = f"{quoted_role}: {quoted_text}"
+    recent_transcript = _bounded_recent_transcript(
+        messages,
+        quoted_message=quoted_message,
+    )
     context_limit_exceeded = _context_exceeds_agent_limit(
         messages,
         has_order_context=session.intent in {"order", "order_question"} or bool(prior_draft.get("lines")),
@@ -1702,8 +3178,10 @@ def process_whatsapp_agent_turn(
                 business_faq=json.dumps(faq_entries, ensure_ascii=False),
                 missing_or_uncertain=prior_missing,
                 latest_message_text=_message_text(latest_message),
+                reply_context_text=reply_context_text,
                 inbound_message=latest_message,
                 input_reference=f"whatsapp-session:{session.id}:revision:{session.revision}",
+                reconcile_order_transcript=late_message_to_reconcile is not None,
             )
     except Exception as exc:  # noqa: BLE001
         _set_handoff(
@@ -1711,12 +3189,20 @@ def process_whatsapp_agent_turn(
             session=session,
             conversation=conversation,
             reason="No se pudo evaluar el mensaje con IA.",
+            trigger_message_id=latest_message.id,
         )
         session.last_processed_message_id = latest_message.id
         session.last_error = type(exc).__name__
         inbound_message.status = "doubtful"
         inbound_message.processing_step = "whatsapp_agent_error"
         inbound_message.processing_error = "No se pudo evaluar el mensaje con IA."
+        fallback_reply = (
+            "No he podido procesar tu mensaje automáticamente. "
+            "Lo dejo pendiente de revisión por el equipo; puedes enviar aquí "
+            "cualquier detalle adicional del pedido."
+        )
+        session.suggested_reply = fallback_reply
+        _mark_late_message_reconciled(late_message_to_reconcile)
         db.commit()
         _log_agent_event(
             db,
@@ -1727,7 +3213,55 @@ def process_whatsapp_agent_turn(
             status="error",
             metadata={"error_type": type(exc).__name__},
         )
-        return {"ok": True, "status": "human_handoff", "session_id": session.id}
+        send_result: dict[str, Any] = {"sent": False, "reason": "response_window_closed"}
+        try:
+            window = whatsapp_response_window_status(
+                db,
+                company_id=company_id,
+                conversation_id=conversation.id,
+                response_window_minutes=config.response_window_minutes,
+            )
+            if window.get("is_open"):
+                send_result = await_send_automatic_response(
+                    db,
+                    company_id=company_id,
+                    conversation_id=conversation.id,
+                    trigger_message_id=latest_message.id,
+                    body=fallback_reply,
+                    semantic_state="human_handoff",
+                    assistant_session_id=session.id,
+                    draft_revision=session.revision,
+                )
+            else:
+                send_result = {
+                    "sent": False,
+                    "reason": str(window.get("reason") or "response_window_closed"),
+                }
+        except Exception as send_exc:  # noqa: BLE001
+            logger.warning(
+                "WhatsApp agent error acknowledgement failed session=%s type=%s",
+                session.id,
+                type(send_exc).__name__,
+            )
+            error_type = str(
+                getattr(send_exc, "error_type", None) or type(send_exc).__name__
+            )
+            if error_type == "rate_limited" and conversation.whatsapp_bot_enabled:
+                inbound_message.processing_step = "whatsapp_agent_reply_retryable"
+                db.commit()
+                raise WhatsAppAgentReplyDeliveryError(
+                    error_type, retryable=True
+                ) from send_exc
+            send_result = {"sent": False, "reason": "send_failed"}
+        conversation.whatsapp_bot_enabled = False
+        conversation.updated_at = _now()
+        db.commit()
+        return {
+            "ok": True,
+            "status": "human_handoff",
+            "session_id": session.id,
+            "auto_response": send_result,
+        }
 
     allowed_evidence = {item["id"] for item in products}
     allowed_evidence.update(item["id"] for item in faq_entries)
@@ -1737,12 +3271,12 @@ def process_whatsapp_agent_turn(
         products=products,
         semantic_missing=evaluation.missing_or_uncertain,
         intent=evaluation.intent,
-        messages=[item for item in messages if item.direction == "inbound"],
+        messages=messages,
     )
     line_limit_exceeded = any(
         "supera el límite de 30 líneas" in item.casefold() for item in missing
     )
-    preserve_existing_order = evaluation.intent in {"question", "order_question", "other"} and bool(prior_draft.get("lines"))
+    preserve_existing_order = evaluation.intent in {"question", "order_question", "other", "greeting"} and bool(prior_draft.get("lines"))
     if preserve_existing_order:
         clean_draft = prior_draft
         missing = prior_missing
@@ -1765,16 +3299,22 @@ def process_whatsapp_agent_turn(
         action = "handoff"
     if line_limit_exceeded:
         action = "handoff"
-    if evaluation.confidence < 0.45 and not evaluation.contextual_order_followup:
+    if media_state == "unreadable":
         action = "handoff"
-    if evaluation.intent in {"question", "other"} and evaluation.reply_needed and not grounded_answer:
+    if (
+        evaluation.confidence < 0.45
+        and not evaluation.contextual_order_followup
+        and evaluation.intent != "greeting"
+    ):
+        action = "handoff"
+    if evaluation.intent == "question" and evaluation.reply_needed and not grounded_answer:
         action = "handoff"
     if evaluation.intent == "order_question" and evaluation.reply_needed and not grounded_answer and not missing:
         action = "handoff"
     if (
         action != "handoff"
         and close_requested
-        and evaluation.intent in {"order", "order_question"}
+        and clean_draft.get("lines")
         and not complete
     ):
         action = "ask"
@@ -1788,7 +3328,12 @@ def process_whatsapp_agent_turn(
     )
     session.draft_json = json.dumps(clean_draft, ensure_ascii=False)
     session.missing_fields_json = json.dumps(missing, ensure_ascii=False)
-    if action == "handoff":
+    if action == "handoff" and media_state == "unreadable":
+        safe_reply = (
+            f"He conservado el texto de tu mensaje, pero no he podido interpretar el adjunto {media_filename}. "
+            "Lo paso al equipo para que lo revise antes de tramitar el pedido."
+        )
+    elif action == "handoff":
         safe_reply = (
             "El pedido o el PDF es demasiado extenso para revisar todas sus líneas automáticamente. "
             "Lo paso al equipo para que lo compruebe completo."
@@ -1798,15 +3343,41 @@ def process_whatsapp_agent_turn(
             else "Voy a pasar tu consulta a una persona del equipo para que pueda ayudarte."
         )
     elif preserve_existing_order and evaluation.reply_needed and grounded_answer:
-        continuation = _order_summary_reply(clean_draft) if complete else _clarification_reply(missing)
+        continuation = _order_summary_reply(clean_draft) if complete else _clarification_reply(missing, draft=clean_draft)
         safe_reply = f"{grounded_answer}\n\n{continuation}"
     elif evaluation.intent == "order_question" and grounded_answer:
-        continuation = _order_summary_reply(clean_draft) if complete else _clarification_reply(missing)
+        continuation = _order_summary_reply(clean_draft) if complete else _clarification_reply(missing, draft=clean_draft)
         safe_reply = f"{grounded_answer}\n\n{continuation}"
     elif evaluation.intent in {"order", "order_question"} and not complete:
-        safe_reply = _clarification_reply(missing)
+        safe_reply = _clarification_reply(missing, draft=clean_draft)
+    elif close_requested and clean_draft.get("lines") and not complete:
+        safe_reply = _clarification_reply(missing, draft=clean_draft)
     elif evaluation.intent in {"order", "order_question"} and complete:
         safe_reply = _order_summary_reply(clean_draft)
+    elif evaluation.intent == "greeting":
+        safe_reply = (
+            "¡Hola! ¿En qué puedo ayudarte? Si quieres hacer un pedido, "
+            "puedes enviarme los productos y las cantidades poco a poco."
+        )
+    elif evaluation.intent == "other":
+        normalized_customer_text = unicodedata.normalize(
+            "NFKD", latest_message.original_content or ""
+        ).casefold()
+        normalized_customer_text = "".join(
+            character
+            for character in normalized_customer_text
+            if not unicodedata.combining(character)
+        )
+        if re.fullmatch(r"\s*(?:gracias|muchas gracias|ok|okay|vale|perfecto|de acuerdo)[.!\s]*", normalized_customer_text):
+            safe_reply = (
+                "¡De nada! Si necesitas ayuda con el pedido o tienes otra consulta, "
+                "escríbeme por aquí."
+            )
+        else:
+            safe_reply = (
+                "No he terminado de entender qué necesitas. ¿Quieres hacer un pedido o tienes una consulta? "
+                "Puedes enviarme los productos y las cantidades en varios mensajes, o adjuntar un PDF."
+            )
     else:
         safe_reply = grounded_answer or ""
     session.suggested_reply = safe_reply[:4096] or None
@@ -1817,6 +3388,7 @@ def process_whatsapp_agent_turn(
     session.updated_at = _now()
     inbound_message.status = "received"
     inbound_message.processing_step = "whatsapp_agent_evaluated"
+    _mark_late_message_reconciled(late_message_to_reconcile)
 
     if action == "handoff":
         _set_handoff(
@@ -1832,6 +3404,7 @@ def process_whatsapp_agent_turn(
                 if line_limit_exceeded
                 else "La conversación necesita atención humana."
             ),
+            trigger_message_id=latest_message.id,
         )
     elif evaluation.intent in {"order", "order_question"}:
         session.status = "ready_for_review" if complete else "awaiting_customer"
@@ -1863,7 +3436,7 @@ def process_whatsapp_agent_turn(
     if (
         action != "handoff"
         and close_requested
-        and evaluation.intent in {"order", "order_question"}
+        and clean_draft.get("lines")
         and complete
     ):
         return enqueue_whatsapp_session_finalization(
@@ -1910,9 +3483,48 @@ def process_whatsapp_agent_turn(
                     )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("WhatsApp agent reply failed session=%s type=%s", session.id, type(exc).__name__)
-                    send_result = {"sent": False, "reason": "send_failed"}
+                    error_type = str(getattr(exc, "error_type", None) or type(exc).__name__)
+                    retryable_delivery = bool(
+                        error_type == "rate_limited"
+                        and conversation.whatsapp_bot_enabled
+                        and not session.human_active
+                    )
+                    if retryable_delivery:
+                        inbound_message.processing_step = "whatsapp_agent_reply_retryable"
+                        db.commit()
+                    raise WhatsAppAgentReplyDeliveryError(
+                        error_type,
+                        retryable=retryable_delivery,
+                    ) from exc
             else:
                 send_result = {"sent": False, "reason": str(window.get("reason") or "response_window_closed")}
+        if (
+            not send_result.get("sent")
+            and str(send_result.get("reason") or "")
+            in {"auto_message_limit", "response_window_closed"}
+        ):
+            limit_reason = str(send_result.get("reason") or "response_window_closed")
+            _set_handoff(
+                db,
+                session=session,
+                conversation=conversation,
+                reason=(
+                    "La respuesta automática alcanzó su límite de seguridad; "
+                    "la conversación requiere atención humana."
+                    if limit_reason == "auto_message_limit"
+                    else "No se puede responder fuera de la ventana de atención de WhatsApp. "
+                    "Revisar la conversación y usar una plantilla aprobada si procede."
+                ),
+                trigger_message_id=latest_message.id,
+            )
+            action = "handoff"
+            inbound_message.processing_step = (
+                "whatsapp_agent_response_limit"
+                if limit_reason == "auto_message_limit"
+                else "whatsapp_agent_response_window_closed"
+            )
+            conversation.updated_at = _now()
+            db.commit()
         _log_agent_event(
             db,
             company_id=company_id,
@@ -1925,6 +3537,11 @@ def process_whatsapp_agent_turn(
     else:
         send_result = {"sent": False, "skipped": True, "reason": "no_reply_needed"}
 
+    if action == "handoff":
+        conversation.whatsapp_bot_enabled = False
+        conversation.updated_at = _now()
+        db.commit()
+
     return {
         "ok": True,
         "status": session.status,
@@ -1936,12 +3553,173 @@ def process_whatsapp_agent_turn(
     }
 
 
-def await_send_automatic_response(**kwargs) -> dict[str, Any]:
+def await_send_automatic_response(db: Session, **kwargs) -> dict[str, Any]:
     """Synchronously bridge the async Meta sender from the worker process."""
 
     import asyncio
 
-    return asyncio.run(send_automatic_response(**kwargs))
+    return asyncio.run(send_automatic_response(db, **kwargs))
+
+
+def handoff_failed_whatsapp_message(
+    db: Session,
+    *,
+    company_id: int,
+    inbound_message_id: int,
+    error_type: str,
+) -> dict[str, Any]:
+    """Make an exhausted WhatsApp processing job visible and stop bot replies."""
+
+    message = db.scalar(
+        select(InboundMessage)
+        .where(
+            InboundMessage.id == inbound_message_id,
+            InboundMessage.company_id == company_id,
+            InboundMessage.direction == "inbound",
+        )
+        .with_for_update()
+    )
+    if not message or not message.conversation_id:
+        return {"ok": True, "skipped": True, "reason": "message_not_found"}
+    conversation = db.scalar(
+        select(Conversation)
+        .where(
+            Conversation.id == message.conversation_id,
+            Conversation.company_id == company_id,
+        )
+        .with_for_update()
+    )
+    if not conversation:
+        return {"ok": True, "skipped": True, "reason": "conversation_not_found"}
+    session = active_whatsapp_session(
+        db,
+        company_id=company_id,
+        conversation_id=conversation.id,
+        lock=True,
+    )
+    existing_order = db.scalar(
+        select(WhatsAppOrderSession.id)
+        .where(
+            WhatsAppOrderSession.company_id == company_id,
+            WhatsAppOrderSession.conversation_id == conversation.id,
+            WhatsAppOrderSession.last_processed_message_id == message.id,
+            WhatsAppOrderSession.order_id.is_not(None),
+        )
+        .limit(1)
+    )
+    if message.order_id or existing_order or (session and session.order_id):
+        return {"ok": True, "skipped": True, "reason": "order_already_created"}
+    reason = "El procesamiento automático falló y requiere revisión humana."
+    if session:
+        _set_handoff(db, session=session, conversation=conversation, reason=reason)
+        session.last_processed_message_id = message.id
+        session.last_error = str(error_type or "job_failed")[:120]
+        session.updated_at = _now()
+    message.status = "doubtful"
+    message.processing_step = "whatsapp_agent_failed"
+    message.processing_error = "No se pudo completar el procesamiento automático tras varios intentos."
+    alert = db.scalar(
+        select(Alert).where(
+            Alert.company_id == company_id,
+            Alert.inbound_message_id == message.id,
+            Alert.alert_type == "whatsapp_agent_processing_failed",
+            Alert.status == "open",
+        )
+    )
+    if not alert:
+        db.add(
+            Alert(
+                company_id=company_id,
+                inbound_message_id=message.id,
+                alert_type="whatsapp_agent_processing_failed",
+                severity="high",
+                status="open",
+                title="Un mensaje de WhatsApp necesita atención",
+                message="Falló el procesamiento automático. Revisa el mensaje y continúa el pedido manualmente.",
+                payload_json=json.dumps(
+                    {"conversation_id": conversation.id, "session_id": session.id if session else None},
+                    ensure_ascii=False,
+                ),
+            )
+        )
+    db.commit()
+
+    send_result: dict[str, Any] = {"sent": False, "reason": "response_window_closed"}
+    try:
+        config = whatsapp_config(db, company_id)
+        window = whatsapp_response_window_status(
+            db,
+            company_id=company_id,
+            conversation_id=conversation.id,
+            response_window_minutes=config.response_window_minutes,
+        )
+        if window.get("is_open") and conversation.whatsapp_bot_enabled:
+            send_result = await_send_automatic_response(
+                db,
+                company_id=company_id,
+                conversation_id=conversation.id,
+                trigger_message_id=message.id,
+                body=(
+                    "No he podido procesar tu mensaje automáticamente. Lo dejo pendiente "
+                    "de revisión por el equipo; puedes enviar aquí cualquier detalle adicional del pedido."
+                ),
+                semantic_state="human_handoff",
+                assistant_session_id=session.id if session else None,
+                draft_revision=session.revision if session else None,
+            )
+        elif window.get("is_open"):
+            send_result = {"sent": False, "reason": "bot_disabled"}
+        else:
+            send_result = {"sent": False, "reason": str(window.get("reason") or "response_window_closed")}
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        logger.warning(
+            "WhatsApp processing failure acknowledgement failed message=%s type=%s",
+            inbound_message_id,
+            type(exc).__name__,
+        )
+        send_result = {"sent": False, "reason": "send_failed"}
+
+    conversation = db.scalar(
+        select(Conversation).where(
+            Conversation.id == message.conversation_id,
+            Conversation.company_id == company_id,
+        )
+    )
+    session = active_whatsapp_session(
+        db,
+        company_id=company_id,
+        conversation_id=message.conversation_id,
+        lock=True,
+    )
+    if conversation:
+        conversation.status = "human_owned"
+        conversation.whatsapp_bot_enabled = False
+        conversation.updated_at = _now()
+    if session:
+        session.status = "human_handoff"
+        session.human_active = True
+        session.handoff_reason = reason
+        session.handoff_at = session.handoff_at or _now()
+        session.updated_at = _now()
+    db.commit()
+    if session:
+        _log_agent_event(
+            db,
+            company_id=company_id,
+            conversation_id=message.conversation_id,
+            session_id=session.id,
+            event="processing_failed_handoff",
+            status="error",
+            metadata={"message_id": message.id, "error_type": str(error_type or "job_failed")[:120]},
+        )
+    return {
+        "ok": True,
+        "status": "human_handoff",
+        "message_id": message.id,
+        "session_id": session.id if session else None,
+        "auto_response": send_result,
+    }
 
 
 def enqueue_whatsapp_session_finalization(

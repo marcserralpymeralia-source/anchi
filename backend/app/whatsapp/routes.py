@@ -4,7 +4,8 @@ from collections import Counter
 import hmac
 import json
 import logging
-import httpx
+import time
+from datetime import datetime, timezone
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from sqlalchemy.orm import Session
@@ -13,19 +14,17 @@ from app.auth.dependencies import current_user
 from app.core.config import get_settings
 from app.master.database import get_master_db
 from app.master.service import TenantUser
-from app.tenancy.database import tenant_db_session
-from app.tenancy.database import get_tenant_db
+from app.tenancy.database import get_tenant_db, tenant_db_session
 from app.logs.service import log_action
 from app.whatsapp.service import (
     enqueue_whatsapp_media_download,
     enqueue_whatsapp_processing,
-    download_whatsapp_media,
     parse_payload_events,
     persist_event,
     resolve_company_from_slug,
     resolve_company_from_whatsapp_identifiers,
     whatsapp_event_matches_config,
-    whatsapp_event_has_processable_content,
+    whatsapp_event_requires_agent_turn,
     whatsapp_event_requires_media_download,
     whatsapp_ingress_is_ready,
     verify_signature,
@@ -36,42 +35,80 @@ from app.whatsapp.service import (
 
 router = APIRouter(prefix="/webhooks/whatsapp", tags=["whatsapp"])
 logger = logging.getLogger(__name__)
+MAX_WHATSAPP_WEBHOOK_BODY_BYTES = 2 * 1024 * 1024
 
 
-async def _download_whatsapp_media_in_background(
-    database_url: str,
-    company_id: int,
-    message_ids: list[int],
-) -> None:
-    """Best-effort media delivery immediately after accepting a webhook.
+async def _read_bounded_webhook_body(request: Request) -> tuple[bytes | None, int]:
+    """Read a Meta webhook without allowing an unbounded request body into memory."""
 
-    The durable job remains queued as a fallback for cron or a dedicated worker.
-    This task only removes the usual serverless wait for the next worker tick.
-    """
-
-    if not database_url or not message_ids:
-        return
-    db = tenant_db_session(database_url)()
+    content_length = request.headers.get("content-length")
     try:
-        async with httpx.AsyncClient(timeout=get_settings().meta_request_timeout_seconds) as client:
-            for message_id in dict.fromkeys(message_ids):
-                try:
-                    result = await download_whatsapp_media(
-                        db,
-                        company_id=company_id,
-                        inbound_message_id=message_id,
-                        client=client,
-                    )
-                    if result.get("ready_for_processing"):
-                        enqueue_whatsapp_processing(db, company_id, message_id)
-                except Exception:  # noqa: BLE001
-                    logger.exception(
-                        "whatsapp.media_background_download_failed company=%s message=%s",
-                        company_id,
-                        message_id,
-                    )
-    finally:
-        db.close()
+        declared_size = int(content_length) if content_length is not None else None
+    except (TypeError, ValueError):
+        declared_size = None
+    if declared_size is not None and declared_size > MAX_WHATSAPP_WEBHOOK_BODY_BYTES:
+        return None, MAX_WHATSAPP_WEBHOOK_BODY_BYTES + 1
+
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > MAX_WHATSAPP_WEBHOOK_BODY_BYTES:
+            return None, MAX_WHATSAPP_WEBHOOK_BODY_BYTES + 1
+        body.extend(chunk)
+    return bytes(body), len(body)
+
+
+def _webhook_body_too_large_response(
+    request: Request,
+    *,
+    route_scope: str,
+    body_size: int,
+    company_id: int | None = None,
+) -> JSONResponse:
+    metadata = {
+        "status": "error",
+        "reason": "payload_too_large",
+        "body_size_bytes": body_size,
+        "max_body_size_bytes": MAX_WHATSAPP_WEBHOOK_BODY_BYTES,
+        "route_scope": route_scope,
+    }
+    if company_id is not None:
+        metadata["company_id"] = company_id
+    _log_webhook_activity(
+        request=request,
+        action="whatsapp.webhook_payload_too_large",
+        message="Webhook WhatsApp rechazado: el cuerpo supera el límite permitido.",
+        metadata=metadata,
+        level=logging.WARNING,
+    )
+    return JSONResponse({"ok": False, "message": "payload too large"}, status_code=413)
+
+
+def _process_whatsapp_jobs_in_background(
+    company_id: int,
+    jobs: list[tuple[int, datetime | None]],
+) -> None:
+    """Run just-enqueued WhatsApp turns promptly; cron remains the durable fallback."""
+
+    from app.workers.jobs_worker import run_worker_cycle
+
+    for job_id, not_before in jobs:
+        if not_before is not None:
+            due_at = not_before
+            if due_at.tzinfo is None:
+                due_at = due_at.replace(tzinfo=timezone.utc)
+            delay = (due_at - datetime.now(timezone.utc)).total_seconds()
+            # Debounce should be short. Never hold a serverless invocation open
+            # for a retry scheduled by the durable queue; cron will handle that.
+            if delay > 15:
+                continue
+            if delay > 0:
+                time.sleep(delay)
+        summary = run_worker_cycle(max_jobs=1, company_id=company_id, job_id=job_id)
+        if summary.get("processed"):
+            logger.info(
+                "whatsapp.background_job_processed company=%s",
+                company_id,
+            )
 
 
 def _webhook_payload_summary(
@@ -239,9 +276,15 @@ async def _receive_default_webhook_request(
     master_db: Session,
     background_tasks: BackgroundTasks,
 ):
-    raw_body = await request.body()
+    raw_body, body_size = await _read_bounded_webhook_body(request)
+    if raw_body is None:
+        return _webhook_body_too_large_response(
+            request,
+            route_scope="default",
+            body_size=body_size,
+        )
     summary = {
-        "body_size_bytes": len(raw_body),
+        "body_size_bytes": body_size,
         "signature_present": bool(x_hub_signature_256),
         "path": request.url.path,
     }
@@ -311,7 +354,8 @@ async def _receive_default_webhook_request(
     handled = 0
     queued_processing = 0
     queued_media = 0
-    background_media: dict[tuple[str, int], list[int]] = {}
+    background_media: dict[int, list[tuple[int, datetime | None]]] = {}
+    background_processing: dict[int, list[tuple[int, datetime | None]]] = {}
     not_processable = 0
     ignored_reasons: Counter[str] = Counter()
     for event in events:
@@ -394,12 +438,17 @@ async def _receive_default_webhook_request(
                 stored.append(message.id)
                 if event.get("kind") == "message":
                     if whatsapp_event_requires_media_download(event):
-                        enqueue_whatsapp_media_download(config_db, company.id, message.id)
-                        background_media.setdefault((tenant_db.database_url, company.id), []).append(message.id)
+                        media_job = enqueue_whatsapp_media_download(config_db, company.id, message.id)
+                        background_media.setdefault(company.id, []).append(
+                            (media_job.id, media_job.next_retry_at)
+                        )
                         queued_media += 1
                         queue_action = "download_whatsapp_media"
-                    elif whatsapp_event_has_processable_content(event):
-                        enqueue_whatsapp_processing(config_db, company.id, message.id)
+                    elif whatsapp_event_requires_agent_turn(event):
+                        processing_job = enqueue_whatsapp_processing(config_db, company.id, message.id)
+                        background_processing.setdefault(company.id, []).append(
+                            (processing_job.id, processing_job.next_retry_at)
+                        )
                         queued_processing += 1
                         queue_action = "process_inbound_message"
                     else:
@@ -441,12 +490,17 @@ async def _receive_default_webhook_request(
             raise
         finally:
             config_db.close()
-    for (database_url, company_id), message_ids in background_media.items():
+    for company_id, jobs in background_processing.items():
         background_tasks.add_task(
-            _download_whatsapp_media_in_background,
-            database_url,
+            _process_whatsapp_jobs_in_background,
             company_id,
-            message_ids,
+            jobs,
+        )
+    for company_id, jobs in background_media.items():
+        background_tasks.add_task(
+            _process_whatsapp_jobs_in_background,
+            company_id,
+            jobs,
         )
 
     result_metadata = {
@@ -599,12 +653,19 @@ async def _receive_tenant_webhook_request(
             level=logging.WARNING,
         )
         return JSONResponse({"ok": False, "message": "tenant not found"}, status_code=404)
-    raw_body = await request.body()
+    raw_body, body_size = await _read_bounded_webhook_body(request)
+    if raw_body is None:
+        return _webhook_body_too_large_response(
+            request,
+            route_scope="tenant",
+            body_size=body_size,
+            company_id=company.id,
+        )
     config_db = tenant_db_session(tenant_db.database_url)()
     try:
         base_metadata = {
             "company_id": company.id,
-            "body_size_bytes": len(raw_body),
+            "body_size_bytes": body_size,
             "signature_present": bool(x_hub_signature_256),
             "route_scope": "tenant",
         }
@@ -669,7 +730,8 @@ async def _receive_tenant_webhook_request(
         handled = 0
         queued_processing = 0
         queued_media = 0
-        background_media: list[int] = []
+        background_media: list[tuple[int, datetime | None]] = []
+        background_processing: list[tuple[int, datetime | None]] = []
         not_processable = 0
         ignored_reasons: Counter[str] = Counter()
         ingress_ready = whatsapp_ingress_is_ready(config_db, company.id, config=config)
@@ -716,12 +778,13 @@ async def _receive_tenant_webhook_request(
                 stored.append(message.id)
                 if event.get("kind") == "message":
                     if whatsapp_event_requires_media_download(event):
-                        enqueue_whatsapp_media_download(config_db, company.id, message.id)
-                        background_media.append(message.id)
+                        media_job = enqueue_whatsapp_media_download(config_db, company.id, message.id)
+                        background_media.append((media_job.id, media_job.next_retry_at))
                         queued_media += 1
                         queue_action = "download_whatsapp_media"
-                    elif whatsapp_event_has_processable_content(event):
-                        enqueue_whatsapp_processing(config_db, company.id, message.id)
+                    elif whatsapp_event_requires_agent_turn(event):
+                        processing_job = enqueue_whatsapp_processing(config_db, company.id, message.id)
+                        background_processing.append((processing_job.id, processing_job.next_retry_at))
                         queued_processing += 1
                         queue_action = "process_inbound_message"
                     else:
@@ -744,10 +807,15 @@ async def _receive_tenant_webhook_request(
                 company_id=company.id,
             )
         config_db.commit()
+        if background_processing:
+            background_tasks.add_task(
+                _process_whatsapp_jobs_in_background,
+                company.id,
+                background_processing,
+            )
         if background_media:
             background_tasks.add_task(
-                _download_whatsapp_media_in_background,
-                tenant_db.database_url,
+                _process_whatsapp_jobs_in_background,
                 company.id,
                 background_media,
             )

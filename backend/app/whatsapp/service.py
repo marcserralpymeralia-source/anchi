@@ -39,6 +39,8 @@ WHATSAPP_PROVIDER = "meta"
 WHATSAPP_ONBOARDING_CLOUD_API = "cloud_api"
 WHATSAPP_ONBOARDING_COEXISTENCE = "coexistence"
 WHATSAPP_COEXISTENCE_FEATURE_TYPE = "whatsapp_business_app_onboarding"
+WHATSAPP_ORDER_IDLE_HOURS = 12
+WHATSAPP_RETRYABLE_AUTO_SEND_STEP = "outbound_send_failed_retryable"
 META_ID_PATTERN = re.compile(r"^\d{5,32}$")
 WHATSAPP_SUPPORTED_DOCUMENT_MIME_TYPES = {
     "application/pdf",
@@ -155,7 +157,9 @@ def whatsapp_config(db: Session, company_id: int) -> WhatsAppTenantConfig:
         access_token=_secret_value(settings_map.get("access_token")).strip(),
         verify_token=_secret_value(settings_map.get("verify_token")).strip(),
         webhook_enabled=_as_bool(settings_map.get("webhook_enabled")),
-        idle_session_hours=max(1, min(_as_int(settings_map.get("idle_session_hours"), 12), 72)),
+        # Order sessions always settle after the agreed fixed 12-hour idle
+        # window. Ignore stale tenant settings left from the removed controls.
+        idle_session_hours=WHATSAPP_ORDER_IDLE_HOURS,
         bot_debounce_seconds=max(0, min(_as_int(settings_map.get("bot_debounce_seconds"), 3), 15)),
         business_faq=(settings_map.get("business_faq") or "").strip()[:12000],
         connection_status=(settings_map.get("connection_status") or "not_connected").strip().lower(),
@@ -163,7 +167,10 @@ def whatsapp_config(db: Session, company_id: int) -> WhatsAppTenantConfig:
         last_error=(settings_map.get("last_error") or "").strip(),
         default_language=(settings_map.get("default_language") or "es").strip(),
         timezone=(settings_map.get("timezone") or "Europe/Madrid").strip(),
-        response_window_minutes=_as_int(settings_map.get("response_window_minutes"), 24 * 60),
+        response_window_minutes=max(
+            1,
+            min(_as_int(settings_map.get("response_window_minutes"), 24 * 60), 24 * 60),
+        ),
         max_auto_messages=max(1, min(_as_int(settings_map.get("max_auto_messages"), 20), 100)),
         max_agent_turns_per_session=max(1, min(_as_int(settings_map.get("max_agent_turns_per_session"), 30), 100)),
         max_attachment_bytes=_as_int(settings_map.get("max_attachment_bytes"), 10 * 1024 * 1024),
@@ -658,27 +665,27 @@ async def _download_meta_binary(
     max_bytes: int,
 ) -> bytes:
     if not _is_allowed_media_host(url):
-        raise WhatsAppEmbeddedSignupError("Meta devolviÃ³ una URL de media no segura.", error_type="invalid_media_url")
+        raise WhatsAppEmbeddedSignupError("Meta devolvió una URL de media no segura.", error_type="invalid_media_url")
     try:
         async with client.stream("GET", url, headers={"Authorization": f"Bearer {access_token}"}) as response:
-            if response.status_code >= 400:
-                raise WhatsAppEmbeddedSignupError("Meta rechazÃ³ la descarga de la media.", error_type="media_download_failed")
+            if not 200 <= response.status_code < 300:
+                raise WhatsAppEmbeddedSignupError("Meta rechazó la descarga de la media.", error_type="media_download_failed")
             content_length = response.headers.get("content-length")
             try:
                 declared_size = int(content_length or 0)
             except ValueError:
                 declared_size = 0
             if declared_size > max_bytes:
-                raise WhatsAppEmbeddedSignupError("El adjunto supera el tamaÃ±o mÃ¡ximo permitido.", error_type="media_too_large")
+                raise WhatsAppEmbeddedSignupError("El adjunto supera el tamaño máximo permitido.", error_type="media_too_large")
 
             content = bytearray()
             async for chunk in response.aiter_bytes():
                 if len(content) + len(chunk) > max_bytes:
-                    raise WhatsAppEmbeddedSignupError("El adjunto supera el tamaÃ±o mÃ¡ximo permitido.", error_type="media_too_large")
+                    raise WhatsAppEmbeddedSignupError("El adjunto supera el tamaño máximo permitido.", error_type="media_too_large")
                 content.extend(chunk)
             return bytes(content)
     except httpx.TimeoutException as exc:
-        raise WhatsAppEmbeddedSignupError("Meta no respondiÃ³ a tiempo al descargar la media.", error_type="timeout") from exc
+        raise WhatsAppEmbeddedSignupError("Meta no respondió a tiempo al descargar la media.", error_type="timeout") from exc
     except httpx.HTTPError as exc:
         raise WhatsAppEmbeddedSignupError("No se pudo descargar la media desde Meta.", error_type="media_download_failed") from exc
 
@@ -725,20 +732,70 @@ def _whatsapp_message_has_processable_text(message: InboundMessage) -> bool:
 
 
 def _whatsapp_media_ready_for_processing(message: InboundMessage) -> bool:
-    pending_statuses = {
-        "pending",
-        "downloaded",
+    attachments = list(message.attachments or [])
+    pending_statuses = {"pending", "downloaded", "storage_error"}
+    terminal_statuses = {
+        "extracted",
+        "no_text_found",
+        "stored",
         "transcription_pending",
         "extraction_error",
-        "storage_error",
         "unsupported",
     }
-    attachments = list(message.attachments or [])
-    if any((attachment.extraction_status or "pending") in pending_statuses for attachment in attachments):
+    statuses = [str(attachment.extraction_status or "pending").strip().lower() for attachment in attachments]
+    if any(status in pending_statuses or status not in terminal_statuses for status in statuses):
         return False
-    # Images are stored for the conversation but are not text-extracted. Only
-    # enqueue the order pipeline when the message also has usable text.
-    return not attachments or _whatsapp_message_has_processable_text(message)
+    # Terminal unreadable media must reach the agent too: it records a clear
+    # human handoff instead of leaving the customer message silently unhandled.
+    unreadable_statuses = {
+        "no_text_found",
+        "stored",
+        "transcription_pending",
+        "extraction_error",
+        "unsupported",
+    }
+    return not attachments or _whatsapp_message_has_processable_text(message) or any(
+        status in unreadable_statuses for status in statuses
+    )
+
+
+def mark_whatsapp_media_failed_after_retries(
+    db: Session,
+    *,
+    company_id: int,
+    inbound_message_id: int,
+) -> bool:
+    """Turn exhausted download/storage failures into a durable human handoff."""
+
+    message = db.scalar(
+        select(InboundMessage).where(
+            InboundMessage.id == inbound_message_id,
+            InboundMessage.company_id == company_id,
+        )
+    )
+    if not message:
+        return False
+    changed = False
+    for attachment in message.attachments or []:
+        status = str(attachment.extraction_status or "pending").strip().lower()
+        if status in {"pending", "downloaded", "storage_error"}:
+            attachment.extraction_status = "extraction_error"
+            attachment.extraction_error = (
+                "No se pudo descargar o guardar el archivo de WhatsApp tras varios intentos."
+            )
+            changed = True
+    if changed:
+        _upsert_whatsapp_alert(
+            db,
+            company_id=company_id,
+            alert_type="whatsapp_media_processing_failed",
+            title="Un archivo de WhatsApp necesita revisión",
+            message="No se pudo descargar o guardar un archivo tras varios intentos. El chat se ha derivado al equipo.",
+            severity="medium",
+            inbound_message_id=message.id,
+        )
+        db.commit()
+    return changed and _whatsapp_media_ready_for_processing(message)
 
 
 async def download_whatsapp_media(
@@ -764,7 +821,10 @@ async def download_whatsapp_media(
             "failed": len(attachments),
             "ready_for_processing": _whatsapp_media_ready_for_processing(message),
         }
-    attachments = list(message.attachments or [])
+    attachments = sorted(
+        list(message.attachments or []),
+        key=lambda attachment: int(attachment.id or 0),
+    )
     if not attachments:
         return {"ok": True, "downloaded": 0, "skipped": 0, "failed": 0, "ready_for_processing": True}
     owns_client = client is None
@@ -774,7 +834,23 @@ async def download_whatsapp_media(
     failed = 0
     retryable_failure = False
     try:
-        for attachment in attachments:
+        for attachment_id in (attachment.id for attachment in attachments):
+            # The request BackgroundTask and durable worker can race to fetch
+            # the same attachment. Serialize each attachment on databases
+            # that support row locks, and refresh the identity-map row after
+            # waiting so the second worker observes the first worker's result.
+            attachment = db.scalar(
+                select(MessageAttachment)
+                .where(
+                    MessageAttachment.id == attachment_id,
+                    MessageAttachment.company_id == company_id,
+                    MessageAttachment.inbound_message_id == inbound_message_id,
+                )
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if not attachment:
+                continue
             if not _is_supported_media(
                 attachment.filename,
                 attachment.content_type,
@@ -805,7 +881,7 @@ async def download_whatsapp_media(
                     continue
             media_id = _meta_media_id(message, attachment)
             if not media_id:
-                _persist_media_failure(attachment, "Meta no proporcionÃ³ un identificador de media.")
+                _persist_media_failure(attachment, "Meta no proporcionó un identificador de media.")
                 failed += 1
                 db.commit()
                 continue
@@ -833,10 +909,10 @@ async def download_whatsapp_media(
                     )
                 media_url = str(media_info.get("url") or "").strip()
                 if not media_url:
-                    raise WhatsAppEmbeddedSignupError("Meta no devolviÃ³ la URL de la media.", error_type="media_download_failed")
+                    raise WhatsAppEmbeddedSignupError("Meta no devolvió la URL de la media.", error_type="media_download_failed")
                 declared_size = _as_int(str(media_info.get("file_size") or ""), 0)
                 if declared_size > config.max_attachment_bytes:
-                    raise WhatsAppEmbeddedSignupError("El adjunto supera el tamaÃ±o mÃ¡ximo permitido.", error_type="media_too_large")
+                    raise WhatsAppEmbeddedSignupError("El adjunto supera el tamaño máximo permitido.", error_type="media_too_large")
                 content = await _download_meta_binary(
                     graph_client,
                     url=media_url,
@@ -1104,7 +1180,8 @@ def whatsapp_response_window_status(
         }
     if received_at.tzinfo is None:
         received_at = received_at.replace(tzinfo=timezone.utc)
-    expires_at = received_at + timedelta(minutes=max(int(response_window_minutes or 0), 1))
+    bounded_window_minutes = max(1, min(int(response_window_minutes or 0), 24 * 60))
+    expires_at = received_at + timedelta(minutes=bounded_window_minutes)
     remaining_seconds = max(0, int((expires_at - datetime.now(timezone.utc)).total_seconds()))
     has_recipient = bool(str(latest_inbound.sender or "").strip())
     return {
@@ -1296,7 +1373,7 @@ def _store_embedded_signup_state(
         "connection_status": connection_status,
         "connected_at": datetime.now(timezone.utc).isoformat() if connection_status == "connected" else "",
         "webhook_enabled": "true" if webhook_enabled else "false",
-        "idle_session_hours": "12",
+        "idle_session_hours": str(WHATSAPP_ORDER_IDLE_HOURS),
         "bot_debounce_seconds": "3",
         "business_faq": "",
         "max_auto_messages": "20",
@@ -1639,6 +1716,21 @@ def _message_event(
     }
     if sync_metadata:
         event_metadata["sync"] = sync_metadata
+    text_content = _extract_message_text(message)
+    context = message.get("context") if isinstance(message.get("context"), dict) else {}
+    referred_product = context.get("referred_product")
+    if isinstance(referred_product, dict):
+        catalog_id = str(referred_product.get("catalog_id") or "").strip()[:120]
+        retailer_id = str(referred_product.get("product_retailer_id") or "").strip()[:200]
+        if catalog_id or retailer_id:
+            product_context = "Producto de catálogo al que hace referencia el cliente"
+            if retailer_id:
+                product_context += f': referencia "{retailer_id}"'
+            if catalog_id:
+                product_context += f" (catálogo {catalog_id})"
+            text_content = "\n".join(
+                part for part in (str(text_content or "").strip(), product_context) if part
+            )
     return {
         "kind": kind,
         "direction": direction,
@@ -1648,7 +1740,7 @@ def _message_event(
         "recipients": recipients,
         "phone_number_id": phone_number_id,
         "business_account_id": business_account_id,
-        "text_content": _extract_message_text(message),
+        "text_content": text_content,
         "message_type": message.get("type"),
         "message_status": str(history_context.get("status") or "").strip().lower(),
         "occurred_at": _event_timestamp(message.get("timestamp")),
@@ -1950,6 +2042,8 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
                 subject="WhatsApp",
                 text_content=event.get("text_content"),
                 external_thread_id=event.get("external_thread_id"),
+                received_at=event.get("occurred_at"),
+                direction=str(event.get("direction") or "inbound"),
                 metadata=metadata,
             )
             message, conversation = persist_normalized_message(
@@ -1959,6 +2053,9 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
                 has_attachments=bool(event.get("attachments")),
                 has_pdf=any(attachment.get("is_pdf") for attachment in event.get("attachments", [])),
                 has_audio=any(attachment.get("is_audio") for attachment in event.get("attachments", [])),
+                whatsapp_bot_enabled_on_create=(
+                    event_kind == "message" and normalized.direction == "inbound"
+                ),
             )
     except IntegrityError:
         db.rollback()
@@ -2002,7 +2099,12 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
                     is_pdf=bool(attachment.get("is_pdf")),
                     is_image=bool(attachment.get("is_image")),
                     is_audio=bool(attachment.get("is_audio")),
-                    extraction_status="pending",
+                    extraction_status=("pending" if attachment.get("downloadable", True) else "unsupported"),
+                    extraction_error=(
+                        None
+                        if attachment.get("downloadable", True)
+                        else "Este tipo de archivo no se puede interpretar automáticamente."
+                    ),
                 )
             )
     if (
@@ -2021,6 +2123,9 @@ def persist_event(db: Session, company_id: int, event: dict[str, Any], user=None
             .order_by(WhatsAppOrderSession.id.desc())
             .limit(1)
         )
+        conversation.whatsapp_bot_enabled = False
+        conversation.status = "human_owned"
+        conversation.updated_at = datetime.now(timezone.utc)
         if session:
             session.status = "human_handoff"
             session.human_active = True
@@ -2150,6 +2255,48 @@ def _find_idempotent_outbound(
     )
 
 
+def has_accepted_manual_response_replay(
+    db: Session,
+    *,
+    company_id: int,
+    conversation_id: int,
+    idempotency_key: str | None,
+    has_text: bool,
+    attachment_count: int,
+) -> bool:
+    """Return true only when every part of a keyed manual send was accepted."""
+
+    try:
+        normalized_key = _normalize_idempotency_key(idempotency_key)
+    except WhatsAppEmbeddedSignupError:
+        return False
+    if not normalized_key:
+        return False
+
+    bounded_attachment_count = max(0, int(attachment_count or 0))
+    keys = []
+    if has_text:
+        keys.append(f"{normalized_key}:text" if bounded_attachment_count else normalized_key)
+    keys.extend(
+        f"{normalized_key}:media:{index}"
+        for index in range(bounded_attachment_count)
+    )
+    if not keys:
+        return False
+
+    accepted_statuses = {"accepted", "sent", "delivered", "read"}
+    for key in keys:
+        existing = _find_idempotent_outbound(
+            db,
+            company_id=company_id,
+            conversation_id=conversation_id,
+            idempotency_key=key,
+        )
+        if not existing or str(existing.status or "").strip().lower() not in accepted_statuses:
+            return False
+    return True
+
+
 def _pending_outbound_external_id(company_id: int, conversation_id: int, idempotency_key: str) -> str:
     digest = hashlib.sha256(f"{company_id}:{conversation_id}:{idempotency_key}".encode("utf-8")).hexdigest()[:32]
     return f"{_PENDING_OUTBOUND_EXTERNAL_ID_PREFIX}{digest}"
@@ -2272,10 +2419,19 @@ def _mark_outbound_send_unknown(db: Session, message: InboundMessage, *, user_id
         db.rollback()
 
 
-def _mark_outbound_send_failed(db: Session, message: InboundMessage, *, user_id: int | None, error: Exception) -> None:
+def _mark_outbound_send_failed(
+    db: Session,
+    message: InboundMessage,
+    *,
+    user_id: int | None,
+    error: Exception,
+    retryable: bool = False,
+) -> None:
     """Persist a definitive provider rejection without presenting it as pending."""
     message.status = "failed"
-    message.processing_step = "outbound_send_failed"
+    message.processing_step = (
+        WHATSAPP_RETRYABLE_AUTO_SEND_STEP if retryable else "outbound_send_failed"
+    )
     message.processing_error = str(error)[:2000]
     try:
         if isinstance(error, WhatsAppEmbeddedSignupError) and error.error_type in {
@@ -2312,7 +2468,55 @@ def _mark_outbound_send_error(db: Session, message: InboundMessage, *, user_id: 
     if isinstance(error, WhatsAppEmbeddedSignupError) and error.error_type == "meta_api_error":
         _mark_outbound_send_failed(db, message, user_id=user_id, error=error)
         return
+    if isinstance(error, WhatsAppEmbeddedSignupError) and error.error_type == "rate_limited":
+        # A 429 is a definitive rejection, so a retry using the same key cannot duplicate a send.
+        _mark_outbound_send_failed(db, message, user_id=user_id, error=error, retryable=True)
+        return
     _mark_outbound_send_unknown(db, message, user_id=user_id, error=error)
+
+
+def recover_stale_whatsapp_outbound_sends(
+    db: Session,
+    *,
+    company_id: int,
+    now: datetime | None = None,
+    stale_after_seconds: int | None = None,
+) -> int:
+    """Mark interrupted send reservations unknown; never retry a possibly sent message."""
+
+    configured_timeout = max(int(get_settings().meta_request_timeout_seconds or 0), 0)
+    stale_after = max(
+        120,
+        int(stale_after_seconds)
+        if stale_after_seconds is not None
+        else configured_timeout + 30,
+    )
+    cutoff = (now or datetime.now(timezone.utc)) - timedelta(seconds=stale_after)
+    reservations = db.scalars(
+        select(InboundMessage)
+        .where(
+            InboundMessage.company_id == company_id,
+            InboundMessage.provider == WHATSAPP_PROVIDER,
+            InboundMessage.direction == "outbound",
+            InboundMessage.status == "sending",
+            InboundMessage.source_external_id.like(f"{_PENDING_OUTBOUND_EXTERNAL_ID_PREFIX}%"),
+            InboundMessage.created_at <= cutoff,
+        )
+        .order_by(InboundMessage.created_at.asc(), InboundMessage.id.asc())
+        .limit(100)
+        .with_for_update(skip_locked=True)
+    ).all()
+    for message in reservations:
+        _mark_outbound_send_unknown(
+            db,
+            message,
+            user_id=None,
+            error=WhatsAppEmbeddedSignupError(
+                "El proceso de envío se interrumpió antes de guardar la confirmación de Meta.",
+                error_type="send_outcome_unknown",
+            ),
+        )
+    return len(reservations)
 
 
 def _upsert_whatsapp_alert(
@@ -2326,6 +2530,18 @@ def _upsert_whatsapp_alert(
     inbound_message_id: int | None = None,
 ) -> Alert:
     """Create one active alert per WhatsApp incident, without leaking provider data."""
+
+    conversation_id = None
+    if inbound_message_id is not None:
+        conversation_id = db.scalar(
+            select(InboundMessage.conversation_id).where(
+                InboundMessage.id == inbound_message_id,
+                InboundMessage.company_id == company_id,
+            )
+        )
+    alert_payload: dict[str, Any] = {}
+    if conversation_id is not None:
+        alert_payload["conversation_id"] = conversation_id
 
     active_statuses = ("open", "seen")
     existing = db.scalar(
@@ -2342,6 +2558,16 @@ def _upsert_whatsapp_alert(
         existing.title = title
         existing.message = message
         existing.severity = severity
+        if conversation_id is not None:
+            try:
+                existing_payload = json.loads(existing.payload_json or "{}")
+            except (TypeError, ValueError):
+                existing_payload = {}
+            if isinstance(existing_payload, dict):
+                existing_payload.update(alert_payload)
+                existing.payload_json = json.dumps(existing_payload, ensure_ascii=False)
+            else:
+                existing.payload_json = json.dumps(alert_payload, ensure_ascii=False)
         return existing
     alert = Alert(
         company_id=company_id,
@@ -2351,6 +2577,7 @@ def _upsert_whatsapp_alert(
         status="open",
         title=title,
         message=message,
+        payload_json=json.dumps(alert_payload, ensure_ascii=False) if alert_payload else None,
     )
     db.add(alert)
     db.flush()
@@ -2421,6 +2648,15 @@ def automatic_response_status(
             continue
         metadata = _whatsapp_message_metadata(message)
         if not metadata.get("auto_response"):
+            continue
+
+        if (
+            str(message.status or "").strip().lower() == "failed"
+            and str(message.processing_step or "").strip().lower()
+            == WHATSAPP_RETRYABLE_AUTO_SEND_STEP
+        ):
+            # A definitive 429 rejection was not visible to the customer and
+            # must neither count against the reply limit nor block its retry.
             continue
 
         automatic_messages.append(message)
@@ -2580,6 +2816,17 @@ def record_automatic_response(
     message.status = status
     message.processing_step = processing_step
     conversation.updated_at = datetime.now(timezone.utc)
+    if is_pending_existing and status in {"accepted", "sent", "delivered", "read"}:
+        db.execute(
+            update(Alert)
+            .where(
+                Alert.company_id == company_id,
+                Alert.inbound_message_id == message.id,
+                Alert.alert_type == "whatsapp_outbound_failed",
+                Alert.status.in_(("open", "seen")),
+            )
+            .values(status="resolved", resolved_at=datetime.now(timezone.utc))
+        )
     db.commit()
 
     log_action(
@@ -2617,8 +2864,30 @@ def _reserve_automatic_response(
         conversation_id=conversation_id,
         idempotency_key=idempotency_key,
     )
-    if existing:
+    retryable_failed = bool(
+        existing
+        and str(existing.status or "").strip().lower() == "failed"
+        and str(existing.processing_step or "").strip().lower()
+        == WHATSAPP_RETRYABLE_AUTO_SEND_STEP
+    )
+    if existing and not retryable_failed:
         return _reuse_or_reject_outbound(existing), False
+
+    if retryable_failed:
+        metadata = _whatsapp_message_metadata(existing)
+        retry_payload_matches = (
+            str(existing.original_content or "") == body
+            and int(metadata.get("trigger_message_id") or 0) == int(trigger_message_id)
+            and str(metadata.get("semantic_state") or "") == semantic_state
+            and metadata.get("prompt_execution_id") == prompt_execution_id
+            and metadata.get("assistant_session_id") == assistant_session_id
+            and metadata.get("draft_revision") == draft_revision
+        )
+        if not retry_payload_matches:
+            raise WhatsAppEmbeddedSignupError(
+                "La respuesta preparada cambiÃ³ tras el rechazo de Meta y no se repetirÃ¡ automÃ¡ticamente.",
+                error_type="retry_payload_changed",
+            )
     guard_reason, _ = _automatic_response_guard(
         db,
         company_id=company_id,
@@ -2631,6 +2900,27 @@ def _reserve_automatic_response(
             "La respuesta automática ya no es segura para esta conversación.",
             error_type=guard_reason,
         )
+    if retryable_failed:
+        transition = db.execute(
+            update(InboundMessage)
+            .where(
+                InboundMessage.id == existing.id,
+                InboundMessage.company_id == company_id,
+                InboundMessage.status == "failed",
+                InboundMessage.processing_step == WHATSAPP_RETRYABLE_AUTO_SEND_STEP,
+            )
+            .values(
+                status="sending",
+                processing_step="outbound_auto_sending",
+                processing_error=None,
+            )
+        )
+        db.commit()
+        if int(transition.rowcount or 0) != 1:
+            db.refresh(existing)
+            return _reuse_or_reject_outbound(existing), False
+        db.refresh(existing)
+        return existing, True
     try:
         message = record_automatic_response(
             db,
@@ -3186,22 +3476,87 @@ async def retry_failed_whatsapp_message(
 
 
 def _extract_message_text(message: dict[str, Any]) -> str | None:
-    if message.get("type") == "text":
+    message_type = str(message.get("type") or "").strip().lower()
+    if message_type == "text":
         return (message.get("text") or {}).get("body")
-    if message.get("type") == "document":
+    if message_type == "document":
         document = message.get("document") or {}
         return document.get("caption")
-    if message.get("type") == "image":
+    if message_type == "image":
         image = message.get("image") or {}
         return image.get("caption")
-    if message.get("type") == "audio":
+    if message_type == "audio":
         return (message.get("audio") or {}).get("caption")
-    if message.get("type") == "video":
+    if message_type == "video":
         video = message.get("video") or {}
         return video.get("caption")
-    if message.get("type") == "revoke":
+    if message_type == "location":
+        location = message.get("location") if isinstance(message.get("location"), dict) else {}
+        details = []
+        name = str(location.get("name") or "").strip()[:200]
+        address = str(location.get("address") or "").strip()[:500]
+        if name:
+            details.append(f"nombre del lugar: {name}")
+        if address:
+            details.append(f"dirección indicada: {address}")
+        try:
+            latitude = float(location.get("latitude"))
+            longitude = float(location.get("longitude"))
+            if -90 <= latitude <= 90 and -180 <= longitude <= 180:
+                details.append(f"coordenadas: {latitude:.6f}, {longitude:.6f}")
+        except (TypeError, ValueError):
+            pass
+        return (
+            "El cliente compartió una ubicación por WhatsApp: " + "; ".join(details)
+            if details
+            else "El cliente compartió una ubicación de WhatsApp sin datos legibles; hace falta revisión humana."
+        )
+    if message_type == "button":
+        button = message.get("button") if isinstance(message.get("button"), dict) else {}
+        return button.get("text") or button.get("payload")
+    if message_type == "interactive":
+        interactive = message.get("interactive") if isinstance(message.get("interactive"), dict) else {}
+        reply_type = str(interactive.get("type") or "").strip().lower()
+        reply_key = reply_type if reply_type in {"button_reply", "list_reply"} else None
+        reply = interactive.get(reply_key) if reply_key else None
+        reply = reply if isinstance(reply, dict) else {}
+        title = str(reply.get("title") or "").strip()
+        description = str(reply.get("description") or "").strip()
+        reply_id = str(reply.get("id") or "").strip()
+        if title or description or reply_id:
+            selected = title or description or reply_id
+            parts = [f"El cliente seleccionó una opción de WhatsApp: {selected}."]
+            if description and description.casefold() != selected.casefold():
+                parts.append(f"Detalle de la opción: {description}.")
+            if reply_id and reply_id.casefold() not in {selected.casefold(), description.casefold()}:
+                parts.append(f"Identificador de la opción: {reply_id}.")
+            return " ".join(parts)
+        return None
+    if message_type == "order":
+        order = message.get("order") if isinstance(message.get("order"), dict) else {}
+        lines = ["Pedido seleccionado por el cliente en el catálogo de WhatsApp:"]
+        freeform_text = str(order.get("text") or "").strip()
+        if freeform_text:
+            lines.append(f"Nota del cliente: {freeform_text}")
+        product_items = order.get("product_items")
+        if isinstance(product_items, list):
+            for item in product_items[:100]:
+                if not isinstance(item, dict):
+                    continue
+                retailer_id = str(item.get("product_retailer_id") or "").strip()
+                quantity = str(item.get("quantity") or "").strip()
+                if not retailer_id and not quantity:
+                    continue
+                product = f'referencia de catálogo "{retailer_id}"' if retailer_id else "producto sin referencia identificada"
+                if quantity:
+                    product += f"; cantidad solicitada: {quantity}"
+                lines.append(f"- {product}")
+        if len(lines) == 1:
+            lines.append("El contenido del pedido no incluía líneas legibles; hace falta revisión humana.")
+        return "\n".join(lines)
+    if message_type == "revoke":
         return "Mensaje eliminado desde WhatsApp Business App"
-    if message.get("type") == "edit":
+    if message_type == "edit":
         edit = message.get("edit") if isinstance(message.get("edit"), dict) else {}
         edited_message = edit.get("message") if isinstance(edit.get("message"), dict) else {}
         return _extract_message_text(edited_message) or "Mensaje editado desde WhatsApp Business App"
@@ -3278,6 +3633,15 @@ def whatsapp_event_has_processable_content(event: dict[str, Any]) -> bool:
     if not isinstance(event, dict) or whatsapp_event_requires_media_download(event):
         return False
     return bool(str(event.get("text_content") or "").strip())
+
+
+def whatsapp_event_requires_agent_turn(event: dict[str, Any]) -> bool:
+    """Queue text or terminal-attachment events so unreadable media is handed off."""
+
+    attachments = event.get("attachments") if isinstance(event, dict) else None
+    return whatsapp_event_has_processable_content(event) or bool(
+        isinstance(attachments, list) and attachments
+    )
 
 
 def _as_bool(value: str | None, default: bool = False) -> bool:

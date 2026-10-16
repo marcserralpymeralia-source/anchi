@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -23,7 +24,7 @@ from app.agent.platform import UnifiedOrderPipelineService  # noqa: E402
 from app.channels.service import get_or_create_channel  # noqa: E402
 from app.agent.extraction.schema import ExtractedCustomer, ExtractedOrderLine, OrderExtraction, OrderExtractionInput, OrderExtractionResult  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import BackgroundJob, Customer, Email, EmailSettings, ImportJob, InputChannel, InboundMessage, JobAttempt, LLMSettings, Order, OrderLine, Product  # noqa: E402
+from app.db.models import Alert, BackgroundJob, Company, Conversation, Customer, Email, EmailSettings, ImportJob, InputChannel, InboundMessage, JobAttempt, LLMSettings, Order, OrderLine, Product, WhatsAppOrderSession  # noqa: E402
 from app.imports.service import create_preview  # noqa: E402
 from app.jobs.service import claim_next_job, enqueue_job, execute_job_inline, fail_job, finish_job, recover_stale_jobs, retry_job, get_job  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
@@ -31,7 +32,7 @@ from app.master.models import CompanyMembership, MasterCompany, MasterTenantData
 from app.core.encryption import encrypt_secret  # noqa: E402
 from app.tenancy.database import get_tenant_engine  # noqa: E402
 from app.tenancy.migrations import upgrade_tenant_schema  # noqa: E402
-from app.workers.jobs_worker import _process_import_job, _process_job, run_worker_cycle  # noqa: E402
+from app.workers.jobs_worker import _process_import_job, _process_job, _rotate_worker_tenants, run_worker_cycle  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 
 
@@ -53,6 +54,15 @@ class JobsReliabilityTests(unittest.TestCase):
         self.tenant_engine.dispose()
         get_tenant_engine.cache_clear()
         self.tempdir.cleanup()
+
+    def test_cron_worker_rotates_bounded_tenant_batches_fairly(self):
+        tenants = list(range(1, 13))
+        visited = set()
+        for minute_slot in range(len(tenants)):
+            batch = _rotate_worker_tenants(tenants, max_jobs=5, minute_slot=minute_slot)
+            visited.update(batch[:5])
+
+        self.assertEqual(visited, set(tenants))
 
     def _seed_master(self):
         db = self.MasterSession()
@@ -387,6 +397,55 @@ class JobsReliabilityTests(unittest.TestCase):
         self.assertIsNotNone(attempts[0].finished_at)
         self.assertEqual(claimed.status, "success")
         db.close()
+
+    def test_worker_cycle_can_claim_only_the_new_whatsapp_job(self):
+        self._seed_master()
+        upgrade_tenant_schema(self.tenant_engine, company_id=1, application_version="1.2.3")
+        db = self.TenantSession()
+        older_job = enqueue_job(
+            db,
+            company_id=1,
+            job_type="email_sync",
+            payload={"auto_process": False},
+        )
+        whatsapp_job = enqueue_job(
+            db,
+            company_id=1,
+            job_type="process_inbound_message",
+            payload={"inbound_message_id": 123, "channel": "whatsapp"},
+        )
+        older_job_id = older_job.id
+        whatsapp_job_id = whatsapp_job.id
+        db.close()
+
+        with patch(
+            "app.workers.jobs_worker.MasterSessionLocal",
+            new=self.MasterSession,
+        ), patch(
+            "app.workers.jobs_worker._process_job",
+            return_value={"ok": True, "status": "processed"},
+        ) as process_job, patch(
+            "app.workers.jobs_worker.enqueue_due_whatsapp_session_finalizations"
+        ) as enqueue_due, patch(
+            "app.workers.jobs_worker.recover_stale_jobs"
+        ) as recover_stale:
+            summary = run_worker_cycle(
+                max_jobs=1,
+                company_id=1,
+                job_id=whatsapp_job_id,
+            )
+
+        db = self.TenantSession()
+        try:
+            self.assertEqual(summary["attempted"], 1)
+            self.assertEqual(summary["processed"], 1)
+            self.assertEqual(process_job.call_args.args[1].id, whatsapp_job_id)
+            enqueue_due.assert_not_called()
+            recover_stale.assert_not_called()
+            self.assertEqual(db.get(BackgroundJob, whatsapp_job_id).status, "success")
+            self.assertEqual(db.get(BackgroundJob, older_job_id).status, "queued")
+        finally:
+            db.close()
 
     def test_retry_manual_keeps_attempt_history(self):
         db = self.TenantSession()
@@ -827,6 +886,98 @@ class JobsReliabilityTests(unittest.TestCase):
         self.assertEqual(processed_job.status, "success")
         self.assertEqual(db.scalar(select(func.count()).select_from(Order)) or 0, 1)
         self.assertEqual(db.scalar(select(func.count()).select_from(JobAttempt).where(JobAttempt.job_id == job.id)) or 0, 1)
+        db.close()
+
+    def test_exhausted_whatsapp_finalization_is_visible_and_disables_the_chat_bot(self):
+        from datetime import datetime, timedelta, timezone
+
+        self._seed_master()
+        upgrade_tenant_schema(self.tenant_engine, company_id=1, application_version="1.2.3")
+        now = datetime.now(timezone.utc)
+        db = self.TenantSession()
+        db.add(Company(id=1, name="Synthetic tenant"))
+        channel = get_or_create_channel(db, 1, "whatsapp")
+        conversation = Conversation(
+            company_id=1,
+            channel_id=channel.id,
+            provider="meta",
+            external_thread_id="+34600000000",
+            status="open",
+            whatsapp_bot_enabled=True,
+        )
+        db.add(conversation)
+        db.flush()
+        message = InboundMessage(
+            company_id=1,
+            channel_id=channel.id,
+            conversation_id=conversation.id,
+            provider="meta",
+            source_external_id="wa-finalization-failure",
+            sender="+34600000000",
+            original_content="Quiero cuatro cajas eco",
+            content_type="text",
+            direction="inbound",
+            received_at=now - timedelta(hours=13),
+        )
+        db.add(message)
+        db.flush()
+        session = WhatsAppOrderSession(
+            company_id=1,
+            conversation_id=conversation.id,
+            active_key=f"whatsapp-conversation:{conversation.id}",
+            status="ready_for_review",
+            intent="order",
+            revision=1,
+            last_processed_message_id=message.id,
+            draft_json=json.dumps({"customer_name": "", "lines": [], "notes": ""}),
+            missing_fields_json="[]",
+            started_at=message.received_at,
+            last_customer_message_at=message.received_at,
+            due_at=now - timedelta(hours=1),
+        )
+        db.add(session)
+        db.commit()
+        session_id = session.id
+        conversation_id = conversation.id
+        message_id = message.id
+        db.close()
+
+        with patch(
+            "app.workers.jobs_worker.MasterSessionLocal",
+            new=self.MasterSession,
+        ), patch(
+            "app.workers.jobs_worker._process_job",
+            side_effect=RuntimeError("synthetic finalization failure"),
+        ), patch(
+            "app.whatsapp.agent.await_send_automatic_response",
+            return_value={"sent": False, "reason": "server_not_configured"},
+        ):
+            summary = run_worker_cycle()
+
+        db = self.TenantSession()
+        persisted_session = db.get(WhatsAppOrderSession, session_id)
+        persisted_conversation = db.get(Conversation, conversation_id)
+        failure_alert = db.scalar(
+            select(Alert).where(
+                Alert.company_id == 1,
+                Alert.inbound_message_id == message_id,
+                Alert.alert_type == "whatsapp_order_finalization_failed",
+                Alert.status == "open",
+            )
+        )
+        failed_job = db.scalar(
+            select(BackgroundJob).where(
+                BackgroundJob.company_id == 1,
+                BackgroundJob.job_type == "whatsapp_finalize_session",
+            )
+        )
+        self.assertEqual(summary["attempted"], 1)
+        self.assertEqual(failed_job.status, "failed")
+        self.assertEqual(persisted_session.status, "human_handoff")
+        self.assertTrue(persisted_session.human_active)
+        self.assertEqual(persisted_conversation.status, "human_owned")
+        self.assertFalse(persisted_conversation.whatsapp_bot_enabled)
+        self.assertIsNotNone(failure_alert)
         db.close()
 
     def _run_fast_path_case(

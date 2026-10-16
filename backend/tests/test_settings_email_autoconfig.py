@@ -148,9 +148,15 @@ class EmailAutoconfigRouteTests(unittest.TestCase):
             self.assertIn('data-email-save-detected', response.text)
             self.assertIn('name="email_account_only" value="on"', response.text)
             self.assertIn('action="/settings/email/autoconfig"', response.text)
-            self.assertIn('Respuestas del agente', response.text)
+            self.assertNotIn('Bot de WhatsApp', response.text)
             self.assertNotIn('Modo de funcionamiento', response.text)
             self.assertNotIn('Activar el agente para este canal', response.text)
+            self.assertNotIn('/settings/channels/whatsapp/assistant', response.text)
+            self.assertNotIn('name="idle_session_hours"', response.text)
+            self.assertNotIn('name="bot_debounce_seconds"', response.text)
+            self.assertNotIn('name="max_auto_messages"', response.text)
+            self.assertNotIn('name="max_agent_turns_per_session"', response.text)
+            self.assertNotIn('name="business_faq"', response.text)
         finally:
             fixture.cleanup()
 

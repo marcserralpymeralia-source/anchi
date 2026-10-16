@@ -329,7 +329,14 @@ def cancel_job(db: Session, company_id: int, job_id: int) -> BackgroundJob | Non
     return job
 
 
-def claim_next_job(db: Session, *, owner: str, company_id: int | None = None, job_types: set[str] | None = None) -> BackgroundJob | None:
+def claim_next_job(
+    db: Session,
+    *,
+    owner: str,
+    company_id: int | None = None,
+    job_types: set[str] | None = None,
+    job_id: int | None = None,
+) -> BackgroundJob | None:
     now = _now()
     settings = _settings()
     conditions = [
@@ -341,6 +348,8 @@ def claim_next_job(db: Session, *, owner: str, company_id: int | None = None, jo
         conditions.append(BackgroundJob.job_type.in_(sorted(job_types)))
     if company_id is not None:
         conditions.append(BackgroundJob.company_id == company_id)
+    if job_id is not None:
+        conditions.append(BackgroundJob.id == int(job_id))
     candidate_id = db.scalar(
         select(BackgroundJob.id)
         .where(*conditions)
@@ -357,6 +366,8 @@ def claim_next_job(db: Session, *, owner: str, company_id: int | None = None, jo
         ]
     if company_id is not None:
         update_conditions.append(BackgroundJob.company_id == company_id)
+    if job_id is not None:
+        update_conditions.append(BackgroundJob.id == int(job_id))
     result = db.execute(
         update(BackgroundJob)
         .where(*update_conditions)

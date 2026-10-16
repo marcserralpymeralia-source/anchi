@@ -6,6 +6,7 @@ import asyncio
 import json
 import re
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -20,7 +21,7 @@ from app.core import lifespan as lifespan_module  # noqa: E402
 from app.core.app_factory import create_app  # noqa: E402
 from app.db.models import ChannelSetting, Conversation, Customer, InboundMessage, InputChannel, MessageAttachment, WhatsAppOrderSession, utcnow  # noqa: E402
 from app.messages.service import upsert_inbound_message  # noqa: E402
-from app.whatsapp.service import WhatsAppEmbeddedSignupError, send_whatsapp_media  # noqa: E402
+from app.whatsapp.service import WhatsAppEmbeddedSignupError, record_manual_response, send_whatsapp_media  # noqa: E402
 from scripts.performance_data import build_performance_fixture, temporary_performance_environment  # noqa: E402
 
 
@@ -164,6 +165,20 @@ class WhatsAppInboxTests(unittest.TestCase):
                     InboundMessage.direction == "inbound",
                 )
             )
+            _, other_conversation = upsert_inbound_message(
+                db,
+                company_id=1,
+                channel_key="whatsapp",
+                provider="meta",
+                external_id="wamid.inbox-test-other",
+                sender="+34600000001",
+                recipients=["+34910000000"],
+                subject="Otra consulta de WhatsApp",
+                text_content="Este es otro chat de prueba.",
+                external_thread_id="+34600000001",
+                received_at=utcnow() - timedelta(minutes=1),
+                content_type="text",
+            )
             db.add(
                 WhatsAppOrderSession(
                     company_id=1,
@@ -180,6 +195,7 @@ class WhatsAppInboxTests(unittest.TestCase):
                 )
             )
             db.commit()
+            other_conversation_id = other_conversation.id
         engine.dispose()
 
         client, cleanup = self._client_for(fixture)
@@ -187,6 +203,7 @@ class WhatsAppInboxTests(unittest.TestCase):
             self._login(client, fixture)
             page = client.get(f"/whatsapp/inbox?conversation_id={conversation_id}")
             csrf = re.search(r'<meta name="csrf-token" content="([^"]*)"', page.text)
+            self.assertEqual(page.text.count('role="switch"'), 1)
             self.assertIn('role="switch" aria-checked="false"', page.text)
             self.assertIn("Bot de WhatsApp", page.text)
             self.assertNotIn("Atención humana", page.text)
@@ -196,6 +213,9 @@ class WhatsAppInboxTests(unittest.TestCase):
                 follow_redirects=False,
             )
             enabled_page = client.get(response.headers["location"])
+            other_chat_page = client.get(
+                f"/whatsapp/inbox?conversation_id={other_conversation_id}"
+            )
             enabled_csrf = re.search(r'<meta name="csrf-token" content="([^"]*)"', enabled_page.text)
             pause = client.post(
                 f"/whatsapp/inbox/{conversation_id}/assistant-control",
@@ -212,6 +232,8 @@ class WhatsAppInboxTests(unittest.TestCase):
         self.assertNotIn("Esperando datos del cliente", page.text)
         self.assertNotIn("Indicar cantidad", page.text)
         self.assertIn('role="switch" aria-checked="true"', enabled_page.text)
+        self.assertEqual(other_chat_page.status_code, 200)
+        self.assertIn('role="switch" aria-checked="false"', other_chat_page.text)
         self.assertIn('role="switch" aria-checked="false"', paused_page.text)
         self.assertEqual(response.status_code, 303)
         self.assertEqual(pause.status_code, 303)
@@ -711,6 +733,58 @@ class WhatsAppInboxTests(unittest.TestCase):
             cleanup()
             fixture.cleanup()
 
+    def test_accepted_manual_send_replay_succeeds_after_reply_window_expires(self):
+        fixture = build_performance_fixture("small")
+        conversation_id = self._seed_whatsapp(fixture)
+        idempotency_key = "accepted-replay-after-window"
+        engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        with session_factory() as db:
+            inbound = db.scalar(
+                select(InboundMessage).where(
+                    InboundMessage.company_id == 1,
+                    InboundMessage.conversation_id == conversation_id,
+                    InboundMessage.direction == "inbound",
+                )
+            )
+            inbound.received_at = utcnow() - timedelta(days=3)
+            db.commit()
+            record_manual_response(
+                db,
+                company_id=1,
+                conversation_id=conversation_id,
+                body="Respuesta aceptada anteriormente",
+                external_id="wamid.accepted-replay-after-window",
+                status="accepted",
+                processing_step="outbound_accepted",
+                idempotency_key=idempotency_key,
+            )
+        engine.dispose()
+
+        client, cleanup = self._client_for(fixture)
+        try:
+            self._login(client, fixture)
+            page = client.get(f"/whatsapp/inbox?conversation_id={conversation_id}")
+            csrf = re.search(r'<meta name="csrf-token" content="([^"]*)"', page.text)
+            with patch("app.whatsapp.inbox_routes.send_manual_response", new=AsyncMock()) as send:
+                response = client.post(
+                    f"/whatsapp/inbox/{conversation_id}/reply",
+                    data={
+                        "body": "Respuesta aceptada anteriormente",
+                        "idempotency_key": idempotency_key,
+                        "_csrf_token": csrf.group(1) if csrf else "",
+                    },
+                    follow_redirects=False,
+                )
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+        self.assertEqual(response.status_code, 303)
+        self.assertIn("notice=sent", response.headers["location"])
+        self.assertNotIn("error=response_window_expired", response.headers["location"])
+        send.assert_not_awaited()
+
     def test_media_send_uploads_file_then_sends_document_message(self):
         fixture = build_performance_fixture("small")
         conversation_id = self._seed_whatsapp(fixture)
@@ -999,6 +1073,70 @@ class WhatsAppInboxTests(unittest.TestCase):
         finally:
             cleanup()
             fixture.cleanup()
+
+    def test_manual_media_sync_queues_processing_only_after_media_is_ready(self):
+        fixture = build_performance_fixture("small")
+        conversation_id = self._seed_whatsapp(fixture)
+        engine = create_engine(fixture.tenant_database_url, connect_args={"check_same_thread": False})
+        session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+        with session() as db:
+            message = db.scalar(
+                select(InboundMessage).where(
+                    InboundMessage.company_id == 1,
+                    InboundMessage.conversation_id == conversation_id,
+                    InboundMessage.direction == "inbound",
+                )
+            )
+            attachment = MessageAttachment(
+                company_id=1,
+                inbound_message_id=message.id,
+                filename="pedido.pdf",
+                content_type="application/pdf",
+                extraction_status="extraction_error",
+            )
+            db.add(attachment)
+            db.flush()
+            attachment_id = attachment.id
+            message_id = message.id
+            db.commit()
+        engine.dispose()
+
+        client, cleanup = self._client_for(fixture)
+        try:
+            self._login(client, fixture)
+            with patch(
+                "app.whatsapp.inbox_routes.download_whatsapp_media",
+                new=AsyncMock(
+                    side_effect=[
+                        {"ok": True, "ready_for_processing": False},
+                        {"ok": True, "ready_for_processing": True},
+                    ]
+                ),
+            ), patch(
+                "app.whatsapp.inbox_routes.enqueue_whatsapp_processing",
+                return_value=SimpleNamespace(id=42, next_retry_at=None),
+            ) as enqueue_processing, patch(
+                "app.whatsapp.inbox_routes._process_whatsapp_job_after_manual_media_sync",
+                new=AsyncMock(),
+            ) as process_job:
+                not_ready = client.get(
+                    f"/whatsapp/inbox/{conversation_id}/sync-media/{attachment_id}",
+                    follow_redirects=False,
+                )
+                enqueue_processing.assert_not_called()
+                ready = client.get(
+                    f"/whatsapp/inbox/{conversation_id}/sync-media/{attachment_id}",
+                    follow_redirects=False,
+                )
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+        self.assertEqual(not_ready.status_code, 303)
+        self.assertEqual(ready.status_code, 303)
+        enqueue_processing.assert_called_once()
+        self.assertEqual(enqueue_processing.call_args.args[1:3], (1, message_id))
+        process_job.assert_awaited_once_with(1, 42, None)
 
 if __name__ == "__main__":
     unittest.main()

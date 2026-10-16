@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -50,6 +51,31 @@ def has_explicit_order_close(text: str | None) -> bool:
     if not normalized:
         return False
     return any(re.search(pattern, normalized) for pattern in _EXPLICIT_CLOSE_PATTERNS)
+
+
+_EXPLICIT_CANCELLATION_PATTERNS = (
+    r"\b(?:cancela(?:r)?|anula(?:r)?|retira(?:r)?)\s+(?:(?:el|la|mi|este|esta)\s+)?(?:pedido|comanda|orden)\b",
+    r"\bno\s+(?:tramites?|envies?|prepares?|confirmes?)\s+(?:(?:el|la|mi)\s+)?(?:pedido|comanda|orden)\b",
+    r"\bno\s+lo\s+(?:tramites?|envies?|prepares?|confirmes?)\b",
+    r"\bno\s+hagas\s+(?:(?:el|la|mi)\s+)?(?:pedido|comanda|orden)\b",
+    r"\bya\s+no\s+quiero\s+(?:(?:el|la|mi)\s+)?(?:pedido|comanda|orden)\b",
+    r"\b(?:ya\s+)?no\s+quiero\s+(?:seguir|continuar)\s+(?:con\s+)?(?:(?:el|la|mi|este|esta)\s+)?(?:pedido|comanda|orden)\b",
+    r"\b(?:deja|dejar)\s+sin\s+efecto\s+(?:(?:el|la|mi)\s+)?(?:pedido|comanda|orden)\b",
+    r"\b(?:olvida|olvidar|descarta|descartar)\s+(?:(?:el|la|mi|este|esta)\s+)?(?:pedido|comanda|orden)\b",
+)
+
+_CANCELLATION_QUESTION_PATTERNS = (
+    r"\bcomo\s+(?:(?:se|puedo|podria|podemos)\s+)?(?:cancela|cancelar|anula|anular|retira|retirar)\b",
+    r"\b(?:se\s+)?puede\s+(?:cancelar|anular|retirar)\b",
+)
+
+
+def has_explicit_order_cancellation(text: str | None) -> bool:
+    normalized = unicodedata.normalize("NFKD", _normalized_text(text).casefold())
+    normalized = "".join(char for char in normalized if not unicodedata.combining(char))
+    if any(re.search(pattern, normalized) for pattern in _CANCELLATION_QUESTION_PATTERNS):
+        return False
+    return any(re.search(pattern, normalized) for pattern in _EXPLICIT_CANCELLATION_PATTERNS)
 
 
 _SHORT_CONFIRMATION_PATTERN = re.compile(

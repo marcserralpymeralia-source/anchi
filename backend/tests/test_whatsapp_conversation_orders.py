@@ -13,6 +13,7 @@ from app.db.models import Company, Conversation, InboundMessage, InputChannel, O
 from app.whatsapp.conversation_orders import (
     build_transcript,
     evaluate_conversation_order,
+    has_explicit_order_cancellation,
     has_explicit_order_close,
     is_short_order_confirmation,
 )
@@ -79,6 +80,26 @@ class WhatsAppConversationOrderTests(unittest.TestCase):
         self.assertTrue(has_explicit_order_close("Eso es todo"))
         self.assertTrue(has_explicit_order_close("Confirma el pedido"))
         self.assertFalse(has_explicit_order_close("Ponme 4 cajas de tomate"))
+
+    def test_explicit_order_cancellation_detection_distinguishes_requests_from_questions(self):
+        for text in (
+            "Cancela el pedido, por favor",
+            "No tramites la comanda",
+            "Ya no quiero seguir con este pedido",
+            "Deja sin efecto la orden",
+            "Olvida mi pedido",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(has_explicit_order_cancellation(text))
+
+        for text in (
+            "¿Cómo se cancela el pedido?",
+            "¿Se puede cancelar una comanda?",
+            "¿Cómo puedo anular la orden?",
+            "Quiero saber cómo cancelar un pedido",
+        ):
+            with self.subTest(text=text):
+                self.assertFalse(has_explicit_order_cancellation(text))
 
     def test_transcript_preserves_roles_and_order(self):
         db = self.Session()

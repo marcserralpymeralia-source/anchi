@@ -164,6 +164,19 @@ class SecurityConfigurationTests(unittest.TestCase):
         self.assertFalse(settings.debug)
         self.assertFalse(settings.session_cookie_secure)
         self.assertFalse(settings.seed_demo_data)
+        self.assertFalse(settings.run_internal_email_worker)
+        self.assertFalse(settings.run_internal_job_worker)
+
+    def test_test_environment_can_explicitly_enable_workers(self):
+        settings = _load_settings(
+            {
+                "APP_ENV": "test",
+                "RUN_INTERNAL_EMAIL_WORKER": "true",
+                "RUN_INTERNAL_JOB_WORKER": "true",
+            }
+        )
+        self.assertTrue(settings.run_internal_email_worker)
+        self.assertTrue(settings.run_internal_job_worker)
 
     def test_production_accepts_safe_configuration(self):
         settings = _load_settings(
