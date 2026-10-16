@@ -221,6 +221,15 @@ def replace_customer_contact_points(
     aliases: str = "",
 ) -> None:
     db.query(CustomerContactPoint).filter(CustomerContactPoint.customer_id == customer.id).delete()
+    # Sessions use autoflush=False, so contact points added by earlier rows in
+    # the same import are not visible to the query below until commit. Remove
+    # this customer's still-pending points before replacing them, then check
+    # pending points from other customers to avoid a batch-level unique-key
+    # violation when the source file repeats a contact value.
+    for pending in tuple(db.new):
+        if isinstance(pending, CustomerContactPoint) and pending.customer_id == customer.id:
+            db.expunge(pending)
+
     now = datetime.now(timezone.utc)
     seen: set[tuple[str, str]] = set()
 
@@ -232,6 +241,19 @@ def replace_customer_contact_points(
         if key in seen:
             return
         seen.add(key)
+        pending_duplicate = next(
+            (
+                point
+                for point in db.new
+                if isinstance(point, CustomerContactPoint)
+                and point.company_id == customer.company_id
+                and point.type == point_type
+                and point.value == normalized
+            ),
+            None,
+        )
+        if pending_duplicate:
+            return
         existing = db.scalar(
             select(CustomerContactPoint).where(
                 CustomerContactPoint.company_id == customer.company_id,
