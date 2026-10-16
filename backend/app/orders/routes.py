@@ -37,6 +37,7 @@ from app.orders.scoring import is_positive_quantity
 from app.settings.service import get_or_create_settings, resolve_updated_by_id
 from app.tenancy.database import get_tenant_db
 from app.core.attachment_storage import read_attachment
+from app.demo_scenarios import load_demo_scenarios
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
@@ -101,6 +102,7 @@ def _conversation_preview(order: Order | None) -> dict | None:
 def list_orders(
     request: Request,
     view: str = "list",
+    demo: bool = False,
     archived: bool = False,
     date_from: str = "",
     date_to: str = "",
@@ -132,6 +134,17 @@ def list_orders(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
+    if demo:
+        return templates.TemplateResponse(
+            "orders/demo.html",
+            {
+                "request": request,
+                "user": user,
+                "title": "Pedidos · DEMO",
+                "scenarios": load_demo_scenarios(db, user.company_id),
+            },
+        )
+
     effective_search = search or customer_or_sender
 
     filters = {

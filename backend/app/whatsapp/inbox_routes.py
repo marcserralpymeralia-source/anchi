@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, aliased, selectinload
 from app.auth.dependencies import current_user
 from app.core.pagination import normalize_page
 from app.core.templating import templates
+from app.demo_scenarios import load_demo_scenarios
 from app.customers.matching import build_customer_phone_index, customer_id_from_phone
 from app.db.models import Conversation, Customer, InboundMessage, InputChannel, MessageAttachment, WhatsAppOrderSession, utcnow
 from app.logs.service import log_action
@@ -622,6 +623,8 @@ def _inbox_partial_context(
 async def whatsapp_inbox(
     request: Request,
     conversation_id: int | None = None,
+    demo: bool = False,
+    case: int = 0,
     search: str = "",
     page: int = 1,
     page_size: int = 30,
@@ -629,6 +632,21 @@ async def whatsapp_inbox(
     db: Session = Depends(get_tenant_db),
     user: TenantUser = Depends(current_user),
 ):
+    if demo:
+        scenarios = load_demo_scenarios(db, user.company_id)
+        selected_index = case if 0 <= case < len(scenarios) else 0
+        return templates.TemplateResponse(
+            "whatsapp/demo.html",
+            {
+                "request": request,
+                "user": user,
+                "title": "Conversaciones WhatsApp · DEMO",
+                "scenarios": scenarios,
+                "selected": scenarios[selected_index],
+                "selected_index": selected_index,
+            },
+        )
+
     channel = _channel(db, user.company_id)
     if not channel:
         return PlainTextResponse("El canal WhatsApp no está activo para este tenant.", status_code=404)

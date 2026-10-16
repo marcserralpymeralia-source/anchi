@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% set title = "Pedidos · DEMO" %}
+{% block head_extra %}<link rel="stylesheet" href="{{ asset_url('demo.css') }}">{% endblock %}
+{% block content %}
+<section class="database-compact-page demo-page">
+  <header class="demo-page-header">
+    <div>
+      <span class="demo-kicker">SIMULACIÓ INTERNA</span>
+      <h1>Pedidos <span class="demo-tag">DEMO</span></h1>
+      <p>Cinc propostes de comanda basades en el catàleg i els clients d'aquest tenant.</p>
+    </div>
+    <a class="button secondary" href="/orders?view=cards">Veure pedidos reals</a>
+  </header>
+
+  <div class="demo-notice" role="status">Les comandes són simulades i de només lectura. No es guardaran ni s'exportaran.</div>
+
+  <div class="demo-order-grid">
+    {% for scenario in scenarios %}
+      <article class="demo-order-card">
+        <div class="demo-card-topline">
+          <span class="demo-channel">WhatsApp</span>
+          <span class="demo-status {% if 'Pendent' in scenario.status %}is-pending{% elif 'corregida' in scenario.status %}is-corrected{% endif %}">{{ scenario.status }}</span>
+        </div>
+        <div class="demo-customer">
+          <h2>{{ scenario.customer_name or 'Client no disponible' }}</h2>
+        </div>
+        {% if scenario.customer_missing %}
+          <p class="demo-missing" role="status">Aquest escenari no es pot mostrar: el client no s'ha trobat en aquest tenant.</p>
+        {% else %}
+          <p class="demo-order-summary">{{ scenario.summary }}</p>
+          <ul class="demo-line-list">
+            {% for line in scenario.lines %}
+              <li>
+                <span class="demo-quantity">{{ line.quantity }}</span>
+                <div class="demo-line-description">
+                  {% if line.reference %}
+                    {% if line.product_missing %}
+                      <strong>Article no disponible en aquest tenant</strong>
+                      <span>Referència proposada <code>{{ line.reference }}</code></span>
+                    {% else %}
+                      <strong>{{ line.product_name }}</strong>
+                      <span>Referència proposada <code>{{ line.reference }}</code></span>
+                    {% endif %}
+                  {% else %}
+                    <strong>Producte pendent de concretar</strong>
+                    <span>Sense referència assignada</span>
+                    {% if line.candidates %}
+                      <div class="demo-candidates">
+                        <span>Variants candidates</span>
+                        {% for candidate in line.candidates %}
+                          <span><code>{{ candidate.reference }}</code>{% if candidate.name %} · {{ candidate.name }}{% else %} · no disponible en aquest tenant{% endif %}</span>
+                        {% endfor %}
+                      </div>
+                    {% endif %}
+                  {% endif %}
+                </div>
+              </li>
+            {% endfor %}
+          </ul>
+          {% if scenario.correction_note %}<p class="demo-correction">{{ scenario.correction_note }}</p>{% endif %}
+          <details class="demo-order-details">
+            <summary>Veure detall de la simulació</summary>
+            <div class="demo-details-body">
+              {% for line in scenario.lines %}
+                <p><strong>{{ line.quantity }}</strong> · {% if line.reference %}{{ line.product_name or "Article no disponible" }} ({{ line.reference }}){% else %}{{ line.candidates|length }} variants possibles; cap seleccionada{% endif %}</p>
+              {% endfor %}
+              <span>Només lectura · DEMO</span>
+            </div>
+          </details>
+        {% endif %}
+      </article>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

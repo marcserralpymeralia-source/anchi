@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% set title = "Conversaciones WhatsApp · DEMO" %}
+{% block head_extra %}<link rel="stylesheet" href="{{ asset_url('demo.css') }}">{% endblock %}
+{% block content %}
+<section class="channel-inbox-shell whatsapp-inbox-shell demo-whatsapp-page">
+  <header class="demo-page-header demo-chat-page-header">
+    <div>
+      <span class="demo-kicker">SIMULACIÓ INTERNA</span>
+      <h1>WhatsApp <span class="demo-tag">DEMO</span></h1>
+      <p>Converses simulades per a cinc clients del tenant.</p>
+    </div>
+    <a class="button secondary" href="/whatsapp/inbox">Veure bústia real</a>
+  </header>
+  <div class="demo-notice" role="status">Converses de mostra; no s'enviarà cap missatge.</div>
+
+  <main class="channel-inbox-workspace demo-chat-workspace">
+    <aside class="channel-inbox-contacts demo-chat-contacts">
+      <div class="channel-inbox-pane-header"><div><strong>Contactes</strong><span class="muted">5 converses · DEMO</span></div></div>
+      <div class="channel-inbox-contact-list" role="list">
+        {% for scenario in scenarios %}
+          <a class="channel-contact {% if loop.index0 == selected_index %}is-selected{% endif %}" href="/whatsapp/inbox?demo=1&case={{ loop.index0 }}" role="listitem"{% if loop.index0 == selected_index %} aria-current="page"{% endif %}>
+            <div class="channel-contact-avatar"><span>{{ (scenario.customer_name or 'DE')[:2]|upper }}</span></div>
+            <div class="channel-contact-main">
+              <div class="channel-contact-top"><strong class="channel-contact-name">{{ scenario.customer_name or 'Client no disponible' }}</strong><span class="demo-contact-tag">DEMO</span></div>
+              <div class="channel-contact-detail">{% if scenario.customer_missing %}Escenari no disponible en aquest tenant{% else %}{{ scenario.summary }}{% endif %}</div>
+            </div>
+          </a>
+        {% endfor %}
+      </div>
+    </aside>
+
+    <section class="channel-inbox-chat demo-chat-panel" aria-label="Conversa simulada">
+      <header class="channel-chat-header demo-chat-header">
+        <div class="channel-chat-identity">
+          <div class="channel-chat-header-avatar"><span>{{ (selected.customer_name or 'DE')[:2]|upper }}</span></div>
+          <div class="channel-chat-header-info">
+            <h3>{{ selected.customer_name or 'Client no disponible' }} <span class="demo-tag">DEMO</span></h3>
+            <span class="muted">WhatsApp</span>
+          </div>
+        </div>
+        <span class="demo-status {% if 'Pendent' in selected.status %}is-pending{% elif 'corregida' in selected.status %}is-corrected{% endif %}">{{ selected.status }}</span>
+      </header>
+      {% if selected.customer_missing %}<div class="demo-missing" role="status">Aquest escenari no es pot mostrar: el client no s'ha trobat en aquest tenant.</div>{% endif %}
+      <div class="channel-chat-messages demo-chat-messages" aria-live="polite">
+        {% if not selected.customer_missing %}
+          {% for direction, text in selected.messages %}
+            <article class="channel-chat-message {{ direction }}">
+              <div class="channel-chat-message-meta"><strong>{{ "Client" if direction == "inbound" else "Assistent (simulat)" }}</strong><span>DEMO</span></div>
+              <p>{{ text }}</p>
+            </article>
+          {% endfor %}
+        {% endif %}
+      </div>
+      <div class="demo-chat-footer">Simulació de només lectura</div>
+    </section>
+  </main>
+</section>
+{% endblock %}
