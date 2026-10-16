@@ -1,4 +1,7 @@
 import json
+import mimetypes
+import os
+import re
 from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
@@ -122,6 +125,38 @@ DEFAULT_MICROCOPY = {
 
 BRANDING_UPLOAD_DIR = Path(__file__).resolve().parents[1] / "static" / "uploads" / "branding"
 ALLOWED_LOGO_EXTENSIONS = {".png", ".jpg", ".jpeg", ".svg", ".webp"}
+BRANDING_ASSET_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,179}$")
+
+
+def _blob_storage_enabled() -> bool:
+    return bool(
+        os.getenv("BLOB_READ_WRITE_TOKEN", "").strip()
+        or (os.getenv("VERCEL_OIDC_TOKEN", "").strip() and os.getenv("BLOB_STORE_ID", "").strip())
+    )
+
+
+async def _upload_branding_blob(pathname: str, content: bytes, content_type: str):
+    from vercel import blob
+
+    return await blob.put_blob(
+        pathname,
+        content,
+        access="private",
+        content_type=content_type,
+        cache_control_max_age=3600,
+    )
+
+
+async def _download_branding_blob(pathname: str):
+    from vercel import blob
+
+    return await blob.get_blob(pathname, access="private")
+
+
+async def _delete_branding_blob(pathname: str) -> None:
+    from vercel import blob
+
+    await blob.delete_blob(pathname)
 
 
 def deep_merge(default: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
@@ -286,15 +321,52 @@ def delete_brand_asset(value: str | None) -> None:
         path.unlink()
 
 
+def _branding_blob_path(value: str | None) -> str | None:
+    prefix = "/settings/branding/assets/"
+    if not value or not value.startswith(prefix):
+        return None
+    parts = value.removeprefix(prefix).split("/", 1)
+    if len(parts) != 2 or not parts[0].isdigit() or not BRANDING_ASSET_FILENAME.fullmatch(parts[1]):
+        return None
+    suffix = Path(parts[1]).suffix.lower()
+    if suffix not in ALLOWED_LOGO_EXTENSIONS:
+        return None
+    return f"branding/tenant-{int(parts[0])}/{parts[1]}"
+
+
+async def delete_brand_asset_from_storage(value: str | None) -> None:
+    pathname = _branding_blob_path(value)
+    if pathname and _blob_storage_enabled():
+        await _delete_branding_blob(pathname)
+        return
+    delete_brand_asset(value)
+
+
+async def load_brand_asset(company_id: int, filename: str):
+    if not BRANDING_ASSET_FILENAME.fullmatch(filename):
+        return None
+    if Path(filename).suffix.lower() not in ALLOWED_LOGO_EXTENSIONS or not _blob_storage_enabled():
+        return None
+    pathname = f"branding/tenant-{int(company_id)}/{filename}"
+    result = await _download_branding_blob(pathname)
+    content_type = result.metadata.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    return result.body, content_type
+
+
 async def store_brand_asset(company_id: int, upload: UploadFile, prefix: str) -> str:
     suffix = Path(upload.filename or "").suffix.lower()
     if suffix not in ALLOWED_LOGO_EXTENSIONS:
         raise ValueError("Formato de archivo no permitido. Usa PNG, JPG, SVG o WEBP.")
+    filename = f"{prefix}-{uuid4().hex}{suffix}"
+    content = await upload.read()
+    if _blob_storage_enabled():
+        pathname = f"branding/tenant-{int(company_id)}/{filename}"
+        await _upload_branding_blob(pathname, content, upload.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream")
+        return f"/settings/branding/assets/{int(company_id)}/{filename}"
     tenant_dir = BRANDING_UPLOAD_DIR / f"tenant-{int(company_id)}"
     tenant_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{prefix}-{uuid4().hex}{suffix}"
     path = tenant_dir / filename
-    path.write_bytes(await upload.read())
+    path.write_bytes(content)
     return f"/static/uploads/branding/tenant-{int(company_id)}/{filename}"
 
 

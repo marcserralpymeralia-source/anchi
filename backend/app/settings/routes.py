@@ -10,7 +10,7 @@ from time import perf_counter
 
 import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy import case, func, select, update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -29,7 +29,7 @@ from app.db.models import BackgroundJob
 from app.logs.service import log_action
 from app.settings.agent_config import agent_metrics, agent_status, apply_safety_level, improvement_suggestions
 from app.settings.autoconfig import detect_email_configuration
-from app.settings.branding import branding_to_dict, delete_brand_asset, get_or_create_branding, reset_branding, store_brand_asset, update_branding_from_form
+from app.settings.branding import branding_to_dict, delete_brand_asset_from_storage, get_or_create_branding, load_brand_asset, reset_branding, store_brand_asset, update_branding_from_form
 from app.settings.email_config import TEMPLATE_VARIABLES, email_config_status, email_templates, ensure_default_email_templates, serialize_email_settings
 from app.settings.integrations import AGENT_FLOW_DEMO_SAMPLE, AGENT_FLOW_DEMO_VALIDATION_CONTEXT, classify_sample, extract_sample, preview_initial_imap_sync, run_initial_imap_sync, send_test_email, test_imap_connection, test_smtp_connection, validate_sample
 from app.settings.application import run_connection_test, update_settings_section_async
@@ -1663,6 +1663,24 @@ def get_branding(db: Session = Depends(get_tenant_db), user: TenantUser = Depend
     return JSONResponse(branding_to_dict(get_or_create_branding(db, user.company_id)))
 
 
+@router.get("/branding/assets/{company_id}/{filename}")
+async def get_brand_asset(company_id: int, filename: str):
+    try:
+        asset = await load_brand_asset(company_id, filename)
+    except Exception as exc:  # noqa: BLE001
+        if exc.__class__.__name__ == "BlobNotFoundError":
+            raise HTTPException(status_code=404, detail="No se encontró el logo.") from None
+        raise
+    if asset is None:
+        raise HTTPException(status_code=404, detail="No se encontró el logo.")
+    content, content_type = asset
+    return Response(
+        content=content,
+        media_type=content_type,
+        headers={"Cache-Control": "public, max-age=3600", "X-Content-Type-Options": "nosniff"},
+    )
+
+
 @router.put("/branding")
 async def put_branding(request: Request, db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if user.role.name != "Administrador":
@@ -1701,10 +1719,10 @@ async def update_branding(request: Request, db: Session = Depends(get_tenant_db)
     ]:
         upload = formdata.get(upload_key)
         if form.get(remove_key) == "on":
-            delete_brand_asset(getattr(branding, field))
+            await delete_brand_asset_from_storage(getattr(branding, field))
             setattr(branding, field, None)
         elif isinstance(upload, UploadFile) and upload.filename:
-            delete_brand_asset(getattr(branding, field))
+            await delete_brand_asset_from_storage(getattr(branding, field))
             setattr(branding, field, await store_brand_asset(user.company_id, upload, prefix))
     db.commit()
     invalidate_branding_cache(user.company_id)
@@ -1724,13 +1742,13 @@ def reset_branding_default(db: Session = Depends(get_tenant_db), user: TenantUse
 
 
 @router.post("/company/reset-default")
-def reset_company_default(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
+async def reset_company_default(db: Session = Depends(get_tenant_db), user: TenantUser = Depends(current_user)):
     if user.role.name != "Administrador":
         return RedirectResponse("/settings#general", status_code=303)
     settings = get_settings()
     company = db.get(Company, user.company_id)
     if company:
-        delete_brand_asset(company.logo_url)
+        await delete_brand_asset_from_storage(company.logo_url)
         company.name = settings.default_company_name
         company.legal_name = None
         company.tax_id = None

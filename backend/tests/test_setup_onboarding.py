@@ -22,7 +22,7 @@ from app.core.encryption import decrypt_secret, encrypt_secret  # noqa: E402
 from app.core.security import hash_password  # noqa: E402
 from app.agent.model_catalog import DEFAULT_OPENAI_MODEL, LEGACY_OPENAI_MODEL_FALLBACK, resolve_openai_runtime_model  # noqa: E402
 from app.db.database import Base  # noqa: E402
-from app.db.models import AuditLog, ChannelSetting, Company, Customer, EmailSettings, InputChannel, LLMSettings, Product, ProxyConnection, Role, User  # noqa: E402
+from app.db.models import AuditLog, BrandingSettings, ChannelSetting, Company, Customer, EmailSettings, InputChannel, LLMSettings, Product, ProxyConnection, Role, User  # noqa: E402
 from app.master.database import MasterBase  # noqa: E402
 from app.master.migrations import upgrade_master_schema  # noqa: E402
 from app.master.models import CompanyMembership, MasterCompany, MasterTenantDatabase, MasterUser  # noqa: E402
@@ -261,6 +261,55 @@ class SetupOnboardingTests(unittest.TestCase):
             self.assertIn("Anchi todavía no está lista", follow_up.text)
             self.assertIn("Continuar configuración", follow_up.text)
             self.assertNotIn("/login", response.headers.get("location", ""))
+        finally:
+            cleanup()
+            fixture.cleanup()
+
+    def test_setup_company_logo_upload_uses_blob_instead_of_readonly_deployment_filesystem(self):
+        fixture = SetupFixture()
+        client, cleanup = fixture.client()
+        original_mkdir = Path.mkdir
+
+        def deny_deployment_uploads(path, *args, **kwargs):
+            if "/static/uploads/branding" in path.as_posix():
+                raise OSError(30, "Read-only file system", path.as_posix())
+            return original_mkdir(path, *args, **kwargs)
+
+        try:
+            self._login(client)
+            with patch.dict(os.environ, {"BLOB_READ_WRITE_TOKEN": "test-token", "BLOB_STORE_ID": "store_test"}), patch(
+                "app.settings.branding._upload_branding_blob",
+                new=AsyncMock(return_value=SimpleNamespace(pathname="unused")),
+                create=True,
+            ) as upload_blob, patch(
+                "app.settings.branding._download_branding_blob",
+                new=AsyncMock(return_value=SimpleNamespace(body=b"logo-image", metadata=SimpleNamespace(content_type="image/png"))),
+                create=True,
+            ) as download_blob, patch.object(Path, "mkdir", new=deny_deployment_uploads):
+                response = client.post(
+                    "/setup/company",
+                    data={"legal_name": "Setup Demo SL", "commercial_name": "Setup Demo", "country": "España"},
+                    files={"logo": ("logo.png", b"logo-image", "image/png")},
+                    follow_redirects=False,
+                )
+
+            self.assertEqual(response.status_code, 303)
+            self.assertEqual(response.headers["location"], "/setup/channels")
+            upload_blob.assert_awaited_once()
+            with fixture.TenantSession() as db:
+                branding = db.query(BrandingSettings).filter(BrandingSettings.company_id == 1).one()
+                logo_url = branding.logo_url
+                self.assertTrue(logo_url.startswith("/settings/branding/assets/1/setup-logo-"))
+                self.assertTrue(logo_url.endswith(".png"))
+            blob_path = upload_blob.await_args.args[0]
+            with patch.dict(os.environ, {"BLOB_READ_WRITE_TOKEN": "test-token", "BLOB_STORE_ID": "store_test"}), patch(
+                "app.settings.branding._download_branding_blob", new=AsyncMock(return_value=SimpleNamespace(body=b"logo-image", metadata=SimpleNamespace(content_type="image/png")))
+            ) as download_blob:
+                logo_response = client.get(logo_url)
+            download_blob.assert_awaited_once_with(blob_path)
+            self.assertEqual(logo_response.status_code, 200)
+            self.assertEqual(logo_response.content, b"logo-image")
+            self.assertEqual(logo_response.headers["content-type"], "image/png")
         finally:
             cleanup()
             fixture.cleanup()

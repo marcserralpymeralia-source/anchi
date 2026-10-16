@@ -18,7 +18,7 @@ from app.exports.service import FTPService
 from app.logs.service import log_action
 from app.master.service import TenantUser
 from app.settings.agent_config import agent_metrics, agent_status, improvement_suggestions, apply_safety_level
-from app.settings.branding import branding_to_dict, delete_brand_asset, get_or_create_branding, reset_branding, store_brand_asset, update_branding_from_form
+from app.settings.branding import branding_to_dict, delete_brand_asset_from_storage, get_or_create_branding, reset_branding, store_brand_asset, update_branding_from_form
 from app.settings.email_config import TEMPLATE_VARIABLES, email_config_status, email_templates, ensure_default_email_templates, serialize_email_settings
 from app.settings.integrations import classify_sample, extract_sample, send_test_email, test_imap_connection, test_smtp_connection
 from app.settings.service import get_or_create_settings, resolve_updated_by_id, update_with_form
@@ -216,10 +216,10 @@ async def update_settings_section_async(section: str, request: Request, db: Sess
             company.active = form.get("active") == "on"
             logo_file = formdata.get("logo_file")
             if form.get("remove_logo") == "on":
-                delete_brand_asset(company.logo_url)
+                await delete_brand_asset_from_storage(company.logo_url)
                 company.logo_url = None
             elif isinstance(logo_file, UploadFile) and logo_file.filename:
-                delete_brand_asset(company.logo_url)
+                await delete_brand_asset_from_storage(company.logo_url)
                 company.logo_url = await store_brand_asset(user.company_id, logo_file, "company-logo")
             elif form.get("logo_url"):
                 company.logo_url = form["logo_url"].strip()
