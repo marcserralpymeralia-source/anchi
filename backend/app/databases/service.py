@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
+import re
 
 from sqlalchemy import case, exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.core.pagination import normalize_page, paginate
 from app.db.models import Customer, CustomerAlias, CustomerContact, CustomerContactPoint, CustomerDomain, CustomerProductKnowledge, LearnedAlias, ManualCorrection, Order, OrderLine, Product, ProductAlias, RagCase, RagDocument
+from app.master_data.service import format_phone, is_valid_phone, normalize_phone
 
 
 def _fmt_dt(value: datetime | None) -> str:
@@ -84,7 +86,34 @@ def _customer_row(customer: Customer, orders_count: int, last_order_at: datetime
     contacts = [contact.name for contact in getattr(customer, "contacts", []) if contact.name]
     contact_points = [point for point in getattr(customer, "contact_points", []) if point.active]
     email_points = [point.value for point in contact_points if point.type == "email"]
-    phone_points = [point.value for point in contact_points if point.type in {"phone", "whatsapp"}]
+    phone_points = [point for point in contact_points if point.type in {"phone", "whatsapp"}]
+    primary_email = customer.primary_email or next((point.value for point in contact_points if point.type == "email" and point.is_primary), "")
+    primary_phone = customer.phone or next((point.value for point in phone_points if point.is_primary), "")
+    def phone_identity(value: str) -> str:
+        normalized = normalize_phone(value)
+        if normalized.startswith("+34") and re.fullmatch(r"\+34\d{9}", normalized):
+            return normalized[3:]
+        if normalized.startswith("0034") and re.fullmatch(r"0034\d{9}", normalized):
+            return normalized[4:]
+        return normalized
+
+    primary_phone_key = phone_identity(primary_phone)
+    associated_phone_items = []
+    seen_phone_keys = {primary_phone_key} if primary_phone_key else set()
+    for point in phone_points:
+        value = point.value or ""
+        key = phone_identity(value)
+        if not key or key in seen_phone_keys:
+            continue
+        seen_phone_keys.add(key)
+        display = format_phone(value)
+        valid_tel = is_valid_phone(value) and bool(re.fullmatch(r"[\d\s().+\-]+", value.strip()))
+        associated_phone_items.append({
+            "display": display,
+            "href": f"tel:{normalize_phone(value)}" if valid_tel else "",
+        })
+    normalized_primary_phone = normalize_phone(primary_phone)
+    primary_phone_valid_tel = is_valid_phone(primary_phone) and bool(re.fullmatch(r"[\d\s().+\-]+", primary_phone.strip()))
     domain_points = [point.value for point in contact_points if point.type == "domain"]
     alias_points = [point.value for point in contact_points if point.type == "alias"]
     return {
@@ -93,9 +122,10 @@ def _customer_row(customer: Customer, orders_count: int, last_order_at: datetime
         "fiscal_name": customer.fiscal_name,
         "commercial_name": customer.commercial_name or "",
         "tax_id": customer.tax_id or "",
-        "primary_email": customer.primary_email or "",
+        "primary_email": primary_email,
         "delegation": customer.delegation or "",
-        "phone": customer.phone or "",
+        "phone": format_phone(primary_phone),
+        "phone_href": f"tel:{normalized_primary_phone}" if primary_phone_valid_tel else "",
         "address": customer.address or "",
         "city": customer.city or "",
         "province": customer.province or "",
@@ -110,7 +140,8 @@ def _customer_row(customer: Customer, orders_count: int, last_order_at: datetime
         "domains": domains,
         "contacts": contacts,
         "associated_emails": ", ".join(dict.fromkeys(email_points)),
-        "associated_phones": ", ".join(dict.fromkeys(phone_points)),
+        "associated_phones": ", ".join(item["display"] for item in associated_phone_items),
+        "associated_phone_items": associated_phone_items,
         "associated_domains": ", ".join(dict.fromkeys(domain_points)),
         "associated_aliases": ", ".join(dict.fromkeys(alias_points)),
         "alias_count": len(aliases),

@@ -738,6 +738,12 @@ def confirm_import(
                 rows_error += 1
                 errors.append(f"Fila {row_index + 2}: conflicto existente para {match_reason or 'cliente'}")
                 continue
+            if existing and not data.get("associated_phones"):
+                data["associated_phones"] = ",".join(
+                    point.value
+                    for point in existing.contact_points
+                    if point.active and point.type in {"phone", "whatsapp"} and not point.is_primary
+                )
             try:
                 outcome = upsert_customer(
                     db,

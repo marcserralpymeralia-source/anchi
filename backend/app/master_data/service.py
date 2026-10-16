@@ -53,6 +53,26 @@ def normalize_phone(value: str) -> str:
     return re.sub(r"[\s\-.()]+", "", (value or "").strip())
 
 
+def format_phone(value: str | None) -> str:
+    """Format Spanish phone numbers for display without numeric conversion."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+
+    digits = re.sub(r"\D+", "", raw)
+    spanish_prefix = re.match(r"^\s*(\+34|0034)[\s().-]*", raw)
+    if spanish_prefix and len(digits) == (11 if spanish_prefix.group(1) == "+34" else 13):
+        local = digits[-9:]
+        prefix = spanish_prefix.group(1)
+        return f"{prefix} {local[:3]} {local[3:6]} {local[6:]}"
+    if len(digits) == 9 and re.fullmatch(r"[\d\s().\-]+", raw):
+        return f"{digits[:3]} {digits[3:6]} {digits[6:]}"
+
+    # Keep unusual and international formats recognizable while removing
+    # legacy dot separators and collapsing accidental whitespace.
+    return re.sub(r"\s+", " ", re.sub(r"\s*\.\s*", " ", raw)).strip()
+
+
 def is_valid_email(value: str) -> bool:
     return bool(re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", (value or "").strip()))
 
@@ -122,7 +142,10 @@ def apply_customer_data(customer: Customer, data: dict[str, str]) -> None:
         "category",
         "notes",
     ]:
-        _set_value_if_present(customer, field, data)
+        if field == "phone" and data.get(field):
+            customer.phone = format_phone(data[field])
+        else:
+            _set_value_if_present(customer, field, data)
     if data.get("company_inactive"):
         customer.company_inactive = data["company_inactive"].strip().lower() in {"1", "si", "sí", "s", "yes", "true", "x", "inactive", "inactivo", "baja"}
     if data.get("status"):

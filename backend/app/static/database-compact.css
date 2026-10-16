@@ -1401,3 +1401,388 @@ th.table-settings-th {
     max-width: none;
   }
 }
+
+/* Customer and product master-data lists */
+.database-table-wrap--master-data {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid var(--line, #dbe2e6);
+  border-radius: 9px;
+  background: var(--panel, #fff);
+  box-shadow: 0 1px 2px rgba(16, 38, 42, .04);
+  scrollbar-color: #a4b8b0 #eef3f1;
+}
+
+.database-table-wrap--master-data > .database-table-customersCompact,
+.database-table-wrap--master-data > .database-table-productsCompact {
+  margin: 0;
+  border-radius: 8px;
+  background: var(--panel, #fff);
+}
+
+table.database-table-compact.database-table-customersCompact th,
+table.database-table-compact.database-table-productsCompact th {
+  height: 42px;
+  padding: 8px 12px !important;
+  border-bottom: 1px solid #dfe7e4;
+  background: var(--table-head-bg, #f4f7f6) !important;
+  background-color: var(--table-head-bg, #f4f7f6) !important;
+  color: var(--table-head-text, #51645e) !important;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: .035em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+table.database-table-compact.database-table-customersCompact th.sortable-th,
+table.database-table-compact.database-table-productsCompact th.sortable-th {
+  background: var(--table-head-bg, #f4f7f6) !important;
+  background-color: var(--table-head-bg, #f4f7f6) !important;
+}
+
+.database-table-customersCompact .sort-header-btn,
+.database-table-productsCompact .sort-header-btn {
+  min-height: 24px;
+  color: inherit !important;
+  font: inherit;
+  letter-spacing: inherit;
+  text-align: left;
+  text-transform: inherit;
+}
+
+.database-table-customersCompact .sort-header-btn:focus-visible,
+.database-table-productsCompact .sort-header-btn:focus-visible,
+.database-table-customersCompact .table-column-resizer:focus-visible,
+.database-table-productsCompact .table-column-resizer:focus-visible,
+.database-table-customersCompact a:focus-visible,
+.database-table-productsCompact a:focus-visible,
+.database-table-customersCompact summary:focus-visible,
+.database-table-productsCompact summary:focus-visible,
+.database-table-customersCompact button:focus-visible,
+.database-table-productsCompact button:focus-visible {
+  outline: 2px solid #1d7463;
+  outline-offset: 2px;
+}
+
+table.database-table-compact.database-table-customersCompact tbody td,
+table.database-table-compact.database-table-productsCompact tbody td {
+  height: 52px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #edf1ef;
+  color: var(--text, #26342f);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
+table.database-table-compact.database-table-customersCompact tbody tr:nth-child(odd),
+table.database-table-compact.database-table-productsCompact tbody tr:nth-child(odd) {
+  background: var(--table-row-odd, #fff);
+}
+
+table.database-table-compact.database-table-customersCompact tbody tr:nth-child(even),
+table.database-table-compact.database-table-productsCompact tbody tr:nth-child(even) {
+  background: var(--table-row-even, #fff);
+}
+
+table.database-table-compact.database-table-customersCompact tbody tr,
+table.database-table-compact.database-table-productsCompact tbody tr {
+  transition: background-color .14s ease;
+}
+
+table.database-table-compact.database-table-customersCompact tbody tr:hover,
+table.database-table-compact.database-table-productsCompact tbody tr:hover {
+  background: var(--table-row-hover, #f6faf8);
+}
+
+.database-table-customersCompact .data-table__primary,
+.database-table-productsCompact .data-table__primary {
+  display: -webkit-box;
+  overflow: hidden;
+  color: #182923;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.35;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.database-table-customersCompact .database-code-text,
+.database-table-productsCompact .database-code-text {
+  color: #687770;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 550;
+}
+
+.database-table-customersCompact .customer-contact-cell,
+.database-table-customersCompact .associated-phones-cell {
+  vertical-align: middle;
+}
+
+.customer-contact-cell,
+.associated-phone-list {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.customer-contact-line,
+.associated-phone-link {
+  display: block;
+  overflow: hidden;
+  color: #364a42;
+  font-size: 11.5px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.customer-contact-phone,
+.associated-phone-link {
+  font-variant-numeric: tabular-nums;
+}
+
+.customer-contact-email {
+  color: #687770;
+}
+
+.customer-contact-line[href]:hover,
+.associated-phone-link[href]:hover {
+  color: var(--accent, #123a32);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.customer-contact-empty {
+  color: #89958f;
+}
+
+.associated-phone-more {
+  position: relative;
+  width: fit-content;
+  color: var(--accent, #123a32);
+  font-size: 10.5px;
+  line-height: 1.25;
+}
+
+.associated-phone-more > summary {
+  cursor: pointer;
+  font-weight: 650;
+  list-style-position: inside;
+}
+
+.associated-phone-expanded {
+  display: grid;
+  gap: 4px;
+  padding: 5px 0 1px 10px;
+}
+
+.associated-phone-expanded > * {
+  color: #364a42;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.database-table-customersCompact .row-context-actions,
+.database-table-productsCompact .row-context-actions {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s ease;
+}
+
+.database-table-customersCompact tbody tr:hover .row-context-actions,
+.database-table-customersCompact tbody tr:focus-within .row-context-actions,
+.database-table-productsCompact tbody tr:hover .row-context-actions,
+.database-table-productsCompact tbody tr:focus-within .row-context-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.database-table-productsCompact td[data-column="reference"] .database-code-text {
+  color: #51645e;
+}
+
+.database-table-productsCompact td[data-column="sale_unit"] {
+  color: #5e6e67;
+  text-align: center;
+}
+
+.database-table-productsCompact td[data-column="price"] {
+  color: #20352d;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.database-table-productsCompact .product-name-cell .data-table__primary {
+  max-height: 36px;
+}
+
+.database-table-customersCompact .table-empty-cell,
+.database-table-productsCompact .table-empty-cell {
+  height: 142px;
+  text-align: center;
+}
+
+.database-list-empty {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  color: #687770;
+  white-space: normal;
+}
+
+.database-list-empty strong {
+  color: #263a32;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.database-list-empty span,
+.database-list-empty a {
+  font-size: 11.5px;
+}
+
+.database-list-empty a {
+  color: var(--accent, #123a32);
+  font-weight: 650;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.database-table-customersCompact .data-table__status,
+.database-table-productsCompact .data-table__status {
+  min-height: 24px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.database-table-customersCompact .status-confirmed,
+.database-table-productsCompact .status-confirmed {
+  border-color: #d2e7dc;
+  background: #edf7f1;
+  color: #276448;
+}
+
+.database-table-customersCompact .status-doubtful,
+.database-table-productsCompact .status-doubtful {
+  border-color: #e5e2ce;
+  background: #f8f6e9;
+  color: #786b31;
+}
+
+.database-table-customersCompact .status-discarded,
+.database-table-productsCompact .status-discarded {
+  border-color: #e6ddda;
+  background: #f7f1ef;
+  color: #78584f;
+}
+
+@media (max-width: 760px) {
+  body:has(.database-table-customersCompact, .database-table-productsCompact) .app {
+    grid-template-columns: 68px minmax(0, 1fr);
+  }
+
+  body:has(.database-table-customersCompact, .database-table-productsCompact) .sidebar {
+    min-width: 0;
+    padding: 18px 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  body:has(.database-table-customersCompact, .database-table-productsCompact) .sidebar .brand,
+  body:has(.database-table-customersCompact, .database-table-productsCompact) .sidebar .nav-label {
+    display: none !important;
+  }
+
+  body:has(.database-table-customersCompact, .database-table-productsCompact) .sidebar .brand-row,
+  body:has(.database-table-customersCompact, .database-table-productsCompact) .sidebar .nav {
+    width: 100%;
+    justify-content: center;
+    align-items: center;
+    padding: 0;
+    gap: 6px;
+  }
+
+  body:has(.database-table-customersCompact, .database-table-productsCompact) .sidebar .brand-row {
+    margin-bottom: 14px;
+  }
+
+  body:has(.database-table-customersCompact, .database-table-productsCompact) .sidebar .nav a {
+    width: 40px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  body:has(.database-table-customersCompact, .database-table-productsCompact) .main {
+    min-width: 0;
+    padding: 12px;
+  }
+
+  body:has(.database-table-customersCompact, .database-table-productsCompact) .topbar {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 8px;
+    padding-bottom: 10px;
+  }
+
+  body:has(.database-table-customersCompact, .database-table-productsCompact) .topbar-actions {
+    max-width: 100%;
+    flex-wrap: wrap;
+  }
+
+  body:has(.database-table-customersCompact, .database-table-productsCompact) .database-compact-page {
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  body:has(.database-table-customersCompact, .database-table-productsCompact) .data-dock {
+    align-items: stretch;
+  }
+
+  body:has(.database-table-customersCompact, .database-table-productsCompact) .dock-divider {
+    display: none;
+  }
+
+  body:has(.database-table-customersCompact, .database-table-productsCompact) .dock-main-form {
+    min-width: 0;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  body:has(.database-table-customersCompact, .database-table-productsCompact) .dock-search-box,
+  body:has(.database-table-customersCompact, .database-table-productsCompact) .dock-select-box,
+  body:has(.database-table-customersCompact, .database-table-productsCompact) .dock-select {
+    width: 100%;
+    max-width: none;
+    min-width: 0;
+  }
+
+  .database-table-wrap--master-data {
+    border-radius: 7px;
+    scrollbar-width: thin;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .database-table-customersCompact .row-context-actions,
+  .database-table-productsCompact .row-context-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .database-table-customersCompact .data-table__primary,
+  .database-table-productsCompact .data-table__primary {
+    font-size: 12.5px;
+  }
+}

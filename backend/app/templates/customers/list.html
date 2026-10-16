@@ -13,19 +13,21 @@
   {% else %}
     {% set target_sort = desc_val if default_desc else asc_val %}
   {% endif %}
-  <th data-column="{{ col_key }}" class="sortable-th {% if is_active %}is-sorted{% endif %}" onclick="applySort('{{ target_sort }}')">
-    <span class="sort-th-content">
-      <span>{{ label }}</span>
-      {% if is_active %}
-        <span class="sort-arrow">
-          {% if is_asc %}
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="18 15 12 9 6 15"></polyline></svg>
-          {% else %}
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
-          {% endif %}
-        </span>
-      {% endif %}
-    </span>
+  <th data-column="{{ col_key }}" class="sortable-th {% if is_active %}is-sorted{% endif %}" aria-sort="{{ 'ascending' if is_active and is_asc else ('descending' if is_active else 'none') }}">
+    <button type="button" class="sort-header-btn" onclick="applySort('{{ target_sort }}')" aria-label="Ordenar por {{ label }}">
+      <span class="sort-th-content">
+        <span>{{ label }}</span>
+        {% if is_active %}
+          <span class="sort-arrow">
+            {% if is_asc %}
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="18 15 12 9 6 15"></polyline></svg>
+            {% else %}
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            {% endif %}
+          </span>
+        {% endif %}
+      </span>
+    </button>
   </th>
 {%- endmacro %}
 
@@ -256,14 +258,15 @@
       {% endif %}
     </div>
 
-    <div class="database-table-wrap">
-    <table class="data-table database-table database-table-customersCompact database-table-customers database-table-compact" data-resizable-table data-table-key="customersCompact" data-min-table-width="1056">
+    <div class="database-table-wrap database-table-wrap--master-data">
+    <table class="data-table database-table database-table-customersCompact database-table-customers database-table-compact" data-resizable-table data-table-key="customersCompact" data-min-table-width="1156">
           <colgroup>
-            <col data-column="name" data-default-width="280" data-min-width="180" data-max-width="640" class="data-table__col-customer">
-            <col data-column="code" data-default-width="112" data-min-width="96" data-max-width="220" class="data-table__col-code">
-            <col data-column="primary_email" data-default-width="260" data-min-width="180" data-max-width="560" class="data-table__col-contact">
-            <col data-column="city" data-default-width="160" data-min-width="120" data-max-width="320" class="data-table__col-city">
-            <col data-column="status" data-default-width="112" data-min-width="96" data-max-width="220" class="data-table__col-status">
+            <col data-column="name" data-default-width="280" data-min-width="190" data-max-width="640" class="data-table__col-customer">
+            <col data-column="code" data-default-width="110" data-min-width="96" data-max-width="220" class="data-table__col-code">
+            <col data-column="primary_email" data-default-width="250" data-min-width="190" data-max-width="560" class="data-table__col-contact">
+            <col data-column="associated_phones" data-default-width="220" data-min-width="160" data-max-width="380" class="data-table__col-associated-phones">
+            <col data-column="city" data-default-width="150" data-min-width="120" data-max-width="320" class="data-table__col-city">
+            <col data-column="status" data-default-width="110" data-min-width="96" data-max-width="220" class="data-table__col-status">
             <col data-column="channel" data-default-width="150" data-min-width="120" data-max-width="320">
             <col data-column="knowledge" data-default-width="170" data-min-width="140" data-max-width="360">
             <col data-column="last_activity" data-default-width="160" data-min-width="126" data-max-width="320">
@@ -280,6 +283,7 @@
               {{ render_sort_th("name", "Cliente", "name_asc", "name_desc") }}
               {{ render_sort_th("code", "Código", "code_asc", "code_desc") }}
               {{ render_sort_th("primary_email", "Contacto", "email_asc", "email_desc") }}
+              <th data-column="associated_phones">Teléfonos asociados</th>
               {{ render_sort_th("city", "Localidad", "city_asc", "city_desc") }}
               {{ render_sort_th("status", "Estado", "status_asc", "status_desc") }}
               {{ render_sort_th("channel", "Canal", "channel_asc", "channel_desc") }}
@@ -301,6 +305,7 @@
                       ("name","Cliente", true),
                       ("code","Código", true),
                       ("primary_email","Contacto", true),
+                      ("associated_phones","Teléfonos asociados", true),
                       ("city","Localidad", true),
                       ("status","Estado", true),
                       ("channel","Canal", false),
@@ -325,7 +330,7 @@
               <tr>
                 <td class="wide-cell" data-column="name" title="{{ row.fiscal_name }}">
                   <span class="data-table__primary">{{ row.commercial_name or row.fiscal_name }}</span>
-                  <div class="row-context-actions" hidden>
+                  <div class="row-context-actions">
                     <div class="data-table__actions">
                       <button type="button" class="secondary compact-button table-edit-button" title="Editar cliente" aria-label="Editar cliente" onclick="openCustomerEditor(this)" data-customer='{{ row|tojson }}'>{{ icon_edit(15) }}</button>
                       <a class="button secondary compact-button" href="/customers/{{ row.id }}/knowledge">Abrir</a>
@@ -342,8 +347,36 @@
                   </div>
                 </td>
                 <td data-column="code"><span class="database-code-text">{{ row.code }}</span></td>
-                <td data-column="primary_email" title="{{ row.primary_email or row.phone or '—' }}">
-                  <span class="data-table__secondary">{{ row.primary_email or row.phone or '—' }}</span>
+                <td data-column="primary_email" class="customer-contact-cell">
+                  {% if row.phone or row.primary_email %}
+                    {% if row.phone %}
+                      {% if row.phone_href %}<a class="customer-contact-line customer-contact-phone" href="{{ row.phone_href }}">{{ row.phone }}</a>{% else %}<span class="customer-contact-line customer-contact-phone">{{ row.phone }}</span>{% endif %}
+                    {% endif %}
+                    {% if row.primary_email %}<a class="customer-contact-line customer-contact-email" href="mailto:{{ row.primary_email }}" title="{{ row.primary_email }}">{{ row.primary_email }}</a>{% endif %}
+                  {% else %}
+                    <span class="customer-contact-empty">—</span>
+                  {% endif %}
+                </td>
+                <td data-column="associated_phones" class="associated-phones-cell">
+                  {% if row.associated_phone_items %}
+                    <div class="associated-phone-list">
+                      {% for item in row.associated_phone_items[:2] %}
+                        {% if item.href %}<a href="{{ item.href }}" class="associated-phone-link">{{ item.display }}</a>{% else %}<span class="associated-phone-link">{{ item.display }}</span>{% endif %}
+                      {% endfor %}
+                      {% if row.associated_phone_items|length > 2 %}
+                        <details class="associated-phone-more">
+                          <summary aria-label="Mostrar {{ row.associated_phone_items|length - 2 }} teléfonos más">+{{ row.associated_phone_items|length - 2 }} más</summary>
+                          <div class="associated-phone-expanded">
+                            {% for item in row.associated_phone_items[2:] %}
+                              {% if item.href %}<a href="{{ item.href }}">{{ item.display }}</a>{% else %}<span>{{ item.display }}</span>{% endif %}
+                            {% endfor %}
+                          </div>
+                        </details>
+                      {% endif %}
+                    </div>
+                  {% else %}
+                    <span class="customer-contact-empty">—</span>
+                  {% endif %}
                 </td>
                 <td data-column="city" class="cell-ellipsis" title="{{ row.city or row.province or '—' }}">{{ row.city or row.province or '—' }}</td>
                 <td data-column="status"><span class="badge data-table__status {{ 'status-confirmed' if row.status == 'active' and not row.company_inactive else 'status-discarded' }}">{{ row.status_label }}</span></td>
@@ -362,7 +395,7 @@
                 <td data-column="table_settings" class="table-settings-td"></td>
               </tr>
             {% else %}
-              <tr><td colspan="15" class="muted">No hay clientes para los filtros seleccionados.</td></tr>
+              <tr><td colspan="16" class="table-empty-cell"><div class="database-list-empty"><strong>No hay clientes para mostrar</strong><span>Prueba a ajustar la búsqueda o los filtros.</span><a href="/customers?view=list">Limpiar filtros</a></div></td></tr>
             {% endfor %}
           </tbody>
         </table>
@@ -643,9 +676,18 @@
     const table = document.querySelector(`.database-table-${tableKey}`);
     if (!table) return;
     const checkboxes = Array.from(panel.querySelectorAll("[data-column-checkbox]"));
-    const storageKey = `database.columns.${tableKey}.v2`;
+    const storageKey = `database.columns.${tableKey}.v3`;
     const saved = (() => {
-      try { return JSON.parse(localStorage.getItem(storageKey) || "null"); } catch { return null; }
+      try {
+        const current = JSON.parse(localStorage.getItem(storageKey) || "null");
+        if (Array.isArray(current)) return current;
+        const legacy = JSON.parse(localStorage.getItem(`database.columns.${tableKey}.v2`) || "null");
+        if (!Array.isArray(legacy)) return null;
+        const migrated = [...legacy];
+        if (!migrated.includes("associated_phones")) migrated.push("associated_phones");
+        localStorage.setItem(storageKey, JSON.stringify(migrated));
+        return migrated;
+      } catch { return null; }
     })();
     if (Array.isArray(saved) && saved.length) {
       checkboxes.forEach((checkbox) => {
@@ -656,7 +698,7 @@
       const visible = checkboxes.filter((checkbox) => checkbox.checked).map((checkbox) => checkbox.dataset.columnCheckbox);
       visible.push("action");
       visible.push("table_settings");
-      localStorage.setItem(storageKey, JSON.stringify(visible));
+      try { localStorage.setItem(storageKey, JSON.stringify(visible)); } catch { /* La configuración de columnas sigue activa en esta sesión. */ }
       table.querySelectorAll("[data-column]").forEach((cell) => {
         cell.hidden = !visible.includes(cell.dataset.column);
       });

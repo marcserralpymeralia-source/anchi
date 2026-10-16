@@ -13,19 +13,21 @@
   {% else %}
     {% set target_sort = desc_val if default_desc else asc_val %}
   {% endif %}
-  <th data-column="{{ col_key }}" class="sortable-th {% if is_active %}is-sorted{% endif %}" onclick="applySort('{{ target_sort }}')">
-    <span class="sort-th-content">
-      <span>{{ label }}</span>
-      {% if is_active %}
-        <span class="sort-arrow">
-          {% if is_asc %}
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="18 15 12 9 6 15"></polyline></svg>
-          {% else %}
-            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
-          {% endif %}
-        </span>
-      {% endif %}
-    </span>
+  <th data-column="{{ col_key }}" class="sortable-th {% if is_active %}is-sorted{% endif %}" aria-sort="{{ 'ascending' if is_active and is_asc else ('descending' if is_active else 'none') }}">
+    <button type="button" class="sort-header-btn" onclick="applySort('{{ target_sort }}')" aria-label="Ordenar por {{ label }}">
+      <span class="sort-th-content">
+        <span>{{ label }}</span>
+        {% if is_active %}
+          <span class="sort-arrow">
+            {% if is_asc %}
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="18 15 12 9 6 15"></polyline></svg>
+            {% else %}
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            {% endif %}
+          </span>
+        {% endif %}
+      </span>
+    </button>
   </th>
 {%- endmacro %}
 
@@ -222,8 +224,8 @@
     {% endif %}
   </div>
 
-<div class="database-table-wrap">
-<table class="data-table database-table database-table-productsCompact database-table-products database-table-compact" data-resizable-table data-table-key="productsCompact" data-min-table-width="974">
+<div class="database-table-wrap database-table-wrap--master-data">
+<table class="data-table database-table database-table-productsCompact database-table-products database-table-compact" data-resizable-table data-table-key="productsCompact" data-min-table-width="900">
   <colgroup>
     <col data-column="name" data-default-width="320" data-min-width="200" data-max-width="640" class="data-table__col-product">
     <col data-column="reference" data-default-width="160" data-min-width="120" data-max-width="280" class="data-table__col-reference">
@@ -284,9 +286,9 @@
   {% for product in products %}
     <tr>
       {% set stats = product_stats.get(product.id, {}) %}
-      <td data-column="name" class="wide-cell" title="{{ product.name }}">
+      <td data-column="name" class="wide-cell product-name-cell" title="{{ product.name }}">
         <span class="data-table__primary">{{ product.name }}</span>
-        <div class="row-context-actions" hidden>
+        <div class="row-context-actions">
           <div class="data-table__actions">
             <button type="button" class="secondary compact-button table-edit-button" title="Editar producto" aria-label="Editar producto" onclick="document.getElementById('product-{{ product.id }}').showModal()">{{ icon_edit(15) }}</button>
             <button type="button" class="secondary compact-button" onclick="document.getElementById('product-{{ product.id }}').showModal()">Abrir</button>
@@ -301,9 +303,14 @@
         </div>
       </td>
       <td data-column="reference"><span class="database-code-text">{{ product.reference }}</span></td>
-      <td data-column="sale_unit">{{ product.sale_unit or "—" }}</td>
-      <td data-column="price">{{ "%.2f"|format(product.sale_price) if product.sale_price is not none else "—" }}</td>
-      <td data-column="status"><span class="badge data-table__status {{ 'status-confirmed' if product.status == 'active' and not product.obsolete else 'status-discarded' }}">{{ product.status|status_label }}</span></td>
+      <td data-column="sale_unit" class="product-unit-cell">{{ product.sale_unit or "—" }}</td>
+      <td data-column="price" class="product-price-cell">
+        {% if product.sale_price is not none %}
+          {% set price_text = "{:,.2f}".format(product.sale_price) %}
+          {{ price_text.replace(",", "|").replace(".", ",").replace("|", ".") }}
+        {% else %}—{% endif %}
+      </td>
+      <td data-column="status"><span class="badge data-table__status {{ 'status-discarded' if product.obsolete else ('status-confirmed' if product.status == 'active' else 'status-doubtful') }}">{{ "Obsoleto" if product.obsolete else product.status|status_label }}</span></td>
       <td data-column="family" class="cell-ellipsis" title="{{ product.family or '—' }}">{{ product.family or "—" }}</td>
       <td data-column="aliases"><span class="badge data-table__status">{{ product.aliases|length }}</span></td>
       <td data-column="customers"><span class="badge data-table__status">{{ stats.customers or 0 }}</span></td>
@@ -314,7 +321,7 @@
       <td data-column="table_settings" class="table-settings-td"></td>
     </tr>
   {% else %}
-    <tr><td colspan="13" class="muted">No hay productos para los filtros seleccionados.</td></tr>
+    <tr><td colspan="13" class="table-empty-cell"><div class="database-list-empty"><strong>No hay productos para mostrar</strong><span>Prueba a ajustar la búsqueda o los filtros.</span><a href="/products">Limpiar filtros</a></div></td></tr>
   {% endfor %}
   </tbody>
 </table>
@@ -395,14 +402,23 @@
     const table = document.querySelector(`.database-table-${tableKey}`);
     if (!table) return;
     const checkboxes = Array.from(panel.querySelectorAll("[data-column-checkbox]"));
-    const storageKey = `database.columns.${tableKey}.v2`;
-    const saved = (() => { try { return JSON.parse(localStorage.getItem(storageKey) || "null"); } catch { return null; } })();
+    const storageKey = `database.columns.${tableKey}.v3`;
+    const saved = (() => {
+      try {
+        const current = JSON.parse(localStorage.getItem(storageKey) || "null");
+        if (Array.isArray(current)) return current;
+        const legacy = JSON.parse(localStorage.getItem(`database.columns.${tableKey}.v2`) || "null");
+        if (!Array.isArray(legacy)) return null;
+        localStorage.setItem(storageKey, JSON.stringify(legacy));
+        return legacy;
+      } catch { return null; }
+    })();
     if (Array.isArray(saved) && saved.length) checkboxes.forEach((checkbox) => { checkbox.checked = saved.includes(checkbox.dataset.columnCheckbox); });
     const apply = () => {
       const visible = checkboxes.filter((checkbox) => checkbox.checked).map((checkbox) => checkbox.dataset.columnCheckbox);
       visible.push("action");
       visible.push("table_settings");
-      localStorage.setItem(storageKey, JSON.stringify(visible));
+      try { localStorage.setItem(storageKey, JSON.stringify(visible)); } catch { /* La configuración de columnas sigue activa en esta sesión. */ }
       table.querySelectorAll("[data-column]").forEach((cell) => { cell.hidden = !visible.includes(cell.dataset.column); });
     };
     checkboxes.forEach((checkbox) => checkbox.addEventListener("change", apply));
