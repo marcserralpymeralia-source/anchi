@@ -136,27 +136,40 @@ def _blob_storage_enabled() -> bool:
 
 
 async def _upload_branding_blob(pathname: str, content: bytes, content_type: str):
-    from vercel import blob
+    from vercel.blob import AsyncBlobClient
 
-    return await blob.put_blob(
-        pathname,
-        content,
-        access="private",
-        content_type=content_type,
-        cache_control_max_age=3600,
-    )
+    client = AsyncBlobClient()
+    try:
+        return await client.put(
+            pathname,
+            content,
+            access="private",
+            content_type=content_type,
+            cache_control_max_age=3600,
+            overwrite=False,
+        )
+    finally:
+        await client.aclose()
 
 
 async def _download_branding_blob(pathname: str):
-    from vercel import blob
+    from vercel.blob import AsyncBlobClient
 
-    return await blob.get_blob(pathname, access="private")
+    client = AsyncBlobClient()
+    try:
+        return await client.get(pathname, access="private")
+    finally:
+        await client.aclose()
 
 
 async def _delete_branding_blob(pathname: str) -> None:
-    from vercel import blob
+    from vercel.blob import AsyncBlobClient
 
-    await blob.delete_blob(pathname)
+    client = AsyncBlobClient()
+    try:
+        await client.delete(pathname)
+    finally:
+        await client.aclose()
 
 
 def deep_merge(default: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
@@ -349,8 +362,10 @@ async def load_brand_asset(company_id: int, filename: str):
         return None
     pathname = f"branding/tenant-{int(company_id)}/{filename}"
     result = await _download_branding_blob(pathname)
-    content_type = result.metadata.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
-    return result.body, content_type
+    if result is None:
+        return None
+    content_type = result.content_type or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    return result.content, content_type
 
 
 async def store_brand_asset(company_id: int, upload: UploadFile, prefix: str) -> str:

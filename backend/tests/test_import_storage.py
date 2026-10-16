@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 import importlib
 import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import patch
@@ -103,6 +106,96 @@ class ImportStorageTests(unittest.TestCase):
             self.assertEqual(path.parent.parent.name, "7")
             self.assertEqual(path.parent.parent.parent.name, "tenants")
             self.assertEqual(read_attachment(storage_ref), b"tenant-file")
+
+    def test_vercel_import_preview_is_saved_to_private_blob_and_read_across_requests(self):
+        from fastapi import UploadFile
+        from app.imports.service import create_preview, read_preview
+
+        blobs: dict[str, bytes] = {}
+        calls: list[tuple[str, str, str]] = []
+
+        class FakeBlobClient:
+            def put(self, path, body, *, access, **kwargs):
+                calls.append(("put", path, access))
+                blobs[path] = body
+                return SimpleNamespace(url=f"https://blob.example/{path}")
+
+            def get(self, path, *, access):
+                calls.append(("get", path, access))
+                if path not in blobs:
+                    return None
+                return SimpleNamespace(content=blobs[path], uploaded_at=datetime.now(timezone.utc))
+
+            def delete(self, path):
+                blobs.pop(path, None)
+
+            def close(self):
+                pass
+
+        with patch.dict(os.environ, {"VERCEL": "1", "VERCEL_ENV": "production", "BLOB_READ_WRITE_TOKEN": "test-token"}), patch(
+            "vercel.blob.BlobClient", FakeBlobClient
+        ), patch(
+            "pathlib.Path.mkdir", side_effect=AssertionError("Vercel previews must not use local filesystem")
+        ):
+            preview = asyncio.run(
+                create_preview(
+                    UploadFile(filename="customers.csv", file=BytesIO(b"Codigo cliente,Razon social\nC-1,Cliente Uno\n")),
+                    "customers",
+                    company_id=7,
+                )
+            )
+            restored = read_preview(preview["token"], preview["filename"], company_id=7)
+
+        self.assertEqual(restored.iloc[0]["Razon social"], "Cliente Uno")
+        pathname = f"tenants/7/import-previews/{preview['token']}.csv"
+        self.assertEqual(calls, [("put", pathname, "private"), ("get", pathname, "private")])
+
+    def test_vercel_import_preview_fails_clearly_without_persistent_storage(self):
+        from fastapi import UploadFile
+        from app.imports.service import create_preview
+
+        with patch.dict(
+            os.environ,
+            {"VERCEL": "1", "VERCEL_ENV": "production", "BLOB_READ_WRITE_TOKEN": ""},
+            clear=False,
+        ), patch("pathlib.Path.mkdir", side_effect=AssertionError("must fail before local write")):
+            with self.assertRaisesRegex(RuntimeError, "almacenamiento persistente"):
+                asyncio.run(
+                    create_preview(
+                        UploadFile(filename="customers.csv", file=BytesIO(b"Name\nClient\n")),
+                        "customers",
+                        company_id=7,
+                    )
+                )
+
+    def test_branding_upload_uses_supported_blob_client_methods(self):
+        from app.settings.branding import _delete_branding_blob, _download_branding_blob, _upload_branding_blob
+
+        saved: dict[str, bytes] = {}
+
+        class FakeAsyncBlobClient:
+            async def put(self, path, body, *, access, content_type, **kwargs):
+                saved[path] = body
+                return SimpleNamespace(url=f"https://blob.example/{path}")
+
+            async def get(self, path, *, access):
+                return SimpleNamespace(content=saved[path], content_type="image/png")
+
+            async def delete(self, path):
+                saved.pop(path, None)
+
+            async def aclose(self):
+                return None
+
+        with patch.dict(os.environ, {"BLOB_READ_WRITE_TOKEN": "test-token"}), patch(
+            "vercel.blob.AsyncBlobClient", FakeAsyncBlobClient
+        ):
+            asyncio.run(_upload_branding_blob("branding/tenant-7/logo.png", b"image", "image/png"))
+            result = asyncio.run(_download_branding_blob("branding/tenant-7/logo.png"))
+            asyncio.run(_delete_branding_blob("branding/tenant-7/logo.png"))
+
+        self.assertEqual(result.content, b"image")
+        self.assertNotIn("branding/tenant-7/logo.png", saved)
 
 
 if __name__ == "__main__":

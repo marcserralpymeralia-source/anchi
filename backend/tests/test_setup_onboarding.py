@@ -283,7 +283,7 @@ class SetupOnboardingTests(unittest.TestCase):
                 create=True,
             ) as upload_blob, patch(
                 "app.settings.branding._download_branding_blob",
-                new=AsyncMock(return_value=SimpleNamespace(body=b"logo-image", metadata=SimpleNamespace(content_type="image/png"))),
+                new=AsyncMock(return_value=SimpleNamespace(content=b"logo-image", content_type="image/png")),
                 create=True,
             ) as download_blob, patch.object(Path, "mkdir", new=deny_deployment_uploads):
                 response = client.post(
@@ -303,7 +303,7 @@ class SetupOnboardingTests(unittest.TestCase):
                 self.assertTrue(logo_url.endswith(".png"))
             blob_path = upload_blob.await_args.args[0]
             with patch.dict(os.environ, {"BLOB_READ_WRITE_TOKEN": "test-token", "BLOB_STORE_ID": "store_test"}), patch(
-                "app.settings.branding._download_branding_blob", new=AsyncMock(return_value=SimpleNamespace(body=b"logo-image", metadata=SimpleNamespace(content_type="image/png")))
+                "app.settings.branding._download_branding_blob", new=AsyncMock(return_value=SimpleNamespace(content=b"logo-image", content_type="image/png"))
             ) as download_blob:
                 logo_response = client.get(logo_url)
             download_blob.assert_awaited_once_with(blob_path)

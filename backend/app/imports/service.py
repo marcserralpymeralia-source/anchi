@@ -1,4 +1,6 @@
+import asyncio
 import json
+import mimetypes
 import os
 import re
 import time
@@ -31,6 +33,65 @@ def _preview_directory(company_id: int | None = None) -> Path:
     if company_id is None:
         return PREVIEW_DIR
     return PREVIEW_DIR / f"company-{int(company_id)}"
+
+
+def _is_vercel_runtime() -> bool:
+    return os.getenv("VERCEL") == "1" or bool(os.getenv("VERCEL_ENV"))
+
+
+def _blob_storage_enabled() -> bool:
+    return bool(os.getenv("BLOB_READ_WRITE_TOKEN", "").strip())
+
+
+def _preview_blob_path(token: str, filename: str, company_id: int | None) -> str:
+    if company_id is None:
+        raise RuntimeError("La previsualización necesita una empresa para usar almacenamiento persistente.")
+    suffix = Path(filename or "import.csv").suffix.lower()
+    if not re.fullmatch(r"\.[a-z0-9]{1,10}", suffix):
+        suffix = ".csv"
+    return f"tenants/{int(company_id)}/import-previews/{token}{suffix}"
+
+
+def _upload_preview_blob(pathname: str, content: bytes, filename: str) -> None:
+    from vercel.blob import BlobClient
+
+    client = BlobClient()
+    try:
+        client.put(
+            pathname,
+            content,
+            access="private",
+            content_type=mimetypes.guess_type(filename)[0] or "application/octet-stream",
+            overwrite=False,
+        )
+    finally:
+        client.close()
+
+
+def _read_preview_blob(pathname: str) -> tuple[bytes, float] | None:
+    from vercel.blob import BlobClient, BlobNotFoundError
+
+    client = BlobClient()
+    try:
+        try:
+            result = client.get(pathname, access="private")
+        except BlobNotFoundError:
+            return None
+        if result is None:
+            return None
+        return result.content, result.uploaded_at.timestamp()
+    finally:
+        client.close()
+
+
+def _delete_preview_blob(pathname: str) -> None:
+    from vercel.blob import BlobClient
+
+    client = BlobClient()
+    try:
+        client.delete(pathname)
+    finally:
+        client.close()
 
 CUSTOMER_FIELDS = {
     "code": "Codigo cliente",
@@ -293,8 +354,14 @@ async def create_preview(
     content = await file.read()
     token = uuid.uuid4().hex
     suffix = Path(file.filename or "import.csv").suffix.lower() or ".csv"
-    preview_dir = ensure_directory(_preview_directory(company_id))
-    (preview_dir / f"{token}{suffix}").write_bytes(content)
+    if _is_vercel_runtime():
+        if not _blob_storage_enabled():
+            raise RuntimeError("No hay almacenamiento persistente configurado para las previsualizaciones.")
+        pathname = _preview_blob_path(token, file.filename or "import.csv", company_id)
+        await asyncio.to_thread(_upload_preview_blob, pathname, content, file.filename or "import.csv")
+    else:
+        preview_dir = ensure_directory(_preview_directory(company_id))
+        (preview_dir / f"{token}{suffix}").write_bytes(content)
     df = read_table_from_bytes(content, file.filename or "import.csv", encoding=encoding)
     columns = [str(column) for column in df.columns]
     return {
@@ -318,6 +385,18 @@ def read_preview(token: str, filename: str, encoding: str = "utf-8", *, company_
 def _read_preview(token: str, filename: str, *, encoding: str = "utf-8", company_id: int | None = None) -> pd.DataFrame:
     if not _PREVIEW_TOKEN_RE.fullmatch(str(token or "")):
         raise FileNotFoundError("No se encontro la previsualizacion de importacion.")
+    if _is_vercel_runtime():
+        if not _blob_storage_enabled():
+            raise FileNotFoundError("No se encontro la previsualizacion de importacion.")
+        pathname = _preview_blob_path(token, filename, company_id)
+        stored = _read_preview_blob(pathname)
+        if stored is None:
+            raise FileNotFoundError("No se encontro la previsualizacion de importacion.")
+        content, uploaded_at = stored
+        if time.time() - uploaded_at > PREVIEW_TTL_SECONDS:
+            _delete_preview_blob(pathname)
+            raise FileNotFoundError("La previsualizacion de importacion ha caducado.")
+        return read_table_from_bytes(content, filename or Path(pathname).name, encoding=encoding)
     matches = list(_preview_directory(company_id).glob(f"{token}.*"))
     if not matches:
         raise FileNotFoundError("No se encontro la previsualizacion de importacion.")
